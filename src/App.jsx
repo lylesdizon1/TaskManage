@@ -35,11 +35,272 @@ const PRIORITY_BADGE = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ALERT RULES CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_ALERT_RULES = [
+  {
+    id: 'rule-overdue',
+    name: 'Overdue Tasks',
+    description: 'Alert when tasks are past their due date',
+    enabled: true,
+    condition: { type: 'overdue' },
+    recipientOverride: '',
+    isCustom: false,
+  },
+  {
+    id: 'rule-due-24h',
+    name: 'Due in 24 Hours',
+    description: 'Alert when tasks are due within 24 hours',
+    enabled: true,
+    condition: { type: 'due-in-hours', hours: 24 },
+    recipientOverride: '',
+    isCustom: false,
+  },
+  {
+    id: 'rule-high-priority',
+    name: 'High Priority Backlog',
+    description: 'Alert when incomplete high-priority tasks exist',
+    enabled: false,
+    condition: { type: 'high-priority' },
+    recipientOverride: '',
+    isCustom: false,
+  },
+  {
+    id: 'rule-daily-digest',
+    name: 'Daily Digest',
+    description: 'Session summary of all active tasks on app load',
+    enabled: false,
+    condition: { type: 'daily-digest' },
+    recipientOverride: '',
+    isCustom: false,
+  },
+];
+
+// condition type → { label, hasTag, hasHours }
+const CONDITION_META = {
+  'overdue':        { label: 'Overdue tasks',             hasTag: false, hasHours: false },
+  'due-in-hours':   { label: 'Due within N hours',        hasTag: false, hasHours: true  },
+  'high-priority':  { label: 'High-priority tasks',       hasTag: false, hasHours: false },
+  'tag-match':      { label: 'All active tasks for tag',  hasTag: true,  hasHours: false },
+  'tag-overdue':    { label: 'Overdue tasks for tag',     hasTag: true,  hasHours: false },
+  'daily-digest':   { label: 'Daily summary (all tasks)', hasTag: false, hasHours: false },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL & ALERT UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function conditionDescription(condition) {
+  switch (condition.type) {
+    case 'overdue':        return 'Tasks past their due date';
+    case 'due-in-hours':   return `Tasks due within ${condition.hours || 24} hours`;
+    case 'high-priority':  return 'All incomplete high-priority tasks';
+    case 'tag-match':      return `All active "${condition.tag}" tasks`;
+    case 'tag-overdue':    return `Overdue "${condition.tag}" tasks`;
+    case 'daily-digest':   return 'All active tasks (session summary)';
+    default:               return 'Unknown condition';
+  }
+}
+
+// Returns 'per-task' | 'daily' | 'session'
+function getRuleScope(type) {
+  if (type === 'daily-digest')  return 'session';
+  if (type === 'high-priority') return 'daily';
+  if (type === 'tag-match')     return 'daily';
+  return 'per-task'; // overdue, due-in-hours, tag-overdue
+}
+
+function evaluateRule(rule, tasks) {
+  const now      = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const active   = tasks.filter((t) => !t.completed);
+
+  switch (rule.condition.type) {
+    case 'overdue':
+      return active.filter((t) => t.dueDate && t.dueDate < todayStr);
+
+    case 'due-in-hours': {
+      const windowMs = (rule.condition.hours || 24) * 3_600_000;
+      return active.filter((t) => {
+        if (!t.dueDate) return false;
+        const dueMs = new Date(t.dueDate + 'T23:59:59').getTime();
+        return dueMs > now.getTime() && dueMs - now.getTime() <= windowMs;
+      });
+    }
+
+    case 'high-priority':
+      return active.filter((t) => t.priority === 'high');
+
+    case 'tag-match':
+      return active.filter((t) => t.tags.includes(rule.condition.tag));
+
+    case 'tag-overdue':
+      return active.filter(
+        (t) => t.dueDate && t.dueDate < todayStr && t.tags.includes(rule.condition.tag),
+      );
+
+    case 'daily-digest':
+      return active;
+
+    default:
+      return [];
+  }
+}
+
+/** Build a professional HTML alert email for the given tasks. */
+function buildEmailHtml(ruleName, ruleDesc, tasks) {
+  const h        = escapeHtml;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const pColor   = { high: '#dc2626', medium: '#d97706', low: '#16a34a' };
+  const pBg      = { high: '#fef2f2', medium: '#fffbeb', low: '#f0fdf4' };
+
+  const rows = tasks
+    .map((t) => {
+      const overdue  = t.dueDate && t.dueDate < todayStr;
+      const tagPills = t.tags
+        .map(
+          (tag) =>
+            `<span style="display:inline-block;margin:1px 2px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:500;background:#eef2ff;color:#4338ca;border:1px solid #e0e7ff;">${h(tag)}</span>`,
+        )
+        .join('');
+      return `
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #f3f4f6;vertical-align:top;">
+            <div style="font-weight:600;color:#111827;font-size:13px;">${h(t.title)}</div>
+            ${t.description ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">${h(t.description)}</div>` : ''}
+          </td>
+          <td style="padding:10px 14px;border-bottom:1px solid #f3f4f6;text-align:center;white-space:nowrap;vertical-align:top;">
+            <span style="padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:${pBg[t.priority]};color:${pColor[t.priority]};">${h(t.priority)}</span>
+          </td>
+          <td style="padding:10px 14px;border-bottom:1px solid #f3f4f6;text-align:center;white-space:nowrap;vertical-align:top;font-size:12px;color:${overdue ? '#dc2626' : '#6b7280'};">
+            ${t.dueDate ? `${overdue ? '&#9888; ' : ''}${h(t.dueDate)}` : '&mdash;'}
+          </td>
+          <td style="padding:10px 14px;border-bottom:1px solid #f3f4f6;vertical-align:top;">${tagPills}</td>
+        </tr>`;
+    })
+    .join('');
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#f9fafb;margin:0;padding:32px 16px;">
+<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,.08);">
+  <div style="background:linear-gradient(135deg,#4f46e5 0%,#6366f1 100%);padding:32px 24px;text-align:center;">
+    <div style="font-size:32px;margin-bottom:10px;">&#128203;</div>
+    <h1 style="color:#fff;margin:0 0 6px;font-size:20px;font-weight:700;letter-spacing:-.3px;">${h(ruleName)}</h1>
+    <p style="color:#c7d2fe;margin:0;font-size:13px;">${h(ruleDesc)}</p>
+  </div>
+  <div style="padding:24px;">
+    <p style="color:#374151;font-size:14px;margin:0 0 20px;">
+      <strong style="color:#111827;">${tasks.length}</strong> task${tasks.length !== 1 ? 's' : ''}
+      require${tasks.length === 1 ? 's' : ''} your attention:
+    </p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #f3f4f6;border-radius:8px;overflow:hidden;">
+      <thead>
+        <tr style="background:#f9fafb;">
+          <th style="padding:8px 14px;text-align:left;color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:600;border-bottom:1px solid #f3f4f6;">Task</th>
+          <th style="padding:8px 14px;text-align:center;color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:600;border-bottom:1px solid #f3f4f6;">Priority</th>
+          <th style="padding:8px 14px;text-align:center;color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:600;border-bottom:1px solid #f3f4f6;">Due</th>
+          <th style="padding:8px 14px;text-align:left;color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:600;border-bottom:1px solid #f3f4f6;">Tags</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <div style="background:#f9fafb;padding:14px 24px;border-top:1px solid #f3f4f6;display:flex;justify-content:space-between;align-items:center;">
+    <span style="color:#9ca3af;font-size:11px;font-weight:500;">TaskManage Alerts</span>
+    <span style="color:#9ca3af;font-size:11px;">${new Date().toLocaleString()}</span>
+  </div>
+</div>
+</body></html>`;
+}
+
+/** POST to /api/email/send via the local proxy. */
+async function sendAlertEmail(emailSettings, to, subject, html) {
+  const res = await fetch('/api/email/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      gmailUser: emailSettings.gmailUser,
+      gmailAppPassword: emailSettings.gmailAppPassword,
+      to,
+      subject,
+      html,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Evaluate all enabled rules and send emails for new matches.
+ * firedRef (Set) prevents duplicate sends within the same browser session.
+ */
+async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
+  const { gmailUser, gmailAppPassword, recipientEmail } = emailSettings;
+  if (!gmailUser || !gmailAppPassword || !recipientEmail) return;
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+
+    const matching = evaluateRule(rule, tasks);
+    if (matching.length === 0) continue;
+
+    const to    = rule.recipientOverride || recipientEmail;
+    const scope = getRuleScope(rule.condition.type);
+    let tasksToSend = [];
+
+    if (scope === 'per-task') {
+      tasksToSend = matching.filter((t) => !firedRef.current.has(`${rule.id}::${t.id}`));
+      if (tasksToSend.length === 0) continue;
+      tasksToSend.forEach((t) => firedRef.current.add(`${rule.id}::${t.id}`));
+    } else if (scope === 'daily') {
+      const key = `${rule.id}::${todayStr}`;
+      if (firedRef.current.has(key)) continue;
+      firedRef.current.add(key);
+      tasksToSend = matching;
+    } else {
+      // session — once per browser load
+      if (firedRef.current.has(rule.id)) continue;
+      firedRef.current.add(rule.id);
+      tasksToSend = matching;
+    }
+
+    const count   = tasksToSend.length;
+    const subject = `[TaskManage] ${rule.name} — ${count} task${count !== 1 ? 's' : ''}`;
+    const html    = buildEmailHtml(rule.name, conditionDescription(rule.condition), tasksToSend);
+
+    try {
+      await sendAlertEmail(emailSettings, to, subject, html);
+      addToast({
+        type: 'success',
+        message: `Alert sent: "${rule.name}" (${count} task${count !== 1 ? 's' : ''})`,
+      });
+    } catch (err) {
+      addToast({ type: 'error', message: `Alert failed: ${err.message}` });
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,29 +403,94 @@ function TagPill({ tag, isAi = false }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SETTINGS MODAL
+// TOAST NOTIFICATIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SettingsModal({ apiKeys, onSave, onClose }) {
-  const [draft, setDraft] = useState({ ...apiKeys });
+function ToastContainer({ toasts, onDismiss }) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`flex items-start gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium ${
+            t.type === 'success'
+              ? 'bg-white border-green-200 text-green-800'
+              : 'bg-white border-red-200 text-red-700'
+          }`}
+        >
+          <span className="flex-shrink-0 mt-0.5">{t.type === 'success' ? '✉️' : '❌'}</span>
+          <span className="flex-1 leading-snug">{t.message}</span>
+          <button
+            onClick={() => onDismiss(t.id)}
+            className="flex-shrink-0 text-gray-300 hover:text-gray-500 transition-colors"
+          >
+            <XIcon className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS MODAL  (tabbed: API Keys | Email & Alerts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose }) {
+  const [tab, setTab]               = useState('keys');
+  const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
+  const [draftEmail, setDraftEmail] = useState({ ...emailSettings });
+  const [testing, setTesting]       = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
   function handleKeyDown(e) {
     if (e.key === 'Escape') onClose();
   }
+
+  async function handleTestConnection() {
+    if (!draftEmail.gmailUser || !draftEmail.gmailAppPassword) {
+      setTestResult({ ok: false, msg: 'Enter Gmail address and App Password first.' });
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/email/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gmailUser: draftEmail.gmailUser,
+          gmailAppPassword: draftEmail.gmailAppPassword,
+        }),
+      });
+      const data = await res.json();
+      setTestResult(
+        res.ok ? { ok: true, msg: 'Connection verified!' } : { ok: false, msg: data.error || 'Failed' },
+      );
+    } catch (err) {
+      setTestResult({ ok: false, msg: err.message });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const inputCls =
+    'w-full px-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition';
 
   return (
     <div
       className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50"
       onKeyDown={handleKeyDown}
     >
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 animate-in fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4">
         {/* Header */}
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between px-6 pt-5 pb-4">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
               <GearIcon className="w-4 h-4 text-gray-600" />
             </div>
-            <h2 className="text-lg font-bold text-gray-900">API Settings</h2>
+            <h2 className="text-lg font-bold text-gray-900">Settings</h2>
           </div>
           <button
             onClick={onClose}
@@ -174,60 +500,509 @@ function SettingsModal({ apiKeys, onSave, onClose }) {
           </button>
         </div>
 
-        <p className="text-xs text-gray-500 mb-5 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-          Keys are stored in memory only and never sent to any server other than
-          the respective AI provider via the local proxy.
-        </p>
+        {/* Tabs */}
+        <div className="flex border-b border-gray-100 mx-6">
+          {[
+            { key: 'keys',  label: 'API Keys' },
+            { key: 'email', label: 'Email & Alerts' },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+                tab === key
+                  ? 'border-indigo-600 text-indigo-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Claude API Key
-            </label>
-            <input
-              type="password"
-              value={draft.claude}
-              onChange={(e) => setDraft((k) => ({ ...k, claude: e.target.value }))}
-              placeholder="sk-ant-api03-..."
-              autoComplete="off"
-              className="w-full px-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Powers AI tag suggestions + Claude chat
-            </p>
+        <div className="px-6 py-5">
+          {/* API Keys tab */}
+          {tab === 'keys' && (
+            <div className="space-y-4">
+              <p className="text-xs text-gray-500 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                Keys are stored in memory only and never persisted beyond this session.
+              </p>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Claude API Key</label>
+                <input
+                  type="password"
+                  value={draftKeys.claude}
+                  onChange={(e) => setDraftKeys((k) => ({ ...k, claude: e.target.value }))}
+                  placeholder="sk-ant-api03-..."
+                  autoComplete="off"
+                  className={inputCls}
+                />
+                <p className="text-xs text-gray-400 mt-1">AI tag suggestions + Claude chat</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">OpenAI API Key</label>
+                <input
+                  type="password"
+                  value={draftKeys.openai}
+                  onChange={(e) => setDraftKeys((k) => ({ ...k, openai: e.target.value }))}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                  className={inputCls}
+                />
+                <p className="text-xs text-gray-400 mt-1">ChatGPT chat</p>
+              </div>
+
+              <button
+                onClick={() => { onSave(draftKeys); onClose(); }}
+                className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm"
+              >
+                Save API Keys
+              </button>
+            </div>
+          )}
+
+          {/* Email tab */}
+          {tab === 'email' && (
+            <div className="space-y-4">
+              <p className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                Use a Gmail <strong>App Password</strong> — not your account password.
+                Generate one at <span className="font-mono text-blue-700">myaccount.google.com → Security → App passwords</span>.
+              </p>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Gmail Address</label>
+                <input
+                  type="email"
+                  value={draftEmail.gmailUser}
+                  onChange={(e) => { setDraftEmail((s) => ({ ...s, gmailUser: e.target.value })); setTestResult(null); }}
+                  placeholder="you@gmail.com"
+                  autoComplete="off"
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">App Password</label>
+                <input
+                  type="password"
+                  value={draftEmail.gmailAppPassword}
+                  onChange={(e) => { setDraftEmail((s) => ({ ...s, gmailAppPassword: e.target.value })); setTestResult(null); }}
+                  placeholder="xxxx xxxx xxxx xxxx"
+                  autoComplete="off"
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Default Alert Recipient
+                </label>
+                <input
+                  type="email"
+                  value={draftEmail.recipientEmail}
+                  onChange={(e) => setDraftEmail((s) => ({ ...s, recipientEmail: e.target.value }))}
+                  placeholder="alerts@example.com"
+                  autoComplete="off"
+                  className={inputCls}
+                />
+                <p className="text-xs text-gray-400 mt-1">Alerts are sent to this address by default</p>
+              </div>
+
+              {testResult && (
+                <div
+                  className={`text-xs px-3 py-2 rounded-lg font-medium ${
+                    testResult.ok
+                      ? 'bg-green-50 text-green-700 border border-green-200'
+                      : 'bg-red-50 text-red-700 border border-red-200'
+                  }`}
+                >
+                  {testResult.ok ? '✓ ' : '✗ '}{testResult.msg}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleTestConnection}
+                  disabled={testing}
+                  className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors disabled:opacity-50"
+                >
+                  {testing ? 'Testing…' : 'Test Connection'}
+                </button>
+                <button
+                  onClick={() => { onSaveEmail(draftEmail); onClose(); }}
+                  className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm"
+                >
+                  Save Email Settings
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERTS MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+
+const EMPTY_NEW_RULE = {
+  name: '',
+  condition: { type: 'overdue', hours: 24, tag: TAGS[0] },
+  recipientOverride: '',
+};
+
+function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange }) {
+  const [expanded, setExpanded] = useState(false);
+  const scope = getRuleScope(rule.condition.type);
+  const scopeLabel = { 'per-task': 'per task', daily: 'daily', session: 'once/session' }[scope];
+
+  return (
+    <div
+      className={`rounded-xl border transition-all ${
+        rule.enabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50/50'
+      }`}
+    >
+      <div className="flex items-center gap-3 px-4 py-3">
+        {/* Toggle */}
+        <button
+          onClick={onToggle}
+          className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors ${
+            rule.enabled ? 'bg-indigo-600' : 'bg-gray-200'
+          }`}
+          title={rule.enabled ? 'Disable' : 'Enable'}
+        >
+          <span
+            className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+              rule.enabled ? 'translate-x-4' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className={`text-sm font-medium ${rule.enabled ? 'text-gray-900' : 'text-gray-400'}`}>
+              {rule.name}
+            </span>
+            <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-medium">
+              {scopeLabel}
+            </span>
+            {rule.isCustom && (
+              <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded font-medium">
+                custom
+              </span>
+            )}
           </div>
+          <p className="text-xs text-gray-400 mt-0.5 truncate">{rule.description}</p>
+        </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              OpenAI API Key
-            </label>
-            <input
-              type="password"
-              value={draft.openai}
-              onChange={(e) => setDraft((k) => ({ ...k, openai: e.target.value }))}
-              placeholder="sk-..."
-              autoComplete="off"
-              className="w-full px-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-            />
-            <p className="text-xs text-gray-400 mt-1">Powers ChatGPT chat</p>
+        {/* Expand / delete */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="text-gray-300 hover:text-gray-500 transition-colors p-1"
+            title="Set per-rule recipient"
+          >
+            <svg
+              className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              className="text-gray-300 hover:text-red-400 transition-colors p-1"
+              title="Delete rule"
+            >
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Expanded: recipient override */}
+      {expanded && (
+        <div className="px-4 pb-3 border-t border-gray-100">
+          <label className="block text-xs font-medium text-gray-500 mb-1.5 mt-2.5">
+            Recipient override{' '}
+            <span className="font-normal text-gray-400">
+              (blank = default: {defaultRecipient || 'not set'})
+            </span>
+          </label>
+          <input
+            type="email"
+            value={rule.recipientOverride}
+            onChange={(e) => onRecipientChange(e.target.value)}
+            placeholder={defaultRecipient || 'override@example.com'}
+            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose }) {
+  const [showAdd, setShowAdd]       = useState(false);
+  const [newRule, setNewRule]       = useState(EMPTY_NEW_RULE);
+  const [evaluating, setEvaluating] = useState(false);
+  const [sending, setSending]       = useState(false);
+
+  const emailConfigured =
+    emailSettings.gmailUser && emailSettings.gmailAppPassword && emailSettings.recipientEmail;
+
+  function toggleRule(id) {
+    onUpdateRules((prev) => prev.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)));
+  }
+
+  function deleteRule(id) {
+    onUpdateRules((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  function updateRecipient(id, value) {
+    onUpdateRules((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, recipientOverride: value } : r)),
+    );
+  }
+
+  function handleAddRule() {
+    if (!newRule.name.trim()) return;
+    onUpdateRules((prev) => [
+      ...prev,
+      {
+        id: uid(),
+        name: newRule.name.trim(),
+        description: conditionDescription(newRule.condition),
+        enabled: true,
+        condition: { ...newRule.condition },
+        recipientOverride: newRule.recipientOverride.trim(),
+        isCustom: true,
+      },
+    ]);
+    setNewRule(EMPTY_NEW_RULE);
+    setShowAdd(false);
+  }
+
+  async function handleEvaluateNow() {
+    if (!emailConfigured) {
+      addToast({ type: 'error', message: 'Configure email credentials in Settings first' });
+      return;
+    }
+    setEvaluating(true);
+    await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast);
+    setEvaluating(false);
+  }
+
+  async function handleSendTest() {
+    if (!emailConfigured) {
+      addToast({ type: 'error', message: 'Configure email credentials in Settings first' });
+      return;
+    }
+    setSending(true);
+    try {
+      const sampleTasks = tasks.filter((t) => !t.completed).slice(0, 3);
+      const html = buildEmailHtml(
+        'Test Email',
+        'This is a test from TaskManage',
+        sampleTasks.length ? sampleTasks : tasks.slice(0, 2),
+      );
+      await sendAlertEmail(
+        emailSettings,
+        emailSettings.recipientEmail,
+        '[TaskManage] Test Email',
+        html,
+      );
+      addToast({ type: 'success', message: 'Test email sent!' });
+    } catch (err) {
+      addToast({ type: 'error', message: `Test failed: ${err.message}` });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const selectedMeta = CONDITION_META[newRule.condition.type] || {};
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 flex-shrink-0 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
+              <BellIcon className="w-4 h-4 text-indigo-600" />
+            </div>
+            <h2 className="text-lg font-bold text-gray-900">Alert Rules</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleEvaluateNow}
+              disabled={evaluating}
+              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {evaluating ? 'Running…' : '▶ Evaluate Now'}
+            </button>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-1 transition-colors"
+            >
+              <XIcon className="w-5 h-5" />
+            </button>
           </div>
         </div>
 
-        <div className="flex gap-3 mt-6">
+        {/* Email status */}
+        <div
+          className={`px-6 py-2.5 text-xs flex items-center gap-1.5 flex-shrink-0 ${
+            emailConfigured
+              ? 'bg-green-50 text-green-700 border-b border-green-100'
+              : 'bg-amber-50 text-amber-700 border-b border-amber-100'
+          }`}
+        >
+          <span>{emailConfigured ? '✓' : '⚠️'}</span>
+          <span>
+            {emailConfigured
+              ? `Alerts → ${emailSettings.recipientEmail} · Rules check every 60 s`
+              : 'Configure Gmail credentials in Settings → Email & Alerts to activate'}
+          </span>
+        </div>
+
+        {/* Scrollable rules list */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+          {rules.map((rule) => (
+            <RuleRow
+              key={rule.id}
+              rule={rule}
+              defaultRecipient={emailSettings.recipientEmail}
+              onToggle={() => toggleRule(rule.id)}
+              onDelete={rule.isCustom ? () => deleteRule(rule.id) : null}
+              onRecipientChange={(v) => updateRecipient(rule.id, v)}
+            />
+          ))}
+
+          {/* Add custom rule inline form */}
+          {showAdd ? (
+            <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/30 mt-2">
+              <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                New Custom Rule
+              </h4>
+              <div className="space-y-2.5">
+                <input
+                  type="text"
+                  placeholder="Rule name *"
+                  value={newRule.name}
+                  onChange={(e) => setNewRule((r) => ({ ...r, name: e.target.value }))}
+                  className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+
+                <select
+                  value={newRule.condition.type}
+                  onChange={(e) =>
+                    setNewRule((r) => ({
+                      ...r,
+                      condition: { ...r.condition, type: e.target.value },
+                    }))
+                  }
+                  className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {Object.entries(CONDITION_META).map(([type, meta]) => (
+                    <option key={type} value={type}>{meta.label}</option>
+                  ))}
+                </select>
+
+                {selectedMeta.hasHours && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-500 w-16 flex-shrink-0">Hours:</label>
+                    <select
+                      value={newRule.condition.hours || 24}
+                      onChange={(e) =>
+                        setNewRule((r) => ({
+                          ...r,
+                          condition: { ...r.condition, hours: Number(e.target.value) },
+                        }))
+                      }
+                      className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {[2, 4, 8, 24, 48, 72].map((h) => (
+                        <option key={h} value={h}>{h} h</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {selectedMeta.hasTag && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-500 w-16 flex-shrink-0">Tag:</label>
+                    <select
+                      value={newRule.condition.tag || TAGS[0]}
+                      onChange={(e) =>
+                        setNewRule((r) => ({
+                          ...r,
+                          condition: { ...r.condition, tag: e.target.value },
+                        }))
+                      }
+                      className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {TAGS.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                <input
+                  type="email"
+                  placeholder="Recipient override (optional)"
+                  value={newRule.recipientOverride}
+                  onChange={(e) => setNewRule((r) => ({ ...r, recipientOverride: e.target.value }))}
+                  className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { setShowAdd(false); setNewRule(EMPTY_NEW_RULE); }}
+                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleAddRule}
+                    disabled={!newRule.name.trim()}
+                    className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors disabled:opacity-40"
+                  >
+                    Add Rule
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAdd(true)}
+              className="w-full flex items-center gap-2 px-4 py-3 border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50/20 transition-all text-sm font-medium mt-1"
+            >
+              <span className="text-base leading-none">+</span> Add custom rule
+            </button>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex gap-2 flex-shrink-0">
           <button
-            onClick={onClose}
-            className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors"
+            onClick={handleSendTest}
+            disabled={sending}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors disabled:opacity-50"
           >
-            Cancel
+            <MailIcon className="w-4 h-4" />
+            {sending ? 'Sending…' : 'Send Test Email'}
           </button>
           <button
-            onClick={() => {
-              onSave(draft);
-              onClose();
-            }}
-            className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm"
+            onClick={onClose}
+            className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm"
           >
-            Save Keys
+            Done
           </button>
         </div>
       </div>
@@ -928,6 +1703,24 @@ function SpinnerIcon({ className }) {
   );
 }
 
+function BellIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+    </svg>
+  );
+}
+
+function MailIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+    </svg>
+  );
+}
+
 function ChecklistIcon({ className }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -989,12 +1782,55 @@ const SAMPLE_TASKS = [
 ];
 
 export default function App() {
-  const [tasks, setTasks] = useState(SAMPLE_TASKS);
-  const [activeView, setActiveView] = useState('daily');
+  const [tasks, setTasks]                       = useState(SAMPLE_TASKS);
+  const [activeView, setActiveView]             = useState('daily');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [showSettings, setShowSettings] = useState(false);
-  const [apiKeys, setApiKeys] = useState({ claude: '', openai: '' });
+  const [statusFilter, setStatusFilter]         = useState('all');
+  const [showSettings, setShowSettings]         = useState(false);
+  const [showAlerts, setShowAlerts]             = useState(false);
+  const [apiKeys, setApiKeys]                   = useState({ claude: '', openai: '' });
+  const [emailSettings, setEmailSettings]       = useState({
+    gmailUser: '',
+    gmailAppPassword: '',
+    recipientEmail: '',
+  });
+  const [alertRules, setAlertRules]             = useState(DEFAULT_ALERT_RULES);
+  const [toasts, setToasts]                     = useState([]);
+  const firedAlertsRef                          = useRef(new Set());
+
+  // Keep refs current so the 60 s interval always reads fresh values without
+  // needing to re-register the effect on every state change.
+  const tasksRef         = useRef(tasks);
+  const alertRulesRef    = useRef(alertRules);
+  const emailSettingsRef = useRef(emailSettings);
+  useEffect(() => { tasksRef.current = tasks; },         [tasks]);
+  useEffect(() => { alertRulesRef.current = alertRules; }, [alertRules]);
+  useEffect(() => { emailSettingsRef.current = emailSettings; }, [emailSettings]);
+
+  function addToast(t) {
+    const id = uid();
+    setToasts((prev) => [...prev, { ...t, id }]);
+    setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 5000);
+  }
+
+  function dismissToast(id) {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  // Evaluate rules on mount (catches session-scoped digest) + every 60 s
+  useEffect(() => {
+    runAlertRules(
+      tasksRef.current, alertRulesRef.current,
+      emailSettingsRef.current, firedAlertsRef, addToast,
+    );
+    const id = setInterval(() => {
+      runAlertRules(
+        tasksRef.current, alertRulesRef.current,
+        emailSettingsRef.current, firedAlertsRef, addToast,
+      );
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function addTask(task) {
     setTasks((prev) => [task, ...prev]);
@@ -1024,7 +1860,8 @@ export default function App() {
     });
   }, [tasks, activeView, activeTagFilters, statusFilter]);
 
-  const completedCount = filteredTasks.filter((t) => t.completed).length;
+  const completedCount    = filteredTasks.filter((t) => t.completed).length;
+  const enabledRulesCount = alertRules.filter((r) => r.enabled).length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -1040,13 +1877,25 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Summary pill */}
+        <div className="flex items-center gap-2">
           <span className="hidden sm:inline-flex text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full font-medium">
             {tasks.filter((t) => !t.completed).length} active ·{' '}
             {tasks.filter((t) => t.completed).length} done
           </span>
 
+          {/* Bell — alert rules */}
+          <button
+            onClick={() => setShowAlerts(true)}
+            className="relative p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+            title="Alert rules"
+          >
+            <BellIcon className="w-5 h-5" />
+            {enabledRulesCount > 0 && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-indigo-600 rounded-full" />
+            )}
+          </button>
+
+          {/* Gear — settings */}
           <button
             onClick={() => setShowSettings(true)}
             className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1098,20 +1947,16 @@ export default function App() {
               setStatusFilter={setStatusFilter}
             />
 
-            {/* Task count */}
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs text-gray-400">
                 {filteredTasks.length} task{filteredTasks.length !== 1 ? 's' : ''}
                 {activeView === 'priority' ? ' (high priority)' : ''}
               </span>
               {completedCount > 0 && (
-                <span className="text-xs text-gray-400">
-                  {completedCount} completed
-                </span>
+                <span className="text-xs text-gray-400">{completedCount} completed</span>
               )}
             </div>
 
-            {/* Task list */}
             <div className="space-y-2.5">
               {filteredTasks.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -1145,14 +1990,31 @@ export default function App() {
         </section>
       </main>
 
-      {/* ── Settings Modal ── */}
+      {/* ── Modals ── */}
       {showSettings && (
         <SettingsModal
           apiKeys={apiKeys}
           onSave={setApiKeys}
+          emailSettings={emailSettings}
+          onSaveEmail={setEmailSettings}
           onClose={() => setShowSettings(false)}
         />
       )}
+
+      {showAlerts && (
+        <AlertsModal
+          rules={alertRules}
+          onUpdateRules={setAlertRules}
+          emailSettings={emailSettings}
+          tasks={tasks}
+          firedAlertsRef={firedAlertsRef}
+          addToast={addToast}
+          onClose={() => setShowAlerts(false)}
+        />
+      )}
+
+      {/* ── Toast notifications ── */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
