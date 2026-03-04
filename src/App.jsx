@@ -1381,10 +1381,18 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
 // TASK CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, onToggle, onDelete, onToggleVisibility, currentUser }) {
+function TaskCard({ task, onToggle, onDelete, onToggleVisibility, onSyncCalendar, currentUser, gcalConnected }) {
+  const [syncing, setSyncing] = useState(false);
   const overdue =
     task.dueDate && !task.completed && new Date(task.dueDate) < new Date();
   const isOwner = !task.owner || task.owner === currentUser?.id;
+
+  async function handleSync() {
+    if (!onSyncCalendar || syncing) return;
+    setSyncing(true);
+    await onSyncCalendar(task);
+    setSyncing(false);
+  }
 
   return (
     <div
@@ -1416,6 +1424,17 @@ function TaskCard({ task, onToggle, onDelete, onToggleVisibility, currentUser })
               {task.title}
             </h4>
             <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Sync to Google Calendar */}
+              {task.dueDate && gcalConnected && !task.completed && (
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors disabled:opacity-50"
+                  title="Sync to Google Calendar"
+                >
+                  {syncing ? <SpinnerIcon className="w-3 h-3 animate-spin" /> : <SyncIcon className="w-3 h-3" />}
+                </button>
+              )}
               {/* Visibility toggle */}
               {isOwner && (
                 <button
@@ -1894,6 +1913,148 @@ function LogoutIcon({ className }) {
   );
 }
 
+function CalendarIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  );
+}
+
+function SyncIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GOOGLE CALENDAR PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CalendarPanel({ currentUser, addToast }) {
+  const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null });
+  const [loading, setLoading]       = useState(true);
+
+  // Check connection status on mount and after OAuth redirect
+  useEffect(() => {
+    checkStatus();
+    // Handle ?gcal=connected redirect from OAuth callback
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('gcal') === 'connected') {
+      window.history.replaceState({}, '', window.location.pathname);
+      checkStatus();
+      addToast({ type: 'success', message: 'Google Calendar connected!' });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function checkStatus() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`);
+      const data = await res.json();
+      setGcalStatus(data);
+    } catch {
+      setGcalStatus({ connected: false });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleConnect() {
+    try {
+      const res = await fetch(`${API_BASE}/api/gcal/auth-url?userId=${currentUser.id}`);
+      const data = await res.json();
+      if (data.error) {
+        addToast({ type: 'error', message: data.error });
+        return;
+      }
+      window.location.href = data.url;
+    } catch (err) {
+      addToast({ type: 'error', message: 'Failed to start Google sign-in' });
+    }
+  }
+
+  async function handleDisconnect() {
+    try {
+      await fetch(`${API_BASE}/api/gcal/disconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+      setGcalStatus({ connected: false, email: null });
+      addToast({ type: 'success', message: 'Google Calendar disconnected' });
+    } catch {
+      addToast({ type: 'error', message: 'Failed to disconnect' });
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-400">
+        <SpinnerIcon className="w-6 h-6 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!gcalStatus.connected) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
+        <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mb-4">
+          <CalendarIcon className="w-8 h-8 text-indigo-600" />
+        </div>
+        <h3 className="text-lg font-bold text-gray-900 mb-2">Connect Google Calendar</h3>
+        <p className="text-sm text-gray-500 mb-6 max-w-xs">
+          Sign in with Google to view your calendar and sync tasks with due dates as calendar events.
+        </p>
+        <button
+          onClick={handleConnect}
+          className="flex items-center gap-3 px-5 py-3 bg-white border border-gray-300 rounded-xl shadow-sm hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+          Sign in with Google
+        </button>
+      </div>
+    );
+  }
+
+  // Connected — show embedded calendar
+  // Build a public embeddable Google Calendar URL for the user's primary calendar
+  const calendarSrc = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(gcalStatus.email)}&ctz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`;
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Connection status bar */}
+      <div className="flex items-center justify-between px-4 py-2 bg-green-50 border-b border-green-100 flex-shrink-0">
+        <div className="flex items-center gap-2 text-xs text-green-700">
+          <span className="w-2 h-2 bg-green-500 rounded-full" />
+          Connected as {gcalStatus.email}
+        </div>
+        <button
+          onClick={handleDisconnect}
+          className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium"
+        >
+          Disconnect
+        </button>
+      </div>
+      {/* Calendar iframe */}
+      <iframe
+        src={calendarSrc}
+        className="flex-1 w-full border-0"
+        title="Google Calendar"
+      />
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1992,6 +2153,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
   });
   const [alertRules, setAlertRules]             = useState(DEFAULT_ALERT_RULES);
   const [toasts, setToasts]                     = useState([]);
+  const [gcalConnected, setGcalConnected]       = useState(false);
   const firedAlertsRef                          = useRef(new Set());
 
   // Keep refs current so the 60 s interval always reads fresh values without
@@ -2063,6 +2225,35 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
     }, 60_000);
     return () => clearInterval(id);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Google Calendar status check ──────────────────────────────────────────
+  useEffect(() => {
+    fetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`)
+      .then((r) => r.json())
+      .then((data) => setGcalConnected(data.connected))
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleSyncToCalendar(task) {
+    if (!task.dueDate) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/gcal/sync-task`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          title: task.title,
+          description: task.description || '',
+          dueDate: task.dueDate,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Sync failed');
+      addToast({ type: 'success', message: `Synced "${task.title}" to Google Calendar` });
+    } catch (err) {
+      addToast({ type: 'error', message: `Calendar sync failed: ${err.message}` });
+    }
+  }
 
   function addTask(task) {
     setTasks((prev) => [task, ...prev]);
@@ -2183,16 +2374,18 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
               {[
                 { key: 'daily', label: 'Daily Tasks' },
                 { key: 'priority', label: 'High Priority' },
+                { key: 'calendar', label: 'Calendar' },
               ].map(({ key, label }) => (
                 <button
                   key={key}
                   onClick={() => setActiveView(key)}
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px flex items-center gap-1.5 ${
                     activeView === key
                       ? 'border-indigo-600 text-indigo-700'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-200'
                   }`}
                 >
+                  {key === 'calendar' && <CalendarIcon className="w-3.5 h-3.5" />}
                   {label}
                   {key === 'priority' && (
                     <span className="ml-1.5 text-[10px] bg-red-100 text-red-500 font-semibold px-1.5 py-0.5 rounded-full">
@@ -2204,7 +2397,11 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
             </div>
           </div>
 
-          {/* Scrollable content */}
+          {/* Calendar view */}
+          {activeView === 'calendar' ? (
+            <CalendarPanel currentUser={currentUser} addToast={addToast} />
+          ) : (
+          /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-6 py-5">
             <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} />
             <FilterBar
@@ -2245,12 +2442,15 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
                     onToggle={toggleTask}
                     onDelete={deleteTask}
                     onToggleVisibility={toggleVisibility}
+                    onSyncCalendar={handleSyncToCalendar}
                     currentUser={currentUser}
+                    gcalConnected={gcalConnected}
                   />
                 ))
               )}
             </div>
           </div>
+          )}
         </section>
 
         {/* ── Right: Chat panel (40%) ── */}
