@@ -514,6 +514,44 @@ app.post('/api/tasks', async (req, res) => {
   }
 });
 
+app.put('/api/tasks/:id', async (req, res) => {
+  try {
+    const updated = await db.updateTask(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Task not found' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[tasks] update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Change password ──────────────────────────────────────────────────────────
+
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current password and new password are required' });
+  }
+  if (newPassword.length < 4) {
+    return res.status(400).json({ error: 'New password must be at least 4 characters' });
+  }
+
+  try {
+    const user = await db.getUserById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await db.updateUserPassword(user.id, newHash);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[auth] change-password failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>

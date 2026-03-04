@@ -1382,8 +1382,10 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
 // TASK CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, onToggle, onDelete, onToggleVisibility, onSyncCalendar, currentUser, gcalConnected }) {
+function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSyncCalendar, currentUser, gcalConnected }) {
   const [syncing, setSyncing] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft]     = useState(null);
   const overdue =
     task.dueDate && !task.completed && new Date(task.dueDate) < new Date();
   const isOwner = !task.owner || task.owner === currentUser?.id;
@@ -1393,6 +1395,132 @@ function TaskCard({ task, onToggle, onDelete, onToggleVisibility, onSyncCalendar
     setSyncing(true);
     await onSyncCalendar(task);
     setSyncing(false);
+  }
+
+  function openEdit() {
+    setDraft({
+      title: task.title,
+      description: task.description || '',
+      priority: task.priority,
+      dueDate: task.dueDate || '',
+      tags: [...(task.tags || [])],
+      visibility: task.visibility || 'shared',
+    });
+    setEditing(true);
+  }
+
+  function handleSaveEdit(e) {
+    e.preventDefault();
+    if (!draft.title.trim()) return;
+    onEdit(task.id, draft);
+    setEditing(false);
+    setDraft(null);
+  }
+
+  if (editing && draft) {
+    return (
+      <div className={`bg-white rounded-xl border border-gray-100 shadow-sm p-4 ${PRIORITY_BORDER[draft.priority]}`}>
+        <form onSubmit={handleSaveEdit} className="space-y-3">
+          <input
+            type="text"
+            value={draft.title}
+            onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+            placeholder="Task title *"
+            autoFocus
+            required
+          />
+          <textarea
+            value={draft.description}
+            onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+            placeholder="Description (optional)"
+            rows={2}
+          />
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Priority</label>
+              <select
+                value={draft.priority}
+                onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
+                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Due Date</label>
+              <input
+                type="date"
+                value={draft.dueDate}
+                onChange={(e) => setDraft((d) => ({ ...d, dueDate: e.target.value }))}
+                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Tags</label>
+            <div className="flex flex-wrap gap-1.5">
+              {TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => setDraft((d) => ({
+                    ...d,
+                    tags: d.tags.includes(tag) ? d.tags.filter((t) => t !== tag) : [...d.tags, tag],
+                  }))}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${
+                    draft.tags.includes(tag)
+                      ? `${TAG_STYLES[tag]} ring-2 ring-offset-1 ${TAG_ACTIVE_RING[tag]}`
+                      : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Visibility</label>
+            <div className="flex gap-2">
+              {['shared', 'private'].map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setDraft((d) => ({ ...d, visibility: v }))}
+                  className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
+                    draft.visibility === v
+                      ? v === 'private'
+                        ? 'bg-amber-50 text-amber-700 border-amber-300 ring-2 ring-offset-1 ring-amber-300'
+                        : 'bg-indigo-50 text-indigo-700 border-indigo-300 ring-2 ring-offset-1 ring-indigo-300'
+                      : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  {v === 'private' ? 'Private' : 'Shared'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => { setEditing(false); setDraft(null); }}
+              className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm"
+            >
+              Save
+            </button>
+          </div>
+        </form>
+      </div>
+    );
   }
 
   return (
@@ -1425,6 +1553,16 @@ function TaskCard({ task, onToggle, onDelete, onToggleVisibility, onSyncCalendar
               {task.title}
             </h4>
             <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Edit button */}
+              {isOwner && !task.completed && (
+                <button
+                  onClick={openEdit}
+                  className="text-gray-300 hover:text-indigo-500 transition-colors min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                  title="Edit task"
+                >
+                  <PencilIcon className="w-4 h-4 md:w-3.5 md:h-3.5" />
+                </button>
+              )}
               {/* Sync to Google Calendar */}
               {task.dueDate && gcalConnected && !task.completed && (
                 <button
@@ -1932,6 +2070,15 @@ function SyncIcon({ className }) {
   );
 }
 
+function PencilIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+    </svg>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GOOGLE CALENDAR PANEL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2329,6 +2476,18 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
     );
   }
 
+  function editTask(id, fields) {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...fields } : t)),
+    );
+    // Also persist to server via PUT
+    fetch(`/api/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fields),
+    }).catch((err) => console.error('[tasks] edit failed:', err.message));
+  }
+
   // Filter tasks: show shared tasks from anyone + private tasks only from current user
   const visibleTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -2497,6 +2656,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
                     task={task}
                     onToggle={toggleTask}
                     onDelete={deleteTask}
+                    onEdit={editTask}
                     onToggleVisibility={toggleVisibility}
                     onSyncCalendar={handleSyncToCalendar}
                     currentUser={currentUser}

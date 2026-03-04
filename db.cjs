@@ -195,6 +195,51 @@ async function deleteGcalTokensForUser(userId) {
   await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
 }
 
+// ── Single-task update ───────────────────────────────────────────────────────
+
+async function updateTask(id, fields) {
+  const { rows } = await pool.query(
+    `UPDATE tasks
+     SET title       = COALESCE($2, title),
+         description = COALESCE($3, description),
+         priority    = COALESCE($4, priority),
+         due_date    = COALESCE($5, due_date),
+         tags        = COALESCE($6, tags),
+         visibility  = COALESCE($7, visibility),
+         completed   = COALESCE($8, completed),
+         updated_at  = NOW()
+     WHERE id = $1
+     RETURNING id, title, description, priority, status, due_date AS "dueDate",
+               tags, visibility, completed, owner, created_by AS "createdBy",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [
+      id,
+      fields.title ?? null,
+      fields.description ?? null,
+      fields.priority ?? null,
+      fields.dueDate ?? null,
+      fields.tags ? JSON.stringify(fields.tags) : null,
+      fields.visibility ?? null,
+      fields.completed !== undefined ? fields.completed : null,
+    ],
+  );
+  return rows[0] || null;
+}
+
+// ── Password update ──────────────────────────────────────────────────────────
+
+async function getUserById(id) {
+  const { rows } = await pool.query(
+    'SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash" FROM users WHERE id = $1',
+    [id],
+  );
+  return rows[0] || null;
+}
+
+async function updateUserPassword(id, newHash) {
+  await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [id, newHash]);
+}
+
 // ── Seed users from users.json (one-time migration) ──────────────────────────
 
 async function seedUsersIfEmpty() {
@@ -230,5 +275,8 @@ module.exports = {
   getGcalTokensForUser,
   setGcalTokensForUser,
   deleteGcalTokensForUser,
+  updateTask,
+  getUserById,
+  updateUserPassword,
   seedUsersIfEmpty,
 };
