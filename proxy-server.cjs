@@ -813,10 +813,10 @@ if (fs.existsSync(DIST_DIR)) {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 async function start() {
-  // Initialise database tables and seed data
+  // Initialise database tables, seed data, and run migrations
   await db.initTables();
-  await db.seedEntitiesIfEmpty();
   await db.seedUsersIfEmpty();
+  await db.runMigrations();
 
   app.listen(PORT, () => {
     console.log(`\n✓ TaskManage server running at http://localhost:${PORT}`);

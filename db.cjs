@@ -535,17 +535,7 @@ async function updateUserPassword(id, newHash) {
 
 async function seedUsersIfEmpty() {
   const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM users');
-  if (rows[0].count > 0) {
-    // Ensure first user (lyle) is admin with all entities if not set
-    const lyle = await getUserById('user-lyle');
-    if (lyle && lyle.role === 'member') {
-      const entities = await getEntities();
-      const allEntityNames = entities.map((e) => e.name);
-      await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames });
-      console.log('[db] Upgraded user-lyle to admin with all entities');
-    }
-    return;
-  }
+  if (rows[0].count > 0) return;
 
   const fs   = require('fs');
   const path = require('path');
@@ -554,19 +544,50 @@ async function seedUsersIfEmpty() {
 
   try {
     const users = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const entities = await getEntities();
-    const allEntityNames = entities.map((e) => e.name);
-    for (let i = 0; i < users.length; i++) {
-      const u = users[i];
-      await upsertUser({
-        ...u,
-        role: i === 0 ? 'admin' : 'member',
-        entityIds: allEntityNames,
-      });
+    for (const u of users) {
+      await upsertUser(u);
     }
     console.log(`[db] Seeded ${users.length} users from users.json`);
   } catch (err) {
     console.error('[db] Failed to seed users:', err.message);
+  }
+}
+
+/**
+ * Robust migration that runs on EVERY startup.
+ * Ensures entities exist, lyle is admin with all entities assigned,
+ * and all users have the new columns populated.
+ */
+async function runMigrations() {
+  // 1. Seed default entities if the table is empty
+  await seedEntitiesIfEmpty();
+
+  // 2. Get all entity names
+  const entities = await getEntities();
+  const allEntityNames = entities.map((e) => e.name);
+
+  // 3. Find lyle — always ensure admin + all entities
+  const lyle = await getUserById('user-lyle');
+  if (lyle) {
+    const needsUpdate =
+      lyle.role !== 'admin' ||
+      !Array.isArray(lyle.entityIds) ||
+      lyle.entityIds.length !== allEntityNames.length ||
+      !allEntityNames.every((n) => lyle.entityIds.includes(n));
+
+    if (needsUpdate) {
+      await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames });
+      console.log('[db] Migration: set user-lyle as admin with all entities');
+    }
+  }
+
+  // 4. Ensure all existing users who have empty entity_ids get all entities assigned
+  const allUsers = await getUsers();
+  for (const u of allUsers) {
+    if (!Array.isArray(u.entityIds) || u.entityIds.length === 0) {
+      await updateUser(u.id, { entityIds: allEntityNames });
+      console.log(`[db] Migration: assigned all entities to ${u.username}`);
+    }
   }
 }
 
@@ -605,4 +626,5 @@ module.exports = {
   getUserById,
   updateUserPassword,
   seedUsersIfEmpty,
+  runMigrations,
 };
