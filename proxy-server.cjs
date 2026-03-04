@@ -1350,6 +1350,72 @@ app.post('/api/notes/categories', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Daily Digest ─────────────────────────────────────────────────────────────
+
+app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Check if digest already exists for today
+    const notes = await db.getNotes(req.user.id);
+    const existing = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
+    if (existing) return res.json(existing);
+
+    // Gather context for the AI
+    const tasks = await db.getTasks(req.user.id);
+    const activeTasks = (Array.isArray(tasks) ? tasks : []).filter((t) => !t.completed);
+    const recentNotes = notes.slice(0, 10);
+
+    const apiKey = req.body.apiKey || process.env.CLAUDE_API_KEY;
+    if (!apiKey) {
+      // No API key — create a simple summary without AI
+      const overdue = activeTasks.filter((t) => t.dueDate && t.dueDate < today).length;
+      const high = activeTasks.filter((t) => t.priority === 'high').length;
+      const content = `**Daily Summary — ${today}**\n\nYou have ${activeTasks.length} active tasks${overdue > 0 ? `, ${overdue} overdue` : ''}${high > 0 ? `, ${high} high priority` : ''}.\n\nStay focused and tackle the most important items first.`;
+      const id = `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const digest = await db.createNote({
+        id, userId: req.user.id, title: `Daily Digest — ${today}`, content, type: 'digest', pillar: 'grow',
+      });
+      return res.json(digest);
+    }
+
+    // Build AI prompt
+    const taskSummary = activeTasks.slice(0, 15).map((t) =>
+      `- [${t.priority}] ${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ''}`
+    ).join('\n');
+    const noteSummary = recentNotes.slice(0, 5).map((n) =>
+      `- ${n.title || '(untitled)'}: ${(n.content || '').slice(0, 80)}`
+    ).join('\n');
+
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 512,
+        system: 'You are a concise personal productivity assistant. Write a brief daily digest (3-5 short paragraphs) summarizing priorities, flagging overdue items, and offering one actionable tip. Use markdown formatting. Be warm but direct.',
+        messages: [{
+          role: 'user',
+          content: `Today is ${today}. Here are my active tasks:\n${taskSummary || '(none)'}\n\nRecent notes:\n${noteSummary || '(none)'}\n\nWrite my daily digest.`,
+        }],
+      },
+      {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        timeout: 30_000,
+      },
+    );
+
+    const aiContent = response.data.content?.[0]?.text || 'No digest could be generated.';
+    const id = `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const digest = await db.createNote({
+      id, userId: req.user.id, title: `Daily Digest — ${today}`, content: aiContent, type: 'digest', pillar: 'grow',
+    });
+    return res.json(digest);
+  } catch (err) {
+    console.error('[digest] generation failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>

@@ -2248,7 +2248,7 @@ function FilterBar({
 // CHAT PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financialTransactions = [], financialAccounts = [] }) {
+function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financialTransactions = [], financialAccounts = [], initialMessage = '' }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [backend, setBackend] = useState('claude');
@@ -2257,6 +2257,7 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financial
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const historyLoadedRef = useRef(false);
+  const initialMsgHandledRef = useRef('');
 
   const authHeaders = {
     'Content-Type': 'application/json',
@@ -2275,6 +2276,19 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financial
       .catch(() => {})
       .finally(() => { historyLoadedRef.current = true; });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle initial message from Dashboard AI prompt bar
+  useEffect(() => {
+    if (initialMessage && initialMessage !== initialMsgHandledRef.current) {
+      initialMsgHandledRef.current = initialMessage;
+      setInput(initialMessage);
+      // Auto-send after a brief delay to allow rendering
+      setTimeout(() => {
+        const ta = textareaRef.current;
+        if (ta) { ta.focus(); }
+      }, 100);
+    }
+  }, [initialMessage]);
 
   function persistMessage(role, content, model) {
     apiFetch('/api/chat/message', {
@@ -3499,6 +3513,337 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DASHBOARD PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SkeletonBlock({ className = '' }) {
+  return <div className={`bg-gray-200 rounded-lg animate-pulse ${className}`} />;
+}
+
+function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt }) {
+  const [digest, setDigest] = useState(null);
+  const [digestLoading, setDigestLoading] = useState(true);
+  const [promptInput, setPromptInput] = useState('');
+
+  const today = new Date().toISOString().slice(0, 10);
+  const tasksReady = tasks.length > 0 || tasks._loaded;
+
+  // Greeting
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const firstName = currentUser?.displayName?.split(' ')[0] || currentUser?.username || '';
+  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+  // Task computations
+  const activeTasks = useMemo(() => tasks.filter((t) => !t.completed), [tasks]);
+  const overdueTasks = useMemo(() => activeTasks.filter((t) => t.dueDate && t.dueDate < today), [activeTasks, today]);
+  const highPriorityTasks = useMemo(() => activeTasks.filter((t) => t.priority === 'high'), [activeTasks]);
+  const todayTasks = useMemo(() => activeTasks.filter((t) => t.dueDate === today), [activeTasks, today]);
+
+  // Top 5 focus tasks: overdue first, then high priority due today, then high priority no date
+  const focusTasks = useMemo(() => {
+    const scored = activeTasks.map((t) => {
+      let score = 0;
+      if (t.dueDate && t.dueDate < today) score += 1000;
+      if (t.priority === 'high') score += 100;
+      if (t.dueDate === today) score += 50;
+      if (t.dueDate) score += 10;
+      return { ...t, _score: score };
+    });
+    scored.sort((a, b) => b._score - a._score);
+    return scored.slice(0, 5);
+  }, [activeTasks, today]);
+
+  // Financial: net cash flow this month
+  const netCashFlow = useMemo(() => {
+    if (!financialTransactions || financialTransactions.length === 0) return null;
+    const monthPrefix = today.slice(0, 7); // YYYY-MM
+    let net = 0;
+    financialTransactions.forEach((t) => {
+      if (t.date && t.date.startsWith(monthPrefix)) {
+        net += parseFloat(t.amount) || 0;
+      }
+    });
+    return net;
+  }, [financialTransactions, today]);
+
+  // Notes: this week count + latest note
+  const notesThisWeek = useMemo(() => {
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const weekAgoStr = weekAgo.toISOString();
+    return notes.filter((n) => n.type !== 'digest' && n.createdAt && n.createdAt >= weekAgoStr).length;
+  }, [notes]);
+
+  const latestNote = useMemo(() => {
+    return notes.find((n) => n.type !== 'digest') || null;
+  }, [notes]);
+
+  // Digest: load from localStorage cache or fetch
+  useEffect(() => {
+    const cacheKey = `digest_${today}`;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        setDigest(JSON.parse(cached));
+        setDigestLoading(false);
+        return;
+      } catch { /* invalid cache, refetch */ }
+    }
+
+    // Check if already generated today (from notes)
+    const existingDigest = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
+    if (existingDigest) {
+      setDigest(existingDigest);
+      localStorage.setItem(cacheKey, JSON.stringify(existingDigest));
+      setDigestLoading(false);
+      return;
+    }
+
+    // Fire POST to generate
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
+    apiFetch('/api/notes/daily-digest', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ apiKey: apiKeys?.claude || '' }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && data.content) {
+          setDigest(data);
+          localStorage.setItem(cacheKey, JSON.stringify(data));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setDigestLoading(false));
+  }, [today]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handlePromptSubmit(e) {
+    e.preventDefault();
+    const text = promptInput.trim();
+    if (!text) return;
+    setPromptInput('');
+    onAIPrompt(text);
+  }
+
+  const pillarBadge = (pillar) => {
+    if (!pillar) return null;
+    const cfg = { hustle: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Hustle' }, home: { bg: 'bg-green-100', text: 'text-green-700', label: 'Home' }, move: { bg: 'bg-orange-100', text: 'text-orange-700', label: 'Move' }, grow: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Grow' } }[pillar];
+    if (!cfg) return null;
+    return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cfg.bg} ${cfg.text}`}>{cfg.label}</span>;
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5 space-y-5">
+
+      {/* ── Header / Greeting ── */}
+      <div>
+        <h2 className="text-xl md:text-2xl font-bold text-gray-900">
+          {greeting}, {firstName} <span className="font-normal text-gray-400 text-base md:text-lg">&middot; {dateStr}</span>
+        </h2>
+        <p className="text-sm text-gray-500 mt-1">Here&rsquo;s what needs your attention today</p>
+      </div>
+
+      {/* ── Urgency strip ── */}
+      {(overdueTasks.length > 0 || highPriorityTasks.length > 0) && (
+        <div className="flex gap-3 flex-wrap">
+          {overdueTasks.length > 0 && (
+            <button
+              onClick={() => onNavigate('daily', 'overdue')}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors"
+            >
+              <span>&#9888;&#65039;</span> {overdueTasks.length} overdue
+            </button>
+          )}
+          {highPriorityTasks.length > 0 && (
+            <button
+              onClick={() => onNavigate('daily', 'high')}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+            >
+              <span className="w-2 h-2 bg-red-500 rounded-full" /> {highPriorityTasks.length} high priority
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Today's Focus ── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+          <span>&#127919;</span> Today&rsquo;s Focus
+        </h3>
+        {!tasksReady ? (
+          <div className="space-y-3">
+            {[1,2,3].map((i) => <SkeletonBlock key={i} className="h-10 w-full" />)}
+          </div>
+        ) : focusTasks.length === 0 ? (
+          <p className="text-sm text-gray-400 py-3">No active tasks — nice work!</p>
+        ) : (
+          <div className="space-y-2">
+            {focusTasks.map((task) => (
+              <button
+                key={task.id}
+                onClick={() => onNavigate('daily')}
+                className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors text-left group"
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                    task.dueDate && task.dueDate < today ? 'bg-red-500' : task.priority === 'high' ? 'bg-orange-500' : 'bg-gray-300'
+                  }`} />
+                  <span className="text-sm text-gray-800 truncate">{task.title.length > 40 ? task.title.slice(0, 40) + '…' : task.title}</span>
+                  {task.tags?.[0] && pillarBadge(task.tags[0].toLowerCase())}
+                </div>
+                <svg className="w-4 h-4 text-gray-300 group-hover:text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        )}
+        {activeTasks.length > 5 && (
+          <button onClick={() => onNavigate('daily')} className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
+            See all {activeTasks.length} tasks &rarr;
+          </button>
+        )}
+      </div>
+
+      {/* ── Pillar Strip ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+        {/* Hustle */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+            <h4 className="text-sm font-semibold text-gray-900">Hustle</h4>
+          </div>
+          {!tasksReady ? (
+            <div className="space-y-2"><SkeletonBlock className="h-4 w-3/4" /><SkeletonBlock className="h-4 w-1/2" /><SkeletonBlock className="h-4 w-2/3" /></div>
+          ) : (
+            <div className="space-y-1.5 text-sm">
+              <p className={highPriorityTasks.length > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
+                {highPriorityTasks.length} high priority
+              </p>
+              <p className={overdueTasks.length > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
+                {overdueTasks.length} overdue
+              </p>
+              <p className={netCashFlow !== null ? (netCashFlow >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium') : 'text-gray-400'}>
+                {netCashFlow !== null
+                  ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month`
+                  : '\u2014'}
+              </p>
+            </div>
+          )}
+          <button onClick={() => onNavigate('daily')} className="mt-3 text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors">
+            View Tasks &rarr;
+          </button>
+        </div>
+
+        {/* Home */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
+            <h4 className="text-sm font-semibold text-gray-900">Home</h4>
+          </div>
+          {!tasksReady ? (
+            <div className="space-y-2"><SkeletonBlock className="h-4 w-3/4" /><SkeletonBlock className="h-4 w-1/2" /><SkeletonBlock className="h-4 w-2/3" /></div>
+          ) : (
+            <div className="space-y-1.5 text-sm">
+              <p className="text-gray-500">No events today</p>
+              <p className="text-gray-400">&mdash;</p>
+              <p className="text-gray-500">{todayTasks.length} task{todayTasks.length !== 1 ? 's' : ''} due today</p>
+            </div>
+          )}
+          <button onClick={() => onNavigate('calendar')} className="mt-3 text-xs font-medium text-green-600 hover:text-green-800 transition-colors">
+            View Calendar &rarr;
+          </button>
+        </div>
+
+        {/* Grow */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+            <h4 className="text-sm font-semibold text-gray-900">Grow</h4>
+          </div>
+          {notes.length === 0 && !tasksReady ? (
+            <div className="space-y-2"><SkeletonBlock className="h-4 w-3/4" /><SkeletonBlock className="h-4 w-1/2" /><SkeletonBlock className="h-4 w-2/3" /></div>
+          ) : (
+            <div className="space-y-1.5 text-sm">
+              <p className="text-gray-500">{notesThisWeek} note{notesThisWeek !== 1 ? 's' : ''} this week</p>
+              <p className="text-gray-400 truncate">{latestNote ? (latestNote.content || '').slice(0, 40) : 'No notes yet'}</p>
+              <p className={digest ? 'text-purple-600 font-medium' : 'text-gray-400'}>
+                {digest ? 'Daily Digest ready \u2728' : 'No digest yet'}
+              </p>
+            </div>
+          )}
+          <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
+            View Notes &rarr;
+          </button>
+        </div>
+
+        {/* Move (placeholder) */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 opacity-60">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2.5 h-2.5 rounded-full bg-orange-400" />
+            <h4 className="text-sm font-semibold text-gray-500">Move</h4>
+          </div>
+          <div className="space-y-1.5 text-sm">
+            <p className="text-gray-400">Coming soon</p>
+            <p className="text-gray-400">Workouts &amp; health tracking</p>
+            <p className="text-gray-400">&mdash;</p>
+          </div>
+          <span className="mt-3 inline-block text-xs font-medium text-gray-300 cursor-not-allowed">
+            View Move &rarr;
+          </span>
+        </div>
+      </div>
+
+      {/* ── AI Daily Digest ── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow border-l-4 border-l-purple-500">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+          <span>&#129504;</span> Daily Digest <span className="text-gray-400 font-normal">&middot; {dateStr}</span>
+        </h3>
+        {digestLoading ? (
+          <div className="flex items-center gap-2 py-3">
+            <SpinnerIcon className="w-4 h-4 animate-spin text-purple-400" />
+            <span className="text-sm text-gray-400">Generating your digest...</span>
+          </div>
+        ) : digest ? (
+          <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+            {digest.content.split('\n').slice(0, 4).join('\n')}
+            {digest.content.split('\n').length > 4 && '…'}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400 py-2">No digest yet — check back tomorrow</p>
+        )}
+        {digest && (
+          <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
+            Read full digest &rarr;
+          </button>
+        )}
+      </div>
+
+      {/* ── AI Prompt Bar ── */}
+      <form onSubmit={handlePromptSubmit} className="flex items-center gap-2 bg-white rounded-full shadow-sm border border-gray-200 px-4 py-2 hover:shadow-md transition-shadow">
+        <input
+          type="text"
+          value={promptInput}
+          onChange={(e) => setPromptInput(e.target.value)}
+          placeholder="What do you want to focus on today?"
+          className="flex-1 text-sm text-gray-700 placeholder-gray-400 bg-transparent border-0 outline-none focus:ring-0"
+        />
+        <button
+          type="submit"
+          disabled={!promptInput.trim()}
+          className="w-9 h-9 flex items-center justify-center rounded-full transition-all disabled:opacity-30"
+          style={{ backgroundColor: '#7C3AED' }}
+        >
+          <SendIcon className="w-4 h-4 text-white" />
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // NOTES PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -4439,7 +4784,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [currentUser, setCurrentUser]           = useState(initialUser);
   const [tasks, setTasks]                       = useState([]);
   const tasksLoadedRef                           = useRef(false);
-  const [activeView, setActiveView]             = useState('daily');
+  const [activeView, setActiveView]             = useState('dashboard');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
   const [statusFilter, setStatusFilter]         = useState('all');
   const [showSettings, setShowSettings]         = useState(false);
@@ -4465,6 +4810,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [notesEditorOpen, setNotesEditorOpen]   = useState(false);
   const [quickCapturedNote, setQuickCapturedNote] = useState(null);
 
+  // Dashboard state
+  const [dashboardNotes, setDashboardNotes]     = useState([]);
+  const [chatInitialMsg, setChatInitialMsg]     = useState('');
+
   // Load entities + refresh current user on mount
   useEffect(() => {
     apiFetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -4479,6 +4828,11 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     apiFetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setFinancialAccounts(data); })
+      .catch(() => {});
+    // Load notes for dashboard
+    apiFetch('/api/notes', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setDashboardNotes(data); })
       .catch(() => {});
     // Refresh user data (role, entityIds) from server
     apiFetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -4778,8 +5132,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           <div className="bg-white border-b border-gray-100 px-4 md:px-6 pt-3 md:pt-4 pb-0 flex-shrink-0">
             <div className="flex gap-1 w-fit">
               {[
+                { key: 'dashboard', label: 'Dashboard' },
                 { key: 'daily', label: 'Daily Tasks' },
-                { key: 'priority', label: 'High Priority' },
                 { key: 'calendar', label: 'Calendar', desktopOnly: true },
                 { key: 'financials', label: 'Financials', desktopOnly: true },
                 { key: 'notes', label: 'Notes', desktopOnly: true },
@@ -4799,18 +5153,38 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   {key === 'financials' && <DollarIcon className="w-3.5 h-3.5" />}
                   {key === 'notes' && <NotesIcon className="w-3.5 h-3.5" />}
                   {label}
-                  {key === 'priority' && (
-                    <span className="ml-1.5 text-[10px] bg-red-100 text-red-500 font-semibold px-1.5 py-0.5 rounded-full">
-                      {tasks.filter((t) => t.priority === 'high' && !t.completed).length}
-                    </span>
-                  )}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Calendar view */}
-          {activeView === 'calendar' ? (
+          {/* View routing */}
+          {activeView === 'dashboard' ? (
+            <DashboardPanel
+              tasks={tasks}
+              financialTransactions={financialTransactions}
+              currentUser={currentUser}
+              authToken={authToken}
+              apiKeys={apiKeys}
+              notes={dashboardNotes}
+              onNavigate={(view, filter) => {
+                setActiveView(view);
+                // On mobile, switch mobileView for panels that have their own mobile section
+                if (window.innerWidth < 768) {
+                  if (view === 'calendar') setMobileView('calendar');
+                  else if (view === 'financials') setMobileView('financials');
+                  else if (view === 'notes') setMobileView('notes');
+                  else setMobileView('tasks');
+                }
+                if (view === 'daily' && filter === 'overdue') setStatusFilter('active');
+                if (view === 'daily' && filter === 'high') { setStatusFilter('active'); }
+              }}
+              onAIPrompt={(msg) => {
+                setChatInitialMsg(msg);
+                if (window.innerWidth < 768) setMobileView('chat');
+              }}
+            />
+          ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
           ) : activeView === 'financials' ? (
             <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
@@ -4878,7 +5252,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'chat' ? 'flex' : 'hidden md:flex'
           }`}
         >
-          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} entities={userEntities} financialTransactions={financialTransactions} financialAccounts={financialAccounts} />
+          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} entities={userEntities} financialTransactions={financialTransactions} financialAccounts={financialAccounts} initialMessage={chatInitialMsg} />
         </section>
 
         {/* ── Calendar panel (mobile only — on desktop it's in the task section tabs) ── */}
@@ -4922,7 +5296,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             key={key}
             onClick={() => {
               setMobileView(key);
-              if (key === 'tasks' && (activeView === 'calendar' || activeView === 'financials' || activeView === 'notes')) setActiveView('daily');
+              if (key === 'tasks' && (activeView === 'calendar' || activeView === 'financials' || activeView === 'notes')) setActiveView('dashboard');
             }}
             className={`flex-1 flex flex-col items-center gap-0.5 py-2 min-h-[56px] text-xs font-medium transition-colors ${
               mobileView === key
