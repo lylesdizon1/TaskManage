@@ -7,6 +7,81 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 const API_BASE = '';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// JWT TOKEN HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Decode a JWT payload without a library (base64url decode the middle section). */
+function decodeJwtPayload(token) {
+  try {
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch { return null; }
+}
+
+/** Returns true if the token expires within `thresholdSeconds` (default 24h). */
+function tokenExpiresSoon(token, thresholdSeconds = 86400) {
+  const payload = decodeJwtPayload(token);
+  if (!payload || !payload.exp) return false;
+  return payload.exp - Date.now() / 1000 < thresholdSeconds;
+}
+
+/** Singleton refresh promise so concurrent 403s don't fire multiple refreshes. */
+let _refreshPromise = null;
+
+/**
+ * Attempt to refresh the JWT token via POST /api/auth/refresh.
+ * On success: saves new token to localStorage, returns new token.
+ * On failure: clears auth, returns null.
+ */
+async function refreshToken() {
+  const currentToken = localStorage.getItem('tm_token');
+  if (!currentToken) return null;
+
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${currentToken}` },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      localStorage.setItem('tm_token', data.token);
+      localStorage.setItem('tm_user', JSON.stringify(data.user));
+      return data.token;
+    } catch { return null; }
+    finally { _refreshPromise = null; }
+  })();
+  return _refreshPromise;
+}
+
+/**
+ * Drop-in replacement for fetch() that auto-refreshes on 403.
+ * - If a request returns 403, attempts a silent token refresh and retries once.
+ * - If refresh fails, fires a 'session-expired' CustomEvent so the UI can react.
+ * - Accepts the same arguments as fetch(). If `options.headers.Authorization` is
+ *   present, it will be updated with the refreshed token on retry.
+ */
+async function apiFetch(url, options = {}) {
+  const res = await fetch(url, options);
+  if (res.status !== 403) return res;
+
+  // 403 — attempt silent refresh
+  const newToken = await refreshToken();
+  if (newToken) {
+    // Retry original request with new token
+    const retryOpts = { ...options, headers: { ...options.headers, Authorization: `Bearer ${newToken}` } };
+    return fetch(url, retryOpts);
+  }
+
+  // Refresh failed — session truly expired
+  localStorage.removeItem('tm_token');
+  localStorage.removeItem('tm_user');
+  window.dispatchEvent(new CustomEvent('session-expired'));
+  return res;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -246,7 +321,7 @@ function buildEmailHtml(ruleName, ruleDesc, tasks) {
 
 /** POST to /api/email/send via the proxy (Resend). */
 async function sendAlertEmail(emailSettings, to, subject, html) {
-  const res = await fetch('/api/email/send', {
+  const res = await apiFetch('/api/email/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ to, subject, html }),
@@ -324,7 +399,7 @@ async function fetchSuggestedTags(title, description, claudeKey, entityNames, au
     `e.g. ${JSON.stringify(entityNames.slice(0, 2))}. No explanation.`;
 
   try {
-    const res = await fetch('/api/claude', {
+    const res = await apiFetch('/api/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({
@@ -348,7 +423,7 @@ async function fetchSuggestedTags(title, description, claudeKey, entityNames, au
 }
 
 async function callClaudeChat(messages, systemPrompt, apiKey, authToken) {
-  const res = await fetch('/api/claude', {
+  const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
@@ -368,7 +443,7 @@ async function callClaudeChat(messages, systemPrompt, apiKey, authToken) {
 }
 
 async function callOpenAIChat(messages, systemPrompt, apiKey, authToken) {
-  const res = await fetch('/api/openai', {
+  const res = await apiFetch('/api/openai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
@@ -579,7 +654,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
   async function loadEntities() {
     try {
-      const res = await fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } });
+      const res = await apiFetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
       if (Array.isArray(data)) setEntityList(data);
     } catch {}
@@ -587,7 +662,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
   async function loadUsers() {
     try {
-      const res = await fetch('/api/users', { headers: { Authorization: `Bearer ${authToken}` } });
+      const res = await apiFetch('/api/users', { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
       if (Array.isArray(data)) setUserList(data);
     } catch {}
@@ -596,7 +671,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   async function handleCreateEntity() {
     if (!newEntityName.trim()) return;
     try {
-      const res = await fetch('/api/entities', {
+      const res = await apiFetch('/api/entities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ name: newEntityName.trim(), color: newEntityColor }),
@@ -612,7 +687,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
   async function handleUpdateEntity(id, fields) {
     try {
-      await fetch(`/api/entities/${id}`, {
+      await apiFetch(`/api/entities/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify(fields),
@@ -625,7 +700,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
   async function handleDeleteEntity(id) {
     try {
-      await fetch(`/api/entities/${id}`, {
+      await apiFetch(`/api/entities/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${authToken}` },
       });
@@ -637,7 +712,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   async function handleCreateUser() {
     if (!newUser.username.trim() || !newUser.password) return;
     try {
-      const res = await fetch('/api/users', {
+      const res = await apiFetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify(newUser),
@@ -652,7 +727,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
   async function handleUpdateUser(id, fields) {
     try {
-      await fetch(`/api/users/${id}`, {
+      await apiFetch(`/api/users/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify(fields),
@@ -664,7 +739,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
   async function handleDeleteUser(id) {
     try {
-      await fetch(`/api/users/${id}`, {
+      await apiFetch(`/api/users/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${authToken}` },
       });
@@ -680,7 +755,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch('/api/email/test', {
+      const res = await apiFetch('/api/email/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: draftEmail.recipientEmail }),
@@ -934,7 +1009,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
                   }
                   setPwSaving(true);
                   try {
-                    const res = await fetch('/api/auth/change-password', {
+                    const res = await apiFetch('/api/auth/change-password', {
                       method: 'POST',
                       headers: {
                         'Content-Type': 'application/json',
@@ -2190,7 +2265,7 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financial
 
   // Load chat history on mount
   useEffect(() => {
-    fetch('/api/chat/history', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/chat/history', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
@@ -2202,7 +2277,7 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financial
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function persistMessage(role, content, model) {
-    fetch('/api/chat/message', {
+    apiFetch('/api/chat/message', {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ role, content, model }),
@@ -2310,7 +2385,7 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financial
 
   async function handleClearChat() {
     setMessages([]);
-    fetch('/api/chat/history', {
+    apiFetch('/api/chat/history', {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${authToken}` },
     }).catch((err) => console.error('[chat] clear failed:', err.message));
@@ -2683,8 +2758,8 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
     setLoadError('');
     try {
       const [acctRes, summRes] = await Promise.all([
-        fetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } }),
-        fetch('/api/financial/summary', { headers: { Authorization: `Bearer ${authToken}` } }),
+        apiFetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } }),
+        apiFetch('/api/financial/summary', { headers: { Authorization: `Bearer ${authToken}` } }),
       ]);
       if (!acctRes.ok) {
         const err = await acctRes.json().catch(() => ({}));
@@ -2710,7 +2785,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
     if (filterStartDate) params.set('startDate', filterStartDate);
     if (filterEndDate) params.set('endDate', filterEndDate);
     try {
-      const res = await fetch(`/api/financial/transactions?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const res = await apiFetch(`/api/financial/transactions?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         setLoadError(`Failed to load transactions: ${err.error || res.statusText}`);
@@ -2730,14 +2805,14 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
   async function handleCreateAccount(e) {
     e.preventDefault();
     if (!acctForm.name.trim()) return;
-    await fetch('/api/financial/accounts', { method: 'POST', headers, body: JSON.stringify(acctForm) });
+    await apiFetch('/api/financial/accounts', { method: 'POST', headers, body: JSON.stringify(acctForm) });
     setAcctForm({ name: '', type: 'checking', institution: '', entityId: '', accountClass: 'personal' });
     setShowAddAccount(false);
     loadAll();
   }
 
   async function handleDeleteAccount(id) {
-    await fetch(`/api/financial/accounts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+    await apiFetch(`/api/financial/accounts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
     loadAll();
     loadTransactions();
   }
@@ -2746,7 +2821,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
     e.preventDefault();
     if (!txForm.accountId || !txForm.amount) return;
     const acct = accounts.find((a) => a.id === txForm.accountId);
-    await fetch('/api/financial/transactions', {
+    await apiFetch('/api/financial/transactions', {
       method: 'POST', headers,
       body: JSON.stringify({
         ...txForm,
@@ -2762,13 +2837,13 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
   }
 
   async function handleDeleteTx(id) {
-    await fetch(`/api/financial/transactions/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+    await apiFetch(`/api/financial/transactions/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
     loadTransactions();
     loadAll();
   }
 
   async function handleUpdateTx(id, fields) {
-    await fetch(`/api/financial/transactions/${id}`, { method: 'PUT', headers, body: JSON.stringify(fields) });
+    await apiFetch(`/api/financial/transactions/${id}`, { method: 'PUT', headers, body: JSON.stringify(fields) });
     setEditingTx(null);
     loadTransactions();
     loadAll();
@@ -2793,7 +2868,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
       } else {
         body.fileData = importFileData;
       }
-      const res = await fetch('/api/financial/import-csv', {
+      const res = await apiFetch('/api/financial/import-csv', {
         method: 'POST', headers,
         body: JSON.stringify(body),
       });
@@ -3467,7 +3542,7 @@ function NotesPanel({ authToken }) {
     if (pillarFilter) params.set('pillar', pillarFilter);
     if (categoryFilter) params.set('category', categoryFilter);
     try {
-      const res = await fetch(`/api/notes?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const res = await apiFetch(`/api/notes?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
       if (Array.isArray(data)) setNotes(data);
     } catch {}
@@ -3475,7 +3550,7 @@ function NotesPanel({ authToken }) {
 
   const loadCategories = useCallback(async () => {
     try {
-      const res = await fetch('/api/notes/categories', { headers: { Authorization: `Bearer ${authToken}` } });
+      const res = await apiFetch('/api/notes/categories', { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
       if (Array.isArray(data)) setCategories(data);
     } catch {}
@@ -3552,7 +3627,7 @@ function NotesPanel({ authToken }) {
       if (!selectedNote.id) {
         // New note — POST to create
         body.type = 'structured';
-        const res = await fetch('/api/notes', { method: 'POST', headers, body: JSON.stringify(body) });
+        const res = await apiFetch('/api/notes', { method: 'POST', headers, body: JSON.stringify(body) });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           setSaveStatus(`Save failed — ${err.error || res.statusText}`);
@@ -3564,7 +3639,7 @@ function NotesPanel({ authToken }) {
         setSaveStatus('saved');
       } else {
         // Existing note — PUT to update
-        const res = await fetch(`/api/notes/${selectedNote.id}`, { method: 'PUT', headers, body: JSON.stringify(body) });
+        const res = await apiFetch(`/api/notes/${selectedNote.id}`, { method: 'PUT', headers, body: JSON.stringify(body) });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           setSaveStatus(`Save failed — ${err.error || res.statusText}`);
@@ -3581,7 +3656,7 @@ function NotesPanel({ authToken }) {
   async function handlePin() {
     if (!selectedNote || !selectedNote.id) return;
     try {
-      const res = await fetch(`/api/notes/${selectedNote.id}/pin`, { method: 'PUT', headers });
+      const res = await apiFetch(`/api/notes/${selectedNote.id}/pin`, { method: 'PUT', headers });
       const updated = await res.json();
       if (updated.id) {
         setSelectedNote(updated);
@@ -3599,7 +3674,7 @@ function NotesPanel({ authToken }) {
       return;
     }
     try {
-      await fetch(`/api/notes/${selectedNote.id}`, { method: 'DELETE', headers });
+      await apiFetch(`/api/notes/${selectedNote.id}`, { method: 'DELETE', headers });
       setNotes((prev) => prev.filter((n) => n.id !== selectedNote.id));
       setSelectedNote(null);
       setShowDeleteConfirm(false);
@@ -4048,17 +4123,68 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('tm_user')); } catch { return null; }
   });
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('tm_token') || null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   function handleLogin(user, token) {
     setCurrentUser(user);
     setAuthToken(token);
+    setSessionExpired(false);
   }
 
   function handleLogout() {
     setCurrentUser(null);
     setAuthToken(null);
+    setSessionExpired(false);
     localStorage.removeItem('tm_token');
     localStorage.removeItem('tm_user');
+  }
+
+  // Listen for session-expired events from apiFetch
+  useEffect(() => {
+    function onSessionExpired() {
+      setSessionExpired(true);
+    }
+    window.addEventListener('session-expired', onSessionExpired);
+    return () => window.removeEventListener('session-expired', onSessionExpired);
+  }, []);
+
+  // Proactive token refresh — if token expires within 24h, refresh it now
+  useEffect(() => {
+    if (!authToken) return;
+    if (tokenExpiresSoon(authToken)) {
+      refreshToken().then((newToken) => {
+        if (newToken) {
+          setAuthToken(newToken);
+          try {
+            const user = JSON.parse(localStorage.getItem('tm_user'));
+            if (user) setCurrentUser(user);
+          } catch {}
+        }
+      });
+    }
+  }, [authToken]);
+
+  // Session expired modal
+  if (sessionExpired) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full text-center">
+          <div className="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-7 h-7 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">Session Expired</h2>
+          <p className="text-sm text-gray-500 mb-6">Your session has expired. Please log in again to continue.</p>
+          <button
+            onClick={handleLogout}
+            className="w-full py-2.5 px-4 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Log In Again
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // If not logged in, show login screen
@@ -4097,21 +4223,21 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // Load entities + refresh current user on mount
   useEffect(() => {
-    fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setEntities(data); })
       .catch(() => {});
     // Load financial data for AI context
-    fetch('/api/financial/transactions', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/financial/transactions', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setFinancialTransactions(data); })
       .catch(() => {});
-    fetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setFinancialAccounts(data); })
       .catch(() => {});
     // Refresh user data (role, entityIds) from server
-    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
         if (data.user) {
@@ -4123,18 +4249,18 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function reloadFinancialData() {
-    fetch('/api/financial/transactions', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/financial/transactions', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setFinancialTransactions(data); })
       .catch(() => {});
-    fetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setFinancialAccounts(data); })
       .catch(() => {});
   }
 
   function reloadEntities() {
-    fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setEntities(data); })
       .catch(() => {});
@@ -4164,7 +4290,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   async function saveSettings(keys, email, rules) {
     try {
-      await fetch('/api/settings', {
+      await apiFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKeys: keys, emailSettings: email, alertRules: rules }),
@@ -4176,7 +4302,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // Load settings once on mount
   useEffect(() => {
-    fetch('/api/settings')
+    apiFetch('/api/settings')
       .then((r) => r.json())
       .then((data) => {
         if (data.apiKeys)       setApiKeys(data.apiKeys);
@@ -4192,7 +4318,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // Load tasks on mount; fall back to SAMPLE_TASKS if server has none
   useEffect(() => {
-    fetch('/api/tasks', { headers: { Authorization: `Bearer ${authToken}` } })
+    apiFetch('/api/tasks', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
@@ -4208,7 +4334,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   // Auto-save tasks whenever they change (skip initial hydration)
   useEffect(() => {
     if (!tasksLoadedRef.current) return;
-    fetch('/api/tasks', {
+    apiFetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(tasks),
@@ -4304,7 +4430,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       prev.map((t) => (t.id === id ? { ...t, ...fields } : t)),
     );
     // Also persist to server via PUT
-    fetch(`/api/tasks/${id}`, {
+    apiFetch(`/api/tasks/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(fields),

@@ -162,6 +162,40 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/auth/refresh
+ * Accepts a valid (non-expired) token, returns a fresh token with new 7d expiry.
+ * Header: Authorization: Bearer <token>
+ * Returns: { token, user: { id, username, displayName, ... } }
+ */
+app.post('/api/auth/refresh', authenticateToken, async (req, res) => {
+  try {
+    const user = await db.getUserById(req.user.id);
+    if (!user || user.active === false) {
+      return res.status(403).json({ error: 'Account is deactivated or not found' });
+    }
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        email: user.email || '',
+        role: user.role || 'member',
+        entityIds: user.entityIds || [],
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' },
+    );
+
+    const { passwordHash, ...safe } = user;
+    return res.json({ token, user: safe });
+  } catch (err) {
+    console.error('[auth] refresh failed:', err.message);
+    return res.status(500).json({ error: 'Token refresh failed' });
+  }
+});
+
 // ── Admin middleware ──────────────────────────────────────────────────────────
 
 function requireAdmin(req, res, next) {
