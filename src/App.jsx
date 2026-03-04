@@ -110,6 +110,38 @@ function getTagStyle(tagName, entities) {
   return getEntityStyle(entity?.color);
 }
 
+// Build grouped entity list for dropdowns: Business (+ children) > Personal
+function buildGroupedEntities(entities) {
+  const businesses = entities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
+  const projects = entities.filter((e) => e.type === 'project');
+  const personals = entities.filter((e) => e.type === 'personal');
+  const result = [];
+  businesses.forEach((b) => {
+    result.push({ ...b, _indent: 0, _group: 'business' });
+    projects.filter((p) => p.parentId === b.id).forEach((p) => result.push({ ...p, _indent: 1, _group: 'business' }));
+  });
+  projects.filter((p) => !p.parentId || !businesses.find((b) => b.id === p.parentId)).forEach((p) => result.push({ ...p, _indent: 0, _group: 'business' }));
+  personals.forEach((p) => result.push({ ...p, _indent: 0, _group: 'personal' }));
+  return result;
+}
+
+// Render grouped entity <option> elements for <select> dropdowns
+function EntitySelectOptions({ entities }) {
+  const grouped = buildGroupedEntities(entities);
+  let lastGroup = '';
+  const items = [];
+  grouped.forEach((ent, i) => {
+    if (ent._group === 'personal' && lastGroup !== 'personal') {
+      items.push(<option key="__sep" disabled>{'─────────────'}</option>);
+    }
+    lastGroup = ent._group;
+    const prefix = ent._indent ? '\u00A0\u00A0\u00A0\u2514\u2500 ' : '';
+    const shared = ent.shared ? ' \u{1F517}' : '';
+    items.push(<option key={ent.id} value={ent.name}>{prefix}{ent.name}{shared}</option>);
+  });
+  return items;
+}
+
 const PRIORITY_BORDER = {
   high:   'border-l-4 border-l-red-500',
   medium: 'border-l-4 border-l-amber-400',
@@ -564,11 +596,13 @@ function LoginScreen({ onLogin }) {
 
 function TagPill({ tag, isAi = false, entities = [] }) {
   const style = getTagStyle(tag, entities);
+  const entity = entities.find((e) => e.name === tag);
   return (
     <span
       className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium border ${style.bg} ${style.text} ${style.border}`}
     >
       {tag}
+      {entity?.shared && <span>{'\u{1F517}'}</span>}
       {isAi && (
         <span className="text-[9px] leading-none bg-indigo-500 text-white px-1 py-0.5 rounded-full">
           AI
@@ -637,6 +671,9 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   const [entityList, setEntityList] = useState([]);
   const [newEntityName, setNewEntityName] = useState('');
   const [newEntityColor, setNewEntityColor] = useState('indigo');
+  const [newEntityType, setNewEntityType] = useState('business');
+  const [newEntityParent, setNewEntityParent] = useState('');
+  const [newEntityShared, setNewEntityShared] = useState(false);
   const [editingEntity, setEditingEntity] = useState(null);
 
   // ── User management state ──
@@ -674,11 +711,20 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
       const res = await apiFetch('/api/entities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ name: newEntityName.trim(), color: newEntityColor }),
+        body: JSON.stringify({
+          name: newEntityName.trim(),
+          color: newEntityColor,
+          type: newEntityType,
+          parentId: newEntityType === 'project' ? newEntityParent || null : null,
+          shared: newEntityShared,
+        }),
       });
       if (res.ok) {
         setNewEntityName('');
         setNewEntityColor('indigo');
+        setNewEntityType('business');
+        setNewEntityParent('');
+        setNewEntityShared(false);
         loadEntities();
         onEntitiesChanged?.();
       }
@@ -1040,81 +1086,154 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
           {/* Entities tab (admin only) */}
           {tab === 'entities' && isAdmin && (
             <div className="space-y-3">
-              <p className="text-xs text-gray-500">Manage business entities / tags used across the app.</p>
+              <p className="text-xs text-gray-500">Manage entities, projects, and household sharing.</p>
 
-              {/* Existing entities */}
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {entityList.map((ent) => {
+              {/* Existing entities — hierarchical */}
+              <div className="space-y-1 max-h-64 overflow-y-auto">
+                {(() => {
+                  // Build hierarchy: businesses first, then their child projects, then personal
+                  const businesses = entityList.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
+                  const projects = entityList.filter((e) => e.type === 'project');
+                  const personals = entityList.filter((e) => e.type === 'personal');
+                  const ordered = [];
+                  businesses.forEach((b) => {
+                    ordered.push({ ...b, _indent: 0 });
+                    projects.filter((p) => p.parentId === b.id).forEach((p) => ordered.push({ ...p, _indent: 1 }));
+                  });
+                  // Orphan projects (no parent or parent not found)
+                  projects.filter((p) => !p.parentId || !businesses.find((b) => b.id === p.parentId)).forEach((p) => ordered.push({ ...p, _indent: 0 }));
+                  personals.forEach((p) => ordered.push({ ...p, _indent: 0 }));
+                  return ordered;
+                })().map((ent) => {
                   const style = getEntityStyle(ent.color);
+                  const typeIcon = ent.type === 'personal' ? '\u{1F464}' : ent.type === 'project' ? '\u{1F4CB}' : '\u{1F3E2}';
+                  const typeLabel = ent.type === 'personal' ? 'Personal' : ent.type === 'project' ? 'Project' : 'Business';
+                  const isOwner = ent.isOwner !== false;
+
                   if (editingEntity === ent.id) {
                     return (
-                      <div key={ent.id} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-                        <input
-                          type="text"
-                          defaultValue={ent.name}
-                          id={`ent-name-${ent.id}`}
-                          className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded"
-                        />
-                        <select
-                          defaultValue={ent.color}
-                          id={`ent-color-${ent.id}`}
-                          className="px-2 py-1 text-sm border border-gray-200 rounded"
-                        >
-                          {AVAILABLE_COLORS.map((c) => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => {
-                            const name = document.getElementById(`ent-name-${ent.id}`).value;
-                            const color = document.getElementById(`ent-color-${ent.id}`).value;
-                            handleUpdateEntity(ent.id, { name, color });
-                          }}
-                          className="px-2 py-1 text-xs bg-indigo-600 text-white rounded"
-                        >Save</button>
-                        <button onClick={() => setEditingEntity(null)} className="px-2 py-1 text-xs text-gray-500">Cancel</button>
+                      <div key={ent.id} className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <input type="text" defaultValue={ent.name} id={`ent-name-${ent.id}`} className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded" />
+                          <select defaultValue={ent.color} id={`ent-color-${ent.id}`} className="px-2 py-1 text-sm border border-gray-200 rounded">
+                            {AVAILABLE_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select defaultValue={ent.type || 'business'} id={`ent-type-${ent.id}`} className="px-2 py-1 text-xs border border-gray-200 rounded">
+                            <option value="business">Business</option>
+                            <option value="project">Project</option>
+                            <option value="personal">Personal</option>
+                          </select>
+                          <select defaultValue={ent.parentId || ''} id={`ent-parent-${ent.id}`} className="px-2 py-1 text-xs border border-gray-200 rounded">
+                            <option value="">No parent</option>
+                            {entityList.filter((e) => (e.type === 'business' || !e.type) && e.id !== ent.id).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                          </select>
+                          <label className="flex items-center gap-1 text-xs text-gray-600">
+                            <input type="checkbox" defaultChecked={ent.shared || false} id={`ent-shared-${ent.id}`} className="rounded" />
+                            Shared
+                          </label>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              const name = document.getElementById(`ent-name-${ent.id}`).value;
+                              const color = document.getElementById(`ent-color-${ent.id}`).value;
+                              const type = document.getElementById(`ent-type-${ent.id}`).value;
+                              const parentId = document.getElementById(`ent-parent-${ent.id}`).value;
+                              const shared = document.getElementById(`ent-shared-${ent.id}`).checked;
+                              handleUpdateEntity(ent.id, { name, color, type, parentId: type === 'project' ? parentId : null, shared });
+                            }}
+                            className="px-2 py-1 text-xs bg-indigo-600 text-white rounded"
+                          >Save</button>
+                          <button onClick={() => setEditingEntity(null)} className="px-2 py-1 text-xs text-gray-500">Cancel</button>
+                        </div>
                       </div>
                     );
                   }
+
                   return (
-                    <div key={ent.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-3 h-3 rounded-full ${style.dot}`} />
-                        <span className="text-sm font-medium text-gray-800">{ent.name}</span>
-                        <span className="text-[10px] text-gray-400">{ent.color}</span>
+                    <div key={ent.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100" style={{ marginLeft: ent._indent ? 20 : 0 }}>
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        {ent._indent > 0 && <span className="text-gray-300 text-xs">&lsaquo;&mdash;</span>}
+                        <span className={`w-3 h-3 rounded-full flex-shrink-0 ${style.dot}`} />
+                        <span className="text-sm font-medium text-gray-800 truncate">{ent.name}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">{typeIcon} {typeLabel}</span>
+                        {ent.shared && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">{'\u{1F517}'} Shared</span>}
+                        {!isOwner && <span className="text-[10px] text-gray-400">(read-only)</span>}
                       </div>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => setEditingEntity(ent.id)} className="text-xs text-indigo-500 hover:text-indigo-700 px-1">Edit</button>
-                        <button onClick={() => handleDeleteEntity(ent.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
-                      </div>
+                      {isOwner && (
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button onClick={() => setEditingEntity(ent.id)} className="text-xs text-indigo-500 hover:text-indigo-700 px-1">Edit</button>
+                          <button onClick={() => handleDeleteEntity(ent.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
 
               {/* Add new entity */}
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={newEntityName}
-                  onChange={(e) => setNewEntityName(e.target.value)}
-                  placeholder="New entity name"
-                  className={inputCls + ' flex-1'}
-                />
-                <select
-                  value={newEntityColor}
-                  onChange={(e) => setNewEntityColor(e.target.value)}
-                  className="px-2 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm"
-                >
-                  {AVAILABLE_COLORS.map((c) => (
-                    <option key={c} value={c}>{c}</option>
+              <div className="space-y-2 p-3 bg-gray-50 rounded-lg">
+                <div className="flex gap-2">
+                  <input type="text" value={newEntityName} onChange={(e) => setNewEntityName(e.target.value)} placeholder="New entity name" className={inputCls + ' flex-1'} />
+                  <select value={newEntityColor} onChange={(e) => setNewEntityColor(e.target.value)} className="px-2 py-2 bg-white border border-gray-200 rounded-lg text-sm">
+                    {AVAILABLE_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+
+                {/* Type selector pills */}
+                <div className="flex gap-2">
+                  {[
+                    { key: 'business', icon: '\u{1F3E2}', label: 'Business' },
+                    { key: 'project', icon: '\u{1F4CB}', label: 'Project' },
+                    { key: 'personal', icon: '\u{1F464}', label: 'Personal' },
+                  ].map(({ key, icon, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setNewEntityType(key)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                        newEntityType === key
+                          ? 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                          : 'bg-white text-gray-500 border border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      {icon} {label}
+                    </button>
                   ))}
-                </select>
+                </div>
+
+                {/* Parent selector (only for projects) */}
+                {newEntityType === 'project' && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Belongs to</label>
+                    <select value={newEntityParent} onChange={(e) => setNewEntityParent(e.target.value)} className="w-full px-2 py-2 bg-white border border-gray-200 rounded-lg text-sm">
+                      <option value="">-- Select parent business --</option>
+                      {entityList.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal')).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                {/* Shared toggle */}
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <div className="relative">
+                    <input type="checkbox" checked={newEntityShared} onChange={(e) => setNewEntityShared(e.target.checked)} className="sr-only" />
+                    <div className={`w-9 h-5 rounded-full transition-colors ${newEntityShared ? 'bg-indigo-600' : 'bg-gray-300'}`} onClick={() => setNewEntityShared(!newEntityShared)}>
+                      <div className={`w-4 h-4 bg-white rounded-full shadow transform transition-transform mt-0.5 ${newEntityShared ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'}`} />
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-xs font-medium text-gray-700">Share with household</span>
+                    <p className="text-[10px] text-gray-400">Shared entities are visible to all users</p>
+                  </div>
+                </label>
+
                 <button
                   onClick={handleCreateEntity}
                   disabled={!newEntityName.trim()}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
-                >Add</button>
+                  className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-indigo-700 transition-colors"
+                >Add Entity</button>
               </div>
             </div>
           )}
@@ -1561,7 +1680,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
                       }
                       className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
-                      {(entities || []).map((ent) => <option key={ent.id} value={ent.name}>{ent.name}</option>)}
+                      <EntitySelectOptions entities={entities || []} />
                     </select>
                   </div>
                 )}
@@ -1812,7 +1931,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {entities.map((ent) => {
+                {buildGroupedEntities(entities).map((ent) => {
                   const tag = ent.name;
                   const style = getEntityStyle(ent.color);
                   const isSelected = form.tags.includes(tag);
@@ -1828,7 +1947,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
                           : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
                       }`}
                     >
-                      {tag}
+                      {ent._indent ? '\u2514 ' : ''}{tag}{ent.shared ? ' \u{1F517}' : ''}
                       {isAiPick && isSelected && (
                         <span className="text-[9px] leading-none bg-indigo-500 text-white px-1 py-0.5 rounded-full">
                           AI
@@ -1979,7 +2098,7 @@ function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSync
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Tags</label>
             <div className="flex flex-wrap gap-1.5">
-              {(entities || []).map((ent) => {
+              {buildGroupedEntities(entities || []).map((ent) => {
                 const tag = ent.name;
                 const style = getEntityStyle(ent.color);
                 return (
@@ -1996,7 +2115,7 @@ function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSync
                         : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
                     }`}
                   >
-                    {tag}
+                    {ent._indent ? '\u2514 ' : ''}{tag}{ent.shared ? ' \u{1F517}' : ''}
                   </button>
                 );
               })}
@@ -2182,7 +2301,7 @@ function FilterBar({
         </span>
 
         {/* Tag filters — dynamic from user's entities */}
-        {(entities || []).map((ent) => {
+        {buildGroupedEntities(entities || []).map((ent) => {
           const tag = ent.name;
           const style = getEntityStyle(ent.color);
           const active = activeTagFilters.includes(tag);
@@ -2200,7 +2319,7 @@ function FilterBar({
                   : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600'
               }`}
             >
-              {tag}
+              {tag}{ent.shared ? ' \u{1F517}' : ''}
             </button>
           );
         })}
@@ -2322,7 +2441,27 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financial
       completed: t.completed,
       dueDate: t.dueDate || null,
     }));
-    const entityNames = (entities || []).map((e) => e.name).join(', ');
+
+    // Build structured entity context
+    const allEntities = entities || [];
+    const businesses = allEntities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
+    const projects = allEntities.filter((e) => e.type === 'project');
+    const personals = allEntities.filter((e) => e.type === 'personal');
+    const sharedEnts = allEntities.filter((e) => e.shared);
+
+    let entityContext = '\n\nENTITIES & STRUCTURE:';
+    if (businesses.length > 0) entityContext += `\nBusinesses: ${businesses.map((e) => e.name).join(', ')}`;
+    if (projects.length > 0) {
+      entityContext += '\nProjects:';
+      businesses.forEach((b) => {
+        const children = projects.filter((p) => p.parentId === b.id);
+        if (children.length > 0) entityContext += `\n  ${b.name} → ${children.map((p) => p.name).join(', ')}`;
+      });
+      const orphans = projects.filter((p) => !p.parentId || !businesses.find((b) => b.id === p.parentId));
+      if (orphans.length > 0) entityContext += `\n  (unassigned) → ${orphans.map((p) => p.name).join(', ')}`;
+    }
+    if (personals.length > 0) entityContext += `\nPersonal: ${personals.map((e) => e.name).join(', ')}`;
+    if (sharedEnts.length > 0) entityContext += `\nShared (household): ${sharedEnts.map((e) => e.name).join(', ')}`;
 
     // Build account lookup for transaction context
     const acctMap = {};
@@ -2343,9 +2482,12 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financial
 
     return (
       `You are a business productivity assistant. ` +
-      `The user manages these entities/ventures: ${entityNames || 'various'}. ` +
+      `The user manages multiple ventures and personal entities. ` +
       `Current tasks with tags: ${JSON.stringify(taskSummary)}. ` +
-      `Help the user prioritize, plan, and delegate across their businesses.` +
+      `Help the user prioritize, plan, and delegate across their businesses. ` +
+      `When the user asks about a specific entity, scope your response to that entity only. ` +
+      `When they ask about "all businesses", aggregate across business-type entities only.` +
+      entityContext +
       txContext
     );
   }
@@ -3190,7 +3332,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
                   <label className="block text-xs font-medium text-gray-500 mb-1">Entity</label>
                   <select value={acctForm.entityId} onChange={(e) => setAcctForm((f) => ({ ...f, entityId: e.target.value }))} className={inputCls}>
                     <option value="">-- None --</option>
-                    {entities.map((ent) => <option key={ent.id} value={ent.name}>{ent.name}</option>)}
+                    <EntitySelectOptions entities={entities} />
                   </select>
                 </div>
                 <div className="flex gap-2">
@@ -3226,7 +3368,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
                         </span>
                         {acct.entityId && (
                           <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${entStyle.bg} ${entStyle.text}`}>
-                            {acct.entityId}
+                            {acct.entityId}{ent?.shared ? ' \u{1F517}' : ''}
                           </span>
                         )}
                       </div>
@@ -3274,7 +3416,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
                 </select>
                 <select value={filterEntity} onChange={(e) => setFilterEntity(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50">
                   <option value="">All Entities</option>
-                  {entities.map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+                  <EntitySelectOptions entities={entities} />
                 </select>
                 <select value={filterClass} onChange={(e) => setFilterClass(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50">
                   <option value="">All Classes</option>
@@ -3333,7 +3475,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
                     <label className="block text-xs font-medium text-gray-500 mb-1">Entity</label>
                     <select value={txForm.entityId} onChange={(e) => setTxForm((f) => ({ ...f, entityId: e.target.value }))} className={inputCls}>
                       <option value="">-- None --</option>
-                      {entities.map((ent) => <option key={ent.id} value={ent.name}>{ent.name}</option>)}
+                      <EntitySelectOptions entities={entities} />
                     </select>
                   </div>
                   <div>
@@ -3444,7 +3586,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
                       <div className="grid grid-cols-3 gap-2">
                         <select defaultValue={tx.entityId} id={`tx-ent-${tx.id}`} className="text-xs px-2 py-1 border border-gray-200 rounded">
                           <option value="">No entity</option>
-                          {entities.map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+                          <EntitySelectOptions entities={entities} />
                         </select>
                         <select defaultValue={tx.accountClass} id={`tx-cls-${tx.id}`} className="text-xs px-2 py-1 border border-gray-200 rounded">
                           <option value="personal">Personal</option>
@@ -3477,7 +3619,7 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
                         {acct && <span className="text-[10px] text-gray-400">· {acct.name}</span>}
                         {tx.category && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{tx.category}</span>}
                         {tx.entityId && (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${entStyle.bg} ${entStyle.text}`}>{tx.entityId}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${entStyle.bg} ${entStyle.text}`}>{tx.entityId}{ent?.shared ? ' \u{1F517}' : ''}</span>
                         )}
                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${tx.accountClass === 'business' ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-500'}`}>
                           {tx.accountClass}

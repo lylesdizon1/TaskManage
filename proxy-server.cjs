@@ -207,10 +207,18 @@ function requireAdmin(req, res, next) {
 
 // ── Entity routes ────────────────────────────────────────────────────────────
 
-app.get('/api/entities', authenticateToken, async (_req, res) => {
+app.get('/api/entities', authenticateToken, async (req, res) => {
   try {
-    const entities = await db.getEntities();
-    return res.json(entities);
+    // Admin sees all; others see own + shared
+    const entities = req.user.role === 'admin'
+      ? await db.getEntities()
+      : await db.getEntitiesForUser(req.user.id);
+    // Add isOwner flag for admin (getEntities doesn't compute it)
+    const result = entities.map((e) => ({
+      ...e,
+      isOwner: e.isOwner !== undefined ? e.isOwner : (e.createdBy === req.user.id || req.user.role === 'admin'),
+    }));
+    return res.json(result);
   } catch (err) {
     console.error('[entities] read failed:', err.message);
     return res.json([]);
@@ -219,9 +227,21 @@ app.get('/api/entities', authenticateToken, async (_req, res) => {
 
 app.post('/api/entities', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { id, name, color } = req.body;
+    const { id, name, color, type, parentId, shared } = req.body;
     if (!name) return res.status(400).json({ error: 'name is required' });
-    const entity = await db.createEntity({ id: id || `entity-${Date.now()}`, name, color, createdBy: req.user.id });
+    const validTypes = ['business', 'project', 'personal'];
+    if (type && !validTypes.includes(type)) {
+      return res.status(400).json({ error: `type must be one of: ${validTypes.join(', ')}` });
+    }
+    if (parentId) {
+      const parent = await db.getEntityById(parentId);
+      if (!parent) return res.status(400).json({ error: 'Parent entity not found' });
+    }
+    const entity = await db.createEntity({
+      id: id || `entity-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name, color, createdBy: req.user.id,
+      type: type || 'business', parentId: parentId || null, shared: shared || false,
+    });
     return res.json(entity);
   } catch (err) {
     console.error('[entities] create failed:', err.message);
@@ -231,6 +251,20 @@ app.post('/api/entities', authenticateToken, requireAdmin, async (req, res) => {
 
 app.put('/api/entities/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    // Ownership check for shared entities
+    const existing = await db.getEntityById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Entity not found' });
+    if (existing.shared && existing.createdBy !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the owner can edit this entity' });
+    }
+    const validTypes = ['business', 'project', 'personal'];
+    if (req.body.type && !validTypes.includes(req.body.type)) {
+      return res.status(400).json({ error: `type must be one of: ${validTypes.join(', ')}` });
+    }
+    if (req.body.parentId) {
+      const parent = await db.getEntityById(req.body.parentId);
+      if (!parent) return res.status(400).json({ error: 'Parent entity not found' });
+    }
     const updated = await db.updateEntity(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Entity not found' });
     return res.json(updated);
@@ -242,6 +276,11 @@ app.put('/api/entities/:id', authenticateToken, requireAdmin, async (req, res) =
 
 app.delete('/api/entities/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    const existing = await db.getEntityById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Entity not found' });
+    if (existing.shared && existing.createdBy !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Cannot delete a shared entity' });
+    }
     await db.deleteEntity(req.params.id);
     return res.json({ success: true });
   } catch (err) {
@@ -1357,7 +1396,7 @@ app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
 
     // Check if digest already exists for today
-    const notes = await db.getNotes(req.user.id);
+    const notes = await db.getNotesForUser(req.user.id);
     const existing = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
     if (existing) return res.json(existing);
 

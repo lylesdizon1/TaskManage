@@ -233,29 +233,69 @@ async function deleteUser(id) {
 
 async function getEntities() {
   const { rows } = await pool.query(
-    'SELECT id, name, color, created_by AS "createdBy", created_at AS "createdAt" FROM entities ORDER BY created_at ASC',
+    `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
+            e.type, e.parent_id AS "parentId", e.shared,
+            p.name AS "parentName"
+     FROM entities e
+     LEFT JOIN entities p ON e.parent_id = p.id
+     ORDER BY e.created_at ASC`,
   );
   return rows;
 }
 
-async function createEntity({ id, name, color, createdBy }) {
+async function getEntitiesForUser(userId) {
   const { rows } = await pool.query(
-    `INSERT INTO entities (id, name, color, created_by)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt"`,
-    [id, name, color || 'slate', createdBy || ''],
+    `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
+            e.type, e.parent_id AS "parentId", e.shared,
+            p.name AS "parentName",
+            (e.created_by = $1) AS "isOwner"
+     FROM entities e
+     LEFT JOIN entities p ON e.parent_id = p.id
+     WHERE e.created_by = $1 OR e.shared = true
+     ORDER BY e.created_at ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function createEntity({ id, name, color, createdBy, type, parentId, shared }) {
+  const { rows } = await pool.query(
+    `INSERT INTO entities (id, name, color, created_by, type, parent_id, shared)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt",
+               type, parent_id AS "parentId", shared`,
+    [id, name, color || 'slate', createdBy || '', type || 'business', parentId || null, shared || false],
   );
   return rows[0];
 }
 
 async function updateEntity(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+
+  if (fields.name !== undefined) { sets.push(`name = $${idx++}`); vals.push(fields.name); }
+  if (fields.color !== undefined) { sets.push(`color = $${idx++}`); vals.push(fields.color); }
+  if (fields.type !== undefined) { sets.push(`type = $${idx++}`); vals.push(fields.type); }
+  if (fields.parentId !== undefined) { sets.push(`parent_id = $${idx++}`); vals.push(fields.parentId || null); }
+  if (fields.shared !== undefined) { sets.push(`shared = $${idx++}`); vals.push(fields.shared); }
+
+  if (sets.length === 0) return null;
+
   const { rows } = await pool.query(
-    `UPDATE entities
-     SET name = COALESCE($2, name),
-         color = COALESCE($3, color)
-     WHERE id = $1
-     RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt"`,
-    [id, fields.name ?? null, fields.color ?? null],
+    `UPDATE entities SET ${sets.join(', ')} WHERE id = $1
+     RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt",
+               type, parent_id AS "parentId", shared`,
+    vals,
+  );
+  return rows[0] || null;
+}
+
+async function getEntityById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, name, color, created_by AS "createdBy", type, parent_id AS "parentId", shared
+     FROM entities WHERE id = $1`,
+    [id],
   );
   return rows[0] || null;
 }
@@ -732,6 +772,23 @@ async function runMigrations() {
   for (const sql of noteCols) {
     await pool.query(sql).catch(() => {});
   }
+
+  // 6. Add type, parent_id, shared columns to entities table (idempotent)
+  const entityCols = [
+    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'business'`,
+    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS parent_id TEXT REFERENCES entities(id) ON DELETE SET NULL`,
+    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS shared BOOLEAN DEFAULT FALSE`,
+  ];
+  for (const sql of entityCols) {
+    await pool.query(sql).catch(() => {});
+  }
+
+  // 7. Seed entity types for existing entities (idempotent — only updates NULLs / defaults)
+  await pool.query(`
+    UPDATE entities SET type = 'personal'
+    WHERE LOWER(name) IN ('personal', 'home', 'family', 'kids')
+      AND (type IS NULL OR type = 'business')
+  `).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -949,6 +1006,8 @@ module.exports = {
   updateUser,
   deleteUser,
   getEntities,
+  getEntitiesForUser,
+  getEntityById,
   createEntity,
   updateEntity,
   deleteEntity,
