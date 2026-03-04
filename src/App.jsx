@@ -2046,12 +2046,30 @@ function CalendarPanel({ currentUser, addToast }) {
           Disconnect
         </button>
       </div>
-      {/* Calendar iframe */}
+      {/* Calendar iframe (desktop) / Open button (mobile) */}
       <iframe
         src={calendarSrc}
-        className="flex-1 w-full border-0"
+        className="flex-1 w-full border-0 hidden md:block"
         title="Google Calendar"
       />
+      <div className="flex-1 flex flex-col items-center justify-center px-6 md:hidden">
+        <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mb-4">
+          <CalendarIcon className="w-8 h-8 text-indigo-600" />
+        </div>
+        <h3 className="text-lg font-bold text-gray-900 mb-2">Your Calendar</h3>
+        <p className="text-sm text-gray-500 mb-6 max-w-xs text-center">
+          View and manage your Google Calendar events in a new tab.
+        </p>
+        <a
+          href={`https://calendar.google.com/calendar/r?authuser=${encodeURIComponent(gcalStatus.email)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-3 px-6 py-3 bg-indigo-600 text-white rounded-xl shadow-sm hover:bg-indigo-700 transition-colors text-sm font-medium min-h-[48px]"
+        >
+          <CalendarIcon className="w-5 h-5" />
+          Open Google Calendar
+        </a>
+      </div>
     </div>
   );
 }
