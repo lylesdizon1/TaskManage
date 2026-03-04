@@ -37,6 +37,7 @@ const path       = require('path');
 const crypto     = require('crypto');
 
 const SETTINGS_FILE    = path.join(__dirname, 'settings.json');
+const TASKS_FILE       = path.join(__dirname, 'tasks.json');
 const USERS_FILE       = path.join(__dirname, 'users.json');
 const GCAL_TOKENS_FILE = path.join(__dirname, 'gcal-tokens.json');
 const DIST_DIR         = path.join(__dirname, 'dist');
@@ -521,6 +522,35 @@ app.post('/api/gcal/disconnect', (req, res) => {
   res.json({ success: true });
 });
 
+// ── Task persistence ─────────────────────────────────────────────────────────
+
+app.get('/api/tasks', (_req, res) => {
+  try {
+    if (fs.existsSync(TASKS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
+      return res.json(data);
+    }
+    return res.json([]);
+  } catch (err) {
+    console.error('[tasks] read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/tasks', (req, res) => {
+  try {
+    const tasks = req.body;
+    if (!Array.isArray(tasks)) {
+      return res.status(400).json({ error: 'Body must be an array of tasks' });
+    }
+    fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2), 'utf8');
+    return res.json({ success: true, count: tasks.length });
+  } catch (err) {
+    console.error('[tasks] write failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>
@@ -555,5 +585,7 @@ app.listen(PORT, () => {
   console.log('  GET  /api/gcal/status   → check calendar connection');
   console.log('  POST /api/gcal/sync-task→ sync task to Google Calendar');
   console.log('  POST /api/gcal/disconnect→ remove calendar connection');
+  console.log('  GET  /api/tasks        → read tasks.json');
+  console.log('  POST /api/tasks        → write tasks.json');
   console.log('  GET  /health\n');
 });

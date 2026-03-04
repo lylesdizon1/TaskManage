@@ -2158,7 +2158,8 @@ export default function App() {
 }
 
 function AuthenticatedApp({ currentUser, authToken, onLogout }) {
-  const [tasks, setTasks]                       = useState(SAMPLE_TASKS);
+  const [tasks, setTasks]                       = useState([]);
+  const tasksLoadedRef                           = useRef(false);
   const [activeView, setActiveView]             = useState('daily');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
   const [statusFilter, setStatusFilter]         = useState('all');
@@ -2216,6 +2217,33 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
       .catch(() => {})
       .finally(() => { settingsLoadedRef.current = true; });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Task persistence ──────────────────────────────────────────────────────
+
+  // Load tasks on mount; fall back to SAMPLE_TASKS if server has none
+  useEffect(() => {
+    fetch('/api/tasks')
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setTasks(data);
+        } else {
+          setTasks(SAMPLE_TASKS);
+        }
+      })
+      .catch(() => setTasks(SAMPLE_TASKS))
+      .finally(() => { tasksLoadedRef.current = true; });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-save tasks whenever they change (skip initial hydration)
+  useEffect(() => {
+    if (!tasksLoadedRef.current) return;
+    fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(tasks),
+    }).catch((err) => console.error('[tasks] save failed:', err.message));
+  }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save alert rules whenever they change (skip during initial hydration)
   useEffect(() => {

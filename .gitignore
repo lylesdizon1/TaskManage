@@ -4,4 +4,5 @@ dist/
 .env.local
 *.local
 settings.json
+tasks.json
 gcal-tokens.json
