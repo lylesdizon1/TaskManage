@@ -2173,7 +2173,7 @@ function FilterBar({
 // CHAT PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities }) {
+function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financialTransactions = [], financialAccounts = [] }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [backend, setBackend] = useState('claude');
@@ -2234,11 +2234,30 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities }) {
       dueDate: t.dueDate || null,
     }));
     const entityNames = (entities || []).map((e) => e.name).join(', ');
+
+    // Build account lookup for transaction context
+    const acctMap = {};
+    (financialAccounts || []).forEach((a) => { acctMap[a.id] = a.name || a.institution || 'Unknown'; });
+
+    // Include up to 200 most recent transactions
+    let txContext = '';
+    if (financialTransactions && financialTransactions.length > 0) {
+      const recent = financialTransactions.slice(0, 200);
+      const txLines = recent.map((t) => {
+        const acctName = acctMap[t.accountId] || 'Unknown';
+        const sign = t.type === 'credit' ? '+' : '-';
+        const amt = `${sign}$${Number(t.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return `${t.date} | ${acctName} | ${t.description || ''} | ${amt} | ${t.category || 'Uncategorized'}`;
+      });
+      txContext = `\n\nThe user's financial transactions (${financialTransactions.length} total, showing ${recent.length} most recent):\nDate | Account | Description | Amount | Category\n${txLines.join('\n')}`;
+    }
+
     return (
       `You are a business productivity assistant. ` +
       `The user manages these entities/ventures: ${entityNames || 'various'}. ` +
       `Current tasks with tags: ${JSON.stringify(taskSummary)}. ` +
-      `Help the user prioritize, plan, and delegate across their businesses.`
+      `Help the user prioritize, plan, and delegate across their businesses.` +
+      txContext
     );
   }
 
@@ -2363,7 +2382,7 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities }) {
       <div className="bg-indigo-50 border-b border-indigo-100 px-4 py-2 text-xs text-indigo-600 flex items-center gap-1.5 flex-shrink-0">
         <span>📋</span>
         <span>
-          {tasks.length} task{tasks.length !== 1 ? 's' : ''} injected as context
+          {tasks.length} task{tasks.length !== 1 ? 's' : ''}{financialTransactions.length > 0 ? ` · ${financialTransactions.length} transaction${financialTransactions.length !== 1 ? 's' : ''}` : ''} injected as context
         </span>
       </div>
 
@@ -2609,7 +2628,7 @@ const ACCOUNT_TYPE_COLORS = {
 
 const ACCOUNT_TYPE_LABELS = { checking: 'Checking', savings: 'Savings', credit_card: 'Credit Card', loan: 'Loan' };
 
-function FinancialsPanel({ authToken, currentUser, entities }) {
+function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
   const [subTab, setSubTab] = useState('dashboard');
   const [accounts, setAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -2674,9 +2693,12 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
     try {
       const res = await fetch(`/api/financial/transactions?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
-      if (Array.isArray(data)) setTransactions(data);
+      if (Array.isArray(data)) {
+        setTransactions(data);
+        if (onDataChange) onDataChange();
+      }
     } catch {}
-  }, [authToken, filterAccount, filterEntity, filterClass, filterCategory, filterStartDate, filterEndDate]);
+  }, [authToken, filterAccount, filterEntity, filterClass, filterCategory, filterStartDate, filterEndDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { loadTransactions(); }, [loadTransactions]);
@@ -3617,6 +3639,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [envConfigured, setEnvConfigured]       = useState({});
   const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'financials'
   const [entities, setEntities]                 = useState([]);
+  const [financialTransactions, setFinancialTransactions] = useState([]);
+  const [financialAccounts, setFinancialAccounts] = useState([]);
   const firedAlertsRef                          = useRef(new Set());
 
   // Load entities + refresh current user on mount
@@ -3624,6 +3648,15 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setEntities(data); })
+      .catch(() => {});
+    // Load financial data for AI context
+    fetch('/api/financial/transactions', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setFinancialTransactions(data); })
+      .catch(() => {});
+    fetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setFinancialAccounts(data); })
       .catch(() => {});
     // Refresh user data (role, entityIds) from server
     fetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -3636,6 +3669,17 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function reloadFinancialData() {
+    fetch('/api/financial/transactions', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setFinancialTransactions(data); })
+      .catch(() => {});
+    fetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setFinancialAccounts(data); })
+      .catch(() => {});
+  }
 
   function reloadEntities() {
     fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -3945,7 +3989,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           {activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
           ) : activeView === 'financials' ? (
-            <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} />
+            <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
           ) : (
           /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
@@ -4008,7 +4052,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'chat' ? 'flex' : 'hidden md:flex'
           }`}
         >
-          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} entities={userEntities} />
+          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} entities={userEntities} financialTransactions={financialTransactions} financialAccounts={financialAccounts} />
         </section>
 
         {/* ── Calendar panel (mobile only — on desktop it's in the task section tabs) ── */}
@@ -4026,7 +4070,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'financials' ? 'flex' : 'hidden'
           }`}
         >
-          <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} />
+          <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
         </section>
       </main>
 
