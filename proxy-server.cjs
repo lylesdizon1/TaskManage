@@ -172,7 +172,7 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
  */
 app.post('/api/claude', async (req, res) => {
   const { apiKey: bodyKey, ...body } = req.body;
-  const apiKey = bodyKey || process.env.CLAUDE_API_KEY;
+  const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.CLAUDE_API_KEY;
   if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
 
   try {
@@ -203,7 +203,7 @@ app.post('/api/claude', async (req, res) => {
  */
 app.post('/api/openai', async (req, res) => {
   const { apiKey: bodyKey, ...body } = req.body;
-  const apiKey = bodyKey || process.env.OPENAI_API_KEY;
+  const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
 
   try {
@@ -243,8 +243,8 @@ function createGmailTransporter(user, pass) {
  * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
  */
 app.post('/api/email/test', async (req, res) => {
-  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_ADDRESS;
-  const gmailAppPassword = req.body.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
+  const gmailUser        = (req.body.gmailUser && !req.body.gmailUser.includes('****')) ? req.body.gmailUser : process.env.GMAIL_ADDRESS;
+  const gmailAppPassword = (req.body.gmailAppPassword && !req.body.gmailAppPassword.includes('****')) ? req.body.gmailAppPassword : process.env.GMAIL_APP_PASSWORD;
 
   if (!gmailUser || !gmailAppPassword) {
     return res.status(400).json({ error: 'gmailUser and gmailAppPassword are required' });
@@ -267,8 +267,8 @@ app.post('/api/email/test', async (req, res) => {
  * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
  */
 app.post('/api/email/send', async (req, res) => {
-  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_ADDRESS;
-  const gmailAppPassword = req.body.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
+  const gmailUser        = (req.body.gmailUser && !req.body.gmailUser.includes('****')) ? req.body.gmailUser : process.env.GMAIL_ADDRESS;
+  const gmailAppPassword = (req.body.gmailAppPassword && !req.body.gmailAppPassword.includes('****')) ? req.body.gmailAppPassword : process.env.GMAIL_APP_PASSWORD;
   const { to, subject, html } = req.body;
 
   if (!gmailUser || !gmailAppPassword || !to || !subject) {
