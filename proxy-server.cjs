@@ -15,6 +15,9 @@
  *   GMAIL_USER           – Gmail address for SMTP
  *   GMAIL_APP_PASSWORD   – Gmail App Password
  *   JWT_SECRET           – secret for signing JWTs (default: random per restart)
+ *   GOOGLE_CLIENT_ID     – Google OAuth2 client ID (for Calendar)
+ *   GOOGLE_CLIENT_SECRET – Google OAuth2 client secret
+ *   APP_URL              – public URL of the app (for OAuth redirect)
  *
  * Start with: node proxy-server.cjs
  */
@@ -27,13 +30,15 @@ const axios      = require('axios');
 const nodemailer = require('nodemailer');
 const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
+const { google } = require('googleapis');
 const fs         = require('fs');
 const path       = require('path');
 const crypto     = require('crypto');
 
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
-const USERS_FILE    = path.join(__dirname, 'users.json');
-const DIST_DIR      = path.join(__dirname, 'dist');
+const SETTINGS_FILE    = path.join(__dirname, 'settings.json');
+const USERS_FILE       = path.join(__dirname, 'users.json');
+const GCAL_TOKENS_FILE = path.join(__dirname, 'gcal-tokens.json');
+const DIST_DIR         = path.join(__dirname, 'dist');
 
 // JWT secret: prefer env var, fall back to random (tokens won't survive restart)
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
@@ -56,6 +61,31 @@ function readUsers() {
   } catch {
     return [];
   }
+}
+
+// ── Google Calendar token persistence (keyed by app user ID) ─────────────────
+
+function readGcalTokens() {
+  try {
+    return JSON.parse(fs.readFileSync(GCAL_TOKENS_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeGcalTokens(data) {
+  fs.writeFileSync(GCAL_TOKENS_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function getAppUrl() {
+  return (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/+$/, '');
+}
+
+function makeOAuth2Client() {
+  const clientId     = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+  return new google.auth.OAuth2(clientId, clientSecret, `${getAppUrl()}/api/gcal/callback`);
 }
 
 const app  = express();
@@ -282,6 +312,157 @@ app.post('/api/settings', (req, res) => {
   }
 });
 
+// ── Google Calendar routes ────────────────────────────────────────────────────
+
+const GCAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
+
+/**
+ * GET /api/gcal/auth-url?userId=...
+ * Returns the Google OAuth consent URL. userId is the app user ID (e.g. "user-lyle").
+ */
+app.get('/api/gcal/auth-url', (req, res) => {
+  const oauth2 = makeOAuth2Client();
+  if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)' });
+
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'userId query param required' });
+
+  const url = oauth2.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: GCAL_SCOPES,
+    state: userId,
+  });
+  res.json({ url });
+});
+
+/**
+ * GET /api/gcal/callback?code=...&state=userId
+ * Google redirects here after consent. Exchanges code for tokens and stores them.
+ */
+app.get('/api/gcal/callback', async (req, res) => {
+  const oauth2 = makeOAuth2Client();
+  if (!oauth2) return res.status(500).send('Google OAuth not configured');
+
+  const { code, state: userId } = req.query;
+  if (!code || !userId) return res.status(400).send('Missing code or state');
+
+  try {
+    const { tokens } = await oauth2.getToken(code);
+    const allTokens = readGcalTokens();
+    allTokens[userId] = tokens;
+    writeGcalTokens(allTokens);
+    console.log(`[gcal] Stored tokens for ${userId}`);
+    // Redirect back to the app's calendar tab
+    res.redirect('/?gcal=connected');
+  } catch (err) {
+    console.error('[gcal] Token exchange failed:', err.message);
+    res.status(500).send(`Google Calendar auth failed: ${err.message}`);
+  }
+});
+
+/**
+ * GET /api/gcal/status?userId=...
+ * Returns { connected: bool, email?: string }
+ */
+app.get('/api/gcal/status', async (req, res) => {
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  const allTokens = readGcalTokens();
+  const tokens = allTokens[userId];
+  if (!tokens) return res.json({ connected: false });
+
+  const oauth2 = makeOAuth2Client();
+  if (!oauth2) return res.json({ connected: false });
+
+  oauth2.setCredentials(tokens);
+  // Refresh if needed and persist
+  oauth2.on('tokens', (newTokens) => {
+    const updated = readGcalTokens();
+    updated[userId] = { ...updated[userId], ...newTokens };
+    writeGcalTokens(updated);
+  });
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+    const { data } = await calendar.calendarList.get({ calendarId: 'primary' });
+    res.json({ connected: true, email: data.id });
+  } catch (err) {
+    console.error('[gcal] status check failed:', err.message);
+    // Token likely revoked
+    delete allTokens[userId];
+    writeGcalTokens(allTokens);
+    res.json({ connected: false });
+  }
+});
+
+/**
+ * POST /api/gcal/sync-task
+ * Body: { userId, title, description?, dueDate (YYYY-MM-DD) }
+ * Creates a Google Calendar all-day event for the task.
+ */
+app.post('/api/gcal/sync-task', async (req, res) => {
+  const { userId, title, description, dueDate } = req.body;
+  if (!userId || !title || !dueDate) {
+    return res.status(400).json({ error: 'userId, title, and dueDate are required' });
+  }
+
+  const allTokens = readGcalTokens();
+  const tokens = allTokens[userId];
+  if (!tokens) return res.status(401).json({ error: 'Google Calendar not connected' });
+
+  const oauth2 = makeOAuth2Client();
+  if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured' });
+
+  oauth2.setCredentials(tokens);
+  oauth2.on('tokens', (newTokens) => {
+    const updated = readGcalTokens();
+    updated[userId] = { ...updated[userId], ...newTokens };
+    writeGcalTokens(updated);
+  });
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+    // Create an all-day event on the due date
+    const nextDay = new Date(dueDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const endDate = nextDay.toISOString().slice(0, 10);
+
+    const event = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: {
+        summary: `[TaskManage] ${title}`,
+        description: description || '',
+        start: { date: dueDate },
+        end:   { date: endDate },
+      },
+    });
+
+    console.log(`[gcal] Created event ${event.data.id} for ${userId}`);
+    res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
+  } catch (err) {
+    console.error('[gcal] sync-task failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/gcal/disconnect
+ * Body: { userId }
+ * Removes stored tokens for the user.
+ */
+app.post('/api/gcal/disconnect', (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  const allTokens = readGcalTokens();
+  delete allTokens[userId];
+  writeGcalTokens(allTokens);
+  console.log(`[gcal] Disconnected ${userId}`);
+  res.json({ success: true });
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>
@@ -311,5 +492,10 @@ app.listen(PORT, () => {
   console.log('  POST /api/email/send    → send email via Gmail SMTP');
   console.log('  GET  /api/settings      → read settings.json');
   console.log('  POST /api/settings      → write settings.json');
+  console.log('  GET  /api/gcal/auth-url → Google Calendar OAuth URL');
+  console.log('  GET  /api/gcal/callback → Google Calendar OAuth callback');
+  console.log('  GET  /api/gcal/status   → check calendar connection');
+  console.log('  POST /api/gcal/sync-task→ sync task to Google Calendar');
+  console.log('  POST /api/gcal/disconnect→ remove calendar connection');
   console.log('  GET  /health\n');
 });
