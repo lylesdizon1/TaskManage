@@ -1269,6 +1269,96 @@ app.get('/api/financial/summary', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Notes ─────────────────────────────────────────────────────────────────────
+
+app.get('/api/notes', authenticateToken, async (req, res) => {
+  try {
+    // Seed categories on first note-related API call
+    await db.seedNoteCategoriesIfEmpty(req.user.id);
+    const filters = {};
+    if (req.query.pillar) filters.pillar = req.query.pillar;
+    if (req.query.category) filters.category = req.query.category;
+    if (req.query.archived) filters.archived = req.query.archived === 'true';
+    if (req.query.pinned) filters.pinned = req.query.pinned === 'true';
+    const notes = await db.getNotesForUser(req.user.id, filters);
+    return res.json(notes);
+  } catch (err) {
+    console.error('[notes] read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/notes', authenticateToken, async (req, res) => {
+  try {
+    const { title, content, type, pillar, category, subcategory, tags } = req.body;
+    const id = `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const note = await db.createNote({
+      id, userId: req.user.id, title, content, type, pillar, category, subcategory, tags,
+    });
+    return res.json(note);
+  } catch (err) {
+    console.error('[notes] create failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/notes/:id', authenticateToken, async (req, res) => {
+  try {
+    const updated = await db.updateNote(req.params.id, req.user.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Note not found' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[notes] update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/notes/:id', authenticateToken, async (req, res) => {
+  try {
+    await db.deleteNote(req.params.id, req.user.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[notes] delete failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/notes/:id/pin', authenticateToken, async (req, res) => {
+  try {
+    const note = await db.getNoteById(req.params.id, req.user.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    const updated = await db.updateNote(req.params.id, req.user.id, { pinned: !note.pinned });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[notes] pin toggle failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/notes/categories', authenticateToken, async (req, res) => {
+  try {
+    await db.seedNoteCategoriesIfEmpty(req.user.id);
+    const cats = await db.getNoteCategories(req.user.id);
+    return res.json(cats);
+  } catch (err) {
+    console.error('[notes] categories read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/notes/categories', authenticateToken, async (req, res) => {
+  try {
+    const { name, parentId, pillar, color } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const id = `ncat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const cat = await db.createNoteCategory({ id, userId: req.user.id, name, parentId, pillar, color });
+    return res.json(cat);
+  } catch (err) {
+    console.error('[notes] category create failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>

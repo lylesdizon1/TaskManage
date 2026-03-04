@@ -81,6 +81,13 @@ async function initTables() {
       title       TEXT DEFAULT '',
       content     TEXT DEFAULT '',
       visibility  TEXT DEFAULT 'private',
+      type        TEXT DEFAULT 'quick',
+      pillar      TEXT,
+      category    TEXT DEFAULT '',
+      subcategory TEXT DEFAULT '',
+      tags        JSONB DEFAULT '[]',
+      pinned      BOOLEAN DEFAULT FALSE,
+      archived    BOOLEAN DEFAULT FALSE,
       created_at  TIMESTAMPTZ DEFAULT NOW(),
       updated_at  TIMESTAMPTZ DEFAULT NOW()
     );
@@ -88,6 +95,22 @@ async function initTables() {
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes (user_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS note_categories (
+      id         TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL,
+      name       TEXT NOT NULL,
+      parent_id  TEXT,
+      pillar     TEXT,
+      color      TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_categories_user ON note_categories (user_id);
   `);
 
   await pool.query(`
@@ -409,57 +432,127 @@ async function deleteGcalTokensForUser(userId) {
 
 // ── Notes (privacy-first: default private) ───────────────────────────────────
 
-async function getNotesForUser(userId) {
+// ── Notes ─────────────────────────────────────────────────────────────────────
+
+const NOTE_RETURNING = `id, user_id AS "userId", title, content, visibility,
+  type, pillar, category, subcategory, tags, pinned, archived,
+  created_at AS "createdAt", updated_at AS "updatedAt"`;
+
+async function getNotesForUser(userId, filters = {}) {
+  const where = ['user_id = $1'];
+  const vals = [userId];
+  let idx = 2;
+  if (filters.pillar) { where.push(`pillar = $${idx++}`); vals.push(filters.pillar); }
+  if (filters.category) { where.push(`category = $${idx++}`); vals.push(filters.category); }
+  if (filters.pinned !== undefined) { where.push(`pinned = $${idx++}`); vals.push(filters.pinned); }
+  if (filters.archived !== undefined) { where.push(`archived = $${idx++}`); vals.push(filters.archived); }
+  else { where.push('archived = FALSE'); }
   const { rows } = await pool.query(
-    `SELECT id, user_id AS "userId", title, content, visibility,
-            created_at AS "createdAt", updated_at AS "updatedAt"
-     FROM notes
-     WHERE user_id = $1 OR visibility = 'shared'
-     ORDER BY created_at DESC`,
-    [userId],
+    `SELECT ${NOTE_RETURNING} FROM notes WHERE ${where.join(' AND ')} ORDER BY pinned DESC, created_at DESC`,
+    vals,
   );
   return rows;
+}
+
+async function getNoteById(id, userId) {
+  const { rows } = await pool.query(
+    `SELECT ${NOTE_RETURNING} FROM notes WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rows[0] || null;
 }
 
 async function getPrivateNotesForAI(userId) {
   const { rows } = await pool.query(
-    `SELECT id, title, content, visibility
-     FROM notes
-     WHERE user_id = $1
-     ORDER BY created_at DESC`,
+    `SELECT id, title, content, visibility, pillar, category
+     FROM notes WHERE user_id = $1 ORDER BY created_at DESC`,
     [userId],
   );
   return rows;
 }
 
-async function createNote({ id, userId, title, content, visibility }) {
+async function createNote({ id, userId, title, content, visibility, type, pillar, category, subcategory, tags }) {
   const { rows } = await pool.query(
-    `INSERT INTO notes (id, user_id, title, content, visibility)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, user_id AS "userId", title, content, visibility,
-               created_at AS "createdAt", updated_at AS "updatedAt"`,
-    [id, userId, title || '', content || '', visibility || 'private'],
+    `INSERT INTO notes (id, user_id, title, content, visibility, type, pillar, category, subcategory, tags)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING ${NOTE_RETURNING}`,
+    [id, userId, title || '', content || '', visibility || 'private',
+     type || 'quick', pillar || null, category || '', subcategory || '',
+     JSON.stringify(tags || [])],
   );
   return rows[0];
 }
 
 async function updateNote(id, userId, fields) {
+  const sets = [];
+  const vals = [id, userId];
+  let idx = 3;
+  if (fields.title !== undefined) { sets.push(`title = $${idx++}`); vals.push(fields.title); }
+  if (fields.content !== undefined) { sets.push(`content = $${idx++}`); vals.push(fields.content); }
+  if (fields.visibility !== undefined) { sets.push(`visibility = $${idx++}`); vals.push(fields.visibility); }
+  if (fields.type !== undefined) { sets.push(`type = $${idx++}`); vals.push(fields.type); }
+  if (fields.pillar !== undefined) { sets.push(`pillar = $${idx++}`); vals.push(fields.pillar); }
+  if (fields.category !== undefined) { sets.push(`category = $${idx++}`); vals.push(fields.category); }
+  if (fields.subcategory !== undefined) { sets.push(`subcategory = $${idx++}`); vals.push(fields.subcategory); }
+  if (fields.tags !== undefined) { sets.push(`tags = $${idx++}`); vals.push(JSON.stringify(fields.tags)); }
+  if (fields.pinned !== undefined) { sets.push(`pinned = $${idx++}`); vals.push(fields.pinned); }
+  if (fields.archived !== undefined) { sets.push(`archived = $${idx++}`); vals.push(fields.archived); }
+  if (sets.length === 0) return null;
+  sets.push('updated_at = NOW()');
   const { rows } = await pool.query(
-    `UPDATE notes
-     SET title = COALESCE($3, title),
-         content = COALESCE($4, content),
-         visibility = COALESCE($5, visibility),
-         updated_at = NOW()
-     WHERE id = $1 AND user_id = $2
-     RETURNING id, user_id AS "userId", title, content, visibility,
-               created_at AS "createdAt", updated_at AS "updatedAt"`,
-    [id, userId, fields.title ?? null, fields.content ?? null, fields.visibility ?? null],
+    `UPDATE notes SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2 RETURNING ${NOTE_RETURNING}`,
+    vals,
   );
   return rows[0] || null;
 }
 
 async function deleteNote(id, userId) {
   await pool.query('DELETE FROM notes WHERE id = $1 AND user_id = $2', [id, userId]);
+}
+
+// ── Note Categories ───────────────────────────────────────────────────────────
+
+async function getNoteCategories(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", name, parent_id AS "parentId", pillar, color,
+            created_at AS "createdAt"
+     FROM note_categories WHERE user_id = $1 ORDER BY pillar, name`,
+    [userId],
+  );
+  return rows;
+}
+
+async function createNoteCategory({ id, userId, name, parentId, pillar, color }) {
+  const { rows } = await pool.query(
+    `INSERT INTO note_categories (id, user_id, name, parent_id, pillar, color)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, user_id AS "userId", name, parent_id AS "parentId", pillar, color, created_at AS "createdAt"`,
+    [id, userId, name, parentId || null, pillar || null, color || ''],
+  );
+  return rows[0];
+}
+
+async function seedNoteCategoriesIfEmpty(userId) {
+  const existing = await getNoteCategories(userId);
+  if (existing.length > 0) return;
+
+  const tree = {
+    hustle: ['Careific', 'Rose Motors', 'Buyflip', 'Care Homes', 'AutoVision', 'General Business'],
+    home: ['Family', 'Liz', 'Kids', 'Personal'],
+    move: ['Workouts', 'Health', 'Nutrition', 'Recovery'],
+    grow: ['Ideas', 'Journal', 'Learnings', 'Goals', 'Braindump'],
+  };
+  const pillarLabels = { hustle: 'Hustle', home: 'Home', move: 'Move', grow: 'Grow' };
+
+  for (const [pillar, children] of Object.entries(tree)) {
+    const parentId = `ncat-${pillar}`;
+    await createNoteCategory({ id: parentId, userId, name: pillarLabels[pillar], parentId: null, pillar, color: '' });
+    for (const child of children) {
+      const childId = `ncat-${pillar}-${child.toLowerCase().replace(/\s+/g, '-')}`;
+      await createNoteCategory({ id: childId, userId, name: child, parentId, pillar, color: '' });
+    }
+  }
+  console.log(`[db] Seeded default note categories for user ${userId}`);
 }
 
 // ── User preferences ─────────────────────────────────────────────────────────
@@ -624,6 +717,20 @@ async function runMigrations() {
       await updateUser(u.id, { entityIds: allEntityNames });
       console.log(`[db] Migration: assigned all entities to ${u.username}`);
     }
+  }
+
+  // 5. Add new columns to notes table (idempotent)
+  const noteCols = [
+    `ALTER TABLE notes ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'quick'`,
+    `ALTER TABLE notes ADD COLUMN IF NOT EXISTS pillar TEXT`,
+    `ALTER TABLE notes ADD COLUMN IF NOT EXISTS category TEXT DEFAULT ''`,
+    `ALTER TABLE notes ADD COLUMN IF NOT EXISTS subcategory TEXT DEFAULT ''`,
+    `ALTER TABLE notes ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'`,
+    `ALTER TABLE notes ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE notes ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE`,
+  ];
+  for (const sql of noteCols) {
+    await pool.query(sql).catch(() => {});
   }
 }
 
@@ -856,10 +963,14 @@ module.exports = {
   setGcalTokensForUser,
   deleteGcalTokensForUser,
   getNotesForUser,
+  getNoteById,
   getPrivateNotesForAI,
   createNote,
   updateNote,
   deleteNote,
+  getNoteCategories,
+  createNoteCategory,
+  seedNoteCategoriesIfEmpty,
   getUserPreferences,
   saveUserPreferences,
   getChatHistory,

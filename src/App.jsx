@@ -2588,6 +2588,15 @@ function DollarIcon({ className }) {
   );
 }
 
+function NotesIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+    </svg>
+  );
+}
+
 function UploadIcon({ className }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3394,6 +3403,401 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// NOTES PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PILLAR_CONFIG = {
+  hustle: { label: 'Hustle', bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
+  home: { label: 'Home', bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-200', dot: 'bg-green-500' },
+  move: { label: 'Move', bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-200', dot: 'bg-orange-500' },
+  grow: { label: 'Grow', bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },
+};
+
+function relativeTime(dateStr) {
+  const now = new Date();
+  const d = new Date(dateStr);
+  const diffMs = now - d;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay === 1) return 'Yesterday';
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+}
+
+function NotesPanel({ authToken }) {
+  const [notes, setNotes] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [pillarFilter, setPillarFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [selectedNote, setSelectedNote] = useState(null);
+  const [editorData, setEditorData] = useState({ title: '', content: '', pillar: '', category: '', subcategory: '', tags: '' });
+  const [saveStatus, setSaveStatus] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const saveTimerRef = useRef(null);
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
+
+  const loadNotes = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (pillarFilter) params.set('pillar', pillarFilter);
+    if (categoryFilter) params.set('category', categoryFilter);
+    try {
+      const res = await fetch(`/api/notes?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (Array.isArray(data)) setNotes(data);
+    } catch {}
+  }, [authToken, pillarFilter, categoryFilter]);
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await fetch('/api/notes/categories', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (Array.isArray(data)) setCategories(data);
+    } catch {}
+  }, [authToken]);
+
+  useEffect(() => {
+    Promise.all([loadNotes(), loadCategories()]).then(() => setLoading(false));
+  }, [loadNotes, loadCategories]);
+
+  // Build category tree
+  const parentCategories = useMemo(() => categories.filter((c) => !c.parentId), [categories]);
+  const childCategories = useMemo(() => categories.filter((c) => c.parentId), [categories]);
+
+  function getSubcategories(parentName, pillar) {
+    const parent = parentCategories.find((p) => p.pillar === pillar);
+    if (!parent) return [];
+    return childCategories.filter((c) => c.parentId === parent.id);
+  }
+
+  // Count notes per category
+  const categoryCounts = useMemo(() => {
+    const counts = {};
+    notes.forEach((n) => { if (n.category) counts[n.category] = (counts[n.category] || 0) + 1; });
+    return counts;
+  }, [notes]);
+
+  async function handleNewNote() {
+    try {
+      const res = await fetch('/api/notes', {
+        method: 'POST', headers,
+        body: JSON.stringify({ title: '', content: '', type: 'quick', pillar: pillarFilter || null }),
+      });
+      const note = await res.json();
+      if (note.id) {
+        setNotes((prev) => [note, ...prev]);
+        setSelectedNote(note);
+        setEditorData({ title: note.title || '', content: note.content || '', pillar: note.pillar || '', category: note.category || '', subcategory: note.subcategory || '', tags: (note.tags || []).join(', ') });
+        setSaveStatus('saved');
+      }
+    } catch {}
+  }
+
+  function openNote(note) {
+    setSelectedNote(note);
+    setEditorData({
+      title: note.title || '',
+      content: note.content || '',
+      pillar: note.pillar || '',
+      category: note.category || '',
+      subcategory: note.subcategory || '',
+      tags: (note.tags || []).join(', '),
+    });
+    setSaveStatus('saved');
+    setShowDeleteConfirm(false);
+  }
+
+  function handleEditorChange(field, value) {
+    setEditorData((prev) => ({ ...prev, [field]: value }));
+    setSaveStatus('saving...');
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveNote({ ...editorData, [field]: value });
+    }, 2000);
+  }
+
+  async function saveNote(data) {
+    if (!selectedNote) return;
+    const body = {
+      title: data.title,
+      content: data.content,
+      pillar: data.pillar || null,
+      category: data.category,
+      subcategory: data.subcategory,
+      tags: data.tags ? data.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+    };
+    try {
+      const res = await fetch(`/api/notes/${selectedNote.id}`, { method: 'PUT', headers, body: JSON.stringify(body) });
+      const updated = await res.json();
+      if (updated.id) {
+        setSelectedNote(updated);
+        setNotes((prev) => prev.map((n) => n.id === updated.id ? updated : n));
+        setSaveStatus('saved');
+      }
+    } catch { setSaveStatus('error'); }
+  }
+
+  async function handlePin() {
+    if (!selectedNote) return;
+    try {
+      const res = await fetch(`/api/notes/${selectedNote.id}/pin`, { method: 'PUT', headers });
+      const updated = await res.json();
+      if (updated.id) {
+        setSelectedNote(updated);
+        setNotes((prev) => prev.map((n) => n.id === updated.id ? updated : n));
+      }
+    } catch {}
+  }
+
+  async function handleDelete() {
+    if (!selectedNote) return;
+    try {
+      await fetch(`/api/notes/${selectedNote.id}`, { method: 'DELETE', headers });
+      setNotes((prev) => prev.filter((n) => n.id !== selectedNote.id));
+      setSelectedNote(null);
+      setShowDeleteConfirm(false);
+    } catch {}
+  }
+
+  function closeEditor() {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveNote(editorData);
+    }
+    setSelectedNote(null);
+  }
+
+  // Filtered subcategories based on selected pillar in editor
+  const editorSubcats = useMemo(() => {
+    if (!editorData.pillar) return [];
+    return getSubcategories(editorData.pillar, editorData.pillar);
+  }, [editorData.pillar, categories]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <SpinnerIcon className="w-6 h-6 text-indigo-400 animate-spin" />
+      </div>
+    );
+  }
+
+  // ── Editor view (mobile replaces list, desktop is right panel) ──
+  const editorPanel = selectedNote && (
+    <div className="flex-1 flex flex-col overflow-hidden bg-white">
+      {/* Editor header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+        <button onClick={closeEditor} className="text-sm text-gray-500 hover:text-gray-700 md:hidden">← Back</button>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs px-2 py-0.5 rounded ${saveStatus === 'saved' ? 'bg-green-50 text-green-600' : saveStatus === 'error' ? 'bg-red-50 text-red-600' : 'bg-yellow-50 text-yellow-600'}`}>
+            {saveStatus === 'saved' ? '✓ Saved' : saveStatus === 'error' ? '✗ Error' : '⏳ Saving...'}
+          </span>
+          <button onClick={handlePin} className={`p-1.5 rounded hover:bg-gray-100 ${selectedNote.pinned ? 'text-amber-500' : 'text-gray-400'}`} title={selectedNote.pinned ? 'Unpin' : 'Pin'}>📌</button>
+        </div>
+      </div>
+
+      {/* Editor body */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+        <input
+          type="text" value={editorData.title}
+          onChange={(e) => handleEditorChange('title', e.target.value)}
+          placeholder="Title (optional)"
+          className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
+        />
+        <textarea
+          value={editorData.content}
+          onChange={(e) => handleEditorChange('content', e.target.value)}
+          placeholder="Start writing..."
+          className="w-full min-h-[200px] bg-transparent border-0 outline-none resize-none text-gray-700 placeholder-gray-300 leading-relaxed"
+          style={{ height: Math.max(200, (editorData.content || '').split('\n').length * 24 + 40) }}
+        />
+
+        {/* Metadata row */}
+        <div className="border-t border-gray-100 pt-3 space-y-3">
+          {/* Pillar pills */}
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">Pillar</label>
+            <div className="flex gap-1.5 flex-wrap">
+              {Object.entries(PILLAR_CONFIG).map(([key, cfg]) => (
+                <button key={key} onClick={() => handleEditorChange('pillar', editorData.pillar === key ? '' : key)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${editorData.pillar === key ? `${cfg.bg} ${cfg.text}` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                  {cfg.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Category dropdown */}
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="text-xs text-gray-400 mb-1 block">Category</label>
+              <select value={editorData.category} onChange={(e) => handleEditorChange('category', e.target.value)}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
+                <option value="">None</option>
+                {childCategories
+                  .filter((c) => !editorData.pillar || c.pillar === editorData.pillar)
+                  .map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="flex-1">
+              <label className="text-xs text-gray-400 mb-1 block">Subcategory</label>
+              <input type="text" value={editorData.subcategory}
+                onChange={(e) => handleEditorChange('subcategory', e.target.value)}
+                placeholder="Optional"
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5" />
+            </div>
+          </div>
+
+          {/* Tags */}
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">Tags (comma-separated)</label>
+            <input type="text" value={editorData.tags}
+              onChange={(e) => handleEditorChange('tags', e.target.value)}
+              placeholder="idea, important, follow-up"
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5" />
+          </div>
+
+          {/* Timestamps */}
+          <div className="flex items-center justify-between text-[10px] text-gray-400 pt-2">
+            <span>Created {new Date(selectedNote.createdAt).toLocaleString()}</span>
+            <span>Updated {new Date(selectedNote.updatedAt).toLocaleString()}</span>
+          </div>
+
+          {/* Delete */}
+          <div className="pt-2 border-t border-gray-100">
+            {showDeleteConfirm ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-red-600">Delete this note?</span>
+                <button onClick={handleDelete} className="text-xs px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600">Yes, delete</button>
+                <button onClick={() => setShowDeleteConfirm(false)} className="text-xs px-3 py-1 bg-gray-100 text-gray-600 rounded hover:bg-gray-200">Cancel</button>
+              </div>
+            ) : (
+              <button onClick={() => setShowDeleteConfirm(true)} className="text-xs text-red-400 hover:text-red-600">Delete note</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Main layout ──
+  return (
+    <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      {/* Left sidebar */}
+      <div className={`w-full md:w-[240px] flex-shrink-0 border-r border-gray-100 flex flex-col bg-white overflow-y-auto ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
+        {/* New Note button */}
+        <div className="p-3">
+          <button onClick={handleNewNote}
+            className="w-full px-4 py-2.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2">
+            <span className="text-lg leading-none">+</span> New Note
+          </button>
+        </div>
+
+        {/* Pillar filters */}
+        <div className="px-3 pb-2 flex flex-wrap gap-1">
+          <button onClick={() => { setPillarFilter(''); setCategoryFilter(''); }}
+            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${!pillarFilter ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+            All
+          </button>
+          {Object.entries(PILLAR_CONFIG).map(([key, cfg]) => (
+            <button key={key} onClick={() => { setPillarFilter(pillarFilter === key ? '' : key); setCategoryFilter(''); }}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${pillarFilter === key ? `${cfg.bg} ${cfg.text}` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+              {cfg.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Category list */}
+        <div className="flex-1 overflow-y-auto px-2 pb-3">
+          {childCategories
+            .filter((c) => !pillarFilter || c.pillar === pillarFilter)
+            .map((cat) => (
+              <button key={cat.id} onClick={() => setCategoryFilter(categoryFilter === cat.name ? '' : cat.name)}
+                className={`w-full text-left px-3 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${categoryFilter === cat.name ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
+                <span className="flex items-center gap-2">
+                  {cat.pillar && <span className={`w-1.5 h-1.5 rounded-full ${PILLAR_CONFIG[cat.pillar]?.dot || 'bg-gray-400'}`} />}
+                  {cat.name}
+                </span>
+                {categoryCounts[cat.name] > 0 && (
+                  <span className="text-[10px] text-gray-400">{categoryCounts[cat.name]}</span>
+                )}
+              </button>
+            ))}
+        </div>
+      </div>
+
+      {/* Main panel: note list or editor on mobile */}
+      {selectedNote && (
+        <div className="flex-1 flex flex-col md:hidden overflow-hidden">
+          {editorPanel}
+        </div>
+      )}
+
+      {!selectedNote && (
+        <div className="flex-1 overflow-y-auto px-4 py-3 md:block">
+          {notes.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400 py-20">
+              <NotesIcon className="w-12 h-12 mb-3 text-gray-300" />
+              <p className="text-sm font-medium text-gray-500 mb-1">Capture your first thought →</p>
+              <button onClick={handleNewNote}
+                className="mt-3 px-5 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors">
+                New Note
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2 max-w-2xl">
+              {notes.map((note) => (
+                <button key={note.id} onClick={() => openNote(note)}
+                  className="w-full text-left p-3 rounded-xl border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all bg-white">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        {note.pinned && <span className="text-xs">📌</span>}
+                        <span className="text-sm font-medium text-gray-800 truncate">
+                          {note.title || (note.content || '').slice(0, 80) || 'Untitled'}
+                        </span>
+                      </div>
+                      {note.content && note.title && (
+                        <p className="text-xs text-gray-400 truncate mb-1.5">{note.content.slice(0, 120)}</p>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {note.pillar && PILLAR_CONFIG[note.pillar] && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${PILLAR_CONFIG[note.pillar].bg} ${PILLAR_CONFIG[note.pillar].text}`}>
+                            {PILLAR_CONFIG[note.pillar].label}
+                          </span>
+                        )}
+                        {note.category && (
+                          <span className="text-[10px] text-gray-400">
+                            {note.category}{note.subcategory ? ` · ${note.subcategory}` : ''}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-gray-300">{relativeTime(note.updatedAt || note.createdAt)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Desktop editor panel (right side) */}
+      <div className="hidden md:flex md:flex-1 md:border-l md:border-gray-100">
+        {selectedNote ? editorPanel : (
+          <div className="flex-1 flex items-center justify-center text-gray-300 text-sm">
+            Select a note or create a new one
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GOOGLE CALENDAR PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3637,7 +4041,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [toasts, setToasts]                     = useState([]);
   const [gcalConnected, setGcalConnected]       = useState(false);
   const [envConfigured, setEnvConfigured]       = useState({});
-  const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'financials'
+  const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'financials' | 'notes'
   const [entities, setEntities]                 = useState([]);
   const [financialTransactions, setFinancialTransactions] = useState([]);
   const [financialAccounts, setFinancialAccounts] = useState([]);
@@ -3960,6 +4364,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 { key: 'priority', label: 'High Priority' },
                 { key: 'calendar', label: 'Calendar', desktopOnly: true },
                 { key: 'financials', label: 'Financials', desktopOnly: true },
+                { key: 'notes', label: 'Notes', desktopOnly: true },
               ].map(({ key, label, desktopOnly }) => (
                 <button
                   key={key}
@@ -3974,6 +4379,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 >
                   {key === 'calendar' && <CalendarIcon className="w-3.5 h-3.5" />}
                   {key === 'financials' && <DollarIcon className="w-3.5 h-3.5" />}
+                  {key === 'notes' && <NotesIcon className="w-3.5 h-3.5" />}
                   {label}
                   {key === 'priority' && (
                     <span className="ml-1.5 text-[10px] bg-red-100 text-red-500 font-semibold px-1.5 py-0.5 rounded-full">
@@ -3990,6 +4396,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
           ) : activeView === 'financials' ? (
             <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
+          ) : activeView === 'notes' ? (
+            <NotesPanel authToken={authToken} />
           ) : (
           /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
@@ -4072,6 +4480,15 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         >
           <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
         </section>
+
+        {/* ── Notes panel (mobile only — on desktop it's in the task section tabs) ── */}
+        <section
+          className={`flex-col overflow-hidden w-full md:hidden ${
+            mobileView === 'notes' ? 'flex' : 'hidden'
+          }`}
+        >
+          <NotesPanel authToken={authToken} />
+        </section>
       </main>
 
       {/* ── Mobile bottom navigation ── */}
@@ -4081,12 +4498,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           { key: 'chat', label: 'Chat', icon: <ChatIcon className="w-5 h-5" /> },
           { key: 'calendar', label: 'Calendar', icon: <CalendarIcon className="w-5 h-5" /> },
           { key: 'financials', label: 'Financials', icon: <DollarIcon className="w-5 h-5" /> },
+          { key: 'notes', label: 'Notes', icon: <NotesIcon className="w-5 h-5" /> },
         ].map(({ key, label, icon }) => (
           <button
             key={key}
             onClick={() => {
               setMobileView(key);
-              if (key === 'tasks' && (activeView === 'calendar' || activeView === 'financials')) setActiveView('daily');
+              if (key === 'tasks' && (activeView === 'calendar' || activeView === 'financials' || activeView === 'notes')) setActiveView('daily');
             }}
             className={`flex-1 flex flex-col items-center gap-0.5 py-2 min-h-[56px] text-xs font-medium transition-colors ${
               mobileView === key
