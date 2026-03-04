@@ -903,24 +903,46 @@ app.delete('/api/financial/transactions/:id', authenticateToken, async (req, res
 
 // ── File Import (CSV, Excel, PDF) ─────────────────────────────────────────────
 
+function splitCSVRow(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; continue; }
+    current += ch;
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function isValidDateField(val) {
+  if (!val) return false;
+  const s = String(val).trim();
+  return /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s) || /^\d{4}-\d{2}-\d{2}/.test(s);
+}
+
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) return { headers: [], rows: [] };
-  function splitRow(line) {
-    const result = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') { inQuotes = !inQuotes; continue; }
-      if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; continue; }
-      current += ch;
+
+  // Scan for the real header row: first row containing both "date" and "description" (case-insensitive)
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(lines.length, 20); i++) {
+    const lower = lines[i].toLowerCase();
+    if (lower.includes('date') && lower.includes('description')) {
+      headerIdx = i;
+      break;
     }
-    result.push(current.trim());
-    return result;
   }
-  const headers = splitRow(lines[0]);
-  const rows = lines.slice(1).map(splitRow).filter((r) => r.length >= 2);
+
+  const headers = splitCSVRow(lines[headerIdx]);
+  const rows = lines.slice(headerIdx + 1)
+    .map(splitCSVRow)
+    .filter((r) => r.length >= 2)
+    // Skip rows where the first column is not a valid date (summary/footer rows)
+    .filter((r) => isValidDateField(r[0]));
   return { headers, rows };
 }
 
@@ -955,8 +977,10 @@ function mapCSVRow(format, headers, row) {
     }
   }
 
-  const amount = Math.abs(parseFloat(amountStr.replace(/[^0-9.\-]/g, '')) || 0);
-  const isCredit = parseFloat(amountStr.replace(/[^0-9.\-]/g, '')) > 0;
+  // Strip commas from dollar amounts (e.g. "23,110.70" → "23110.70") before parsing
+  const cleanedAmount = amountStr.replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+  const amount = Math.abs(parseFloat(cleanedAmount) || 0);
+  const isCredit = parseFloat(cleanedAmount) > 0;
 
   return { date, description, amount, type: isCredit ? 'credit' : 'debit', category };
 }
@@ -1026,18 +1050,86 @@ function parseExcelToRows(base64Data) {
   return { headers, rows };
 }
 
+function parsePDFTextLocally(text) {
+  // Split PDF text into lines and find the header row containing "Date" and "Description"
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  const transactions = [];
+
+  // Strategy 1: Look for tabular data with a header row
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(lines.length, 50); i++) {
+    const lower = lines[i].toLowerCase();
+    if (lower.includes('date') && lower.includes('description')) {
+      headerIdx = i;
+      break;
+    }
+  }
+
+  if (headerIdx >= 0) {
+    // Parse rows after the header using CSV-style splitting
+    const headers = splitCSVRow(lines[headerIdx]);
+    const format = detectCSVFormat(headers);
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+      const row = splitCSVRow(lines[i]);
+      if (row.length < 2) continue;
+      if (!isValidDateField(row[0])) continue;
+      const mapped = mapCSVRow(format, headers, row);
+      if (mapped.date && mapped.amount > 0) {
+        transactions.push(mapped);
+      }
+    }
+    if (transactions.length > 0) return transactions;
+  }
+
+  // Strategy 2: Scan every line for date-prefixed transaction patterns
+  // Matches lines like: "01/15/2025  AMAZON.COM   -45.99" or "01/15/2025  DEPOSIT  1,234.56"
+  const txnPattern = /^(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+?)\s+([-]?\$?[\d,]+\.\d{2})\s*$/;
+  for (const line of lines) {
+    const match = line.trim().match(txnPattern);
+    if (!match) continue;
+    let [, dateStr, description, amountStr] = match;
+    // Normalize date
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const [m, d, y] = parts;
+      const year = y.length === 2 ? '20' + y : y;
+      dateStr = `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    const cleanedAmt = amountStr.replace(/[$,]/g, '');
+    const amount = Math.abs(parseFloat(cleanedAmt) || 0);
+    if (amount > 0) {
+      transactions.push({
+        date: dateStr,
+        description: description.trim(),
+        amount,
+        type: parseFloat(cleanedAmt) > 0 ? 'credit' : 'debit',
+        category: 'Uncategorized',
+      });
+    }
+  }
+
+  return transactions;
+}
+
 async function parsePDFWithClaude(base64Data) {
   const buffer = Buffer.from(base64Data, 'base64');
   const pdfData = await pdfParse(buffer);
   const text = pdfData.text;
 
   if (!text || text.trim().length < 20) {
-    throw new Error('Could not extract readable text from PDF');
+    throw new Error('Could not extract readable text from PDF. The file may be image-based or empty.');
   }
 
+  // Try local text-based parsing first (no API key needed)
+  const localResults = parsePDFTextLocally(text);
+  if (localResults.length > 0) {
+    return localResults;
+  }
+
+  // Fall back to Claude API if local parsing found nothing
   const apiKey = process.env.CLAUDE_API_KEY;
   if (!apiKey) {
-    throw new Error('CLAUDE_API_KEY is required for PDF parsing. Set it in your environment variables.');
+    throw new Error('No transactions could be parsed from the PDF text locally, and CLAUDE_API_KEY is not set for AI-assisted parsing. Please try a CSV or Excel export instead.');
   }
 
   // Truncate to ~12k chars to stay within token limits
