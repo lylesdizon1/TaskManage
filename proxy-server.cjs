@@ -552,6 +552,42 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Chat history ─────────────────────────────────────────────────────────────
+
+app.get('/api/chat/history', authenticateToken, async (req, res) => {
+  try {
+    const messages = await db.getChatHistory(req.user.id, 50);
+    return res.json(messages);
+  } catch (err) {
+    console.error('[chat] history read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/chat/message', authenticateToken, async (req, res) => {
+  try {
+    const { role, content, model } = req.body;
+    if (!role || !content) {
+      return res.status(400).json({ error: 'role and content are required' });
+    }
+    const msg = await db.saveChatMessage({ userId: req.user.id, role, content, model });
+    return res.json(msg);
+  } catch (err) {
+    console.error('[chat] message save failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/chat/history', authenticateToken, async (req, res) => {
+  try {
+    await db.clearChatHistory(req.user.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[chat] history clear failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>
