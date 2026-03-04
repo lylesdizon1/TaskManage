@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"vite\" \"node proxy-server.cjs\"",
     "build": "vite build",
     "preview": "vite preview",
     "proxy": "node proxy-server.cjs",
-    "start": "concurrently \"npm run dev\" \"npm run proxy\""
+    "start": "node proxy-server.cjs"
   },
   "dependencies": {
     "react": "^18.3.1",
