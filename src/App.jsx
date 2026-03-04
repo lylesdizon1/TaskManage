@@ -2624,9 +2624,12 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
   const [showAddTx, setShowAddTx] = useState(false);
   const [txForm, setTxForm] = useState({ accountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', type: 'debit', category: '', entityId: '', accountClass: 'personal', notes: '' });
 
-  // CSV import
+  // File import (CSV, Excel, PDF)
   const [showImport, setShowImport] = useState(false);
   const [csvText, setCsvText] = useState('');
+  const [importFileData, setImportFileData] = useState(null); // base64 for xlsx/pdf
+  const [importFileType, setImportFileType] = useState('csv'); // 'csv' | 'xlsx' | 'pdf'
+  const [importFileName, setImportFileName] = useState('');
   const [importAccountId, setImportAccountId] = useState('');
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -2725,25 +2728,35 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
     loadAll();
   }
 
-  async function handleImportCSV() {
-    if (!csvText || !importAccountId) return;
+  async function handleImportFile() {
+    if (!importAccountId) return;
+    if (importFileType === 'csv' && !csvText) return;
+    if ((importFileType === 'xlsx' || importFileType === 'pdf') && !importFileData) return;
     setImporting(true);
     setImportResult(null);
     try {
       const acct = accounts.find((a) => a.id === importAccountId);
+      const body = {
+        accountId: importAccountId,
+        entityId: acct?.entityId || '',
+        accountClass: acct?.accountClass || 'personal',
+        fileType: importFileType,
+      };
+      if (importFileType === 'csv') {
+        body.csvText = csvText;
+      } else {
+        body.fileData = importFileData;
+      }
       const res = await fetch('/api/financial/import-csv', {
         method: 'POST', headers,
-        body: JSON.stringify({
-          csvText,
-          accountId: importAccountId,
-          entityId: acct?.entityId || '',
-          accountClass: acct?.accountClass || 'personal',
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (res.ok) {
         setImportResult({ ok: true, msg: `Imported ${data.count} transactions (format: ${data.format})` });
         setCsvText('');
+        setImportFileData(null);
+        setImportFileName('');
         loadTransactions();
         loadAll();
       } else {
@@ -2759,9 +2772,34 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
     e.preventDefault();
     const file = e.dataTransfer?.files?.[0] || e.target?.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setCsvText(ev.target.result);
-    reader.readAsText(file);
+    const ext = file.name.split('.').pop().toLowerCase();
+    setImportFileName(file.name);
+
+    if (ext === 'xlsx' || ext === 'xls') {
+      setImportFileType('xlsx');
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const base64 = ev.target.result.split(',')[1];
+        setImportFileData(base64);
+        setCsvText('');
+      };
+      reader.readAsDataURL(file);
+    } else if (ext === 'pdf') {
+      setImportFileType('pdf');
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const base64 = ev.target.result.split(',')[1];
+        setImportFileData(base64);
+        setCsvText('');
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setImportFileType('csv');
+      setImportFileData(null);
+      const reader = new FileReader();
+      reader.onload = (ev) => setCsvText(ev.target.result);
+      reader.readAsText(file);
+    }
   }
 
   // Compute account balances from summary
@@ -3065,7 +3103,7 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
                 <span>+</span> Add Transaction
               </button>
               <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50">
-                <UploadIcon className="w-4 h-4" /> Import CSV
+                <UploadIcon className="w-4 h-4" /> Import File
               </button>
             </div>
 
@@ -3157,16 +3195,21 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
               </form>
             )}
 
-            {/* CSV Import modal */}
+            {/* File Import modal (CSV, Excel, PDF) */}
             {showImport && (
               <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-gray-900">Import CSV</h3>
-                  <button onClick={() => { setShowImport(false); setCsvText(''); setImportResult(null); }} className="text-gray-400 hover:text-gray-600">
+                  <h3 className="text-sm font-semibold text-gray-900">Import Transactions</h3>
+                  <button onClick={() => { setShowImport(false); setCsvText(''); setImportFileData(null); setImportFileName(''); setImportResult(null); }} className="text-gray-400 hover:text-gray-600">
                     <XIcon className="w-4 h-4" />
                   </button>
                 </div>
-                <p className="text-xs text-gray-500">Supports Chase, Bank of America, Amex, and generic CSV formats. Auto-detects columns.</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">CSV</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Excel (.xlsx)</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">PDF (AI-powered)</span>
+                </div>
+                <p className="text-xs text-gray-500">Supports CSV (Chase, BoA, Amex, generic), Excel spreadsheets, and PDF bank statements. PDFs are parsed using Claude AI.</p>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Import to Account *</label>
                   <select value={importAccountId} onChange={(e) => setImportAccountId(e.target.value)} className={inputCls}>
@@ -3180,24 +3223,52 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
                   className="border-2 border-dashed border-gray-200 rounded-lg p-6 text-center hover:border-indigo-300 hover:bg-indigo-50/20 transition-all cursor-pointer"
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <input ref={fileInputRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFileDrop} />
+                  <input ref={fileInputRef} type="file" accept=".csv,.txt,.xlsx,.xls,.pdf" className="hidden" onChange={handleFileDrop} />
                   <UploadIcon className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm text-gray-500 font-medium">{csvText ? `${csvText.split('\n').length - 1} rows loaded` : 'Drop CSV file here or click to browse'}</p>
-                  <p className="text-xs text-gray-400 mt-1">CSV files from Chase, BoA, Amex, or any bank</p>
+                  {importFileName ? (
+                    <div>
+                      <p className="text-sm text-gray-700 font-medium">{importFileName}</p>
+                      <p className="text-xs mt-1">
+                        <span className={`px-1.5 py-0.5 rounded font-medium ${
+                          importFileType === 'pdf' ? 'bg-red-100 text-red-600' :
+                          importFileType === 'xlsx' ? 'bg-blue-100 text-blue-600' :
+                          'bg-green-100 text-green-600'
+                        }`}>
+                          {importFileType === 'pdf' ? 'PDF — will use AI to parse' :
+                           importFileType === 'xlsx' ? 'Excel spreadsheet' :
+                           `CSV — ${csvText.split('\n').length - 1} rows`}
+                        </span>
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm text-gray-500 font-medium">Drop file here or click to browse</p>
+                      <p className="text-xs text-gray-400 mt-1">CSV, Excel (.xlsx), or PDF bank statements</p>
+                    </div>
+                  )}
                 </div>
-                {csvText && (
-                  <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={4} className={inputCls + ' font-mono text-xs'} placeholder="Or paste CSV text here..." />
+                {importFileType === 'csv' && !importFileName && (
+                  <textarea value={csvText} onChange={(e) => { setCsvText(e.target.value); setImportFileType('csv'); }} rows={3} className={inputCls + ' font-mono text-xs'} placeholder="Or paste CSV text here..." />
                 )}
-                {!csvText && (
-                  <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={3} className={inputCls + ' font-mono text-xs'} placeholder="Or paste CSV text here..." />
+                {importFileType === 'csv' && csvText && importFileName && (
+                  <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={4} className={inputCls + ' font-mono text-xs'} placeholder="CSV content..." />
+                )}
+                {importFileType === 'pdf' && importFileData && (
+                  <div className="text-xs px-3 py-2 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+                    PDF will be processed using Claude AI to extract transactions. This may take a moment.
+                  </div>
                 )}
                 {importResult && (
                   <div className={`text-xs px-3 py-2 rounded-lg font-medium ${importResult.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
                     {importResult.ok ? '✓ ' : '✗ '}{importResult.msg}
                   </div>
                 )}
-                <button onClick={handleImportCSV} disabled={importing || !csvText || !importAccountId} className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50">
-                  {importing ? 'Importing...' : 'Import Transactions'}
+                <button
+                  onClick={handleImportFile}
+                  disabled={importing || !importAccountId || (importFileType === 'csv' ? !csvText : !importFileData)}
+                  className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50"
+                >
+                  {importing ? (importFileType === 'pdf' ? 'AI is parsing PDF...' : 'Importing...') : 'Import Transactions'}
                 </button>
               </div>
             )}
