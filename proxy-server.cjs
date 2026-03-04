@@ -23,6 +23,13 @@ const fs         = require('fs');
 const path       = require('path');
 
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const TASKS_FILE    = path.join(__dirname, 'tasks.json');
+
+// ── Hardcoded users (passwords from env vars) ─────────────────────────────────
+const USERS = {
+  lyle: process.env.LYLE_PASSWORD || 'lyle123',
+  wife: process.env.WIFE_PASSWORD || 'wife123',
+};
 
 function readSettings() {
   try {
@@ -35,6 +42,46 @@ function readSettings() {
 function writeSettings(data) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
+
+function readTasks() {
+  try {
+    return JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
+  } catch {
+    return { tasks: [] };
+  }
+}
+
+function writeTasks(data) {
+  fs.writeFileSync(TASKS_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+/**
+ * On first run (no settings.json yet), seed API keys + email from env vars
+ * so Railway deployments can be configured entirely via environment variables.
+ */
+function initSettingsFromEnv() {
+  if (fs.existsSync(SETTINGS_FILE)) return;
+  const seed = {};
+  if (process.env.CLAUDE_API_KEY || process.env.OPENAI_API_KEY) {
+    seed.apiKeys = {
+      claude: process.env.CLAUDE_API_KEY || '',
+      openai: process.env.OPENAI_API_KEY || '',
+    };
+  }
+  if (process.env.GMAIL_USER) {
+    seed.emailSettings = {
+      gmailUser:        process.env.GMAIL_USER || '',
+      gmailAppPassword: process.env.GMAIL_APP_PASSWORD || '',
+      recipientEmail:   process.env.RECIPIENT_EMAIL || '',
+    };
+  }
+  if (Object.keys(seed).length > 0) {
+    writeSettings(seed);
+    console.log('[settings] Seeded from environment variables');
+  }
+}
+
+initSettingsFromEnv();
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -206,11 +253,63 @@ app.post('/api/settings', (req, res) => {
   }
 });
 
+// ── Auth route ────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/login
+ * Body: { username: string, password: string }
+ * Returns: { success: true, user: string } or 401.
+ */
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  const key = (username || '').toLowerCase().trim();
+  if (USERS[key] && USERS[key] === password) {
+    return res.json({ success: true, user: key });
+  }
+  return res.status(401).json({ error: 'Invalid username or password' });
+});
+
+// ── Tasks routes ──────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/tasks
+ * Returns the full tasks list from tasks.json.
+ */
+app.get('/api/tasks', (_req, res) => {
+  res.json(readTasks());
+});
+
+/**
+ * POST /api/tasks
+ * Persists the full tasks array to tasks.json.
+ * Body: { tasks: Task[] }
+ */
+app.post('/api/tasks', (req, res) => {
+  try {
+    writeTasks({ tasks: req.body.tasks || [] });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[tasks] write failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>
   res.json({ status: 'ok', port: PORT, time: new Date().toISOString() }),
 );
+
+// ── Serve frontend static build (Railway / production) ────────────────────────
+// In development Vite's own dev server handles the frontend; in production the
+// built `dist/` folder is served here so a single Railway service covers both.
+
+const DIST_DIR = path.join(__dirname, 'dist');
+if (fs.existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  // SPA fallback — all non-API routes return index.html
+  app.get('*', (_req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
@@ -222,5 +321,11 @@ app.listen(PORT, () => {
   console.log('  POST /api/email/send    → send email via Gmail SMTP');
   console.log('  GET  /api/settings      → read settings.json');
   console.log('  POST /api/settings      → write settings.json');
+  console.log('  POST /api/login         → authenticate lyle / wife');
+  console.log('  GET  /api/tasks         → read tasks.json');
+  console.log('  POST /api/tasks         → write tasks.json');
   console.log('  GET  /health\n');
+  if (fs.existsSync(DIST_DIR)) {
+    console.log('  Serving frontend from dist/ (production mode)\n');
+  }
 });
