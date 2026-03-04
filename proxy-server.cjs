@@ -793,6 +793,226 @@ app.delete('/api/chat/history', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Financial Accounts ────────────────────────────────────────────────────────
+
+app.get('/api/financial/accounts', authenticateToken, async (req, res) => {
+  try {
+    const accounts = await db.getFinancialAccounts(req.user.id, req.user.role);
+    return res.json(accounts);
+  } catch (err) {
+    console.error('[financial] accounts read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/financial/accounts', authenticateToken, async (req, res) => {
+  try {
+    const { name, type, institution, currency, entityId, accountClass } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const id = `fa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const account = await db.createFinancialAccount({
+      id, userId: req.user.id, name, type, institution, currency, entityId, accountClass,
+    });
+    return res.json(account);
+  } catch (err) {
+    console.error('[financial] account create failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/financial/accounts/:id', authenticateToken, async (req, res) => {
+  try {
+    const updated = await db.updateFinancialAccount(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Account not found' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[financial] account update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/financial/accounts/:id', authenticateToken, async (req, res) => {
+  try {
+    await db.deleteFinancialAccount(req.params.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[financial] account delete failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Financial Transactions ────────────────────────────────────────────────────
+
+app.get('/api/financial/transactions', authenticateToken, async (req, res) => {
+  try {
+    const filters = {};
+    if (req.query.accountId) filters.accountId = req.query.accountId;
+    if (req.query.entityId) filters.entityId = req.query.entityId;
+    if (req.query.accountClass) filters.accountClass = req.query.accountClass;
+    if (req.query.category) filters.category = req.query.category;
+    if (req.query.startDate) filters.startDate = req.query.startDate;
+    if (req.query.endDate) filters.endDate = req.query.endDate;
+    const txns = await db.getTransactions(req.user.id, req.user.role, filters);
+    return res.json(txns);
+  } catch (err) {
+    console.error('[financial] transactions read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/financial/transactions', authenticateToken, async (req, res) => {
+  try {
+    const { accountId, date, description, amount, type, category, entityId, accountClass, notes } = req.body;
+    if (!accountId || !date || amount === undefined) {
+      return res.status(400).json({ error: 'accountId, date, and amount are required' });
+    }
+    const id = `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const txn = await db.createTransaction({
+      id, accountId, userId: req.user.id, date, description, amount: Math.abs(amount),
+      type: type || (amount < 0 ? 'debit' : 'credit'), category, entityId, accountClass, notes,
+    });
+    return res.json(txn);
+  } catch (err) {
+    console.error('[financial] transaction create failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
+  try {
+    const updated = await db.updateTransaction(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Transaction not found' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[financial] transaction update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
+  try {
+    await db.deleteTransaction(req.params.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[financial] transaction delete failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CSV Import ────────────────────────────────────────────────────────────────
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return { headers: [], rows: [] };
+  // Simple CSV parse: handle quoted fields
+  function splitRow(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQuotes = !inQuotes; continue; }
+      if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; continue; }
+      current += ch;
+    }
+    result.push(current.trim());
+    return result;
+  }
+  const headers = splitRow(lines[0]);
+  const rows = lines.slice(1).map(splitRow).filter((r) => r.length >= 2);
+  return { headers, rows };
+}
+
+function detectCSVFormat(headers) {
+  const h = headers.map((s) => s.toLowerCase().replace(/[^a-z]/g, ''));
+  // Chase: Transaction Date, Post Date, Description, Category, Type, Amount, Memo
+  // or: Date, Description, Amount
+  if (h.includes('transactiondate') || (h.includes('date') && h.includes('description') && h.includes('amount'))) {
+    return 'chase';
+  }
+  // Bank of America: Date, Description, Amount, Running Bal.
+  if (h.some((x) => x.includes('runningbal'))) return 'boa';
+  // Amex: Date, Description, Amount  (or Reference, Date, Description, Amount)
+  if (h.includes('date') && h.includes('amount')) return 'amex';
+  return 'generic';
+}
+
+function mapCSVRow(format, headers, row) {
+  const h = headers.map((s) => s.toLowerCase().replace(/[^a-z]/g, ''));
+  const get = (key) => {
+    const idx = h.findIndex((x) => x.includes(key));
+    return idx >= 0 ? row[idx] : '';
+  };
+
+  let date = get('date') || get('transactiondate');
+  let description = get('description') || get('memo') || '';
+  let amountStr = get('amount') || '0';
+  let category = get('category') || 'Uncategorized';
+
+  // Normalize date to YYYY-MM-DD
+  if (date && !date.match(/^\d{4}-/)) {
+    const parts = date.split('/');
+    if (parts.length === 3) {
+      const [m, d, y] = parts;
+      const year = y.length === 2 ? '20' + y : y;
+      date = `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+  }
+
+  const amount = Math.abs(parseFloat(amountStr.replace(/[^0-9.\-]/g, '')) || 0);
+  const isCredit = parseFloat(amountStr.replace(/[^0-9.\-]/g, '')) > 0;
+
+  return { date, description, amount, type: isCredit ? 'credit' : 'debit', category };
+}
+
+app.post('/api/financial/import-csv', authenticateToken, async (req, res) => {
+  try {
+    const { csvText, accountId, entityId, accountClass } = req.body;
+    if (!csvText || !accountId) {
+      return res.status(400).json({ error: 'csvText and accountId are required' });
+    }
+
+    const { headers, rows } = parseCSV(csvText);
+    if (rows.length === 0) return res.status(400).json({ error: 'No data rows found in CSV' });
+
+    const format = detectCSVFormat(headers);
+    const txns = rows.map((row) => {
+      const mapped = mapCSVRow(format, headers, row);
+      return {
+        id: `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        accountId,
+        userId: req.user.id,
+        date: mapped.date,
+        description: mapped.description,
+        amount: mapped.amount,
+        type: mapped.type,
+        category: mapped.category,
+        entityId: entityId || '',
+        accountClass: accountClass || 'personal',
+        notes: `Imported from CSV (${format})`,
+      };
+    }).filter((t) => t.date && t.amount > 0);
+
+    const created = await db.bulkCreateTransactions(txns);
+    return res.json({ success: true, count: created.length, format, transactions: created });
+  } catch (err) {
+    console.error('[financial] CSV import failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Financial Summary ─────────────────────────────────────────────────────────
+
+app.get('/api/financial/summary', authenticateToken, async (req, res) => {
+  try {
+    const summary = await db.getFinancialSummary(req.user.id, req.user.role);
+    return res.json(summary);
+  } catch (err) {
+    console.error('[financial] summary failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>
