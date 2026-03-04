@@ -2676,18 +2676,28 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
 
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
 
+  const [loadError, setLoadError] = useState('');
+
   const loadAll = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
       const [acctRes, summRes] = await Promise.all([
         fetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } }),
         fetch('/api/financial/summary', { headers: { Authorization: `Bearer ${authToken}` } }),
       ]);
-      const acctData = await acctRes.json();
-      const summData = await summRes.json();
-      if (Array.isArray(acctData)) setAccounts(acctData);
-      if (summData) setSummary(summData);
-    } catch {}
+      if (!acctRes.ok) {
+        const err = await acctRes.json().catch(() => ({}));
+        setLoadError(`Failed to load accounts: ${err.error || acctRes.statusText}`);
+      } else {
+        const acctData = await acctRes.json();
+        if (Array.isArray(acctData)) setAccounts(acctData);
+      }
+      if (summRes.ok) {
+        const summData = await summRes.json();
+        if (summData) setSummary(summData);
+      }
+    } catch (e) { setLoadError(`Network error: ${e.message}`); }
     setLoading(false);
   }, [authToken]);
 
@@ -2701,12 +2711,17 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
     if (filterEndDate) params.set('endDate', filterEndDate);
     try {
       const res = await fetch(`/api/financial/transactions?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setLoadError(`Failed to load transactions: ${err.error || res.statusText}`);
+        return;
+      }
       const data = await res.json();
       if (Array.isArray(data)) {
         setTransactions(data);
         if (onDataChange) onDataChange();
       }
-    } catch {}
+    } catch (e) { setLoadError(`Network error: ${e.message}`); }
   }, [authToken, filterAccount, filterEntity, filterClass, filterCategory, filterStartDate, filterEndDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -2917,6 +2932,12 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      {loadError && (
+        <div className="mx-4 mt-3 px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center justify-between">
+          <span>{loadError}</span>
+          <button onClick={() => { setLoadError(''); loadAll(); loadTransactions(); }} className="ml-3 text-xs font-medium text-red-600 hover:text-red-800 underline">Retry</button>
+        </div>
+      )}
       {/* Sub-tabs */}
       <div className="bg-white border-b border-gray-100 px-4 pt-3 pb-0 flex-shrink-0">
         <div className="flex gap-1">

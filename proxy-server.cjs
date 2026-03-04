@@ -692,19 +692,7 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   }
 });
 
-// ── Notes (privacy-first) ────────────────────────────────────────────────────
-
-app.get('/api/notes', authenticateToken, async (req, res) => {
-  try {
-    const notes = await db.getNotesForUser(req.user.id);
-    return res.json(notes);
-  } catch (err) {
-    console.error('[notes] read failed:', err.message);
-    return res.json([]);
-  }
-});
-
-// Note: POST/PUT/DELETE /api/notes routes are defined below (in the notes section around line ~1291)
+// Note: All /api/notes routes (GET/POST/PUT/DELETE) are defined in the notes section below
 
 // ── User preferences ─────────────────────────────────────────────────────────
 
