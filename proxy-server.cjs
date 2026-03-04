@@ -12,8 +12,9 @@
  *   PORT                 – server port (default 3001)
  *   CLAUDE_API_KEY       – Anthropic API key
  *   OPENAI_API_KEY       – OpenAI API key
- *   GMAIL_USER           – Gmail address for SMTP
+ *   GMAIL_ADDRESS        – Gmail address for SMTP
  *   GMAIL_APP_PASSWORD   – Gmail App Password
+ *   ALERT_RECIPIENT_EMAIL – default alert recipient email
  *   JWT_SECRET           – secret for signing JWTs (default: random per restart)
  *   GOOGLE_CLIENT_ID     – Google OAuth2 client ID (for Calendar)
  *   GOOGLE_CLIENT_SECRET – Google OAuth2 client secret
@@ -242,7 +243,7 @@ function createGmailTransporter(user, pass) {
  * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
  */
 app.post('/api/email/test', async (req, res) => {
-  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_USER;
+  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_ADDRESS;
   const gmailAppPassword = req.body.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
 
   if (!gmailUser || !gmailAppPassword) {
@@ -266,7 +267,7 @@ app.post('/api/email/test', async (req, res) => {
  * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
  */
 app.post('/api/email/send', async (req, res) => {
-  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_USER;
+  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_ADDRESS;
   const gmailAppPassword = req.body.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
   const { to, subject, html } = req.body;
 
@@ -296,8 +297,58 @@ app.post('/api/email/send', async (req, res) => {
 
 // ── Settings routes ───────────────────────────────────────────────────────────
 
+function maskSecret(value) {
+  if (!value || value.length < 6) return '****';
+  return value.slice(0, 4) + '****' + value.slice(-4);
+}
+
+/**
+ * GET /api/settings
+ * Merges env var values over settings.json. For env-backed fields, returns
+ * masked values and an `envConfigured` map so the frontend knows which
+ * fields to lock.
+ */
 app.get('/api/settings', (_req, res) => {
-  res.json(readSettings());
+  const file = readSettings();
+
+  // Which fields are provided by env vars?
+  const envConfigured = {
+    claudeKey:        !!process.env.CLAUDE_API_KEY,
+    openaiKey:        !!process.env.OPENAI_API_KEY,
+    gmailUser:        !!process.env.GMAIL_ADDRESS,
+    gmailAppPassword: !!process.env.GMAIL_APP_PASSWORD,
+    recipientEmail:   !!process.env.ALERT_RECIPIENT_EMAIL,
+  };
+
+  // Build effective apiKeys (env wins, then file)
+  const apiKeys = {
+    claude: process.env.CLAUDE_API_KEY
+      ? maskSecret(process.env.CLAUDE_API_KEY)
+      : (file.apiKeys?.claude || ''),
+    openai: process.env.OPENAI_API_KEY
+      ? maskSecret(process.env.OPENAI_API_KEY)
+      : (file.apiKeys?.openai || ''),
+  };
+
+  // Build effective emailSettings (env wins, then file)
+  const emailSettings = {
+    gmailUser: process.env.GMAIL_ADDRESS
+      ? maskSecret(process.env.GMAIL_ADDRESS)
+      : (file.emailSettings?.gmailUser || ''),
+    gmailAppPassword: process.env.GMAIL_APP_PASSWORD
+      ? maskSecret(process.env.GMAIL_APP_PASSWORD)
+      : (file.emailSettings?.gmailAppPassword || ''),
+    recipientEmail: process.env.ALERT_RECIPIENT_EMAIL
+      || file.emailSettings?.recipientEmail
+      || '',
+  };
+
+  res.json({
+    apiKeys,
+    emailSettings,
+    alertRules: file.alertRules || null,
+    envConfigured,
+  });
 });
 
 app.post('/api/settings', (req, res) => {
