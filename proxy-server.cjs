@@ -244,26 +244,35 @@ function getFromEmail() {
  * Body: { to? } — defaults to ALERT_RECIPIENT_EMAIL env var.
  */
 app.post('/api/email/test', async (req, res) => {
+  console.log('[email/test] RESEND_API_KEY is set:', !!process.env.RESEND_API_KEY);
+  console.log('[email/test] RESEND_API_KEY length:', process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.length : 0);
+
   const resend = getResendClient();
   if (!resend) {
+    console.log('[email/test] getResendClient() returned null - RESEND_API_KEY missing');
     return res.status(400).json({ error: 'RESEND_API_KEY environment variable is not set' });
   }
 
   const to = req.body.to || req.body.recipientEmail || process.env.ALERT_RECIPIENT_EMAIL;
+  console.log('[email/test] Recipient email:', to);
+  console.log('[email/test] From email:', getFromEmail());
+
   if (!to) {
     return res.status(400).json({ error: 'No recipient email provided' });
   }
 
   try {
-    await resend.emails.send({
+    const response = await resend.emails.send({
       from: getFromEmail(),
       to,
       subject: '[TaskManage] Connection Test',
       html: '<p>Your Resend email integration is working.</p>',
     });
-    return res.json({ success: true, message: 'Test email sent via Resend' });
+    console.log('[email/test] Resend API response:', JSON.stringify(response, null, 2));
+    return res.json({ success: true, message: 'Test email sent via Resend', response });
   } catch (err) {
     console.error('[email/test] Resend test failed:', err.message);
+    console.error('[email/test] Full error:', JSON.stringify(err, null, 2));
     return res.status(500).json({ error: err.message });
   }
 });
