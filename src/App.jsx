@@ -2770,12 +2770,23 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
 
   function handleFileDrop(e) {
     e.preventDefault();
+    e.stopPropagation();
     const file = e.dataTransfer?.files?.[0] || e.target?.files?.[0];
     if (!file) return;
-    const ext = file.name.split('.').pop().toLowerCase();
-    setImportFileName(file.name);
+    // Reset file input so same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = '';
 
-    if (ext === 'xlsx' || ext === 'xls') {
+    const name = file.name || '';
+    const ext = name.split('.').pop().toLowerCase();
+    // Also check MIME type for drag-and-drop where extension may not be reliable
+    const mime = file.type || '';
+    const isPdf = ext === 'pdf' || mime === 'application/pdf';
+    const isExcel = ext === 'xlsx' || ext === 'xls' || mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || mime === 'application/vnd.ms-excel';
+
+    setImportFileName(name);
+    setImportResult(null);
+
+    if (isExcel) {
       setImportFileType('xlsx');
       const reader = new FileReader();
       reader.onload = (ev) => {
@@ -2784,7 +2795,7 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
         setCsvText('');
       };
       reader.readAsDataURL(file);
-    } else if (ext === 'pdf') {
+    } else if (isPdf) {
       setImportFileType('pdf');
       const reader = new FileReader();
       reader.onload = (ev) => {
@@ -2800,6 +2811,11 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
       reader.onload = (ev) => setCsvText(ev.target.result);
       reader.readAsText(file);
     }
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
   }
 
   // Compute account balances from summary
@@ -3219,7 +3235,8 @@ function FinancialsPanel({ authToken, currentUser, entities }) {
                 </div>
                 <div
                   onDrop={handleFileDrop}
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragOver={handleDragOver}
+                  onDragEnter={handleDragOver}
                   className="border-2 border-dashed border-gray-200 rounded-lg p-6 text-center hover:border-indigo-300 hover:bg-indigo-50/20 transition-all cursor-pointer"
                   onClick={() => fileInputRef.current?.click()}
                 >

@@ -961,15 +961,68 @@ function mapCSVRow(format, headers, row) {
   return { date, description, amount, type: isCredit ? 'credit' : 'debit', category };
 }
 
+function excelSerialToDate(serial) {
+  if (typeof serial === 'number' && serial > 25000 && serial < 60000) {
+    const utcDays = Math.floor(serial - 25569);
+    const d = new Date(utcDays * 86400 * 1000);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  return null;
+}
+
+function looksLikeDate(val) {
+  if (!val) return false;
+  const s = String(val).trim();
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return true;
+  // MM/DD/YYYY or MM/DD/YY
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(s)) return true;
+  // Excel serial number
+  const n = Number(s);
+  if (!isNaN(n) && n > 25000 && n < 60000) return true;
+  return false;
+}
+
 function parseExcelToRows(base64Data) {
   const buffer = Buffer.from(base64Data, 'base64');
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
   if (jsonRows.length < 2) return { headers: [], rows: [] };
-  const headers = jsonRows[0].map(String);
-  const rows = jsonRows.slice(1).map((r) => r.map(String)).filter((r) => r.some((c) => c.trim()));
+
+  // Find the header row — first row where at least 2 cells look like headers
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(jsonRows.length, 10); i++) {
+    const row = jsonRows[i].map((c) => String(c).toLowerCase().replace(/[^a-z]/g, ''));
+    const headerish = row.filter((c) => ['date', 'description', 'amount', 'balance', 'runningbal', 'memo', 'category', 'type', 'transactiondate', 'postdate', 'reference'].some((h) => c.includes(h)));
+    if (headerish.length >= 2) { headerIdx = i; break; }
+  }
+
+  const headers = jsonRows[headerIdx].map(String);
+  const dataRows = jsonRows.slice(headerIdx + 1);
+
+  // Convert rows, handling Excel serial dates and filtering non-data rows
+  const rows = dataRows
+    .map((r) => {
+      return r.map((cell, colIdx) => {
+        // Check if this column is the date column
+        const hdr = headers[colIdx]?.toLowerCase().replace(/[^a-z]/g, '') || '';
+        if (hdr.includes('date') && typeof cell === 'number') {
+          const converted = excelSerialToDate(cell);
+          if (converted) return converted;
+        }
+        return String(cell);
+      });
+    })
+    .filter((r) => {
+      // Filter: must have at least a date-like value in the row
+      return r.some((c) => looksLikeDate(c)) && r.some((c) => c.trim());
+    });
+
   return { headers, rows };
 }
 
