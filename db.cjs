@@ -728,10 +728,37 @@ async function seedUsersIfEmpty() {
  * and all users have the new columns populated.
  */
 async function runMigrations() {
+  // ── 0. Add entity columns FIRST (before any query that references them) ──
+  const entityColAlters = [
+    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'business'`,
+    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS parent_id TEXT`,
+    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS shared BOOLEAN DEFAULT FALSE`,
+  ];
+  for (const sql of entityColAlters) {
+    await pool.query(sql).catch((err) => console.warn('[migration] entity col:', err.message));
+  }
+
+  // Add FK constraint separately (safe if already exists)
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE entities ADD CONSTRAINT entities_parent_id_fkey
+        FOREIGN KEY (parent_id) REFERENCES entities(id) ON DELETE SET NULL;
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `).catch((err) => console.warn('[migration] entity FK:', err.message));
+
+  // Seed entity types for existing entities (idempotent)
+  await pool.query(`
+    UPDATE entities SET type = 'personal'
+    WHERE LOWER(name) IN ('personal', 'home', 'family', 'kids')
+      AND (type IS NULL OR type = 'business')
+  `).catch(() => {});
+
   // 1. Seed default entities if the table is empty
   await seedEntitiesIfEmpty();
 
-  // 2. Get all entity names
+  // 2. Get all entity names (now safe — columns exist)
   const entities = await getEntities();
   const allEntityNames = entities.map((e) => e.name);
 
@@ -772,23 +799,6 @@ async function runMigrations() {
   for (const sql of noteCols) {
     await pool.query(sql).catch(() => {});
   }
-
-  // 6. Add type, parent_id, shared columns to entities table (idempotent)
-  const entityCols = [
-    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'business'`,
-    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS parent_id TEXT REFERENCES entities(id) ON DELETE SET NULL`,
-    `ALTER TABLE entities ADD COLUMN IF NOT EXISTS shared BOOLEAN DEFAULT FALSE`,
-  ];
-  for (const sql of entityCols) {
-    await pool.query(sql).catch(() => {});
-  }
-
-  // 7. Seed entity types for existing entities (idempotent — only updates NULLs / defaults)
-  await pool.query(`
-    UPDATE entities SET type = 'personal'
-    WHERE LOWER(name) IN ('personal', 'home', 'family', 'kids')
-      AND (type IS NULL OR type = 'business')
-  `).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────

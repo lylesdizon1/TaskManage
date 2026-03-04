@@ -1478,7 +1478,11 @@ async function start() {
   // Initialise database tables, seed data, and run migrations
   await db.initTables();
   await db.seedUsersIfEmpty();
-  await db.runMigrations();
+  try {
+    await db.runMigrations();
+  } catch (err) {
+    console.error('[migration] Error (non-fatal):', err.message);
+  }
 
   app.listen(PORT, () => {
     console.log(`\n✓ TaskManage server running at http://localhost:${PORT}`);
