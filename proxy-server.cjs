@@ -6,10 +6,11 @@
  *   - Relays AI requests to Claude / OpenAI APIs
  *   - Sends email via Resend API
  *   - Provides JWT-based multi-user authentication
- *   - Persists settings to settings.json
+ *   - Persists all data to PostgreSQL (DATABASE_URL)
  *
  * Environment variables (all optional, fall back to request-body values):
  *   PORT                 – server port (default 3001)
+ *   DATABASE_URL         – PostgreSQL connection string (required for persistence)
  *   CLAUDE_API_KEY       – Anthropic API key
  *   OPENAI_API_KEY       – OpenAI API key
  *   RESEND_API_KEY       – Resend API key for email
@@ -36,48 +37,12 @@ const fs         = require('fs');
 const path       = require('path');
 const crypto     = require('crypto');
 
-const SETTINGS_FILE    = path.join(__dirname, 'settings.json');
-const TASKS_FILE       = path.join(__dirname, 'tasks.json');
-const USERS_FILE       = path.join(__dirname, 'users.json');
-const GCAL_TOKENS_FILE = path.join(__dirname, 'gcal-tokens.json');
-const DIST_DIR         = path.join(__dirname, 'dist');
+const db = require('./db.cjs');
+
+const DIST_DIR = path.join(__dirname, 'dist');
 
 // JWT secret: prefer env var, fall back to random (tokens won't survive restart)
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
-
-function readSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function writeSettings(data) {
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
-}
-
-function readUsers() {
-  try {
-    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
-// ── Google Calendar token persistence (keyed by app user ID) ─────────────────
-
-function readGcalTokens() {
-  try {
-    return JSON.parse(fs.readFileSync(GCAL_TOKENS_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function writeGcalTokens(data) {
-  fs.writeFileSync(GCAL_TOKENS_FILE, JSON.stringify(data, null, 2), 'utf8');
-}
 
 function getAppUrl() {
   return (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/+$/, '');
@@ -133,27 +98,32 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
-  const users = readUsers();
-  const user = users.find((u) => u.username === username);
-  if (!user) {
-    return res.status(401).json({ error: 'Invalid username or password' });
+  try {
+    const users = await db.getUsers();
+    const user = users.find((u) => u.username === username);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, displayName: user.displayName },
+      JWT_SECRET,
+      { expiresIn: '7d' },
+    );
+
+    return res.json({
+      token,
+      user: { id: user.id, username: user.username, displayName: user.displayName },
+    });
+  } catch (err) {
+    console.error('[auth] login failed:', err.message);
+    return res.status(500).json({ error: 'Internal server error' });
   }
-
-  const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) {
-    return res.status(401).json({ error: 'Invalid username or password' });
-  }
-
-  const token = jwt.sign(
-    { id: user.id, username: user.username, displayName: user.displayName },
-    JWT_SECRET,
-    { expiresIn: '7d' },
-  );
-
-  return res.json({
-    token,
-    user: { id: user.id, username: user.username, displayName: user.displayName },
-  });
 });
 
 /**
@@ -318,52 +288,57 @@ function maskSecret(value) {
 
 /**
  * GET /api/settings
- * Merges env var values over settings.json. For env-backed fields, returns
+ * Merges env var values over DB settings. For env-backed fields, returns
  * masked values and an `envConfigured` map so the frontend knows which
  * fields to lock.
  */
-app.get('/api/settings', (_req, res) => {
-  const file = readSettings();
+app.get('/api/settings', async (_req, res) => {
+  try {
+    const file = await db.getSettings();
 
-  // Which fields are provided by env vars?
-  const envConfigured = {
-    claudeKey:        !!process.env.CLAUDE_API_KEY,
-    openaiKey:        !!process.env.OPENAI_API_KEY,
-    resendApiKey:     !!process.env.RESEND_API_KEY,
-    recipientEmail:   !!process.env.ALERT_RECIPIENT_EMAIL,
-  };
+    // Which fields are provided by env vars?
+    const envConfigured = {
+      claudeKey:        !!process.env.CLAUDE_API_KEY,
+      openaiKey:        !!process.env.OPENAI_API_KEY,
+      resendApiKey:     !!process.env.RESEND_API_KEY,
+      recipientEmail:   !!process.env.ALERT_RECIPIENT_EMAIL,
+    };
 
-  // Build effective apiKeys (env wins, then file)
-  const apiKeys = {
-    claude: process.env.CLAUDE_API_KEY
-      ? maskSecret(process.env.CLAUDE_API_KEY)
-      : (file.apiKeys?.claude || ''),
-    openai: process.env.OPENAI_API_KEY
-      ? maskSecret(process.env.OPENAI_API_KEY)
-      : (file.apiKeys?.openai || ''),
-  };
+    // Build effective apiKeys (env wins, then DB)
+    const apiKeys = {
+      claude: process.env.CLAUDE_API_KEY
+        ? maskSecret(process.env.CLAUDE_API_KEY)
+        : (file.apiKeys?.claude || ''),
+      openai: process.env.OPENAI_API_KEY
+        ? maskSecret(process.env.OPENAI_API_KEY)
+        : (file.apiKeys?.openai || ''),
+    };
 
-  // Build effective emailSettings (env wins, then file)
-  const emailSettings = {
-    resendConfigured: !!process.env.RESEND_API_KEY,
-    recipientEmail: process.env.ALERT_RECIPIENT_EMAIL
-      || file.emailSettings?.recipientEmail
-      || '',
-  };
+    // Build effective emailSettings (env wins, then DB)
+    const emailSettings = {
+      resendConfigured: !!process.env.RESEND_API_KEY,
+      recipientEmail: process.env.ALERT_RECIPIENT_EMAIL
+        || file.emailSettings?.recipientEmail
+        || '',
+    };
 
-  res.json({
-    apiKeys,
-    emailSettings,
-    alertRules: file.alertRules || null,
-    envConfigured,
-  });
+    res.json({
+      apiKeys,
+      emailSettings,
+      alertRules: file.alertRules || null,
+      envConfigured,
+    });
+  } catch (err) {
+    console.error('[settings] read failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', async (req, res) => {
   try {
-    const current = readSettings();
+    const current = await db.getSettings();
     const merged  = { ...current, ...req.body };
-    writeSettings(merged);
+    await db.saveSettings(merged);
     res.json({ success: true });
   } catch (err) {
     console.error('[settings] write failed:', err.message);
@@ -408,9 +383,7 @@ app.get('/api/gcal/callback', async (req, res) => {
 
   try {
     const { tokens } = await oauth2.getToken(code);
-    const allTokens = readGcalTokens();
-    allTokens[userId] = tokens;
-    writeGcalTokens(allTokens);
+    await db.setGcalTokensForUser(userId, tokens);
     console.log(`[gcal] Stored tokens for ${userId}`);
     // Redirect back to the app's calendar tab
     res.redirect('/?gcal=connected');
@@ -428,8 +401,7 @@ app.get('/api/gcal/status', async (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
-  const allTokens = readGcalTokens();
-  const tokens = allTokens[userId];
+  const tokens = await db.getGcalTokensForUser(userId);
   if (!tokens) return res.json({ connected: false });
 
   const oauth2 = makeOAuth2Client();
@@ -437,10 +409,9 @@ app.get('/api/gcal/status', async (req, res) => {
 
   oauth2.setCredentials(tokens);
   // Refresh if needed and persist
-  oauth2.on('tokens', (newTokens) => {
-    const updated = readGcalTokens();
-    updated[userId] = { ...updated[userId], ...newTokens };
-    writeGcalTokens(updated);
+  oauth2.on('tokens', async (newTokens) => {
+    const existing = await db.getGcalTokensForUser(userId);
+    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
   });
 
   try {
@@ -450,8 +421,7 @@ app.get('/api/gcal/status', async (req, res) => {
   } catch (err) {
     console.error('[gcal] status check failed:', err.message);
     // Token likely revoked
-    delete allTokens[userId];
-    writeGcalTokens(allTokens);
+    await db.deleteGcalTokensForUser(userId);
     res.json({ connected: false });
   }
 });
@@ -467,18 +437,16 @@ app.post('/api/gcal/sync-task', async (req, res) => {
     return res.status(400).json({ error: 'userId, title, and dueDate are required' });
   }
 
-  const allTokens = readGcalTokens();
-  const tokens = allTokens[userId];
+  const tokens = await db.getGcalTokensForUser(userId);
   if (!tokens) return res.status(401).json({ error: 'Google Calendar not connected' });
 
   const oauth2 = makeOAuth2Client();
   if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured' });
 
   oauth2.setCredentials(tokens);
-  oauth2.on('tokens', (newTokens) => {
-    const updated = readGcalTokens();
-    updated[userId] = { ...updated[userId], ...newTokens };
-    writeGcalTokens(updated);
+  oauth2.on('tokens', async (newTokens) => {
+    const existing = await db.getGcalTokensForUser(userId);
+    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
   });
 
   try {
@@ -511,39 +479,34 @@ app.post('/api/gcal/sync-task', async (req, res) => {
  * Body: { userId }
  * Removes stored tokens for the user.
  */
-app.post('/api/gcal/disconnect', (req, res) => {
+app.post('/api/gcal/disconnect', async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
-  const allTokens = readGcalTokens();
-  delete allTokens[userId];
-  writeGcalTokens(allTokens);
+  await db.deleteGcalTokensForUser(userId);
   console.log(`[gcal] Disconnected ${userId}`);
   res.json({ success: true });
 });
 
 // ── Task persistence ─────────────────────────────────────────────────────────
 
-app.get('/api/tasks', (_req, res) => {
+app.get('/api/tasks', async (_req, res) => {
   try {
-    if (fs.existsSync(TASKS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
-      return res.json(data);
-    }
-    return res.json([]);
+    const tasks = await db.getTasks();
+    return res.json(tasks);
   } catch (err) {
     console.error('[tasks] read failed:', err.message);
     return res.json([]);
   }
 });
 
-app.post('/api/tasks', (req, res) => {
+app.post('/api/tasks', async (req, res) => {
   try {
     const tasks = req.body;
     if (!Array.isArray(tasks)) {
       return res.status(400).json({ error: 'Body must be an array of tasks' });
     }
-    fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2), 'utf8');
+    await db.replaceTasks(tasks);
     return res.json({ success: true, count: tasks.length });
   } catch (err) {
     console.error('[tasks] write failed:', err.message);
@@ -570,22 +533,33 @@ if (fs.existsSync(DIST_DIR)) {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`\n✓ TaskManage server running at http://localhost:${PORT}`);
-  console.log('  POST /api/auth/login    → JWT login');
-  console.log('  GET  /api/auth/me       → current user');
-  console.log('  POST /api/claude        → api.anthropic.com');
-  console.log('  POST /api/openai        → api.openai.com');
-  console.log('  POST /api/email/test    → test Resend email delivery');
-  console.log('  POST /api/email/send    → send email via Resend');
-  console.log('  GET  /api/settings      → read settings.json');
-  console.log('  POST /api/settings      → write settings.json');
-  console.log('  GET  /api/gcal/auth-url → Google Calendar OAuth URL');
-  console.log('  GET  /api/gcal/callback → Google Calendar OAuth callback');
-  console.log('  GET  /api/gcal/status   → check calendar connection');
-  console.log('  POST /api/gcal/sync-task→ sync task to Google Calendar');
-  console.log('  POST /api/gcal/disconnect→ remove calendar connection');
-  console.log('  GET  /api/tasks        → read tasks.json');
-  console.log('  POST /api/tasks        → write tasks.json');
-  console.log('  GET  /health\n');
+async function start() {
+  // Initialise database tables and seed users
+  await db.initTables();
+  await db.seedUsersIfEmpty();
+
+  app.listen(PORT, () => {
+    console.log(`\n✓ TaskManage server running at http://localhost:${PORT}`);
+    console.log('  POST /api/auth/login    → JWT login');
+    console.log('  GET  /api/auth/me       → current user');
+    console.log('  POST /api/claude        → api.anthropic.com');
+    console.log('  POST /api/openai        → api.openai.com');
+    console.log('  POST /api/email/test    → test Resend email delivery');
+    console.log('  POST /api/email/send    → send email via Resend');
+    console.log('  GET  /api/settings      → read settings (PostgreSQL)');
+    console.log('  POST /api/settings      → write settings (PostgreSQL)');
+    console.log('  GET  /api/gcal/auth-url → Google Calendar OAuth URL');
+    console.log('  GET  /api/gcal/callback → Google Calendar OAuth callback');
+    console.log('  GET  /api/gcal/status   → check calendar connection');
+    console.log('  POST /api/gcal/sync-task→ sync task to Google Calendar');
+    console.log('  POST /api/gcal/disconnect→ remove calendar connection');
+    console.log('  GET  /api/tasks        → read tasks (PostgreSQL)');
+    console.log('  POST /api/tasks        → write tasks (PostgreSQL)');
+    console.log('  GET  /health\n');
+  });
+}
+
+start().catch((err) => {
+  console.error('[startup] Fatal error:', err.message);
+  process.exit(1);
 });
