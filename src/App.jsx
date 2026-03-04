@@ -3503,11 +3503,235 @@ function FinancialsPanel({ authToken, currentUser, entities, onDataChange }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PILLAR_CONFIG = {
-  hustle: { label: 'Hustle', bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
-  home: { label: 'Home', bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-200', dot: 'bg-green-500' },
-  move: { label: 'Move', bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-200', dot: 'bg-orange-500' },
-  grow: { label: 'Grow', bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },
+  hustle: { label: 'Hustle', bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500', emoji: '\u{1F535}' },
+  home: { label: 'Home', bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-200', dot: 'bg-green-500', emoji: '\u{1F7E2}' },
+  move: { label: 'Move', bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-200', dot: 'bg-orange-500', emoji: '\u{1F7E0}' },
+  grow: { label: 'Grow', bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500', emoji: '\u{1F7E3}' },
 };
+
+const PILLAR_KEYS = Object.keys(PILLAR_CONFIG);
+
+// Map active views to default pillar pre-selection
+const VIEW_TO_PILLAR = {
+  daily: 'hustle',
+  priority: 'hustle',
+  financials: 'hustle',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quick Capture FAB + Modal
+// ─────────────────────────────────────────────────────────────────────────────
+
+function QuickCaptureModal({ authToken, categories, activeView, onClose, onSaved, addToast }) {
+  const textareaRef = useRef(null);
+  const [content, setContent] = useState('');
+  const [pillar, setPillar] = useState(() => {
+    // Smart default: tab-based or last-used
+    const viewDefault = VIEW_TO_PILLAR[activeView];
+    if (activeView === 'notes' || !viewDefault) {
+      return localStorage.getItem('qc_lastPillar') || '';
+    }
+    return viewDefault;
+  });
+  const [category, setCategory] = useState('');
+
+  // Auto-focus textarea on mount
+  useEffect(() => {
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
+  // Escape to close
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') onClose();
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && content.trim()) handleSave();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [content, pillar, category]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Filter categories by selected pillar
+  const pillarCategories = useMemo(() => {
+    if (!pillar) return [];
+    return categories.filter((c) => c.pillar === pillar && !c.parentId);
+  }, [pillar, categories]);
+
+  // Reset category when pillar changes
+  useEffect(() => { setCategory(''); }, [pillar]);
+
+  // Auto-grow textarea
+  function handleTextChange(e) {
+    setContent(e.target.value);
+    const ta = e.target;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 256) + 'px';
+  }
+
+  function handleSave() {
+    if (!content.trim()) return;
+
+    // Remember pillar choice
+    if (pillar) localStorage.setItem('qc_lastPillar', pillar);
+    else localStorage.removeItem('qc_lastPillar');
+
+    // Close immediately (optimistic)
+    onClose();
+
+    // Toast with pillar badge
+    const pillarLabel = pillar ? PILLAR_CONFIG[pillar]?.label : '';
+    addToast({
+      type: 'success',
+      message: pillarLabel ? `Captured \u00b7 ${pillarLabel}` : 'Captured',
+    });
+
+    // POST in background
+    const body = { title: null, content: content.trim(), type: 'quick', pillar: pillar || null, category: category || null };
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
+    apiFetch('/api/notes', { method: 'POST', headers, body: JSON.stringify(body) })
+      .then((res) => {
+        if (!res.ok) throw new Error('save failed');
+        return res.json();
+      })
+      .then((saved) => { if (onSaved) onSaved(saved); })
+      .catch(() => {
+        addToast({ type: 'error', message: 'Failed to save \u2014 tap to retry' });
+      });
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={onClose}>
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" style={{ animation: 'qcFadeIn 150ms ease-out' }} />
+
+      {/* Modal */}
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[480px] overflow-hidden"
+        style={{ animation: 'qcSlideUp 150ms ease-out' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-5 pt-4 pb-2">
+          <h3 className="text-sm font-medium text-gray-400 tracking-wide uppercase">Quick Capture</h3>
+        </div>
+
+        {/* Textarea */}
+        <div className="px-5">
+          <textarea
+            ref={textareaRef}
+            value={content}
+            onChange={handleTextChange}
+            placeholder="What's on your mind?"
+            rows={3}
+            className="w-full resize-none border-0 focus:ring-0 text-gray-900 placeholder-gray-400 text-[15px] leading-relaxed p-0 outline-none"
+            style={{ minHeight: '4.5rem', maxHeight: '16rem' }}
+          />
+        </div>
+
+        {/* Pillar pills */}
+        <div className="px-5 py-3 flex gap-2 flex-wrap">
+          {PILLAR_KEYS.map((key) => {
+            const cfg = PILLAR_CONFIG[key];
+            const selected = pillar === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setPillar(selected ? '' : key)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                  selected
+                    ? `${cfg.bg} ${cfg.text} ${cfg.border} border`
+                    : 'bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                {cfg.emoji} {cfg.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Category dropdown (only if pillar selected and categories exist) */}
+        {pillar && pillarCategories.length > 0 && (
+          <div className="px-5 pb-3">
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:ring-2 focus:ring-purple-300 focus:border-purple-300 bg-gray-50"
+            >
+              <option value="">No category</option>
+              {pillarCategories.map((c) => (
+                <option key={c.id} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
+          <span className="text-xs text-gray-400">{content.length} chars</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!content.trim()}
+              className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ backgroundColor: content.trim() ? '#7C3AED' : '#a78bfa' }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Animations */}
+      <style>{`
+        @keyframes qcFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes qcSlideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
+    </div>
+  );
+}
+
+function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, addToast, onNoteSaved }) {
+  const [open, setOpen] = useState(false);
+
+  if (hideFAB || open) {
+    // When modal is open, render only the modal (no FAB button)
+    return open ? (
+      <QuickCaptureModal
+        authToken={authToken}
+        categories={categories}
+        activeView={activeView}
+        onClose={() => setOpen(false)}
+        onSaved={onNoteSaved}
+        addToast={addToast}
+      />
+    ) : null;
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="fixed z-50 flex items-center justify-center rounded-full shadow-lg transition-all duration-150 hover:scale-105 active:scale-95"
+        style={{
+          width: 56,
+          height: 56,
+          bottom: 80,
+          right: 20,
+          backgroundColor: '#7C3AED',
+        }}
+        aria-label="Quick Capture"
+      >
+        <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}>
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+        </svg>
+      </button>
+    </>
+  );
+}
 
 function relativeTime(dateStr) {
   const now = new Date();
@@ -3524,7 +3748,7 @@ function relativeTime(dateStr) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
-function NotesPanel({ authToken }) {
+function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickCapturedNote }) {
   const [notes, setNotes] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3559,6 +3783,21 @@ function NotesPanel({ authToken }) {
   useEffect(() => {
     Promise.all([loadNotes(), loadCategories()]).then(() => setLoading(false));
   }, [loadNotes, loadCategories]);
+
+  // Report editor state to parent (for FAB visibility)
+  useEffect(() => {
+    if (onEditorStateChange) onEditorStateChange(selectedNote !== null);
+  }, [selectedNote, onEditorStateChange]);
+
+  // Forward categories to parent (for quick capture modal)
+  useEffect(() => {
+    if (onCategoriesLoaded) onCategoriesLoaded(categories);
+  }, [categories, onCategoriesLoaded]);
+
+  // Prepend quick-captured note if received from FAB
+  useEffect(() => {
+    if (quickCapturedNote) setNotes((prev) => [quickCapturedNote, ...prev]);
+  }, [quickCapturedNote]);
 
   // Build category tree
   const parentCategories = useMemo(() => categories.filter((c) => !c.parentId), [categories]);
@@ -4221,6 +4460,11 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [financialAccounts, setFinancialAccounts] = useState([]);
   const firedAlertsRef                          = useRef(new Set());
 
+  // Quick Capture FAB state
+  const [noteCategories, setNoteCategories]     = useState([]);
+  const [notesEditorOpen, setNotesEditorOpen]   = useState(false);
+  const [quickCapturedNote, setQuickCapturedNote] = useState(null);
+
   // Load entities + refresh current user on mount
   useEffect(() => {
     apiFetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -4571,7 +4815,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'financials' ? (
             <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
           ) : activeView === 'notes' ? (
-            <NotesPanel authToken={authToken} />
+            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} quickCapturedNote={quickCapturedNote} />
           ) : (
           /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
@@ -4661,7 +4905,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'notes' ? 'flex' : 'hidden'
           }`}
         >
-          <NotesPanel authToken={authToken} />
+          <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} quickCapturedNote={quickCapturedNote} />
         </section>
       </main>
 
@@ -4720,6 +4964,16 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           entities={userEntities}
         />
       )}
+
+      {/* ── Quick Capture FAB ── */}
+      <QuickCaptureFAB
+        authToken={authToken}
+        categories={noteCategories}
+        activeView={window.innerWidth >= 768 ? activeView : mobileView}
+        hideFAB={(activeView === 'notes' || mobileView === 'notes') && notesEditorOpen}
+        addToast={addToast}
+        onNoteSaved={(saved) => setQuickCapturedNote(saved)}
+      />
 
       {/* ── Toast notifications ── */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
