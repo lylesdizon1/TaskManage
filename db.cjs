@@ -59,6 +59,17 @@ async function initTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      user_id              TEXT PRIMARY KEY REFERENCES users(id),
+      theme                TEXT DEFAULT 'light',
+      default_tag_filter   JSONB DEFAULT '[]',
+      default_status_filter TEXT DEFAULT 'all',
+      notifications_enabled BOOLEAN DEFAULT TRUE,
+      updated_at           TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_messages (
       id         SERIAL PRIMARY KEY,
       user_id    TEXT NOT NULL,
@@ -223,6 +234,36 @@ async function deleteGcalTokensForUser(userId) {
   await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
 }
 
+// ── User preferences ─────────────────────────────────────────────────────────
+
+async function getUserPreferences(userId) {
+  const { rows } = await pool.query(
+    `SELECT user_id AS "userId", theme, default_tag_filter AS "defaultTagFilter",
+            default_status_filter AS "defaultStatusFilter",
+            notifications_enabled AS "notificationsEnabled", updated_at AS "updatedAt"
+     FROM user_preferences WHERE user_id = $1`,
+    [userId],
+  );
+  return rows[0] || null;
+}
+
+async function saveUserPreferences(userId, prefs) {
+  await pool.query(
+    `INSERT INTO user_preferences (user_id, theme, default_tag_filter, default_status_filter, notifications_enabled, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (user_id) DO UPDATE
+       SET theme = $2, default_tag_filter = $3, default_status_filter = $4,
+           notifications_enabled = $5, updated_at = NOW()`,
+    [
+      userId,
+      prefs.theme || 'light',
+      JSON.stringify(prefs.defaultTagFilter || []),
+      prefs.defaultStatusFilter || 'all',
+      prefs.notificationsEnabled !== false,
+    ],
+  );
+}
+
 // ── Chat messages ────────────────────────────────────────────────────────────
 
 async function getChatHistory(userId, limit = 50) {
@@ -332,6 +373,8 @@ module.exports = {
   getGcalTokensForUser,
   setGcalTokensForUser,
   deleteGcalTokensForUser,
+  getUserPreferences,
+  saveUserPreferences,
   getChatHistory,
   saveChatMessage,
   clearChatHistory,

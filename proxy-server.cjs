@@ -552,6 +552,28 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   }
 });
 
+// ── User preferences ─────────────────────────────────────────────────────────
+
+app.get('/api/preferences', authenticateToken, async (req, res) => {
+  try {
+    const prefs = await db.getUserPreferences(req.user.id);
+    return res.json(prefs || { theme: 'light', defaultTagFilter: [], defaultStatusFilter: 'all', notificationsEnabled: true });
+  } catch (err) {
+    console.error('[preferences] read failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/preferences', authenticateToken, async (req, res) => {
+  try {
+    await db.saveUserPreferences(req.user.id, req.body);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[preferences] write failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Chat history ─────────────────────────────────────────────────────────────
 
 app.get('/api/chat/history', authenticateToken, async (req, res) => {
