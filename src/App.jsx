@@ -1822,7 +1822,7 @@ function FilterBar({
 // CHAT PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ tasks, apiKeys }) {
+function ChatPanel({ tasks, apiKeys, authToken, currentUser }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [backend, setBackend] = useState('claude');
@@ -1830,6 +1830,33 @@ function ChatPanel({ tasks, apiKeys }) {
   const [error, setError] = useState('');
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const historyLoadedRef = useRef(false);
+
+  const authHeaders = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${authToken}`,
+  };
+
+  // Load chat history on mount
+  useEffect(() => {
+    fetch('/api/chat/history', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setMessages(data.map((m) => ({ role: m.role, content: m.content, model: m.model })));
+        }
+      })
+      .catch(() => {})
+      .finally(() => { historyLoadedRef.current = true; });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function persistMessage(role, content, model) {
+    fetch('/api/chat/message', {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ role, content, model }),
+    }).catch((err) => console.error('[chat] save failed:', err.message));
+  }
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -1864,29 +1891,33 @@ function ChatPanel({ tasks, apiKeys }) {
     );
   }
 
+  const modelTag = backend === 'claude' ? 'claude' : 'chatgpt';
+
   async function handleSend() {
     const text = input.trim();
     if (!text || loading) return;
 
     if (!hasKey) {
+      const warningContent = `⚠️ No ${backend === 'claude' ? 'Claude' : 'OpenAI'} API key set. Open Settings (gear icon) to add one.`;
       setMessages((m) => [
         ...m,
-        { role: 'user', content: text },
-        {
-          role: 'assistant',
-          content: `⚠️ No ${backend === 'claude' ? 'Claude' : 'OpenAI'} API key set. Open Settings (gear icon) to add one.`,
-        },
+        { role: 'user', content: text, model: modelTag },
+        { role: 'assistant', content: warningContent, model: modelTag },
       ]);
+      persistMessage('user', text, modelTag);
+      persistMessage('assistant', warningContent, modelTag);
       setInput('');
       return;
     }
 
-    const userMsg = { role: 'user', content: text };
+    const userMsg = { role: 'user', content: text, model: modelTag };
     const history = [...messages, userMsg];
     setMessages(history);
     setInput('');
     setLoading(true);
     setError('');
+
+    persistMessage('user', text, modelTag);
 
     try {
       let reply;
@@ -1895,16 +1926,24 @@ function ChatPanel({ tasks, apiKeys }) {
       } else {
         reply = await callOpenAIChat(history, buildSystemPrompt(), currentKey);
       }
-      setMessages((m) => [...m, { role: 'assistant', content: reply }]);
+      setMessages((m) => [...m, { role: 'assistant', content: reply, model: modelTag }]);
+      persistMessage('assistant', reply, modelTag);
     } catch (err) {
+      const errContent = `❌ Error: ${err.message || 'Request failed'}`;
       setError(err.message || 'Request failed');
-      setMessages((m) => [
-        ...m,
-        { role: 'assistant', content: `❌ Error: ${err.message || 'Request failed'}` },
-      ]);
+      setMessages((m) => [...m, { role: 'assistant', content: errContent, model: modelTag }]);
+      persistMessage('assistant', errContent, modelTag);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleClearChat() {
+    setMessages([]);
+    fetch('/api/chat/history', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    }).catch((err) => console.error('[chat] clear failed:', err.message));
   }
 
   function handleKeyDown(e) {
@@ -1925,24 +1964,36 @@ function ChatPanel({ tasks, apiKeys }) {
           <span className="text-sm font-semibold text-gray-900">AI Assistant</span>
         </div>
 
-        {/* Backend Toggle */}
-        <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5">
-          {[
-            { key: 'claude', label: 'Claude' },
-            { key: 'chatgpt', label: 'ChatGPT' },
-          ].map(({ key, label }) => (
+        <div className="flex items-center gap-2">
+          {/* Clear Chat */}
+          {messages.length > 0 && (
             <button
-              key={key}
-              onClick={() => setBackend(key)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                backend === key
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
+              onClick={handleClearChat}
+              className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium px-2 py-1"
+              title="Clear chat history"
             >
-              {label}
+              Clear
             </button>
-          ))}
+          )}
+          {/* Backend Toggle */}
+          <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5">
+            {[
+              { key: 'claude', label: 'Claude' },
+              { key: 'chatgpt', label: 'ChatGPT' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setBackend(key)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  backend === key
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -2772,7 +2823,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
             mobileView === 'chat' ? 'flex' : 'hidden md:flex'
           }`}
         >
-          <ChatPanel tasks={tasks} apiKeys={apiKeys} />
+          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} />
         </section>
 
         {/* ── Calendar panel (mobile only — on desktop it's in the task section tabs) ── */}
