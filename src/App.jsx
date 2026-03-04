@@ -10,23 +10,30 @@ const API_BASE = '';
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TAGS = ['Careific', 'Rose', 'Buyflip', 'Care Home', 'Personal'];
-
-const TAG_STYLES = {
-  Careific:    'bg-indigo-100 text-indigo-700 border-indigo-200',
-  Rose:        'bg-pink-100   text-pink-700   border-pink-200',
-  Buyflip:     'bg-amber-100  text-amber-700  border-amber-200',
-  'Care Home': 'bg-teal-100   text-teal-700   border-teal-200',
-  Personal:    'bg-slate-100  text-slate-600  border-slate-200',
+// Color presets for entities — maps color name to Tailwind classes
+const COLOR_PRESETS = {
+  indigo: { bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-200', ring: 'ring-indigo-400', dot: 'bg-indigo-500' },
+  pink:   { bg: 'bg-pink-100',   text: 'text-pink-700',   border: 'border-pink-200',   ring: 'ring-pink-400',   dot: 'bg-pink-500' },
+  amber:  { bg: 'bg-amber-100',  text: 'text-amber-700',  border: 'border-amber-200',  ring: 'ring-amber-400',  dot: 'bg-amber-500' },
+  teal:   { bg: 'bg-teal-100',   text: 'text-teal-700',   border: 'border-teal-200',   ring: 'ring-teal-400',   dot: 'bg-teal-500' },
+  slate:  { bg: 'bg-slate-100',  text: 'text-slate-600',  border: 'border-slate-200',  ring: 'ring-slate-400',  dot: 'bg-slate-500' },
+  red:    { bg: 'bg-red-100',    text: 'text-red-700',    border: 'border-red-200',    ring: 'ring-red-400',    dot: 'bg-red-500' },
+  green:  { bg: 'bg-green-100',  text: 'text-green-700',  border: 'border-green-200',  ring: 'ring-green-400',  dot: 'bg-green-500' },
+  blue:   { bg: 'bg-blue-100',   text: 'text-blue-700',   border: 'border-blue-200',   ring: 'ring-blue-400',   dot: 'bg-blue-500' },
+  purple: { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-200', ring: 'ring-purple-400', dot: 'bg-purple-500' },
+  orange: { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-200', ring: 'ring-orange-400', dot: 'bg-orange-500' },
 };
 
-const TAG_ACTIVE_RING = {
-  Careific:    'ring-indigo-400',
-  Rose:        'ring-pink-400',
-  Buyflip:     'ring-amber-400',
-  'Care Home': 'ring-teal-400',
-  Personal:    'ring-slate-400',
-};
+const AVAILABLE_COLORS = Object.keys(COLOR_PRESETS);
+
+function getEntityStyle(colorName) {
+  return COLOR_PRESETS[colorName] || COLOR_PRESETS.slate;
+}
+
+function getTagStyle(tagName, entities) {
+  const entity = entities.find((e) => e.name === tagName);
+  return getEntityStyle(entity?.color);
+}
 
 const PRIORITY_BORDER = {
   high:   'border-l-4 border-l-red-500',
@@ -307,21 +314,19 @@ async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
 // AI UTILITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchSuggestedTags(title, description, claudeKey) {
-  if (!claudeKey || !title.trim()) return [];
+async function fetchSuggestedTags(title, description, claudeKey, entityNames, authToken) {
+  if (!claudeKey || !title.trim() || entityNames.length === 0) return [];
 
   const prompt =
-    `Given these business categories: Careific (AI care management SaaS platform), ` +
-    `Rose (a specific care home facility), Buyflip (a separate business venture), ` +
-    `Care Home (general care home operations), Personal (personal tasks). ` +
+    `Given these categories: ${entityNames.join(', ')}. ` +
     `Based on this task title and description: '${title} - ${description}', ` +
     `suggest which tags apply. Respond ONLY with a JSON array of matching tag names, ` +
-    `e.g. ["Careific", "Personal"]. No explanation.`;
+    `e.g. ${JSON.stringify(entityNames.slice(0, 2))}. No explanation.`;
 
   try {
     const res = await fetch('/api/claude', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({
         apiKey: claudeKey,
         model: 'claude-sonnet-4-20250514',
@@ -336,7 +341,7 @@ async function fetchSuggestedTags(title, description, claudeKey) {
     const match = text.match(/\[[\s\S]*?\]/);
     if (!match) return [];
     const parsed = JSON.parse(match[0]);
-    return parsed.filter((t) => TAGS.includes(t));
+    return parsed.filter((t) => entityNames.includes(t));
   } catch {
     return [];
   }
@@ -482,10 +487,11 @@ function LoginScreen({ onLogin }) {
 // TAG PILL
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TagPill({ tag, isAi = false }) {
+function TagPill({ tag, isAi = false, entities = [] }) {
+  const style = getTagStyle(tag, entities);
   return (
     <span
-      className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium border ${TAG_STYLES[tag]}`}
+      className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium border ${style.bg} ${style.text} ${style.border}`}
     >
       {tag}
       {isAi && (
@@ -541,7 +547,8 @@ function EnvBadge() {
   );
 }
 
-function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken }) {
+function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged }) {
+  const isAdmin = currentUser?.role === 'admin';
   const [tab, setTab]               = useState('keys');
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
   const [draftEmail, setDraftEmail] = useState({ ...emailSettings });
@@ -550,6 +557,120 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   const [pwForm, setPwForm]         = useState({ current: '', newPw: '', confirm: '' });
   const [pwStatus, setPwStatus]     = useState(null);
   const [pwSaving, setPwSaving]     = useState(false);
+
+  // ── Entity management state ──
+  const [entityList, setEntityList] = useState([]);
+  const [newEntityName, setNewEntityName] = useState('');
+  const [newEntityColor, setNewEntityColor] = useState('indigo');
+  const [editingEntity, setEditingEntity] = useState(null);
+
+  // ── User management state ──
+  const [userList, setUserList] = useState([]);
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [newUser, setNewUser] = useState({ username: '', displayName: '', email: '', password: '', role: 'member', entityIds: [] });
+  const [editingUser, setEditingUser] = useState(null);
+
+  useEffect(() => {
+    if (isAdmin && (tab === 'entities' || tab === 'users')) {
+      if (tab === 'entities') loadEntities();
+      if (tab === 'users') loadUsers();
+    }
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadEntities() {
+    try {
+      const res = await fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (Array.isArray(data)) setEntityList(data);
+    } catch {}
+  }
+
+  async function loadUsers() {
+    try {
+      const res = await fetch('/api/users', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (Array.isArray(data)) setUserList(data);
+    } catch {}
+  }
+
+  async function handleCreateEntity() {
+    if (!newEntityName.trim()) return;
+    try {
+      const res = await fetch('/api/entities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ name: newEntityName.trim(), color: newEntityColor }),
+      });
+      if (res.ok) {
+        setNewEntityName('');
+        setNewEntityColor('indigo');
+        loadEntities();
+        onEntitiesChanged?.();
+      }
+    } catch {}
+  }
+
+  async function handleUpdateEntity(id, fields) {
+    try {
+      await fetch(`/api/entities/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(fields),
+      });
+      setEditingEntity(null);
+      loadEntities();
+      onEntitiesChanged?.();
+    } catch {}
+  }
+
+  async function handleDeleteEntity(id) {
+    try {
+      await fetch(`/api/entities/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      loadEntities();
+      onEntitiesChanged?.();
+    } catch {}
+  }
+
+  async function handleCreateUser() {
+    if (!newUser.username.trim() || !newUser.password) return;
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(newUser),
+      });
+      if (res.ok) {
+        setNewUser({ username: '', displayName: '', email: '', password: '', role: 'member', entityIds: [] });
+        setShowAddUser(false);
+        loadUsers();
+      }
+    } catch {}
+  }
+
+  async function handleUpdateUser(id, fields) {
+    try {
+      await fetch(`/api/users/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(fields),
+      });
+      setEditingUser(null);
+      loadUsers();
+    } catch {}
+  }
+
+  async function handleDeleteUser(id) {
+    try {
+      await fetch(`/api/users/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      loadUsers();
+    } catch {}
+  }
 
   function handleKeyDown(e) {
     if (e.key === 'Escape') onClose();
@@ -587,9 +708,9 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
       className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50"
       onKeyDown={handleKeyDown}
     >
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4">
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 flex-shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
               <GearIcon className="w-4 h-4 text-gray-600" />
@@ -605,16 +726,20 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100 mx-6">
+        <div className="flex border-b border-gray-100 mx-6 overflow-x-auto">
           {[
             { key: 'keys',  label: 'API Keys' },
-            { key: 'email', label: 'Email & Alerts' },
+            { key: 'email', label: 'Alerts' },
             { key: 'password', label: 'Password' },
+            ...(isAdmin ? [
+              { key: 'entities', label: 'Entities' },
+              { key: 'users', label: 'Users' },
+            ] : []),
           ].map(({ key, label }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+              className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px whitespace-nowrap ${
                 tab === key
                   ? 'border-indigo-600 text-indigo-700'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -625,7 +750,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
           ))}
         </div>
 
-        <div className="px-6 py-5">
+        <div className="px-6 py-5 flex-1 overflow-y-auto">
           {/* API Keys tab */}
           {tab === 'keys' && (
             <div className="space-y-4">
@@ -836,6 +961,222 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
               </button>
             </div>
           )}
+
+          {/* Entities tab (admin only) */}
+          {tab === 'entities' && isAdmin && (
+            <div className="space-y-3">
+              <p className="text-xs text-gray-500">Manage business entities / tags used across the app.</p>
+
+              {/* Existing entities */}
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {entityList.map((ent) => {
+                  const style = getEntityStyle(ent.color);
+                  if (editingEntity === ent.id) {
+                    return (
+                      <div key={ent.id} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+                        <input
+                          type="text"
+                          defaultValue={ent.name}
+                          id={`ent-name-${ent.id}`}
+                          className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded"
+                        />
+                        <select
+                          defaultValue={ent.color}
+                          id={`ent-color-${ent.id}`}
+                          className="px-2 py-1 text-sm border border-gray-200 rounded"
+                        >
+                          {AVAILABLE_COLORS.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => {
+                            const name = document.getElementById(`ent-name-${ent.id}`).value;
+                            const color = document.getElementById(`ent-color-${ent.id}`).value;
+                            handleUpdateEntity(ent.id, { name, color });
+                          }}
+                          className="px-2 py-1 text-xs bg-indigo-600 text-white rounded"
+                        >Save</button>
+                        <button onClick={() => setEditingEntity(null)} className="px-2 py-1 text-xs text-gray-500">Cancel</button>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={ent.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${style.dot}`} />
+                        <span className="text-sm font-medium text-gray-800">{ent.name}</span>
+                        <span className="text-[10px] text-gray-400">{ent.color}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => setEditingEntity(ent.id)} className="text-xs text-indigo-500 hover:text-indigo-700 px-1">Edit</button>
+                        <button onClick={() => handleDeleteEntity(ent.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Add new entity */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newEntityName}
+                  onChange={(e) => setNewEntityName(e.target.value)}
+                  placeholder="New entity name"
+                  className={inputCls + ' flex-1'}
+                />
+                <select
+                  value={newEntityColor}
+                  onChange={(e) => setNewEntityColor(e.target.value)}
+                  className="px-2 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm"
+                >
+                  {AVAILABLE_COLORS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleCreateEntity}
+                  disabled={!newEntityName.trim()}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                >Add</button>
+              </div>
+            </div>
+          )}
+
+          {/* Users tab (admin only) */}
+          {tab === 'users' && isAdmin && (
+            <div className="space-y-3">
+              <p className="text-xs text-gray-500">Manage user accounts, roles, and entity assignments.</p>
+
+              {/* Existing users */}
+              <div className="space-y-2 max-h-56 overflow-y-auto">
+                {userList.map((u) => {
+                  if (editingUser === u.id) {
+                    return (
+                      <div key={u.id} className="p-3 bg-gray-50 rounded-lg space-y-2">
+                        <div className="flex gap-2">
+                          <input defaultValue={u.displayName} id={`u-dn-${u.id}`} placeholder="Display name" className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded" />
+                          <input defaultValue={u.email} id={`u-em-${u.id}`} placeholder="Email" className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded" />
+                        </div>
+                        <div className="flex gap-2">
+                          <select defaultValue={u.role} id={`u-role-${u.id}`} className="px-2 py-1 text-sm border border-gray-200 rounded">
+                            <option value="admin">Admin</option>
+                            <option value="member">Member</option>
+                          </select>
+                          <input id={`u-pw-${u.id}`} placeholder="New password (optional)" type="password" className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded" />
+                        </div>
+                        {/* Entity checkboxes */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {entityList.map((ent) => {
+                            const style = getEntityStyle(ent.color);
+                            const checked = (u.entityIds || []).includes(ent.name);
+                            return (
+                              <label key={ent.id} className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border cursor-pointer ${checked ? `${style.bg} ${style.text} ${style.border}` : 'bg-gray-50 text-gray-400 border-gray-200'}`}>
+                                <input type="checkbox" defaultChecked={checked} data-entity-name={ent.name} data-user-id={u.id} className="hidden" />
+                                {ent.name}
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              const displayName = document.getElementById(`u-dn-${u.id}`).value;
+                              const email = document.getElementById(`u-em-${u.id}`).value;
+                              const role = document.getElementById(`u-role-${u.id}`).value;
+                              const pw = document.getElementById(`u-pw-${u.id}`).value;
+                              const checkboxes = document.querySelectorAll(`[data-user-id="${u.id}"]`);
+                              const entityIds = [];
+                              checkboxes.forEach((cb) => { if (cb.checked) entityIds.push(cb.dataset.entityName); });
+                              const fields = { displayName, email, role, entityIds };
+                              if (pw) fields.password = pw;
+                              handleUpdateUser(u.id, fields);
+                            }}
+                            className="px-3 py-1 text-xs bg-indigo-600 text-white rounded"
+                          >Save</button>
+                          <button onClick={() => setEditingUser(null)} className="px-3 py-1 text-xs text-gray-500">Cancel</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={u.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-800">{u.displayName || u.username}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${u.role === 'admin' ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-500'}`}>
+                            {u.role}
+                          </span>
+                          {u.active === false && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium">inactive</span>}
+                        </div>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {(u.entityIds || []).map((name) => {
+                            const style = getTagStyle(name, entityList);
+                            return <span key={name} className={`text-[10px] px-1.5 py-0.5 rounded-full ${style.bg} ${style.text}`}>{name}</span>;
+                          })}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button onClick={() => { loadEntities(); setEditingUser(u.id); }} className="text-xs text-indigo-500 hover:text-indigo-700 px-1">Edit</button>
+                        {u.id !== currentUser.id && (
+                          <button onClick={() => handleDeleteUser(u.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Add new user */}
+              {showAddUser ? (
+                <div className="p-3 bg-indigo-50/30 rounded-lg border border-indigo-200 space-y-2">
+                  <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">New User</h4>
+                  <div className="flex gap-2">
+                    <input value={newUser.username} onChange={(e) => setNewUser((u) => ({ ...u, username: e.target.value }))} placeholder="Username *" className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded" />
+                    <input value={newUser.displayName} onChange={(e) => setNewUser((u) => ({ ...u, displayName: e.target.value }))} placeholder="Display name" className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded" />
+                  </div>
+                  <div className="flex gap-2">
+                    <input value={newUser.email} onChange={(e) => setNewUser((u) => ({ ...u, email: e.target.value }))} placeholder="Email" type="email" className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded" />
+                    <input value={newUser.password} onChange={(e) => setNewUser((u) => ({ ...u, password: e.target.value }))} placeholder="Password *" type="password" className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded" />
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <select value={newUser.role} onChange={(e) => setNewUser((u) => ({ ...u, role: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-200 rounded">
+                      <option value="member">Member</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <span className="text-xs text-gray-400">Entities:</span>
+                    {entityList.map((ent) => {
+                      const style = getEntityStyle(ent.color);
+                      const selected = newUser.entityIds.includes(ent.name);
+                      return (
+                        <button
+                          key={ent.id}
+                          type="button"
+                          onClick={() => setNewUser((u) => ({
+                            ...u,
+                            entityIds: selected ? u.entityIds.filter((n) => n !== ent.name) : [...u.entityIds, ent.name],
+                          }))}
+                          className={`text-[10px] px-2 py-1 rounded-full border ${selected ? `${style.bg} ${style.text} ${style.border}` : 'bg-gray-50 text-gray-400 border-gray-200'}`}
+                        >{ent.name}</button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowAddUser(false)} className="flex-1 px-3 py-1.5 border border-gray-200 rounded text-sm text-gray-600">Cancel</button>
+                    <button onClick={handleCreateUser} disabled={!newUser.username.trim() || !newUser.password} className="flex-1 px-3 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium disabled:opacity-50">Create User</button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => { loadEntities(); setShowAddUser(true); }}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 text-sm font-medium"
+                >
+                  <span className="text-base">+</span> Add user
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -848,7 +1189,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
 const EMPTY_NEW_RULE = {
   name: '',
-  condition: { type: 'overdue', hours: 24, tag: TAGS[0] },
+  condition: { type: 'overdue', hours: 24, tag: '' },
   recipientOverride: '',
 };
 
@@ -945,7 +1286,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
   );
 }
 
-function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose }) {
+function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose, entities }) {
   const [showAdd, setShowAdd]       = useState(false);
   const [newRule, setNewRule]       = useState(EMPTY_NEW_RULE);
   const [evaluating, setEvaluating] = useState(false);
@@ -1136,7 +1477,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
                   <div className="flex items-center gap-2">
                     <label className="text-xs text-gray-500 w-16 flex-shrink-0">Tag:</label>
                     <select
-                      value={newRule.condition.tag || TAGS[0]}
+                      value={newRule.condition.tag || (entities[0]?.name || '')}
                       onChange={(e) =>
                         setNewRule((r) => ({
                           ...r,
@@ -1145,7 +1486,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
                       }
                       className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
-                      {TAGS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      {(entities || []).map((ent) => <option key={ent.id} value={ent.name}>{ent.name}</option>)}
                     </select>
                   </div>
                 )}
@@ -1211,7 +1552,8 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
 // ADD TASK FORM
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AddTaskForm({ onAdd, claudeKey, currentUser }) {
+function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
+  const userEntityNames = entities.map((e) => e.name);
   const emptyForm = {
     title: '',
     description: '',
@@ -1231,7 +1573,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
     async (title, desc) => {
       if (!claudeKey || !title.trim()) return;
       setSuggesting(true);
-      const suggested = await fetchSuggestedTags(title, desc, claudeKey);
+      const suggested = await fetchSuggestedTags(title, desc, claudeKey, userEntityNames, authToken);
       setSuggesting(false);
       if (suggested.length > 0) {
         setAiSuggested(suggested);
@@ -1241,7 +1583,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
         }));
       }
     },
-    [claudeKey],
+    [claudeKey, userEntityNames, authToken], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   function scheduleOrRunSuggestion(title, desc) {
@@ -1395,7 +1737,9 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {TAGS.map((tag) => {
+                {entities.map((ent) => {
+                  const tag = ent.name;
+                  const style = getEntityStyle(ent.color);
                   const isSelected = form.tags.includes(tag);
                   const isAiPick = aiSuggested.includes(tag);
                   return (
@@ -1405,7 +1749,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
                       onClick={() => toggleTag(tag)}
                       className={`inline-flex items-center gap-1 text-xs px-3 py-2 md:px-2.5 md:py-1 rounded-full font-medium border transition-all min-h-[36px] md:min-h-0 ${
                         isSelected
-                          ? `${TAG_STYLES[tag]} ring-2 ring-offset-1 ${TAG_ACTIVE_RING[tag]}`
+                          ? `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
                           : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
                       }`}
                     >
@@ -1479,7 +1823,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
 // TASK CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSyncCalendar, currentUser, gcalConnected }) {
+function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSyncCalendar, currentUser, gcalConnected, entities }) {
   const [syncing, setSyncing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft]     = useState(null);
@@ -1560,23 +1904,27 @@ function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSync
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Tags</label>
             <div className="flex flex-wrap gap-1.5">
-              {TAGS.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => setDraft((d) => ({
-                    ...d,
-                    tags: d.tags.includes(tag) ? d.tags.filter((t) => t !== tag) : [...d.tags, tag],
-                  }))}
-                  className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${
-                    draft.tags.includes(tag)
-                      ? `${TAG_STYLES[tag]} ring-2 ring-offset-1 ${TAG_ACTIVE_RING[tag]}`
-                      : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
-                  }`}
-                >
-                  {tag}
-                </button>
-              ))}
+              {(entities || []).map((ent) => {
+                const tag = ent.name;
+                const style = getEntityStyle(ent.color);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setDraft((d) => ({
+                      ...d,
+                      tags: d.tags.includes(tag) ? d.tags.filter((t) => t !== tag) : [...d.tags, tag],
+                    }))}
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${
+                      draft.tags.includes(tag)
+                        ? `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
+                        : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div>
@@ -1710,7 +2058,7 @@ function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSync
           <div className="flex items-end justify-between gap-2 mt-2.5">
             <div className="flex flex-wrap gap-1">
               {task.tags.map((tag) => (
-                <TagPill key={tag} tag={tag} />
+                <TagPill key={tag} tag={tag} entities={entities} />
               ))}
             </div>
 
@@ -1747,6 +2095,7 @@ function FilterBar({
   setActiveTagFilters,
   statusFilter,
   setStatusFilter,
+  entities,
 }) {
   const hasFilters = activeTagFilters.length > 0 || statusFilter !== 'all';
 
@@ -1757,8 +2106,10 @@ function FilterBar({
           Filter
         </span>
 
-        {/* Tag filters */}
-        {TAGS.map((tag) => {
+        {/* Tag filters — dynamic from user's entities */}
+        {(entities || []).map((ent) => {
+          const tag = ent.name;
+          const style = getEntityStyle(ent.color);
           const active = activeTagFilters.includes(tag);
           return (
             <button
@@ -1770,7 +2121,7 @@ function FilterBar({
               }
               className={`text-xs px-2.5 py-1.5 md:py-1 rounded-full font-medium border transition-all flex-shrink-0 min-h-[32px] md:min-h-0 ${
                 active
-                  ? `${TAG_STYLES[tag]} ring-2 ring-offset-1 ${TAG_ACTIVE_RING[tag]}`
+                  ? `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
                   : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600'
               }`}
             >
@@ -1822,7 +2173,7 @@ function FilterBar({
 // CHAT PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ tasks, apiKeys, authToken, currentUser }) {
+function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [backend, setBackend] = useState('claude');
@@ -1882,10 +2233,10 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser }) {
       completed: t.completed,
       dueDate: t.dueDate || null,
     }));
+    const entityNames = (entities || []).map((e) => e.name).join(', ');
     return (
-      `You are a business productivity assistant managing multiple ventures. ` +
-      `Businesses: Careific (care management SaaS), Rose (care home facility), ` +
-      `Buyflip (separate venture), Care Home (operations), Personal. ` +
+      `You are a business productivity assistant. ` +
+      `The user manages these entities/ventures: ${entityNames || 'various'}. ` +
       `Current tasks with tags: ${JSON.stringify(taskSummary)}. ` +
       `Help the user prioritize, plan, and delegate across their businesses.`
     );
@@ -2452,7 +2803,8 @@ export default function App() {
   return <AuthenticatedApp currentUser={currentUser} authToken={authToken} onLogout={handleLogout} />;
 }
 
-function AuthenticatedApp({ currentUser, authToken, onLogout }) {
+function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
+  const [currentUser, setCurrentUser]           = useState(initialUser);
   const [tasks, setTasks]                       = useState([]);
   const tasksLoadedRef                           = useRef(false);
   const [activeView, setActiveView]             = useState('daily');
@@ -2471,7 +2823,41 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
   const [gcalConnected, setGcalConnected]       = useState(false);
   const [envConfigured, setEnvConfigured]       = useState({});
   const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar'
+  const [entities, setEntities]                 = useState([]);
   const firedAlertsRef                          = useRef(new Set());
+
+  // Load entities + refresh current user on mount
+  useEffect(() => {
+    fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setEntities(data); })
+      .catch(() => {});
+    // Refresh user data (role, entityIds) from server
+    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.user) {
+          setCurrentUser(data.user);
+          localStorage.setItem('tm_user', JSON.stringify(data.user));
+        }
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function reloadEntities() {
+    fetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setEntities(data); })
+      .catch(() => {});
+  }
+
+  // Filter entities to only those the user is assigned to (non-admin sees only their entities)
+  const userEntities = useMemo(() => {
+    if (currentUser?.role === 'admin') return entities;
+    const assigned = currentUser?.entityIds || [];
+    if (assigned.length === 0) return entities; // fallback: show all if not yet assigned
+    return entities.filter((e) => assigned.includes(e.name));
+  }, [entities, currentUser]);
 
   // Keep refs current so the 60 s interval always reads fresh values without
   // needing to re-register the effect on every state change.
@@ -2766,12 +3152,13 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           ) : (
           /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
-            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} />
+            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} entities={userEntities} authToken={authToken} />
             <FilterBar
               activeTagFilters={activeTagFilters}
               setActiveTagFilters={setActiveTagFilters}
               statusFilter={statusFilter}
               setStatusFilter={setStatusFilter}
+              entities={userEntities}
             />
 
             <div className="flex items-center justify-between mb-3">
@@ -2809,6 +3196,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
                     onSyncCalendar={handleSyncToCalendar}
                     currentUser={currentUser}
                     gcalConnected={gcalConnected}
+                    entities={userEntities}
                   />
                 ))
               )}
@@ -2823,7 +3211,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
             mobileView === 'chat' ? 'flex' : 'hidden md:flex'
           }`}
         >
-          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} />
+          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} entities={userEntities} />
         </section>
 
         {/* ── Calendar panel (mobile only — on desktop it's in the task section tabs) ── */}
@@ -2871,6 +3259,9 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           onClose={() => setShowSettings(false)}
           envConfigured={envConfigured}
           authToken={authToken}
+          currentUser={currentUser}
+          entities={entities}
+          onEntitiesChanged={reloadEntities}
         />
       )}
 
@@ -2883,6 +3274,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           firedAlertsRef={firedAlertsRef}
           addToast={addToast}
           onClose={() => setShowAlerts(false)}
+          entities={userEntities}
         />
       )}
 
