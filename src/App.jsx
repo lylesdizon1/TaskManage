@@ -3532,23 +3532,29 @@ function NotesPanel({ authToken }) {
         // New note — POST to create
         body.type = 'structured';
         const res = await fetch('/api/notes', { method: 'POST', headers, body: JSON.stringify(body) });
-        const created = await res.json();
-        if (created.id) {
-          setSelectedNote(created);
-          setNotes((prev) => [created, ...prev]);
-          setSaveStatus('saved');
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setSaveStatus(`Save failed — ${err.error || res.statusText}`);
+          return;
         }
+        const created = await res.json();
+        setSelectedNote(created);
+        setNotes((prev) => [created, ...prev]);
+        setSaveStatus('saved');
       } else {
         // Existing note — PUT to update
         const res = await fetch(`/api/notes/${selectedNote.id}`, { method: 'PUT', headers, body: JSON.stringify(body) });
-        const updated = await res.json();
-        if (updated.id) {
-          setSelectedNote(updated);
-          setNotes((prev) => prev.map((n) => n.id === updated.id ? updated : n));
-          setSaveStatus('saved');
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setSaveStatus(`Save failed — ${err.error || res.statusText}`);
+          return;
         }
+        const updated = await res.json();
+        setSelectedNote(updated);
+        setNotes((prev) => prev.map((n) => n.id === updated.id ? updated : n));
+        setSaveStatus('saved');
       }
-    } catch { setSaveStatus('error'); }
+    } catch (e) { setSaveStatus(`Save failed — ${e.message || 'network error'}`); }
   }
 
   async function handlePin() {
@@ -3611,8 +3617,8 @@ function NotesPanel({ authToken }) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
         <button onClick={closeEditor} className="text-sm text-gray-500 hover:text-gray-700 md:hidden">← Back</button>
         <div className="flex items-center gap-2">
-          <span className={`text-xs px-2 py-0.5 rounded ${saveStatus === 'saved' ? 'bg-green-50 text-green-600' : saveStatus === 'error' ? 'bg-red-50 text-red-600' : saveStatus === 'new' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'}`}>
-            {saveStatus === 'saved' ? '✓ Saved' : saveStatus === 'error' ? '✗ Error' : saveStatus === 'new' ? 'New note' : '⏳ Saving...'}
+          <span className={`text-xs px-2 py-0.5 rounded ${saveStatus === 'saved' ? 'bg-green-50 text-green-600' : saveStatus.startsWith('Save failed') ? 'bg-red-50 text-red-600' : saveStatus === 'new' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'}`}>
+            {saveStatus === 'saved' ? '✓ Saved' : saveStatus.startsWith('Save failed') ? saveStatus : saveStatus === 'new' ? 'New note' : '⏳ Saving...'}
           </span>
           <button onClick={handlePin} className={`p-1.5 rounded hover:bg-gray-100 ${selectedNote.pinned ? 'text-amber-500' : 'text-gray-400'}`} title={selectedNote.pinned ? 'Unpin' : 'Pin'}>📌</button>
         </div>
