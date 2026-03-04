@@ -342,10 +342,10 @@ async function fetchSuggestedTags(title, description, claudeKey) {
   }
 }
 
-async function callClaudeChat(messages, systemPrompt, apiKey) {
+async function callClaudeChat(messages, systemPrompt, apiKey, authToken) {
   const res = await fetch('/api/claude', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
       apiKey,
       model: 'claude-sonnet-4-20250514',
@@ -362,10 +362,10 @@ async function callClaudeChat(messages, systemPrompt, apiKey) {
   return data.content?.[0]?.text || '(no response)';
 }
 
-async function callOpenAIChat(messages, systemPrompt, apiKey) {
+async function callOpenAIChat(messages, systemPrompt, apiKey, authToken) {
   const res = await fetch('/api/openai', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
       apiKey,
       model: 'gpt-4o',
@@ -1922,9 +1922,9 @@ function ChatPanel({ tasks, apiKeys, authToken, currentUser }) {
     try {
       let reply;
       if (backend === 'claude') {
-        reply = await callClaudeChat(history, buildSystemPrompt(), currentKey);
+        reply = await callClaudeChat(history, buildSystemPrompt(), currentKey, authToken);
       } else {
-        reply = await callOpenAIChat(history, buildSystemPrompt(), currentKey);
+        reply = await callOpenAIChat(history, buildSystemPrompt(), currentKey, authToken);
       }
       setMessages((m) => [...m, { role: 'assistant', content: reply, model: modelTag }]);
       persistMessage('assistant', reply, modelTag);

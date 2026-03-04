@@ -141,7 +141,7 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
  * Body: { apiKey?: string, ...anthropicPayload }
  * Falls back to CLAUDE_API_KEY env var if apiKey not in body.
  */
-app.post('/api/claude', async (req, res) => {
+app.post('/api/claude', authenticateToken, async (req, res) => {
   const { apiKey: bodyKey, ...body } = req.body;
   const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.CLAUDE_API_KEY;
   if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
@@ -172,7 +172,7 @@ app.post('/api/claude', async (req, res) => {
  * Body: { apiKey?: string, ...openaiPayload }
  * Falls back to OPENAI_API_KEY env var if apiKey not in body.
  */
-app.post('/api/openai', async (req, res) => {
+app.post('/api/openai', authenticateToken, async (req, res) => {
   const { apiKey: bodyKey, ...body } = req.body;
   const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
