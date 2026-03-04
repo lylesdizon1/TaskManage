@@ -4,7 +4,7 @@
  * Express server that:
  *   - Serves the built React app from dist/ (production)
  *   - Relays AI requests to Claude / OpenAI APIs
- *   - Handles Gmail SMTP email sending
+ *   - Sends email via Resend API
  *   - Provides JWT-based multi-user authentication
  *   - Persists settings to settings.json
  *
@@ -12,8 +12,8 @@
  *   PORT                 – server port (default 3001)
  *   CLAUDE_API_KEY       – Anthropic API key
  *   OPENAI_API_KEY       – OpenAI API key
- *   GMAIL_ADDRESS        – Gmail address for SMTP
- *   GMAIL_APP_PASSWORD   – Gmail App Password
+ *   RESEND_API_KEY       – Resend API key for email
+ *   RESEND_FROM_EMAIL    – sender address (default: onboarding@resend.dev)
  *   ALERT_RECIPIENT_EMAIL – default alert recipient email
  *   JWT_SECRET           – secret for signing JWTs (default: random per restart)
  *   GOOGLE_CLIENT_ID     – Google OAuth2 client ID (for Calendar)
@@ -28,7 +28,7 @@
 const express    = require('express');
 const cors       = require('cors');
 const axios      = require('axios');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
 const { google } = require('googleapis');
@@ -226,71 +226,75 @@ app.post('/api/openai', async (req, res) => {
   }
 });
 
-// ── Email routes ──────────────────────────────────────────────────────────────
+// ── Email routes (Resend) ─────────────────────────────────────────────────────
 
-function createGmailTransporter(user, pass) {
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: { user, pass },
-  });
+function getResendClient() {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return null;
+  return new Resend(apiKey);
+}
+
+function getFromEmail() {
+  return process.env.RESEND_FROM_EMAIL || 'TaskManage <onboarding@resend.dev>';
 }
 
 /**
  * POST /api/email/test
- * Body: { gmailUser?, gmailAppPassword? }
- * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
+ * Sends a test email to verify Resend is working.
+ * Body: { to? } — defaults to ALERT_RECIPIENT_EMAIL env var.
  */
 app.post('/api/email/test', async (req, res) => {
-  const gmailUser        = (req.body.gmailUser && !req.body.gmailUser.includes('****')) ? req.body.gmailUser : process.env.GMAIL_ADDRESS;
-  const gmailAppPassword = (req.body.gmailAppPassword && !req.body.gmailAppPassword.includes('****')) ? req.body.gmailAppPassword : process.env.GMAIL_APP_PASSWORD;
-
-  if (!gmailUser || !gmailAppPassword) {
-    return res.status(400).json({ error: 'gmailUser and gmailAppPassword are required' });
+  const resend = getResendClient();
+  if (!resend) {
+    return res.status(400).json({ error: 'RESEND_API_KEY environment variable is not set' });
   }
 
-  const transporter = createGmailTransporter(gmailUser, gmailAppPassword);
+  const to = req.body.to || req.body.recipientEmail || process.env.ALERT_RECIPIENT_EMAIL;
+  if (!to) {
+    return res.status(400).json({ error: 'No recipient email provided' });
+  }
 
   try {
-    await transporter.verify();
-    return res.json({ success: true, message: 'SMTP connection verified successfully' });
+    await resend.emails.send({
+      from: getFromEmail(),
+      to,
+      subject: '[TaskManage] Connection Test',
+      html: '<p>Your Resend email integration is working.</p>',
+    });
+    return res.json({ success: true, message: 'Test email sent via Resend' });
   } catch (err) {
-    console.error('[email/test] SMTP verify failed:', err.message);
+    console.error('[email/test] Resend test failed:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
 
 /**
  * POST /api/email/send
- * Body: { gmailUser?, gmailAppPassword?, to, subject, html }
- * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
+ * Body: { to, subject, html }
  */
 app.post('/api/email/send', async (req, res) => {
-  const gmailUser        = (req.body.gmailUser && !req.body.gmailUser.includes('****')) ? req.body.gmailUser : process.env.GMAIL_ADDRESS;
-  const gmailAppPassword = (req.body.gmailAppPassword && !req.body.gmailAppPassword.includes('****')) ? req.body.gmailAppPassword : process.env.GMAIL_APP_PASSWORD;
-  const { to, subject, html } = req.body;
-
-  if (!gmailUser || !gmailAppPassword || !to || !subject) {
-    return res.status(400).json({
-      error: 'Required fields: gmailUser, gmailAppPassword, to, subject',
-    });
+  const resend = getResendClient();
+  if (!resend) {
+    return res.status(400).json({ error: 'RESEND_API_KEY environment variable is not set' });
   }
 
-  const transporter = createGmailTransporter(gmailUser, gmailAppPassword);
+  const { to, subject, html } = req.body;
+  if (!to || !subject) {
+    return res.status(400).json({ error: 'Required fields: to, subject' });
+  }
 
   try {
-    const info = await transporter.sendMail({
-      from: `"TaskManage" <${gmailUser}>`,
+    const data = await resend.emails.send({
+      from: getFromEmail(),
       to,
       subject,
       html: html || '<p>(no content)</p>',
     });
 
-    console.log(`[email/send] Sent to ${to} — messageId: ${info.messageId}`);
-    return res.json({ success: true, messageId: info.messageId });
+    console.log(`[email/send] Sent to ${to} via Resend — id: ${data.data?.id}`);
+    return res.json({ success: true, messageId: data.data?.id });
   } catch (err) {
-    console.error('[email/send] Failed:', err.message);
+    console.error('[email/send] Resend failed:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -315,8 +319,7 @@ app.get('/api/settings', (_req, res) => {
   const envConfigured = {
     claudeKey:        !!process.env.CLAUDE_API_KEY,
     openaiKey:        !!process.env.OPENAI_API_KEY,
-    gmailUser:        !!process.env.GMAIL_ADDRESS,
-    gmailAppPassword: !!process.env.GMAIL_APP_PASSWORD,
+    resendApiKey:     !!process.env.RESEND_API_KEY,
     recipientEmail:   !!process.env.ALERT_RECIPIENT_EMAIL,
   };
 
@@ -332,12 +335,7 @@ app.get('/api/settings', (_req, res) => {
 
   // Build effective emailSettings (env wins, then file)
   const emailSettings = {
-    gmailUser: process.env.GMAIL_ADDRESS
-      ? maskSecret(process.env.GMAIL_ADDRESS)
-      : (file.emailSettings?.gmailUser || ''),
-    gmailAppPassword: process.env.GMAIL_APP_PASSWORD
-      ? maskSecret(process.env.GMAIL_APP_PASSWORD)
-      : (file.emailSettings?.gmailAppPassword || ''),
+    resendConfigured: !!process.env.RESEND_API_KEY,
     recipientEmail: process.env.ALERT_RECIPIENT_EMAIL
       || file.emailSettings?.recipientEmail
       || '',
@@ -539,8 +537,8 @@ app.listen(PORT, () => {
   console.log('  GET  /api/auth/me       → current user');
   console.log('  POST /api/claude        → api.anthropic.com');
   console.log('  POST /api/openai        → api.openai.com');
-  console.log('  POST /api/email/test    → verify Gmail SMTP credentials');
-  console.log('  POST /api/email/send    → send email via Gmail SMTP');
+  console.log('  POST /api/email/test    → test Resend email delivery');
+  console.log('  POST /api/email/send    → send email via Resend');
   console.log('  GET  /api/settings      → read settings.json');
   console.log('  POST /api/settings      → write settings.json');
   console.log('  GET  /api/gcal/auth-url → Google Calendar OAuth URL');

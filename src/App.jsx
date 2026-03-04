@@ -237,18 +237,12 @@ function buildEmailHtml(ruleName, ruleDesc, tasks) {
 </body></html>`;
 }
 
-/** POST to /api/email/send via the local proxy. */
+/** POST to /api/email/send via the proxy (Resend). */
 async function sendAlertEmail(emailSettings, to, subject, html) {
   const res = await fetch('/api/email/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      gmailUser: emailSettings.gmailUser,
-      gmailAppPassword: emailSettings.gmailAppPassword,
-      to,
-      subject,
-      html,
-    }),
+    body: JSON.stringify({ to, subject, html }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -262,8 +256,8 @@ async function sendAlertEmail(emailSettings, to, subject, html) {
  * firedRef (Set) prevents duplicate sends within the same browser session.
  */
 async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
-  const { gmailUser, gmailAppPassword, recipientEmail } = emailSettings;
-  if (!gmailUser || !gmailAppPassword || !recipientEmail) return;
+  const { recipientEmail, resendConfigured } = emailSettings;
+  if (!resendConfigured || !recipientEmail) return;
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -559,24 +553,17 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   }
 
   async function handleTestConnection() {
-    if (!draftEmail.gmailUser || !draftEmail.gmailAppPassword) {
-      setTestResult({ ok: false, msg: 'Enter Gmail address and App Password first.' });
-      return;
-    }
     setTesting(true);
     setTestResult(null);
     try {
       const res = await fetch('/api/email/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          gmailUser: draftEmail.gmailUser,
-          gmailAppPassword: draftEmail.gmailAppPassword,
-        }),
+        body: JSON.stringify({ to: draftEmail.recipientEmail }),
       });
       const data = await res.json();
       setTestResult(
-        res.ok ? { ok: true, msg: 'Connection verified!' } : { ok: false, msg: data.error || 'Failed' },
+        res.ok ? { ok: true, msg: 'Test email sent via Resend!' } : { ok: false, msg: data.error || 'Failed' },
       );
     } catch (err) {
       setTestResult({ ok: false, msg: err.message });
@@ -694,41 +681,16 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
           {/* Email tab */}
           {tab === 'email' && (
             <div className="space-y-4">
-              <p className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                Use a Gmail <strong>App Password</strong> — not your account password.
-                Generate one at <span className="font-mono text-blue-700">myaccount.google.com → Security → App passwords</span>.
-              </p>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Gmail Address
-                  {envConfigured.gmailUser && <EnvBadge />}
-                </label>
-                <input
-                  type="email"
-                  value={draftEmail.gmailUser}
-                  onChange={(e) => { setDraftEmail((s) => ({ ...s, gmailUser: e.target.value })); setTestResult(null); }}
-                  placeholder="you@gmail.com"
-                  autoComplete="off"
-                  disabled={envConfigured.gmailUser}
-                  className={envConfigured.gmailUser ? disabledCls : inputCls}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  App Password
-                  {envConfigured.gmailAppPassword && <EnvBadge />}
-                </label>
-                <input
-                  type="password"
-                  value={draftEmail.gmailAppPassword}
-                  onChange={(e) => { setDraftEmail((s) => ({ ...s, gmailAppPassword: e.target.value })); setTestResult(null); }}
-                  placeholder="xxxx xxxx xxxx xxxx"
-                  autoComplete="off"
-                  disabled={envConfigured.gmailAppPassword}
-                  className={envConfigured.gmailAppPassword ? disabledCls : inputCls}
-                />
+              {/* Resend status */}
+              <div className={`text-xs px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
+                envConfigured.resendApiKey
+                  ? 'bg-green-50 text-green-700 border border-green-200'
+                  : 'bg-amber-50 text-amber-700 border border-amber-100'
+              }`}>
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${envConfigured.resendApiKey ? 'bg-green-500' : 'bg-amber-400'}`} />
+                {envConfigured.resendApiKey
+                  ? 'Resend API key configured via environment variable'
+                  : 'Set RESEND_API_KEY in Railway environment variables to enable email'}
               </div>
 
               <div>
@@ -763,10 +725,10 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
               <div className="flex gap-2">
                 <button
                   onClick={handleTestConnection}
-                  disabled={testing}
+                  disabled={testing || !envConfigured.resendApiKey}
                   className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors disabled:opacity-50"
                 >
-                  {testing ? 'Testing…' : 'Test Connection'}
+                  {testing ? 'Sending…' : 'Send Test Email'}
                 </button>
                 <button
                   onClick={() => { onSaveEmail(draftEmail); onClose(); }}
@@ -893,7 +855,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
   const [sending, setSending]       = useState(false);
 
   const emailConfigured =
-    emailSettings.gmailUser && emailSettings.gmailAppPassword && emailSettings.recipientEmail;
+    emailSettings.resendConfigured && emailSettings.recipientEmail;
 
   function toggleRule(id) {
     onUpdateRules((prev) => prev.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)));
@@ -929,7 +891,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
 
   async function handleEvaluateNow() {
     if (!emailConfigured) {
-      addToast({ type: 'error', message: 'Configure email credentials in Settings first' });
+      addToast({ type: 'error', message: 'Set RESEND_API_KEY and alert recipient in Settings first' });
       return;
     }
     setEvaluating(true);
@@ -939,7 +901,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
 
   async function handleSendTest() {
     if (!emailConfigured) {
-      addToast({ type: 'error', message: 'Configure email credentials in Settings first' });
+      addToast({ type: 'error', message: 'Set RESEND_API_KEY and alert recipient in Settings first' });
       return;
     }
     setSending(true);
@@ -1006,7 +968,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
           <span>
             {emailConfigured
               ? `Alerts → ${emailSettings.recipientEmail} · Rules check every 60 s`
-              : 'Configure Gmail credentials in Settings → Email & Alerts to activate'}
+              : 'Set RESEND_API_KEY env var and alert recipient in Settings to activate'}
           </span>
         </div>
 
