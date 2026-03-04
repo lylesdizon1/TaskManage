@@ -538,7 +538,16 @@ function ToastContainer({ toasts, onDismiss }) {
 // SETTINGS MODAL  (tabbed: API Keys | Email & Alerts)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose }) {
+function EnvBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full ml-2">
+      <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
+      Configured via environment
+    </span>
+  );
+}
+
+function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {} }) {
   const [tab, setTab]               = useState('keys');
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
   const [draftEmail, setDraftEmail] = useState({ ...emailSettings });
@@ -578,6 +587,10 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose })
 
   const inputCls =
     'w-full px-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition';
+  const disabledCls =
+    'w-full px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-gray-500 cursor-not-allowed';
+
+  const hasAnyEnv = Object.values(envConfigured).some(Boolean);
 
   return (
     <div
@@ -625,32 +638,46 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose })
           {/* API Keys tab */}
           {tab === 'keys' && (
             <div className="space-y-4">
-              <p className="text-xs text-gray-500 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                Keys are stored in memory only and never persisted beyond this session.
-              </p>
+              {hasAnyEnv ? (
+                <p className="text-xs text-gray-500 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  Fields marked with a green badge are configured via Railway environment variables and survive redeploys.
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                  Keys are stored in memory only and never persisted beyond this session.
+                </p>
+              )}
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Claude API Key</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Claude API Key
+                  {envConfigured.claudeKey && <EnvBadge />}
+                </label>
                 <input
                   type="password"
                   value={draftKeys.claude}
                   onChange={(e) => setDraftKeys((k) => ({ ...k, claude: e.target.value }))}
                   placeholder="sk-ant-api03-..."
                   autoComplete="off"
-                  className={inputCls}
+                  disabled={envConfigured.claudeKey}
+                  className={envConfigured.claudeKey ? disabledCls : inputCls}
                 />
                 <p className="text-xs text-gray-400 mt-1">AI tag suggestions + Claude chat</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">OpenAI API Key</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  OpenAI API Key
+                  {envConfigured.openaiKey && <EnvBadge />}
+                </label>
                 <input
                   type="password"
                   value={draftKeys.openai}
                   onChange={(e) => setDraftKeys((k) => ({ ...k, openai: e.target.value }))}
                   placeholder="sk-..."
                   autoComplete="off"
-                  className={inputCls}
+                  disabled={envConfigured.openaiKey}
+                  className={envConfigured.openaiKey ? disabledCls : inputCls}
                 />
                 <p className="text-xs text-gray-400 mt-1">ChatGPT chat</p>
               </div>
@@ -673,32 +700,41 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose })
               </p>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Gmail Address</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Gmail Address
+                  {envConfigured.gmailUser && <EnvBadge />}
+                </label>
                 <input
                   type="email"
                   value={draftEmail.gmailUser}
                   onChange={(e) => { setDraftEmail((s) => ({ ...s, gmailUser: e.target.value })); setTestResult(null); }}
                   placeholder="you@gmail.com"
                   autoComplete="off"
-                  className={inputCls}
+                  disabled={envConfigured.gmailUser}
+                  className={envConfigured.gmailUser ? disabledCls : inputCls}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">App Password</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  App Password
+                  {envConfigured.gmailAppPassword && <EnvBadge />}
+                </label>
                 <input
                   type="password"
                   value={draftEmail.gmailAppPassword}
                   onChange={(e) => { setDraftEmail((s) => ({ ...s, gmailAppPassword: e.target.value })); setTestResult(null); }}
                   placeholder="xxxx xxxx xxxx xxxx"
                   autoComplete="off"
-                  className={inputCls}
+                  disabled={envConfigured.gmailAppPassword}
+                  className={envConfigured.gmailAppPassword ? disabledCls : inputCls}
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   Default Alert Recipient
+                  {envConfigured.recipientEmail && <EnvBadge />}
                 </label>
                 <input
                   type="email"
@@ -706,7 +742,8 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose })
                   onChange={(e) => setDraftEmail((s) => ({ ...s, recipientEmail: e.target.value }))}
                   placeholder="alerts@example.com"
                   autoComplete="off"
-                  className={inputCls}
+                  disabled={envConfigured.recipientEmail}
+                  className={envConfigured.recipientEmail ? disabledCls : inputCls}
                 />
                 <p className="text-xs text-gray-400 mt-1">Alerts are sent to this address by default</p>
               </div>
@@ -2154,6 +2191,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
   const [alertRules, setAlertRules]             = useState(DEFAULT_ALERT_RULES);
   const [toasts, setToasts]                     = useState([]);
   const [gcalConnected, setGcalConnected]       = useState(false);
+  const [envConfigured, setEnvConfigured]       = useState({});
   const firedAlertsRef                          = useRef(new Set());
 
   // Keep refs current so the 60 s interval always reads fresh values without
@@ -2190,6 +2228,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
         if (data.apiKeys)       setApiKeys(data.apiKeys);
         if (data.emailSettings) setEmailSettings(data.emailSettings);
         if (data.alertRules)    setAlertRules(data.alertRules);
+        if (data.envConfigured) setEnvConfigured(data.envConfigured);
       })
       .catch(() => {})
       .finally(() => { settingsLoadedRef.current = true; });
@@ -2467,6 +2506,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           emailSettings={emailSettings}
           onSaveEmail={(email) => { setEmailSettings(email); saveSettings(apiKeysRef.current, email, alertRulesRef.current); }}
           onClose={() => setShowSettings(false)}
+          envConfigured={envConfigured}
         />
       )}
 
