@@ -504,7 +504,7 @@ function TagPill({ tag, isAi = false }) {
 function ToastContainer({ toasts, onDismiss }) {
   if (toasts.length === 0) return null;
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm">
+    <div className="fixed bottom-20 md:bottom-5 right-3 md:right-5 left-3 md:left-auto z-50 flex flex-col gap-2 max-w-sm md:max-w-sm">
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -1198,20 +1198,21 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
       {!isOpen ? (
         <button
           onClick={() => setIsOpen(true)}
-          className="w-full flex items-center gap-2 px-4 py-3 bg-white border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50/30 transition-all text-sm font-medium group"
+          className="w-full flex items-center gap-2 px-4 py-3 md:py-3 min-h-[48px] bg-white border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50/30 transition-all text-sm font-medium group"
         >
-          <span className="w-5 h-5 rounded-full bg-gray-100 group-hover:bg-indigo-100 flex items-center justify-center text-base leading-none transition-colors">
+          <span className="w-6 h-6 md:w-5 md:h-5 rounded-full bg-gray-100 group-hover:bg-indigo-100 flex items-center justify-center text-base leading-none transition-colors">
             +
           </span>
           Add new task
         </button>
       ) : (
+        <div className="fixed inset-0 z-50 bg-white overflow-y-auto md:static md:inset-auto md:z-auto md:bg-transparent md:overflow-visible">
         <form
           onSubmit={handleSubmit}
-          className="bg-white rounded-xl border border-gray-200 shadow-sm p-5"
+          className="p-5 md:bg-white md:rounded-xl md:border md:border-gray-200 md:shadow-sm"
         >
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-900">New Task</h3>
+            <h3 className="text-base md:text-sm font-semibold text-gray-900">New Task</h3>
             <button
               type="button"
               onClick={() => {
@@ -1219,9 +1220,9 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
                 setForm(emptyForm);
                 setAiSuggested([]);
               }}
-              className="text-gray-300 hover:text-gray-500 transition-colors"
+              className="text-gray-400 hover:text-gray-600 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
             >
-              <XIcon className="w-4 h-4" />
+              <XIcon className="w-5 h-5 md:w-4 md:h-4" />
             </button>
           </div>
 
@@ -1235,7 +1236,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
               onBlur={handleBlur}
               autoFocus
               required
-              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+              className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
             />
 
             {/* Description */}
@@ -1245,7 +1246,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
               onChange={handleDescChange}
               onBlur={handleBlur}
               rows={2}
-              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+              className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
             />
 
             {/* Priority + Due Date */}
@@ -1257,7 +1258,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
                 <select
                   value={form.priority}
                   onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                  className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px] md:min-h-0"
                 >
                   <option value="low">🟢 Low</option>
                   <option value="medium">🟡 Medium</option>
@@ -1273,7 +1274,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
                   type="date"
                   value={form.dueDate}
                   onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                  className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px] md:min-h-0"
                 />
               </div>
             </div>
@@ -1305,7 +1306,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
                       key={tag}
                       type="button"
                       onClick={() => toggleTag(tag)}
-                      className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${
+                      className={`inline-flex items-center gap-1 text-xs px-3 py-2 md:px-2.5 md:py-1 rounded-full font-medium border transition-all min-h-[36px] md:min-h-0 ${
                         isSelected
                           ? `${TAG_STYLES[tag]} ring-2 ring-offset-1 ${TAG_ACTIVE_RING[tag]}`
                           : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
@@ -1335,7 +1336,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
                     key={key}
                     type="button"
                     onClick={() => setForm((f) => ({ ...f, visibility: key }))}
-                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
+                    className={`flex-1 px-3 py-3 md:py-2 rounded-lg text-xs font-medium border transition-all min-h-[44px] md:min-h-0 ${
                       form.visibility === key
                         ? key === 'private'
                           ? 'bg-amber-50 text-amber-700 border-amber-300 ring-2 ring-offset-1 ring-amber-300'
@@ -1358,19 +1359,20 @@ function AddTaskForm({ onAdd, claudeKey, currentUser }) {
                   setForm(emptyForm);
                   setAiSuggested([]);
                 }}
-                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
+                className="flex-1 px-4 py-3 md:py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors min-h-[44px]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm"
+                className="flex-1 px-4 py-3 md:py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm min-h-[44px]"
               >
                 Add Task
               </button>
             </div>
           </div>
         </form>
+        </div>
       )}
     </div>
   );
@@ -1401,12 +1403,12 @@ function TaskCard({ task, onToggle, onDelete, onToggleVisibility, onSyncCalendar
     >
       <div className="flex items-start gap-3">
         {/* Checkbox */}
-        <label className="flex items-center mt-0.5 cursor-pointer">
+        <label className="flex items-center mt-0.5 cursor-pointer min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 justify-center">
           <input
             type="checkbox"
             checked={task.completed}
             onChange={() => onToggle(task.id)}
-            className="w-4 h-4 accent-indigo-600 rounded cursor-pointer"
+            className="w-5 h-5 md:w-4 md:h-4 accent-indigo-600 rounded cursor-pointer"
           />
         </label>
 
@@ -1428,17 +1430,17 @@ function TaskCard({ task, onToggle, onDelete, onToggleVisibility, onSyncCalendar
                 <button
                   onClick={handleSync}
                   disabled={syncing}
-                  className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors disabled:opacity-50"
+                  className="text-[10px] px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors disabled:opacity-50 min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
                   title="Sync to Google Calendar"
                 >
-                  {syncing ? <SpinnerIcon className="w-3 h-3 animate-spin" /> : <SyncIcon className="w-3 h-3" />}
+                  {syncing ? <SpinnerIcon className="w-4 h-4 md:w-3 md:h-3 animate-spin" /> : <SyncIcon className="w-4 h-4 md:w-3 md:h-3" />}
                 </button>
               )}
               {/* Visibility toggle */}
               {isOwner && (
                 <button
                   onClick={() => onToggleVisibility(task.id)}
-                  className={`text-[10px] px-1.5 py-0.5 rounded font-medium transition-colors ${
+                  className={`text-[11px] md:text-[10px] px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium transition-colors min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center ${
                     task.visibility === 'private'
                       ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
                       : 'bg-indigo-50 text-indigo-500 hover:bg-indigo-100'
@@ -1449,16 +1451,16 @@ function TaskCard({ task, onToggle, onDelete, onToggleVisibility, onSyncCalendar
                 </button>
               )}
               {!isOwner && (
-                <span className="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded font-medium">
+                <span className="text-[11px] md:text-[10px] bg-gray-100 text-gray-400 px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center">
                   👥
                 </span>
               )}
               <button
                 onClick={() => onDelete(task.id)}
-                className="flex-shrink-0 text-gray-200 hover:text-red-400 transition-colors mt-0.5"
+                className="flex-shrink-0 text-gray-200 hover:text-red-400 transition-colors mt-0.5 min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
                 title="Delete task"
               >
-                <XIcon className="w-4 h-4" />
+                <XIcon className="w-5 h-5 md:w-4 md:h-4" />
               </button>
             </div>
           </div>
@@ -1515,8 +1517,8 @@ function FilterBar({
 
   return (
     <div className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 mb-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+      <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1 md:flex-wrap md:overflow-visible">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex-shrink-0">
           Filter
         </span>
 
@@ -1531,7 +1533,7 @@ function FilterBar({
                   active ? f.filter((t) => t !== tag) : [...f, tag],
                 )
               }
-              className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${
+              className={`text-xs px-2.5 py-1.5 md:py-1 rounded-full font-medium border transition-all flex-shrink-0 min-h-[32px] md:min-h-0 ${
                 active
                   ? `${TAG_STYLES[tag]} ring-2 ring-offset-1 ${TAG_ACTIVE_RING[tag]}`
                   : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600'
@@ -1543,7 +1545,7 @@ function FilterBar({
         })}
 
         {/* Divider */}
-        <span className="text-gray-200">|</span>
+        <span className="text-gray-200 flex-shrink-0">|</span>
 
         {/* Status filters */}
         {[
@@ -1554,7 +1556,7 @@ function FilterBar({
           <button
             key={key}
             onClick={() => setStatusFilter(key)}
-            className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${
+            className={`text-xs px-2.5 py-1.5 md:py-1 rounded-full font-medium border transition-all flex-shrink-0 min-h-[32px] md:min-h-0 ${
               statusFilter === key
                 ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                 : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600'
@@ -1571,7 +1573,7 @@ function FilterBar({
               setActiveTagFilters([]);
               setStatusFilter('all');
             }}
-            className="text-xs text-indigo-500 hover:text-indigo-700 font-medium ml-1 transition-colors"
+            className="text-xs text-indigo-500 hover:text-indigo-700 font-medium ml-1 transition-colors flex-shrink-0"
           >
             Clear all
           </button>
@@ -1796,13 +1798,13 @@ function ChatPanel({ tasks, apiKeys }) {
           onKeyDown={handleKeyDown}
           placeholder={`Message ${backend === 'claude' ? 'Claude' : 'ChatGPT'}… (Enter to send)`}
           rows={1}
-          className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+          className="flex-1 px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-xl text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
           style={{ overflowY: 'hidden' }}
         />
         <button
           onClick={handleSend}
           disabled={loading || !input.trim()}
-          className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+          className="flex-shrink-0 w-11 h-11 md:w-9 md:h-9 flex items-center justify-center bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
           title="Send (Enter)"
         >
           <SendIcon className="w-4 h-4" />
@@ -2154,6 +2156,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
   const [toasts, setToasts]                     = useState([]);
   const [gcalConnected, setGcalConnected]       = useState(false);
   const [envConfigured, setEnvConfigured]       = useState({});
+  const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar'
   const firedAlertsRef                          = useRef(new Set());
 
   // Keep refs current so the 60 s interval always reads fresh values without
@@ -2308,18 +2311,18 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ── Header ── */}
-      <header className="bg-white border-b border-gray-200 px-6 py-3.5 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
-            <ChecklistIcon className="w-5 h-5 text-white" />
+      <header className="bg-white border-b border-gray-200 px-3 md:px-6 py-2.5 md:py-3.5 flex items-center justify-between sticky top-0 z-30">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="w-8 h-8 md:w-9 md:h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
+            <ChecklistIcon className="w-4 h-4 md:w-5 md:h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-base font-bold text-gray-900 leading-none">TaskManage</h1>
-            <p className="text-[11px] text-gray-400 mt-0.5">Multi-venture productivity</p>
+            <h1 className="text-sm md:text-base font-bold text-gray-900 leading-none">TaskManage</h1>
+            <p className="hidden md:block text-[11px] text-gray-400 mt-0.5">Multi-venture productivity</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 md:gap-2">
           <span className="hidden sm:inline-flex text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full font-medium">
             {visibleTasks.filter((t) => !t.completed).length} active ·{' '}
             {visibleTasks.filter((t) => t.completed).length} done
@@ -2328,7 +2331,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           {/* Bell — alert rules */}
           <button
             onClick={() => setShowAlerts(true)}
-            className="relative p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+            className="relative p-2 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
             title="Alert rules"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2343,7 +2346,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           {/* Gear — settings */}
           <button
             onClick={() => setShowSettings(true)}
-            className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
             title="Settings"
           >
             <GearIcon className="w-5 h-5" />
@@ -2351,12 +2354,12 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
 
           {/* User badge + Logout */}
           <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-gray-200">
-            <span className="text-xs font-medium text-gray-600 bg-indigo-50 px-2 py-1 rounded-full">
+            <span className="hidden md:inline text-xs font-medium text-gray-600 bg-indigo-50 px-2 py-1 rounded-full">
               {currentUser.displayName}
             </span>
             <button
               onClick={onLogout}
-              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+              className="p-1.5 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
               title="Sign out"
             >
               <LogoutIcon className="w-4 h-4" />
@@ -2366,21 +2369,27 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
       </header>
 
       {/* ── Main layout ── */}
-      <main className="flex" style={{ height: 'calc(100vh - 57px)' }}>
-        {/* ── Left: Task panel (60%) ── */}
-        <section className="flex flex-col border-r border-gray-200 overflow-hidden" style={{ width: '60%' }}>
-          {/* View Tabs */}
-          <div className="bg-white border-b border-gray-100 px-6 pt-4 pb-0 flex-shrink-0">
+      <main className="flex flex-col md:flex-row pb-16 md:pb-0" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
+        {/* ── Left: Task panel (60% desktop, full mobile) ── */}
+        <section
+          className={`flex-col md:border-r border-gray-200 overflow-hidden w-full md:w-[60%] ${
+            mobileView === 'tasks' ? 'flex' : 'hidden md:flex'
+          }`}
+        >
+          {/* View Tabs — calendar tab hidden on mobile (use bottom nav) */}
+          <div className="bg-white border-b border-gray-100 px-4 md:px-6 pt-3 md:pt-4 pb-0 flex-shrink-0">
             <div className="flex gap-1 w-fit">
               {[
                 { key: 'daily', label: 'Daily Tasks' },
                 { key: 'priority', label: 'High Priority' },
-                { key: 'calendar', label: 'Calendar' },
-              ].map(({ key, label }) => (
+                { key: 'calendar', label: 'Calendar', desktopOnly: true },
+              ].map(({ key, label, desktopOnly }) => (
                 <button
                   key={key}
                   onClick={() => setActiveView(key)}
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px flex items-center gap-1.5 ${
+                  className={`px-3 md:px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px items-center gap-1.5 ${
+                    desktopOnly ? 'hidden md:flex' : 'flex'
+                  } ${
                     activeView === key
                       ? 'border-indigo-600 text-indigo-700'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-200'
@@ -2403,7 +2412,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
           ) : (
           /* Scrollable task content */
-          <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
             <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} />
             <FilterBar
               activeTagFilters={activeTagFilters}
@@ -2454,11 +2463,49 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           )}
         </section>
 
-        {/* ── Right: Chat panel (40%) ── */}
-        <section className="flex flex-col overflow-hidden p-4" style={{ width: '40%' }}>
+        {/* ── Right: Chat panel (40% desktop, full mobile) ── */}
+        <section
+          className={`flex-col overflow-hidden p-3 md:p-4 w-full md:w-[40%] ${
+            mobileView === 'chat' ? 'flex' : 'hidden md:flex'
+          }`}
+        >
           <ChatPanel tasks={tasks} apiKeys={apiKeys} />
         </section>
+
+        {/* ── Calendar panel (mobile only — on desktop it's in the task section tabs) ── */}
+        <section
+          className={`flex-col overflow-hidden w-full md:hidden ${
+            mobileView === 'calendar' ? 'flex' : 'hidden'
+          }`}
+        >
+          <CalendarPanel currentUser={currentUser} addToast={addToast} />
+        </section>
       </main>
+
+      {/* ── Mobile bottom navigation ── */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex z-40 safe-area-bottom">
+        {[
+          { key: 'tasks', label: 'Tasks', icon: <ChecklistIcon className="w-5 h-5" /> },
+          { key: 'chat', label: 'Chat', icon: <ChatIcon className="w-5 h-5" /> },
+          { key: 'calendar', label: 'Calendar', icon: <CalendarIcon className="w-5 h-5" /> },
+        ].map(({ key, label, icon }) => (
+          <button
+            key={key}
+            onClick={() => {
+              setMobileView(key);
+              if (key === 'tasks' && activeView === 'calendar') setActiveView('daily');
+            }}
+            className={`flex-1 flex flex-col items-center gap-0.5 py-2 min-h-[56px] text-xs font-medium transition-colors ${
+              mobileView === key
+                ? 'text-indigo-600'
+                : 'text-gray-400 active:text-gray-600'
+            }`}
+          >
+            {icon}
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
 
       {/* ── Modals ── */}
       {showSettings && (

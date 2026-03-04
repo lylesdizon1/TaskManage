@@ -22,3 +22,17 @@ textarea {
   field-sizing: content;
   max-height: 120px;
 }
+
+/* Hide scrollbar for horizontal filter bar on mobile */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Safe area padding for bottom nav on notched devices */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
