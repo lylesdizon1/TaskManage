@@ -2367,338 +2367,284 @@ function FilterBar({
 // CHAT PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ tasks, apiKeys, authToken, currentUser, entities, financialTransactions = [], financialAccounts = [], initialMessage = '' }) {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [backend, setBackend] = useState('claude');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+// ─────────────────────────────────────────────────────────────────────────────
+// Chat Message Thread (reusable for sliding panel and Chat tab)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ChatMessageThread({ messages, loading }) {
   const messagesEndRef = useRef(null);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50/50">
+      {messages.length === 0 && (
+        <div className="text-center py-10 text-gray-400">
+          <div className="text-4xl mb-3">{'\u{1F916}'}</div>
+          <p className="text-sm font-medium text-gray-500">Ask your AI assistant</p>
+          <p className="text-xs text-gray-400 mt-1">&ldquo;What should I focus on today?&rdquo;</p>
+          <p className="text-xs text-gray-400">&ldquo;Which Careific tasks are overdue?&rdquo;</p>
+        </div>
+      )}
+      {messages.map((msg, i) => (
+        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          {msg.role === 'assistant' && (
+            <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center mr-2 mt-0.5 flex-shrink-0 text-xs">{'\u{1F916}'}</div>
+          )}
+          <div className={`max-w-[82%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${
+            msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-200 shadow-sm rounded-bl-sm'
+          }`}>{msg.content}</div>
+        </div>
+      ))}
+      {loading && (
+        <div className="flex justify-start items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-xs">{'\u{1F916}'}</div>
+          <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm">
+            <div className="flex gap-1 items-center">
+              {[0, 1, 2].map((j) => (
+                <div key={j} className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: `${j * 0.18}s` }} />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      <div ref={messagesEndRef} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sliding Chat Panel (no input — universal prompt bar handles input)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SlidingChatPanel({ messages, loading, backend, contextBadge, onHide }) {
+  return (
+    <div className="flex flex-col h-full bg-white border-l border-gray-200 overflow-hidden">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <span>{'\u{1F4AC}'}</span>
+          <span className="text-sm font-semibold text-gray-900">Chat</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${backend === 'claude' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700'}`}>
+            {backend === 'claude' ? 'Claude' : 'ChatGPT'}
+          </span>
+        </div>
+        <button onClick={onHide} className="text-xs text-gray-400 hover:text-gray-700 font-medium px-2 py-1 flex items-center gap-1 transition-colors">
+          <span>&rarr;</span> Hide
+        </button>
+      </div>
+      {/* Context badge */}
+      {contextBadge && (
+        <div className="bg-indigo-50 border-b border-indigo-100 px-4 py-1.5 text-[11px] text-indigo-600 flex items-center gap-1.5 flex-shrink-0">
+          <span>{'\u{1F4CB}'}</span><span>{contextBadge}</span>
+        </div>
+      )}
+      {/* Messages */}
+      <ChatMessageThread messages={messages} loading={loading} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chat Tab Panel (conversation list + message view)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function chatDateGroup(dateStr) {
+  if (!dateStr) return 'Earlier';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+  if (d >= today) return 'Today';
+  if (d >= yesterday) return 'Yesterday';
+  return 'Earlier';
+}
+
+function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, backend, onSelectConv, onNewChat, onDeleteConv, onRenameConv }) {
+  const [editingTitle, setEditingTitle] = useState(null);
+
+  // Group conversations by date
+  const grouped = useMemo(() => {
+    const groups = { Today: [], Yesterday: [], Earlier: [] };
+    conversations.forEach((c) => {
+      const group = chatDateGroup(c.updatedAt || c.createdAt);
+      groups[group].push(c);
+    });
+    return groups;
+  }, [conversations]);
+
+  return (
+    <div className="flex h-full">
+      {/* Left sidebar */}
+      <div className="w-64 flex-shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
+        <div className="px-4 pt-4 pb-3 flex-shrink-0">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-semibold text-gray-900">{'\u{1F4AC}'} Conversations</span>
+          </div>
+          <button onClick={onNewChat} className="w-full px-3 py-2 text-sm font-medium text-white rounded-lg transition-colors hover:opacity-90" style={{ backgroundColor: '#7C3AED' }}>
+            + New Chat
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-2 pb-3">
+          {conversations.length === 0 && (
+            <p className="text-xs text-gray-400 px-2 py-4 text-center">No conversations yet</p>
+          )}
+          {['Today', 'Yesterday', 'Earlier'].map((group) => {
+            const items = grouped[group];
+            if (items.length === 0) return null;
+            return (
+              <div key={group} className="mb-2">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-2 py-1">{group}</p>
+                {items.map((conv) => (
+                  <div
+                    key={conv.id}
+                    onClick={() => onSelectConv(conv.id)}
+                    className={`group flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition-colors ${
+                      activeConvId === conv.id ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium truncate">{conv.title || 'New conversation'}</p>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${conv.model === 'chatgpt' ? 'bg-green-50 text-green-600' : 'bg-indigo-50 text-indigo-600'}`}>
+                          {conv.model === 'chatgpt' ? 'GPT' : 'Claude'}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDeleteConv(conv.id); }}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 text-xs px-1 transition-opacity"
+                    >{'\u{1F5D1}\u{FE0F}'}</button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Right panel */}
+      <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+        {!activeConvId ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+            <div className="text-4xl mb-3">{'\u{1F4AC}'}</div>
+            <p className="text-sm font-medium text-gray-500">Select a conversation or start a new one</p>
+            <button onClick={onNewChat} className="mt-4 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors hover:opacity-90" style={{ backgroundColor: '#7C3AED' }}>
+              + New Chat
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Conversation header */}
+            <div className="bg-white border-b border-gray-200 px-5 py-3 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                {editingTitle === activeConvId ? (
+                  <input
+                    autoFocus
+                    defaultValue={conversations.find((c) => c.id === activeConvId)?.title || ''}
+                    onBlur={(e) => { onRenameConv(activeConvId, e.target.value); setEditingTitle(null); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { onRenameConv(activeConvId, e.target.value); setEditingTitle(null); } }}
+                    className="text-sm font-semibold text-gray-900 bg-gray-50 border border-gray-200 rounded px-2 py-1 flex-1"
+                  />
+                ) : (
+                  <h3 onClick={() => setEditingTitle(activeConvId)} className="text-sm font-semibold text-gray-900 truncate cursor-pointer hover:text-indigo-600 transition-colors">
+                    {conversations.find((c) => c.id === activeConvId)?.title || 'New conversation'}
+                  </h3>
+                )}
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${backend === 'claude' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700'}`}>
+                  {backend === 'claude' ? 'Claude' : 'ChatGPT'}
+                </span>
+              </div>
+              <button onClick={() => onDeleteConv(activeConvId)} className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium px-2 py-1">
+                {'\u{1F5D1}\u{FE0F}'} Delete
+              </button>
+            </div>
+            {/* Messages */}
+            <ChatMessageThread messages={activeMessages} loading={loading} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Universal Prompt Bar
+// ─────────────────────────────────────────────────────────────────────────────
+
+function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, onSend, loading }) {
   const textareaRef = useRef(null);
-  const historyLoadedRef = useRef(false);
-  const initialMsgHandledRef = useRef('');
 
-  const authHeaders = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${authToken}`,
-  };
-
-  // Load chat history on mount
-  useEffect(() => {
-    apiFetch('/api/chat/history', { headers: { Authorization: `Bearer ${authToken}` } })
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setMessages(data.map((m) => ({ role: m.role, content: m.content, model: m.model })));
-        }
-      })
-      .catch(() => {})
-      .finally(() => { historyLoadedRef.current = true; });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Handle initial message from Dashboard AI prompt bar
-  useEffect(() => {
-    if (initialMessage && initialMessage !== initialMsgHandledRef.current) {
-      initialMsgHandledRef.current = initialMessage;
-      setInput(initialMessage);
-      // Auto-send after a brief delay to allow rendering
-      setTimeout(() => {
-        const ta = textareaRef.current;
-        if (ta) { ta.focus(); }
-      }, 100);
-    }
-  }, [initialMessage]);
-
-  function persistMessage(role, content, model) {
-    apiFetch('/api/chat/message', {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ role, content, model }),
-    }).catch((err) => console.error('[chat] save failed:', err.message));
-  }
-
-  // Auto-scroll on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  // Auto-grow textarea
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    el.style.height = Math.min(el.scrollHeight, 90) + 'px';
   }, [input]);
 
-  const currentKey = backend === 'claude' ? apiKeys.claude : apiKeys.openai;
-  const hasKey = Boolean(currentKey);
-
-  function buildSystemPrompt() {
-    const taskSummary = tasks.map((t) => ({
-      title: t.title,
-      priority: t.priority,
-      tags: t.tags,
-      completed: t.completed,
-      dueDate: t.dueDate || null,
-    }));
-
-    // Build structured entity context
-    const allEntities = entities || [];
-    const businesses = allEntities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
-    const projects = allEntities.filter((e) => e.type === 'project');
-    const personals = allEntities.filter((e) => e.type === 'personal');
-    const sharedEnts = allEntities.filter((e) => e.shared);
-
-    let entityContext = '\n\nENTITIES & STRUCTURE:';
-    if (businesses.length > 0) entityContext += `\nBusinesses: ${businesses.map((e) => e.name).join(', ')}`;
-    if (projects.length > 0) {
-      entityContext += '\nProjects:';
-      businesses.forEach((b) => {
-        const children = projects.filter((p) => p.parentId === b.id);
-        if (children.length > 0) entityContext += `\n  ${b.name} → ${children.map((p) => p.name).join(', ')}`;
-      });
-      const orphans = projects.filter((p) => !p.parentId || !businesses.find((b) => b.id === p.parentId));
-      if (orphans.length > 0) entityContext += `\n  (unassigned) → ${orphans.map((p) => p.name).join(', ')}`;
-    }
-    if (personals.length > 0) entityContext += `\nPersonal: ${personals.map((e) => e.name).join(', ')}`;
-    if (sharedEnts.length > 0) entityContext += `\nShared (household): ${sharedEnts.map((e) => e.name).join(', ')}`;
-
-    // Build account lookup for transaction context
-    const acctMap = {};
-    (financialAccounts || []).forEach((a) => { acctMap[a.id] = a.name || a.institution || 'Unknown'; });
-
-    // Include up to 200 most recent transactions
-    let txContext = '';
-    if (financialTransactions && financialTransactions.length > 0) {
-      const recent = financialTransactions.slice(0, 200);
-      const txLines = recent.map((t) => {
-        const acctName = acctMap[t.accountId] || 'Unknown';
-        const sign = t.type === 'credit' ? '+' : '-';
-        const amt = `${sign}$${Number(t.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        return `${t.date} | ${acctName} | ${t.description || ''} | ${amt} | ${t.category || 'Uncategorized'}`;
-      });
-      txContext = `\n\nThe user's financial transactions (${financialTransactions.length} total, showing ${recent.length} most recent):\nDate | Account | Description | Amount | Category\n${txLines.join('\n')}`;
-    }
-
-    return (
-      `You are a business productivity assistant. ` +
-      `The user manages multiple ventures and personal entities. ` +
-      `Current tasks with tags: ${JSON.stringify(taskSummary)}. ` +
-      `Help the user prioritize, plan, and delegate across their businesses. ` +
-      `When the user asks about a specific entity, scope your response to that entity only. ` +
-      `When they ask about "all businesses", aggregate across business-type entities only.` +
-      entityContext +
-      txContext
-    );
-  }
-
-  const modelTag = backend === 'claude' ? 'claude' : 'chatgpt';
-
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || loading) return;
-
-    if (!hasKey) {
-      const warningContent = `⚠️ No ${backend === 'claude' ? 'Claude' : 'OpenAI'} API key set. Open Settings (gear icon) to add one.`;
-      setMessages((m) => [
-        ...m,
-        { role: 'user', content: text, model: modelTag },
-        { role: 'assistant', content: warningContent, model: modelTag },
-      ]);
-      persistMessage('user', text, modelTag);
-      persistMessage('assistant', warningContent, modelTag);
-      setInput('');
-      return;
-    }
-
-    const userMsg = { role: 'user', content: text, model: modelTag };
-    const history = [...messages, userMsg];
-    setMessages(history);
-    setInput('');
-    setLoading(true);
-    setError('');
-
-    persistMessage('user', text, modelTag);
-
-    try {
-      let reply;
-      if (backend === 'claude') {
-        reply = await callClaudeChat(history, buildSystemPrompt(), currentKey, authToken);
-      } else {
-        reply = await callOpenAIChat(history, buildSystemPrompt(), currentKey, authToken);
-      }
-      setMessages((m) => [...m, { role: 'assistant', content: reply, model: modelTag }]);
-      persistMessage('assistant', reply, modelTag);
-    } catch (err) {
-      const errContent = `❌ Error: ${err.message || 'Request failed'}`;
-      setError(err.message || 'Request failed');
-      setMessages((m) => [...m, { role: 'assistant', content: errContent, model: modelTag }]);
-      persistMessage('assistant', errContent, modelTag);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleClearChat() {
-    setMessages([]);
-    apiFetch('/api/chat/history', {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${authToken}` },
-    }).catch((err) => console.error('[chat] clear failed:', err.message));
-  }
-
   function handleKeyDown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
   }
 
   return (
-    <div className="flex flex-col h-full bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 bg-indigo-100 rounded-lg flex items-center justify-center">
-            <ChatIcon className="w-4 h-4 text-indigo-600" />
-          </div>
-          <span className="text-sm font-semibold text-gray-900">AI Assistant</span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Clear Chat */}
-          {messages.length > 0 && (
-            <button
-              onClick={handleClearChat}
-              className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium px-2 py-1"
-              title="Clear chat history"
-            >
-              Clear
-            </button>
-          )}
-          {/* Backend Toggle */}
-          <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5">
-            {[
-              { key: 'claude', label: 'Claude' },
-              { key: 'chatgpt', label: 'ChatGPT' },
-            ].map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setBackend(key)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  backend === key
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* No-key warning */}
-      {!hasKey && (
-        <div className="bg-amber-50 border-b border-amber-100 px-4 py-2 text-xs text-amber-700 flex items-center gap-1.5 flex-shrink-0">
-          <span>⚠️</span>
-          <span>
-            No {backend === 'claude' ? 'Claude' : 'OpenAI'} API key — add one in
-            Settings to enable chat.
-          </span>
-        </div>
-      )}
-
-      {/* Context note */}
-      <div className="bg-indigo-50 border-b border-indigo-100 px-4 py-2 text-xs text-indigo-600 flex items-center gap-1.5 flex-shrink-0">
-        <span>📋</span>
-        <span>
-          {tasks.length} task{tasks.length !== 1 ? 's' : ''}{financialTransactions.length > 0 ? ` · ${financialTransactions.length} transaction${financialTransactions.length !== 1 ? 's' : ''}` : ''} injected as context
-        </span>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50/50">
-        {messages.length === 0 && (
-          <div className="text-center py-10 text-gray-400">
-            <div className="text-4xl mb-3">🤖</div>
-            <p className="text-sm font-medium text-gray-500">Ask your AI assistant</p>
-            <p className="text-xs text-gray-400 mt-1">
-              &ldquo;What should I focus on today?&rdquo;
-            </p>
-            <p className="text-xs text-gray-400">
-              &ldquo;Which Careific tasks are overdue?&rdquo;
-            </p>
-          </div>
-        )}
-
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            {msg.role === 'assistant' && (
-              <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center mr-2 mt-0.5 flex-shrink-0 text-xs">
-                🤖
-              </div>
-            )}
-            <div
-              className={`max-w-[82%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${
-                msg.role === 'user'
-                  ? 'bg-indigo-600 text-white rounded-br-sm'
-                  : 'bg-white text-gray-800 border border-gray-200 shadow-sm rounded-bl-sm'
-              }`}
-            >
-              {msg.content}
-            </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div className="flex justify-start items-center gap-2">
-            <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-xs">
-              🤖
-            </div>
-            <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm">
-              <div className="flex gap-1 items-center">
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce"
-                    style={{ animationDelay: `${i * 0.18}s` }}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <div className="bg-white border-t border-gray-200 p-3 flex gap-2 items-end flex-shrink-0">
+    <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200 px-3 md:px-4 py-2 mb-14 md:mb-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+      <div className="flex items-end gap-2 max-w-screen-xl mx-auto">
         <textarea
           ref={textareaRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={`Message ${backend === 'claude' ? 'Claude' : 'ChatGPT'}… (Enter to send)`}
+          placeholder="Ask anything..."
           rows={1}
-          className="flex-1 px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-xl text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+          className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
           style={{ overflowY: 'hidden' }}
         />
+        <select
+          value={backend}
+          onChange={(e) => onBackendChange(e.target.value)}
+          className="px-2 py-2 text-xs font-medium bg-gray-50 border border-gray-200 rounded-lg text-gray-700 focus:ring-2 focus:ring-indigo-300"
+        >
+          <option value="claude">Claude</option>
+          <option value="chatgpt">ChatGPT</option>
+        </select>
         <button
-          onClick={handleSend}
+          onClick={onSend}
           disabled={loading || !input.trim()}
-          className="flex-shrink-0 w-11 h-11 md:w-9 md:h-9 flex items-center justify-center bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
-          title="Send (Enter)"
+          className="flex-shrink-0 w-9 h-9 flex items-center justify-center text-white rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+          style={{ backgroundColor: '#7C3AED' }}
         >
           <SendIcon className="w-4 h-4" />
         </button>
       </div>
     </div>
   );
+}
+
+// Build AI system prompt (extracted from old ChatPanel for reuse)
+function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions) {
+  const taskSummary = tasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, completed: t.completed, dueDate: t.dueDate || null }));
+  const allEntities = entities || [];
+  const businesses = allEntities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
+  const projects = allEntities.filter((e) => e.type === 'project');
+  const personals = allEntities.filter((e) => e.type === 'personal');
+  const sharedEnts = allEntities.filter((e) => e.shared);
+  let entityContext = '\n\nENTITIES & STRUCTURE:';
+  if (businesses.length > 0) entityContext += `\nBusinesses: ${businesses.map((e) => e.name).join(', ')}`;
+  if (projects.length > 0) {
+    entityContext += '\nProjects:';
+    businesses.forEach((b) => { const ch = projects.filter((p) => p.parentId === b.id); if (ch.length > 0) entityContext += `\n  ${b.name} \u2192 ${ch.map((p) => p.name).join(', ')}`; });
+    const orphans = projects.filter((p) => !p.parentId || !businesses.find((b) => b.id === p.parentId));
+    if (orphans.length > 0) entityContext += `\n  (unassigned) \u2192 ${orphans.map((p) => p.name).join(', ')}`;
+  }
+  if (personals.length > 0) entityContext += `\nPersonal: ${personals.map((e) => e.name).join(', ')}`;
+  if (sharedEnts.length > 0) entityContext += `\nShared (household): ${sharedEnts.map((e) => e.name).join(', ')}`;
+  const acctMap = {}; (financialAccounts || []).forEach((a) => { acctMap[a.id] = a.name || a.institution || 'Unknown'; });
+  let txContext = '';
+  if (financialTransactions && financialTransactions.length > 0) {
+    const recent = financialTransactions.slice(0, 200);
+    const txLines = recent.map((t) => { const n = acctMap[t.accountId] || 'Unknown'; const s = t.type === 'credit' ? '+' : '-'; return `${t.date} | ${n} | ${t.description || ''} | ${s}$${Number(t.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | ${t.category || 'Uncategorized'}`; });
+    txContext = `\n\nFinancial transactions (${financialTransactions.length} total, ${recent.length} shown):\nDate | Account | Description | Amount | Category\n${txLines.join('\n')}`;
+  }
+  return `You are a business productivity assistant. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + entityContext + txContext;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4956,6 +4902,15 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [dashboardNotes, setDashboardNotes]     = useState([]);
   const [chatInitialMsg, setChatInitialMsg]     = useState('');
 
+  // ── Universal Chat state ──
+  const [conversations, setConversations]       = useState([]);
+  const [activeConvId, setActiveConvId]         = useState(null);
+  const [chatMessages, setChatMessages]         = useState([]);
+  const [chatInput, setChatInput]               = useState('');
+  const [chatBackend, setChatBackend]           = useState('claude');
+  const [chatLoading, setChatLoading]           = useState(false);
+  const [chatPanelOpen, setChatPanelOpen]       = useState(() => localStorage.getItem('tm_chat_panel') !== 'closed');
+
   // Load entities + refresh current user on mount
   useEffect(() => {
     apiFetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -5004,6 +4959,147 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setEntities(data); })
       .catch(() => {});
+  }
+
+  // ── Chat helpers ──
+  async function loadConversations() {
+    try {
+      const r = await apiFetch('/api/conversations', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await r.json();
+      if (Array.isArray(data)) setConversations(data);
+    } catch {}
+  }
+
+  async function loadConversationMessages(convId) {
+    try {
+      const r = await apiFetch(`/api/conversations/${convId}/messages`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await r.json();
+      if (Array.isArray(data)) setChatMessages(data.map((m) => ({ role: m.role, content: m.content })));
+    } catch {}
+  }
+
+  async function selectConversation(convId) {
+    setActiveConvId(convId);
+    if (convId) {
+      const conv = conversations.find((c) => c.id === convId);
+      if (conv?.model) setChatBackend(conv.model);
+      await loadConversationMessages(convId);
+    } else {
+      setChatMessages([]);
+    }
+  }
+
+  async function createNewChat() {
+    try {
+      const r = await apiFetch('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ model: chatBackend }),
+      });
+      const conv = await r.json();
+      if (conv.id) {
+        setActiveConvId(conv.id);
+        setChatMessages([]);
+        await loadConversations();
+        return conv.id;
+      }
+    } catch {}
+    return null;
+  }
+
+  async function deleteConversation(convId) {
+    try {
+      await apiFetch(`/api/conversations/${convId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+      if (activeConvId === convId) { setActiveConvId(null); setChatMessages([]); }
+      await loadConversations();
+    } catch {}
+  }
+
+  async function renameConversation(convId, title) {
+    try {
+      await apiFetch(`/api/conversations/${convId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ title }),
+      });
+      await loadConversations();
+    } catch {}
+  }
+
+  async function handleChatSend() {
+    const text = chatInput.trim();
+    if (!text || chatLoading) return;
+
+    let convId = activeConvId;
+    // Auto-create conversation if none active
+    if (!convId) {
+      convId = await createNewChat();
+      if (!convId) return;
+    }
+
+    const userMsg = { role: 'user', content: text };
+    const updatedMessages = [...chatMessages, userMsg];
+    setChatMessages(updatedMessages);
+    setChatInput('');
+    setChatLoading(true);
+
+    // Save user message to DB
+    try {
+      await apiFetch(`/api/conversations/${convId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ role: 'user', content: text }),
+      });
+    } catch {}
+
+    // Build system prompt and call AI
+    const sysPrompt = buildSystemPrompt(tasks, userEntities, financialAccounts, financialTransactions);
+    try {
+      let reply;
+      if (chatBackend === 'claude') {
+        reply = await callClaudeChat(updatedMessages, sysPrompt, apiKeys.claude, authToken);
+      } else {
+        reply = await callOpenAIChat(updatedMessages, sysPrompt, apiKeys.openai, authToken);
+      }
+      const assistantMsg = { role: 'assistant', content: reply };
+      setChatMessages((prev) => [...prev, assistantMsg]);
+      // Save assistant message to DB
+      try {
+        await apiFetch(`/api/conversations/${convId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ role: 'assistant', content: reply }),
+        });
+      } catch {}
+    } catch (err) {
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }]);
+    }
+    setChatLoading(false);
+    await loadConversations(); // refresh titles
+    // Open sliding panel on desktop if not on chat tab
+    if (window.innerWidth >= 768 && activeView !== 'chat') {
+      setChatPanelOpen(true);
+      localStorage.setItem('tm_chat_panel', 'open');
+    }
+  }
+
+  // Load conversations on mount
+  useEffect(() => { loadConversations(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle chatInitialMsg from Dashboard
+  useEffect(() => {
+    if (chatInitialMsg) {
+      setChatInput(chatInitialMsg);
+      setChatInitialMsg('');
+    }
+  }, [chatInitialMsg]);
+
+  function toggleChatPanel() {
+    setChatPanelOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem('tm_chat_panel', next ? 'open' : 'closed');
+      return next;
+    });
   }
 
   // Filter entities to only those the user is assigned to (non-admin sees only their entities)
@@ -5263,12 +5359,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       </header>
 
       {/* ── Main layout ── */}
-      <main className="flex flex-col md:flex-row pb-16 md:pb-0" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
-        {/* ── Left: Task panel (60% desktop, full mobile) ── */}
+      <main className="flex flex-col md:flex-row pb-16 md:pb-10" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
+        {/* ── Left: Task panel (shrinks when sliding chat is open) ── */}
         <section
-          className={`flex-col md:border-r border-gray-200 overflow-hidden w-full md:w-[60%] ${
+          className={`flex-col md:border-r border-gray-200 overflow-hidden w-full ${
             mobileView === 'tasks' ? 'flex' : 'hidden md:flex'
           }`}
+          style={{ flex: chatPanelOpen && activeView !== 'chat' ? '0 0 75%' : '1 1 100%', transition: 'flex 0.2s' }}
         >
           {/* View Tabs — calendar tab hidden on mobile (use bottom nav) */}
           <div className="bg-white border-b border-gray-100 px-4 md:px-6 pt-3 md:pt-4 pb-0 flex-shrink-0">
@@ -5279,6 +5376,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 { key: 'calendar', label: 'Calendar', desktopOnly: true },
                 { key: 'financials', label: 'Financials', desktopOnly: true },
                 { key: 'notes', label: 'Notes', desktopOnly: true },
+                { key: 'chat', label: 'Chat', desktopOnly: true },
               ].map(({ key, label, desktopOnly }) => (
                 <button
                   key={key}
@@ -5294,6 +5392,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   {key === 'calendar' && <CalendarIcon className="w-3.5 h-3.5" />}
                   {key === 'financials' && <DollarIcon className="w-3.5 h-3.5" />}
                   {key === 'notes' && <NotesIcon className="w-3.5 h-3.5" />}
+                  {key === 'chat' && <ChatIcon className="w-3.5 h-3.5" />}
                   {label}
                 </button>
               ))}
@@ -5332,6 +5431,18 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
           ) : activeView === 'notes' ? (
             <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} quickCapturedNote={quickCapturedNote} />
+          ) : activeView === 'chat' ? (
+            <ChatTabPanel
+              conversations={conversations}
+              activeConvId={activeConvId}
+              activeMessages={chatMessages}
+              loading={chatLoading}
+              backend={chatBackend}
+              onSelectConv={selectConversation}
+              onNewChat={createNewChat}
+              onDeleteConv={deleteConversation}
+              onRenameConv={renameConversation}
+            />
           ) : (
           /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
@@ -5388,13 +5499,48 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           )}
         </section>
 
-        {/* ── Right: Chat panel (40% desktop, full mobile) ── */}
+        {/* ── Right: Sliding Chat panel (25% desktop, hidden on chat tab and mobile) ── */}
+        {chatPanelOpen && activeView !== 'chat' && (
+          <section className="hidden md:flex flex-col overflow-hidden" style={{ flex: '0 0 25%' }}>
+            <SlidingChatPanel
+              messages={chatMessages}
+              loading={chatLoading}
+              backend={chatBackend}
+              contextBadge={`${tasks.filter((t) => !t.completed).length} tasks · ${financialTransactions.length} transactions`}
+              onHide={toggleChatPanel}
+            />
+          </section>
+        )}
+
+        {/* Sliding panel toggle tab (desktop only, when panel is closed) */}
+        {!chatPanelOpen && activeView !== 'chat' && (
+          <button
+            onClick={toggleChatPanel}
+            className="hidden md:flex fixed right-0 top-1/2 -translate-y-1/2 z-30 flex-col items-center gap-1 bg-white border border-r-0 border-gray-200 rounded-l-lg px-1.5 py-3 shadow-sm hover:bg-indigo-50 transition-colors"
+            title="Open chat panel"
+          >
+            <ChatIcon className="w-4 h-4 text-indigo-600" />
+            <span className="text-[9px] text-gray-500 font-medium" style={{ writingMode: 'vertical-rl' }}>Chat</span>
+          </button>
+        )}
+
+        {/* ── Chat panel (mobile only — full screen when mobileView is 'chat') ── */}
         <section
-          className={`flex-col overflow-hidden p-3 md:p-4 w-full md:w-[40%] ${
-            mobileView === 'chat' ? 'flex' : 'hidden md:flex'
+          className={`flex-col overflow-hidden w-full md:hidden ${
+            mobileView === 'chat' ? 'flex' : 'hidden'
           }`}
         >
-          <ChatPanel tasks={tasks} apiKeys={apiKeys} authToken={authToken} currentUser={currentUser} entities={userEntities} financialTransactions={financialTransactions} financialAccounts={financialAccounts} initialMessage={chatInitialMsg} />
+          <ChatTabPanel
+            conversations={conversations}
+            activeConvId={activeConvId}
+            activeMessages={chatMessages}
+            loading={chatLoading}
+            backend={chatBackend}
+            onSelectConv={selectConversation}
+            onNewChat={createNewChat}
+            onDeleteConv={deleteConversation}
+            onRenameConv={renameConversation}
+          />
         </section>
 
         {/* ── Calendar panel (mobile only — on desktop it's in the task section tabs) ── */}
@@ -5489,6 +5635,16 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         hideFAB={(activeView === 'notes' || mobileView === 'notes') && notesEditorOpen}
         addToast={addToast}
         onNoteSaved={(saved) => setQuickCapturedNote(saved)}
+      />
+
+      {/* ── Universal Prompt Bar (fixed bottom, all tabs) ── */}
+      <UniversalPromptBar
+        input={chatInput}
+        onInputChange={setChatInput}
+        backend={chatBackend}
+        onBackendChange={setChatBackend}
+        onSend={handleChatSend}
+        loading={chatLoading}
       />
 
       {/* ── Toast notifications ── */}

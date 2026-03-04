@@ -131,12 +131,28 @@ async function initTables() {
       role       TEXT NOT NULL,
       content    TEXT NOT NULL,
       model      TEXT DEFAULT 'claude',
+      conversation_id INTEGER,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages (user_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+      id         SERIAL PRIMARY KEY,
+      user_id    TEXT NOT NULL,
+      title      TEXT DEFAULT '',
+      model      TEXT DEFAULT 'claude',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_chat_conversations_user_id ON chat_conversations (user_id, updated_at DESC);
   `);
 
   // ── Financial tables ──
@@ -653,6 +669,84 @@ async function clearChatHistory(userId) {
   await pool.query('DELETE FROM chat_messages WHERE user_id = $1', [userId]);
 }
 
+// ── Chat Conversations ──────────────────────────────────────────────────────
+
+async function getConversations(userId) {
+  const { rows } = await pool.query(
+    `SELECT c.id, c.title, c.model, c.created_at AS "createdAt", c.updated_at AS "updatedAt",
+            (SELECT content FROM chat_messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS "lastMessage"
+     FROM chat_conversations c
+     WHERE c.user_id = $1
+     ORDER BY c.updated_at DESC`,
+    [userId],
+  );
+  return rows.map((r) => ({
+    ...r,
+    lastMessage: r.lastMessage ? r.lastMessage.slice(0, 60) : null,
+  }));
+}
+
+async function getConversation(id, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", title, model, created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM chat_conversations WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rows[0] || null;
+}
+
+async function createConversation(userId, model) {
+  const { rows } = await pool.query(
+    `INSERT INTO chat_conversations (user_id, model) VALUES ($1, $2)
+     RETURNING id, user_id AS "userId", title, model, created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [userId, model || 'claude'],
+  );
+  return rows[0];
+}
+
+async function updateConversationTitle(id, userId, title) {
+  const { rows } = await pool.query(
+    `UPDATE chat_conversations SET title = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2
+     RETURNING id, title, model, updated_at AS "updatedAt"`,
+    [id, userId, title],
+  );
+  return rows[0] || null;
+}
+
+async function deleteConversation(id, userId) {
+  await pool.query('DELETE FROM chat_messages WHERE conversation_id = $1 AND user_id = $2', [id, userId]);
+  await pool.query('DELETE FROM chat_conversations WHERE id = $1 AND user_id = $2', [id, userId]);
+}
+
+async function getConversationMessages(conversationId, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, role, content, model, created_at AS "createdAt"
+     FROM chat_messages WHERE conversation_id = $1 AND user_id = $2
+     ORDER BY created_at ASC`,
+    [conversationId, userId],
+  );
+  return rows;
+}
+
+async function addConversationMessage(conversationId, userId, role, content, model) {
+  const { rows } = await pool.query(
+    `INSERT INTO chat_messages (conversation_id, user_id, role, content, model)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, conversation_id AS "conversationId", role, content, model, created_at AS "createdAt"`,
+    [conversationId, userId, role, content, model || 'claude'],
+  );
+  // Update conversation timestamp
+  await pool.query('UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1', [conversationId]);
+  // Auto-title: set title from first user message if empty
+  if (role === 'user') {
+    await pool.query(
+      `UPDATE chat_conversations SET title = $2 WHERE id = $1 AND (title IS NULL OR title = '')`,
+      [conversationId, content.slice(0, 50)],
+    );
+  }
+  return rows[0];
+}
+
 // ── Single-task update ───────────────────────────────────────────────────────
 
 async function updateTask(id, fields) {
@@ -799,6 +893,9 @@ async function runMigrations() {
   for (const sql of noteCols) {
     await pool.query(sql).catch(() => {});
   }
+
+  // 8. Add conversation_id column to chat_messages (idempotent)
+  await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS conversation_id INTEGER`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -1045,6 +1142,13 @@ module.exports = {
   getChatHistory,
   saveChatMessage,
   clearChatHistory,
+  getConversations,
+  getConversation,
+  createConversation,
+  updateConversationTitle,
+  deleteConversation,
+  getConversationMessages,
+  addConversationMessage,
   updateTask,
   getUserById,
   updateUserPassword,
