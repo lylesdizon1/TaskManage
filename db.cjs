@@ -107,6 +107,19 @@ async function getTasks() {
   return rows;
 }
 
+async function getTasksForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, title, description, priority, status, due_date AS "dueDate",
+            tags, visibility, completed, owner, created_by AS "createdBy",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM tasks
+     WHERE visibility = 'shared' OR owner = $1
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
 /**
  * Replace ALL tasks in the database with the provided array.
  * This mirrors the original "overwrite tasks.json" behaviour.
@@ -311,6 +324,7 @@ module.exports = {
   getUsers,
   upsertUser,
   getTasks,
+  getTasksForUser,
   replaceTasks,
   getSettings,
   saveSettings,

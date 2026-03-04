@@ -2517,7 +2517,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
 
   // Load tasks on mount; fall back to SAMPLE_TASKS if server has none
   useEffect(() => {
-    fetch('/api/tasks')
+    fetch('/api/tasks', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
@@ -2535,7 +2535,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
     if (!tasksLoadedRef.current) return;
     fetch('/api/tasks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(tasks),
     }).catch((err) => console.error('[tasks] save failed:', err.message));
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2631,7 +2631,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
     // Also persist to server via PUT
     fetch(`/api/tasks/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(fields),
     }).catch((err) => console.error('[tasks] edit failed:', err.message));
   }

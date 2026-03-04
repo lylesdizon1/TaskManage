@@ -490,9 +490,9 @@ app.post('/api/gcal/disconnect', async (req, res) => {
 
 // ── Task persistence ─────────────────────────────────────────────────────────
 
-app.get('/api/tasks', async (_req, res) => {
+app.get('/api/tasks', authenticateToken, async (req, res) => {
   try {
-    const tasks = await db.getTasks();
+    const tasks = await db.getTasksForUser(req.user.id);
     return res.json(tasks);
   } catch (err) {
     console.error('[tasks] read failed:', err.message);
@@ -500,7 +500,7 @@ app.get('/api/tasks', async (_req, res) => {
   }
 });
 
-app.post('/api/tasks', async (req, res) => {
+app.post('/api/tasks', authenticateToken, async (req, res) => {
   try {
     const tasks = req.body;
     if (!Array.isArray(tasks)) {
@@ -514,7 +514,7 @@ app.post('/api/tasks', async (req, res) => {
   }
 });
 
-app.put('/api/tasks/:id', async (req, res) => {
+app.put('/api/tasks/:id', authenticateToken, async (req, res) => {
   try {
     const updated = await db.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Task not found' });
