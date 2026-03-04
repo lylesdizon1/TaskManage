@@ -116,6 +116,42 @@ async function initTables() {
     CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages (user_id, created_at DESC);
   `);
 
+  // ── Financial tables ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS financial_accounts (
+      id            TEXT PRIMARY KEY,
+      user_id       TEXT NOT NULL,
+      name          TEXT NOT NULL,
+      type          TEXT NOT NULL DEFAULT 'checking',
+      institution   TEXT DEFAULT '',
+      currency      TEXT DEFAULT 'USD',
+      entity_id     TEXT DEFAULT '',
+      account_class TEXT DEFAULT 'personal',
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS transactions (
+      id            TEXT PRIMARY KEY,
+      account_id    TEXT NOT NULL,
+      user_id       TEXT NOT NULL,
+      date          TEXT NOT NULL,
+      description   TEXT DEFAULT '',
+      amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
+      type          TEXT NOT NULL DEFAULT 'debit',
+      category      TEXT DEFAULT 'Uncategorized',
+      entity_id     TEXT DEFAULT '',
+      account_class TEXT DEFAULT 'personal',
+      notes         TEXT DEFAULT '',
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_accounts_user ON financial_accounts (user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions (account_id, date DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id, date DESC);`);
+
   console.log('[db] Tables initialised');
 }
 
@@ -591,6 +627,213 @@ async function runMigrations() {
   }
 }
 
+// ── Financial Accounts ────────────────────────────────────────────────────────
+
+async function getFinancialAccounts(userId, role) {
+  if (role === 'admin') {
+    const { rows } = await pool.query(
+      `SELECT id, user_id AS "userId", name, type, institution, currency,
+              entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"
+       FROM financial_accounts ORDER BY created_at DESC`,
+    );
+    return rows;
+  }
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", name, type, institution, currency,
+            entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"
+     FROM financial_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function createFinancialAccount({ id, userId, name, type, institution, currency, entityId, accountClass }) {
+  const { rows } = await pool.query(
+    `INSERT INTO financial_accounts (id, user_id, name, type, institution, currency, entity_id, account_class)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, user_id AS "userId", name, type, institution, currency,
+               entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"`,
+    [id, userId, name, type || 'checking', institution || '', currency || 'USD', entityId || '', accountClass || 'personal'],
+  );
+  return rows[0];
+}
+
+async function updateFinancialAccount(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+  if (fields.name !== undefined) { sets.push(`name = $${idx++}`); vals.push(fields.name); }
+  if (fields.type !== undefined) { sets.push(`type = $${idx++}`); vals.push(fields.type); }
+  if (fields.institution !== undefined) { sets.push(`institution = $${idx++}`); vals.push(fields.institution); }
+  if (fields.currency !== undefined) { sets.push(`currency = $${idx++}`); vals.push(fields.currency); }
+  if (fields.entityId !== undefined) { sets.push(`entity_id = $${idx++}`); vals.push(fields.entityId); }
+  if (fields.accountClass !== undefined) { sets.push(`account_class = $${idx++}`); vals.push(fields.accountClass); }
+  if (sets.length === 0) return null;
+  const { rows } = await pool.query(
+    `UPDATE financial_accounts SET ${sets.join(', ')} WHERE id = $1
+     RETURNING id, user_id AS "userId", name, type, institution, currency,
+               entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"`,
+    vals,
+  );
+  return rows[0] || null;
+}
+
+async function deleteFinancialAccount(id) {
+  await pool.query('DELETE FROM transactions WHERE account_id = $1', [id]);
+  await pool.query('DELETE FROM financial_accounts WHERE id = $1', [id]);
+}
+
+// ── Transactions ──────────────────────────────────────────────────────────────
+
+async function getTransactions(userId, role, filters = {}) {
+  const where = [];
+  const vals = [];
+  let idx = 1;
+
+  if (role !== 'admin') {
+    where.push(`t.user_id = $${idx++}`);
+    vals.push(userId);
+  }
+  if (filters.accountId) {
+    where.push(`t.account_id = $${idx++}`);
+    vals.push(filters.accountId);
+  }
+  if (filters.entityId) {
+    where.push(`t.entity_id = $${idx++}`);
+    vals.push(filters.entityId);
+  }
+  if (filters.accountClass) {
+    where.push(`t.account_class = $${idx++}`);
+    vals.push(filters.accountClass);
+  }
+  if (filters.category) {
+    where.push(`t.category = $${idx++}`);
+    vals.push(filters.category);
+  }
+  if (filters.startDate) {
+    where.push(`t.date >= $${idx++}`);
+    vals.push(filters.startDate);
+  }
+  if (filters.endDate) {
+    where.push(`t.date <= $${idx++}`);
+    vals.push(filters.endDate);
+  }
+
+  const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT t.id, t.account_id AS "accountId", t.user_id AS "userId", t.date, t.description,
+            t.amount::float, t.type, t.category, t.entity_id AS "entityId",
+            t.account_class AS "accountClass", t.notes, t.created_at AS "createdAt"
+     FROM transactions t ${whereClause} ORDER BY t.date DESC, t.created_at DESC`,
+    vals,
+  );
+  return rows;
+}
+
+async function createTransaction({ id, accountId, userId, date, description, amount, type, category, entityId, accountClass, notes }) {
+  const { rows } = await pool.query(
+    `INSERT INTO transactions (id, account_id, user_id, date, description, amount, type, category, entity_id, account_class, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING id, account_id AS "accountId", user_id AS "userId", date, description,
+               amount::float, type, category, entity_id AS "entityId",
+               account_class AS "accountClass", notes, created_at AS "createdAt"`,
+    [id, accountId, userId, date, description || '', amount, type || 'debit', category || 'Uncategorized', entityId || '', accountClass || 'personal', notes || ''],
+  );
+  return rows[0];
+}
+
+async function bulkCreateTransactions(txns) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const results = [];
+    for (const t of txns) {
+      const { rows } = await client.query(
+        `INSERT INTO transactions (id, account_id, user_id, date, description, amount, type, category, entity_id, account_class, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id, account_id AS "accountId", user_id AS "userId", date, description,
+                   amount::float, type, category, entity_id AS "entityId",
+                   account_class AS "accountClass", notes, created_at AS "createdAt"`,
+        [t.id, t.accountId, t.userId, t.date, t.description || '', t.amount, t.type || 'debit', t.category || 'Uncategorized', t.entityId || '', t.accountClass || 'personal', t.notes || ''],
+      );
+      results.push(rows[0]);
+    }
+    await client.query('COMMIT');
+    return results;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteTransaction(id) {
+  await pool.query('DELETE FROM transactions WHERE id = $1', [id]);
+}
+
+async function updateTransaction(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+  if (fields.date !== undefined) { sets.push(`date = $${idx++}`); vals.push(fields.date); }
+  if (fields.description !== undefined) { sets.push(`description = $${idx++}`); vals.push(fields.description); }
+  if (fields.amount !== undefined) { sets.push(`amount = $${idx++}`); vals.push(fields.amount); }
+  if (fields.type !== undefined) { sets.push(`type = $${idx++}`); vals.push(fields.type); }
+  if (fields.category !== undefined) { sets.push(`category = $${idx++}`); vals.push(fields.category); }
+  if (fields.entityId !== undefined) { sets.push(`entity_id = $${idx++}`); vals.push(fields.entityId); }
+  if (fields.accountClass !== undefined) { sets.push(`account_class = $${idx++}`); vals.push(fields.accountClass); }
+  if (fields.notes !== undefined) { sets.push(`notes = $${idx++}`); vals.push(fields.notes); }
+  if (sets.length === 0) return null;
+  const { rows } = await pool.query(
+    `UPDATE transactions SET ${sets.join(', ')} WHERE id = $1
+     RETURNING id, account_id AS "accountId", user_id AS "userId", date, description,
+               amount::float, type, category, entity_id AS "entityId",
+               account_class AS "accountClass", notes, created_at AS "createdAt"`,
+    vals,
+  );
+  return rows[0] || null;
+}
+
+async function getFinancialSummary(userId, role) {
+  const userFilter = role === 'admin' ? '' : 'WHERE t.user_id = $1';
+  const vals = role === 'admin' ? [] : [userId];
+
+  const { rows } = await pool.query(
+    `SELECT t.entity_id AS "entityId", t.account_class AS "accountClass",
+            SUBSTRING(t.date FROM 1 FOR 7) AS month,
+            SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE 0 END)::float AS income,
+            SUM(CASE WHEN t.type = 'debit' THEN t.amount ELSE 0 END)::float AS expenses
+     FROM transactions t ${userFilter}
+     GROUP BY t.entity_id, t.account_class, SUBSTRING(t.date FROM 1 FOR 7)
+     ORDER BY month DESC`,
+    vals,
+  );
+
+  // Get account balances
+  const balFilter = role === 'admin' ? '' : 'WHERE a.user_id = $1';
+  const { rows: balanceRows } = await pool.query(
+    `SELECT a.id AS "accountId", a.name, a.type, a.entity_id AS "entityId", a.account_class AS "accountClass",
+            COALESCE(SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE -t.amount END), 0)::float AS balance
+     FROM financial_accounts a
+     LEFT JOIN transactions t ON t.account_id = a.id
+     ${balFilter}
+     GROUP BY a.id, a.name, a.type, a.entity_id, a.account_class`,
+    vals,
+  );
+
+  // Top spending categories
+  const catFilter = role === 'admin' ? `WHERE t.type = 'debit'` : `WHERE t.user_id = $1 AND t.type = 'debit'`;
+  const { rows: categoryRows } = await pool.query(
+    `SELECT t.category, SUM(t.amount)::float AS total
+     FROM transactions t ${catFilter}
+     GROUP BY t.category ORDER BY total DESC LIMIT 10`,
+    vals,
+  );
+
+  return { monthly: rows, balances: balanceRows, topCategories: categoryRows };
+}
+
 module.exports = {
   pool,
   initTables,
@@ -627,4 +870,14 @@ module.exports = {
   updateUserPassword,
   seedUsersIfEmpty,
   runMigrations,
+  getFinancialAccounts,
+  createFinancialAccount,
+  updateFinancialAccount,
+  deleteFinancialAccount,
+  getTransactions,
+  createTransaction,
+  bulkCreateTransactions,
+  deleteTransaction,
+  updateTransaction,
+  getFinancialSummary,
 };
