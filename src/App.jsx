@@ -2560,6 +2560,24 @@ function CalendarIcon({ className }) {
   );
 }
 
+function DollarIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function UploadIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+    </svg>
+  );
+}
+
 function SyncIcon({ className }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2575,6 +2593,693 @@ function PencilIcon({ className }) {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
         d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
     </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FINANCIALS PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ACCOUNT_TYPE_COLORS = {
+  checking: { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-200', dot: 'bg-green-500' },
+  savings: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
+  credit_card: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-200', dot: 'bg-red-500' },
+  loan: { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-200', dot: 'bg-orange-500' },
+};
+
+const ACCOUNT_TYPE_LABELS = { checking: 'Checking', savings: 'Savings', credit_card: 'Credit Card', loan: 'Loan' };
+
+function FinancialsPanel({ authToken, currentUser, entities }) {
+  const [subTab, setSubTab] = useState('dashboard');
+  const [accounts, setAccounts] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Account form
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [acctForm, setAcctForm] = useState({ name: '', type: 'checking', institution: '', entityId: '', accountClass: 'personal' });
+
+  // Transaction form
+  const [showAddTx, setShowAddTx] = useState(false);
+  const [txForm, setTxForm] = useState({ accountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', type: 'debit', category: '', entityId: '', accountClass: 'personal', notes: '' });
+
+  // CSV import
+  const [showImport, setShowImport] = useState(false);
+  const [csvText, setCsvText] = useState('');
+  const [importAccountId, setImportAccountId] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // Filters
+  const [filterAccount, setFilterAccount] = useState('');
+  const [filterEntity, setFilterEntity] = useState('');
+  const [filterClass, setFilterClass] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+
+  // Editing transaction
+  const [editingTx, setEditingTx] = useState(null);
+
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [acctRes, summRes] = await Promise.all([
+        fetch('/api/financial/accounts', { headers: { Authorization: `Bearer ${authToken}` } }),
+        fetch('/api/financial/summary', { headers: { Authorization: `Bearer ${authToken}` } }),
+      ]);
+      const acctData = await acctRes.json();
+      const summData = await summRes.json();
+      if (Array.isArray(acctData)) setAccounts(acctData);
+      if (summData) setSummary(summData);
+    } catch {}
+    setLoading(false);
+  }, [authToken]);
+
+  const loadTransactions = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (filterAccount) params.set('accountId', filterAccount);
+    if (filterEntity) params.set('entityId', filterEntity);
+    if (filterClass) params.set('accountClass', filterClass);
+    if (filterCategory) params.set('category', filterCategory);
+    if (filterStartDate) params.set('startDate', filterStartDate);
+    if (filterEndDate) params.set('endDate', filterEndDate);
+    try {
+      const res = await fetch(`/api/financial/transactions?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (Array.isArray(data)) setTransactions(data);
+    } catch {}
+  }, [authToken, filterAccount, filterEntity, filterClass, filterCategory, filterStartDate, filterEndDate]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadTransactions(); }, [loadTransactions]);
+
+  async function handleCreateAccount(e) {
+    e.preventDefault();
+    if (!acctForm.name.trim()) return;
+    await fetch('/api/financial/accounts', { method: 'POST', headers, body: JSON.stringify(acctForm) });
+    setAcctForm({ name: '', type: 'checking', institution: '', entityId: '', accountClass: 'personal' });
+    setShowAddAccount(false);
+    loadAll();
+  }
+
+  async function handleDeleteAccount(id) {
+    await fetch(`/api/financial/accounts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+    loadAll();
+    loadTransactions();
+  }
+
+  async function handleCreateTx(e) {
+    e.preventDefault();
+    if (!txForm.accountId || !txForm.amount) return;
+    const acct = accounts.find((a) => a.id === txForm.accountId);
+    await fetch('/api/financial/transactions', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        ...txForm,
+        amount: parseFloat(txForm.amount),
+        entityId: txForm.entityId || acct?.entityId || '',
+        accountClass: txForm.accountClass || acct?.accountClass || 'personal',
+      }),
+    });
+    setTxForm({ accountId: txForm.accountId, date: new Date().toISOString().slice(0, 10), description: '', amount: '', type: 'debit', category: '', entityId: '', accountClass: 'personal', notes: '' });
+    setShowAddTx(false);
+    loadTransactions();
+    loadAll();
+  }
+
+  async function handleDeleteTx(id) {
+    await fetch(`/api/financial/transactions/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+    loadTransactions();
+    loadAll();
+  }
+
+  async function handleUpdateTx(id, fields) {
+    await fetch(`/api/financial/transactions/${id}`, { method: 'PUT', headers, body: JSON.stringify(fields) });
+    setEditingTx(null);
+    loadTransactions();
+    loadAll();
+  }
+
+  async function handleImportCSV() {
+    if (!csvText || !importAccountId) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const acct = accounts.find((a) => a.id === importAccountId);
+      const res = await fetch('/api/financial/import-csv', {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          csvText,
+          accountId: importAccountId,
+          entityId: acct?.entityId || '',
+          accountClass: acct?.accountClass || 'personal',
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setImportResult({ ok: true, msg: `Imported ${data.count} transactions (format: ${data.format})` });
+        setCsvText('');
+        loadTransactions();
+        loadAll();
+      } else {
+        setImportResult({ ok: false, msg: data.error || 'Import failed' });
+      }
+    } catch (err) {
+      setImportResult({ ok: false, msg: err.message });
+    }
+    setImporting(false);
+  }
+
+  function handleFileDrop(e) {
+    e.preventDefault();
+    const file = e.dataTransfer?.files?.[0] || e.target?.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setCsvText(ev.target.result);
+    reader.readAsText(file);
+  }
+
+  // Compute account balances from summary
+  const accountBalances = useMemo(() => {
+    const map = {};
+    if (summary?.balances) {
+      for (const b of summary.balances) map[b.accountId] = b.balance;
+    }
+    return map;
+  }, [summary]);
+
+  const totalBalance = useMemo(() => Object.values(accountBalances).reduce((s, b) => s + b, 0), [accountBalances]);
+
+  // Monthly income/expenses for chart
+  const monthlyData = useMemo(() => {
+    if (!summary?.monthly) return [];
+    const map = {};
+    for (const row of summary.monthly) {
+      if (!map[row.month]) map[row.month] = { month: row.month, income: 0, expenses: 0 };
+      map[row.month].income += row.income;
+      map[row.month].expenses += row.expenses;
+    }
+    return Object.values(map).sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
+  }, [summary]);
+
+  // Entity breakdown
+  const entityBreakdown = useMemo(() => {
+    if (!summary?.monthly) return [];
+    const map = {};
+    for (const row of summary.monthly) {
+      const key = row.entityId || 'Unassigned';
+      if (!map[key]) map[key] = { entityId: key, income: 0, expenses: 0 };
+      map[key].income += row.income;
+      map[key].expenses += row.expenses;
+    }
+    return Object.values(map);
+  }, [summary]);
+
+  // Personal vs business breakdown
+  const classBreakdown = useMemo(() => {
+    if (!summary?.monthly) return [];
+    const map = {};
+    for (const row of summary.monthly) {
+      const key = row.accountClass || 'personal';
+      if (!map[key]) map[key] = { accountClass: key, income: 0, expenses: 0 };
+      map[key].income += row.income;
+      map[key].expenses += row.expenses;
+    }
+    return Object.values(map);
+  }, [summary]);
+
+  const uniqueCategories = useMemo(() => {
+    const cats = new Set(transactions.map((t) => t.category).filter(Boolean));
+    return [...cats].sort();
+  }, [transactions]);
+
+  const inputCls = 'w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition';
+
+  const maxMonthlyVal = useMemo(() => Math.max(...monthlyData.map((m) => Math.max(m.income, m.expenses)), 1), [monthlyData]);
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <SpinnerIcon className="w-6 h-6 animate-spin text-indigo-500" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Sub-tabs */}
+      <div className="bg-white border-b border-gray-100 px-4 pt-3 pb-0 flex-shrink-0">
+        <div className="flex gap-1">
+          {[
+            { key: 'dashboard', label: 'Dashboard' },
+            { key: 'accounts', label: 'Accounts' },
+            { key: 'transactions', label: 'Transactions' },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setSubTab(key)}
+              className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+                subTab === key
+                  ? 'border-indigo-600 text-indigo-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-4">
+        {/* ── DASHBOARD ── */}
+        {subTab === 'dashboard' && (
+          <div className="space-y-5">
+            {/* Total balance */}
+            <div className="bg-gradient-to-r from-indigo-600 to-indigo-500 rounded-2xl p-5 text-white shadow-lg">
+              <p className="text-sm font-medium opacity-80">Total Balance</p>
+              <p className="text-3xl font-bold mt-1">${totalBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs opacity-70 mt-1">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>
+            </div>
+
+            {/* Income vs Expenses bar chart */}
+            {monthlyData.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-100 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">Income vs Expenses by Month</h3>
+                <div className="space-y-2">
+                  {monthlyData.map((m) => (
+                    <div key={m.month} className="flex items-center gap-2 text-xs">
+                      <span className="w-16 text-gray-500 font-medium flex-shrink-0">{m.month}</span>
+                      <div className="flex-1 flex flex-col gap-1">
+                        <div className="flex items-center gap-1">
+                          <div className="h-3 bg-green-400 rounded" style={{ width: `${Math.max((m.income / maxMonthlyVal) * 100, 0)}%`, minWidth: m.income > 0 ? '4px' : '0' }} />
+                          <span className="text-green-600">${m.income.toLocaleString('en-US', { minimumFractionDigits: 0 })}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="h-3 bg-red-400 rounded" style={{ width: `${Math.max((m.expenses / maxMonthlyVal) * 100, 0)}%`, minWidth: m.expenses > 0 ? '4px' : '0' }} />
+                          <span className="text-red-600">${m.expenses.toLocaleString('en-US', { minimumFractionDigits: 0 })}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-4 mt-3 text-[10px] text-gray-400">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-green-400" /> Income</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-400" /> Expenses</span>
+                </div>
+              </div>
+            )}
+
+            {/* Entity breakdown */}
+            {entityBreakdown.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-100 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">Breakdown by Entity</h3>
+                <div className="space-y-2">
+                  {entityBreakdown.map((e) => {
+                    const ent = entities.find((en) => en.name === e.entityId);
+                    const style = getEntityStyle(ent?.color);
+                    return (
+                      <div key={e.entityId} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${style.bg} ${style.text}`}>
+                          {e.entityId || 'Unassigned'}
+                        </span>
+                        <div className="text-xs text-right">
+                          <span className="text-green-600">+${e.income.toLocaleString()}</span>
+                          <span className="text-gray-300 mx-1">/</span>
+                          <span className="text-red-600">-${e.expenses.toLocaleString()}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Personal vs Business */}
+            {classBreakdown.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-100 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">Personal vs Business</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {classBreakdown.map((c) => (
+                    <div key={c.accountClass} className={`rounded-lg p-3 ${c.accountClass === 'business' ? 'bg-indigo-50 border border-indigo-100' : 'bg-gray-50 border border-gray-100'}`}>
+                      <p className="text-xs font-semibold text-gray-600 uppercase">{c.accountClass}</p>
+                      <p className="text-green-600 text-sm font-medium mt-1">+${c.income.toLocaleString()}</p>
+                      <p className="text-red-600 text-sm font-medium">-${c.expenses.toLocaleString()}</p>
+                      <p className="text-gray-900 text-sm font-bold mt-1">Net: ${(c.income - c.expenses).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Top spending categories */}
+            {summary?.topCategories?.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-100 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">Top Spending Categories</h3>
+                <div className="space-y-1.5">
+                  {summary.topCategories.map((c, i) => (
+                    <div key={c.category} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400 w-4">{i + 1}.</span>
+                        <span className="text-gray-700">{c.category}</span>
+                      </div>
+                      <span className="font-medium text-red-600">${c.total.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {accounts.length === 0 && (
+              <div className="text-center py-12 text-gray-400">
+                <DollarIcon className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                <p className="font-medium text-gray-500">No financial accounts yet</p>
+                <p className="text-xs mt-1">Go to the Accounts tab to add your first account</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── ACCOUNTS ── */}
+        {subTab === 'accounts' && (
+          <div className="space-y-3">
+            {/* Add account button/form */}
+            {showAddAccount ? (
+              <form onSubmit={handleCreateAccount} className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-900">New Account</h3>
+                <input type="text" placeholder="Account name *" value={acctForm.name} onChange={(e) => setAcctForm((f) => ({ ...f, name: e.target.value }))} className={inputCls} required autoFocus />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+                    <select value={acctForm.type} onChange={(e) => setAcctForm((f) => ({ ...f, type: e.target.value }))} className={inputCls}>
+                      <option value="checking">Checking</option>
+                      <option value="savings">Savings</option>
+                      <option value="credit_card">Credit Card</option>
+                      <option value="loan">Loan</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+                    <select value={acctForm.accountClass} onChange={(e) => setAcctForm((f) => ({ ...f, accountClass: e.target.value }))} className={inputCls}>
+                      <option value="personal">Personal</option>
+                      <option value="business">Business</option>
+                    </select>
+                  </div>
+                </div>
+                <input type="text" placeholder="Institution (e.g. Chase)" value={acctForm.institution} onChange={(e) => setAcctForm((f) => ({ ...f, institution: e.target.value }))} className={inputCls} />
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Entity</label>
+                  <select value={acctForm.entityId} onChange={(e) => setAcctForm((f) => ({ ...f, entityId: e.target.value }))} className={inputCls}>
+                    <option value="">-- None --</option>
+                    {entities.map((ent) => <option key={ent.id} value={ent.name}>{ent.name}</option>)}
+                  </select>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setShowAddAccount(false)} className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium">Cancel</button>
+                  <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium shadow-sm">Add Account</button>
+                </div>
+              </form>
+            ) : (
+              <button onClick={() => setShowAddAccount(true)} className="w-full flex items-center gap-2 px-4 py-3 bg-white border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50/30 transition-all text-sm font-medium">
+                <span className="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-base leading-none">+</span>
+                Add account
+              </button>
+            )}
+
+            {/* Account list */}
+            {accounts.map((acct) => {
+              const typeStyle = ACCOUNT_TYPE_COLORS[acct.type] || ACCOUNT_TYPE_COLORS.checking;
+              const balance = accountBalances[acct.id] || 0;
+              const ent = entities.find((e) => e.name === acct.entityId);
+              const entStyle = getEntityStyle(ent?.color);
+              return (
+                <div key={acct.id} className={`bg-white rounded-xl border border-gray-100 shadow-sm p-4 border-l-4 ${typeStyle.border}`}>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-900">{acct.name}</h4>
+                      <p className="text-xs text-gray-400 mt-0.5">{acct.institution || 'No institution'}</p>
+                      <div className="flex gap-1.5 mt-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${typeStyle.bg} ${typeStyle.text}`}>
+                          {ACCOUNT_TYPE_LABELS[acct.type]}
+                        </span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${acct.accountClass === 'business' ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-500'}`}>
+                          {acct.accountClass}
+                        </span>
+                        {acct.entityId && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${entStyle.bg} ${entStyle.text}`}>
+                            {acct.entityId}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-lg font-bold ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        ${balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </p>
+                      <button onClick={() => handleDeleteAccount(acct.id)} className="text-[10px] text-red-400 hover:text-red-600 mt-1">Delete</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {accounts.length === 0 && !showAddAccount && (
+              <div className="text-center py-12 text-gray-400">
+                <DollarIcon className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                <p className="text-sm font-medium text-gray-500">No accounts yet</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TRANSACTIONS ── */}
+        {subTab === 'transactions' && (
+          <div className="space-y-3">
+            {/* Action buttons */}
+            <div className="flex gap-2">
+              <button onClick={() => setShowAddTx(true)} className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 shadow-sm">
+                <span>+</span> Add Transaction
+              </button>
+              <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50">
+                <UploadIcon className="w-4 h-4" /> Import CSV
+              </button>
+            </div>
+
+            {/* Filters */}
+            <div className="bg-white rounded-xl border border-gray-100 px-3 py-2.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex-shrink-0">Filter</span>
+                <select value={filterAccount} onChange={(e) => setFilterAccount(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50">
+                  <option value="">All Accounts</option>
+                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+                <select value={filterEntity} onChange={(e) => setFilterEntity(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50">
+                  <option value="">All Entities</option>
+                  {entities.map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+                </select>
+                <select value={filterClass} onChange={(e) => setFilterClass(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50">
+                  <option value="">All Classes</option>
+                  <option value="personal">Personal</option>
+                  <option value="business">Business</option>
+                </select>
+                <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50">
+                  <option value="">All Categories</option>
+                  {uniqueCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <input type="date" value={filterStartDate} onChange={(e) => setFilterStartDate(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50" placeholder="From" />
+                <input type="date" value={filterEndDate} onChange={(e) => setFilterEndDate(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-gray-50" placeholder="To" />
+                {(filterAccount || filterEntity || filterClass || filterCategory || filterStartDate || filterEndDate) && (
+                  <button onClick={() => { setFilterAccount(''); setFilterEntity(''); setFilterClass(''); setFilterCategory(''); setFilterStartDate(''); setFilterEndDate(''); }} className="text-xs text-indigo-500 hover:text-indigo-700 font-medium">Clear all</button>
+                )}
+              </div>
+            </div>
+
+            {/* Add Transaction form */}
+            {showAddTx && (
+              <form onSubmit={handleCreateTx} className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-900">New Transaction</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Account *</label>
+                    <select value={txForm.accountId} onChange={(e) => { const acct = accounts.find((a) => a.id === e.target.value); setTxForm((f) => ({ ...f, accountId: e.target.value, entityId: acct?.entityId || '', accountClass: acct?.accountClass || 'personal' })); }} className={inputCls} required>
+                      <option value="">Select...</option>
+                      {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Date *</label>
+                    <input type="date" value={txForm.date} onChange={(e) => setTxForm((f) => ({ ...f, date: e.target.value }))} className={inputCls} required />
+                  </div>
+                </div>
+                <input type="text" placeholder="Description" value={txForm.description} onChange={(e) => setTxForm((f) => ({ ...f, description: e.target.value }))} className={inputCls} />
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Amount *</label>
+                    <input type="number" step="0.01" placeholder="0.00" value={txForm.amount} onChange={(e) => setTxForm((f) => ({ ...f, amount: e.target.value }))} className={inputCls} required />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+                    <select value={txForm.type} onChange={(e) => setTxForm((f) => ({ ...f, type: e.target.value }))} className={inputCls}>
+                      <option value="debit">Debit (expense)</option>
+                      <option value="credit">Credit (income)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                    <input type="text" placeholder="e.g. Food" value={txForm.category} onChange={(e) => setTxForm((f) => ({ ...f, category: e.target.value }))} className={inputCls} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Entity</label>
+                    <select value={txForm.entityId} onChange={(e) => setTxForm((f) => ({ ...f, entityId: e.target.value }))} className={inputCls}>
+                      <option value="">-- None --</option>
+                      {entities.map((ent) => <option key={ent.id} value={ent.name}>{ent.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+                    <select value={txForm.accountClass} onChange={(e) => setTxForm((f) => ({ ...f, accountClass: e.target.value }))} className={inputCls}>
+                      <option value="personal">Personal</option>
+                      <option value="business">Business</option>
+                    </select>
+                  </div>
+                </div>
+                <input type="text" placeholder="Notes (optional)" value={txForm.notes} onChange={(e) => setTxForm((f) => ({ ...f, notes: e.target.value }))} className={inputCls} />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setShowAddTx(false)} className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium">Cancel</button>
+                  <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium shadow-sm">Add</button>
+                </div>
+              </form>
+            )}
+
+            {/* CSV Import modal */}
+            {showImport && (
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-gray-900">Import CSV</h3>
+                  <button onClick={() => { setShowImport(false); setCsvText(''); setImportResult(null); }} className="text-gray-400 hover:text-gray-600">
+                    <XIcon className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500">Supports Chase, Bank of America, Amex, and generic CSV formats. Auto-detects columns.</p>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Import to Account *</label>
+                  <select value={importAccountId} onChange={(e) => setImportAccountId(e.target.value)} className={inputCls}>
+                    <option value="">Select account...</option>
+                    {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+                <div
+                  onDrop={handleFileDrop}
+                  onDragOver={(e) => e.preventDefault()}
+                  className="border-2 border-dashed border-gray-200 rounded-lg p-6 text-center hover:border-indigo-300 hover:bg-indigo-50/20 transition-all cursor-pointer"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input ref={fileInputRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFileDrop} />
+                  <UploadIcon className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500 font-medium">{csvText ? `${csvText.split('\n').length - 1} rows loaded` : 'Drop CSV file here or click to browse'}</p>
+                  <p className="text-xs text-gray-400 mt-1">CSV files from Chase, BoA, Amex, or any bank</p>
+                </div>
+                {csvText && (
+                  <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={4} className={inputCls + ' font-mono text-xs'} placeholder="Or paste CSV text here..." />
+                )}
+                {!csvText && (
+                  <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={3} className={inputCls + ' font-mono text-xs'} placeholder="Or paste CSV text here..." />
+                )}
+                {importResult && (
+                  <div className={`text-xs px-3 py-2 rounded-lg font-medium ${importResult.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                    {importResult.ok ? '✓ ' : '✗ '}{importResult.msg}
+                  </div>
+                )}
+                <button onClick={handleImportCSV} disabled={importing || !csvText || !importAccountId} className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50">
+                  {importing ? 'Importing...' : 'Import Transactions'}
+                </button>
+              </div>
+            )}
+
+            {/* Transaction list */}
+            <div className="space-y-1.5">
+              {transactions.map((tx) => {
+                const acct = accounts.find((a) => a.id === tx.accountId);
+                const ent = entities.find((e) => e.name === tx.entityId);
+                const entStyle = getEntityStyle(ent?.color);
+
+                if (editingTx === tx.id) {
+                  return (
+                    <div key={tx.id} className="bg-white rounded-lg border border-indigo-200 p-3 space-y-2">
+                      <div className="grid grid-cols-3 gap-2">
+                        <select defaultValue={tx.entityId} id={`tx-ent-${tx.id}`} className="text-xs px-2 py-1 border border-gray-200 rounded">
+                          <option value="">No entity</option>
+                          {entities.map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+                        </select>
+                        <select defaultValue={tx.accountClass} id={`tx-cls-${tx.id}`} className="text-xs px-2 py-1 border border-gray-200 rounded">
+                          <option value="personal">Personal</option>
+                          <option value="business">Business</option>
+                        </select>
+                        <input defaultValue={tx.category} id={`tx-cat-${tx.id}`} placeholder="Category" className="text-xs px-2 py-1 border border-gray-200 rounded" />
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => {
+                          handleUpdateTx(tx.id, {
+                            entityId: document.getElementById(`tx-ent-${tx.id}`).value,
+                            accountClass: document.getElementById(`tx-cls-${tx.id}`).value,
+                            category: document.getElementById(`tx-cat-${tx.id}`).value,
+                          });
+                        }} className="px-3 py-1 text-xs bg-indigo-600 text-white rounded">Save</button>
+                        <button onClick={() => setEditingTx(null)} className="px-3 py-1 text-xs text-gray-500">Cancel</button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={tx.id} className={`bg-white rounded-lg border border-gray-100 shadow-sm px-3 py-2.5 flex items-center gap-3 ${tx.type === 'credit' ? 'border-l-4 border-l-green-400' : 'border-l-4 border-l-red-300'}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900 truncate">{tx.description || '(no description)'}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className="text-[10px] text-gray-400">{tx.date}</span>
+                        {acct && <span className="text-[10px] text-gray-400">· {acct.name}</span>}
+                        {tx.category && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{tx.category}</span>}
+                        {tx.entityId && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${entStyle.bg} ${entStyle.text}`}>{tx.entityId}</span>
+                        )}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${tx.accountClass === 'business' ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-500'}`}>
+                          {tx.accountClass}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className={`text-sm font-bold ${tx.type === 'credit' ? 'text-green-600' : 'text-red-600'}`}>
+                        {tx.type === 'credit' ? '+' : '-'}${tx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </span>
+                      <div className="flex flex-col gap-0.5">
+                        <button onClick={() => setEditingTx(tx.id)} className="text-[10px] text-indigo-400 hover:text-indigo-600">Edit</button>
+                        <button onClick={() => handleDeleteTx(tx.id)} className="text-[10px] text-red-400 hover:text-red-600">Del</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {transactions.length === 0 && !showAddTx && !showImport && (
+              <div className="text-center py-12 text-gray-400">
+                <DollarIcon className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                <p className="text-sm font-medium text-gray-500">No transactions yet</p>
+                <p className="text-xs mt-1">Add a transaction or import from CSV</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2822,7 +3527,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [toasts, setToasts]                     = useState([]);
   const [gcalConnected, setGcalConnected]       = useState(false);
   const [envConfigured, setEnvConfigured]       = useState({});
-  const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar'
+  const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'financials'
   const [entities, setEntities]                 = useState([]);
   const firedAlertsRef                          = useRef(new Set());
 
@@ -3122,6 +3827,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 { key: 'daily', label: 'Daily Tasks' },
                 { key: 'priority', label: 'High Priority' },
                 { key: 'calendar', label: 'Calendar', desktopOnly: true },
+                { key: 'financials', label: 'Financials', desktopOnly: true },
               ].map(({ key, label, desktopOnly }) => (
                 <button
                   key={key}
@@ -3135,6 +3841,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   }`}
                 >
                   {key === 'calendar' && <CalendarIcon className="w-3.5 h-3.5" />}
+                  {key === 'financials' && <DollarIcon className="w-3.5 h-3.5" />}
                   {label}
                   {key === 'priority' && (
                     <span className="ml-1.5 text-[10px] bg-red-100 text-red-500 font-semibold px-1.5 py-0.5 rounded-full">
@@ -3149,6 +3856,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           {/* Calendar view */}
           {activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
+          ) : activeView === 'financials' ? (
+            <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} />
           ) : (
           /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
@@ -3222,6 +3931,15 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         >
           <CalendarPanel currentUser={currentUser} addToast={addToast} />
         </section>
+
+        {/* ── Financials panel (mobile only — on desktop it's in the task section tabs) ── */}
+        <section
+          className={`flex-col overflow-hidden w-full md:hidden ${
+            mobileView === 'financials' ? 'flex' : 'hidden'
+          }`}
+        >
+          <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} />
+        </section>
       </main>
 
       {/* ── Mobile bottom navigation ── */}
@@ -3230,12 +3948,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           { key: 'tasks', label: 'Tasks', icon: <ChecklistIcon className="w-5 h-5" /> },
           { key: 'chat', label: 'Chat', icon: <ChatIcon className="w-5 h-5" /> },
           { key: 'calendar', label: 'Calendar', icon: <CalendarIcon className="w-5 h-5" /> },
+          { key: 'financials', label: 'Financials', icon: <DollarIcon className="w-5 h-5" /> },
         ].map(({ key, label, icon }) => (
           <button
             key={key}
             onClick={() => {
               setMobileView(key);
-              if (key === 'tasks' && activeView === 'calendar') setActiveView('daily');
+              if (key === 'tasks' && (activeView === 'calendar' || activeView === 'financials')) setActiveView('daily');
             }}
             className={`flex-1 flex flex-col items-center gap-0.5 py-2 min-h-[56px] text-xs font-medium transition-colors ${
               mobileView === key
