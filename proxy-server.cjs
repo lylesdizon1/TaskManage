@@ -1,14 +1,20 @@
 /**
  * proxy-server.cjs
  *
- * Lightweight Express proxy that relays requests to:
- *   POST /api/claude        → https://api.anthropic.com/v1/messages
- *   POST /api/openai        → https://api.openai.com/v1/chat/completions
- *   POST /api/email/send    → Gmail SMTP via Nodemailer
- *   POST /api/email/test    → Verify Gmail SMTP credentials
+ * Express server that:
+ *   - Serves the built React app from dist/ (production)
+ *   - Relays AI requests to Claude / OpenAI APIs
+ *   - Handles Gmail SMTP email sending
+ *   - Provides JWT-based multi-user authentication
+ *   - Persists settings to settings.json
  *
- * API keys and email credentials are passed in the request body and never
- * stored or logged by this server.
+ * Environment variables (all optional, fall back to request-body values):
+ *   PORT                 – server port (default 3001)
+ *   CLAUDE_API_KEY       – Anthropic API key
+ *   OPENAI_API_KEY       – OpenAI API key
+ *   GMAIL_USER           – Gmail address for SMTP
+ *   GMAIL_APP_PASSWORD   – Gmail App Password
+ *   JWT_SECRET           – secret for signing JWTs (default: random per restart)
  *
  * Start with: node proxy-server.cjs
  */
@@ -19,10 +25,18 @@ const express    = require('express');
 const cors       = require('cors');
 const axios      = require('axios');
 const nodemailer = require('nodemailer');
+const bcrypt     = require('bcryptjs');
+const jwt        = require('jsonwebtoken');
 const fs         = require('fs');
 const path       = require('path');
+const crypto     = require('crypto');
 
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const USERS_FILE    = path.join(__dirname, 'users.json');
+const DIST_DIR      = path.join(__dirname, 'dist');
+
+// JWT secret: prefer env var, fall back to random (tokens won't survive restart)
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
 function readSettings() {
   try {
@@ -36,6 +50,14 @@ function writeSettings(data) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
+function readUsers() {
+  try {
+    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
@@ -44,20 +66,82 @@ const PORT = process.env.PORT || 3001;
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '4mb' }));
 
-// Simple request logger (credentials are never in the path or logged)
+// Simple request logger
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
+});
+
+// ── Auth helpers ─────────────────────────────────────────────────────────────
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Authentication required' });
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(403).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// ── Auth routes ──────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/auth/login
+ * Body: { username, password }
+ * Returns: { token, user: { id, username, displayName } }
+ */
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  const users = readUsers();
+  const user = users.find((u) => u.username === username);
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  const token = jwt.sign(
+    { id: user.id, username: user.username, displayName: user.displayName },
+    JWT_SECRET,
+    { expiresIn: '7d' },
+  );
+
+  return res.json({
+    token,
+    user: { id: user.id, username: user.username, displayName: user.displayName },
+  });
+});
+
+/**
+ * GET /api/auth/me
+ * Returns the current user from the JWT.
+ */
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+  res.json({ user: req.user });
 });
 
 // ── AI proxy routes ───────────────────────────────────────────────────────────
 
 /**
  * Claude proxy
- * Body: { apiKey: string, ...anthropicPayload }
+ * Body: { apiKey?: string, ...anthropicPayload }
+ * Falls back to CLAUDE_API_KEY env var if apiKey not in body.
  */
 app.post('/api/claude', async (req, res) => {
-  const { apiKey, ...body } = req.body;
+  const { apiKey: bodyKey, ...body } = req.body;
+  const apiKey = bodyKey || process.env.CLAUDE_API_KEY;
   if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
 
   try {
@@ -83,10 +167,12 @@ app.post('/api/claude', async (req, res) => {
 
 /**
  * OpenAI proxy
- * Body: { apiKey: string, ...openaiPayload }
+ * Body: { apiKey?: string, ...openaiPayload }
+ * Falls back to OPENAI_API_KEY env var if apiKey not in body.
  */
 app.post('/api/openai', async (req, res) => {
-  const { apiKey, ...body } = req.body;
+  const { apiKey: bodyKey, ...body } = req.body;
+  const apiKey = bodyKey || process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
 
   try {
@@ -111,26 +197,23 @@ app.post('/api/openai', async (req, res) => {
 
 // ── Email routes ──────────────────────────────────────────────────────────────
 
-/**
- * Build a Nodemailer transporter for Gmail.
- * Uses an App Password (not the account password) so 2FA accounts work fine.
- */
 function createGmailTransporter(user, pass) {
   return nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 465,
-    secure: true, // TLS
+    secure: true,
     auth: { user, pass },
   });
 }
 
 /**
  * POST /api/email/test
- * Verify Gmail SMTP credentials without sending a message.
- * Body: { gmailUser: string, gmailAppPassword: string }
+ * Body: { gmailUser?, gmailAppPassword? }
+ * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
  */
 app.post('/api/email/test', async (req, res) => {
-  const { gmailUser, gmailAppPassword } = req.body;
+  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_USER;
+  const gmailAppPassword = req.body.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
 
   if (!gmailUser || !gmailAppPassword) {
     return res.status(400).json({ error: 'gmailUser and gmailAppPassword are required' });
@@ -149,11 +232,13 @@ app.post('/api/email/test', async (req, res) => {
 
 /**
  * POST /api/email/send
- * Send an email via Gmail SMTP.
- * Body: { gmailUser, gmailAppPassword, to, subject, html }
+ * Body: { gmailUser?, gmailAppPassword?, to, subject, html }
+ * Falls back to env vars GMAIL_USER / GMAIL_APP_PASSWORD.
  */
 app.post('/api/email/send', async (req, res) => {
-  const { gmailUser, gmailAppPassword, to, subject, html } = req.body;
+  const gmailUser        = req.body.gmailUser        || process.env.GMAIL_USER;
+  const gmailAppPassword = req.body.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
+  const { to, subject, html } = req.body;
 
   if (!gmailUser || !gmailAppPassword || !to || !subject) {
     return res.status(400).json({
@@ -181,19 +266,10 @@ app.post('/api/email/send', async (req, res) => {
 
 // ── Settings routes ───────────────────────────────────────────────────────────
 
-/**
- * GET /api/settings
- * Returns the persisted settings object (empty object if file doesn't exist).
- */
 app.get('/api/settings', (_req, res) => {
   res.json(readSettings());
 });
 
-/**
- * POST /api/settings
- * Merges the incoming body into settings.json and writes it to disk.
- * Body: { apiKeys, emailSettings, alertRules }
- */
 app.post('/api/settings', (req, res) => {
   try {
     const current = readSettings();
@@ -212,10 +288,23 @@ app.get('/health', (_req, res) =>
   res.json({ status: 'ok', port: PORT, time: new Date().toISOString() }),
 );
 
+// ── Serve React app from dist/ (production) ──────────────────────────────────
+
+if (fs.existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  // SPA fallback: any non-API route serves index.html
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(DIST_DIR, 'index.html'));
+  });
+  console.log('[static] Serving React build from dist/');
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`\n✓ TaskManage proxy running at http://localhost:${PORT}`);
+  console.log(`\n✓ TaskManage server running at http://localhost:${PORT}`);
+  console.log('  POST /api/auth/login    → JWT login');
+  console.log('  GET  /api/auth/me       → current user');
   console.log('  POST /api/claude        → api.anthropic.com');
   console.log('  POST /api/openai        → api.openai.com');
   console.log('  POST /api/email/test    → verify Gmail SMTP credentials');
