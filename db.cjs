@@ -24,6 +24,22 @@ async function initTables() {
     );
   `);
 
+  // Add new columns to users table (idempotent)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'member'`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS entity_ids JSONB DEFAULT '[]'`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS entities (
+      id         TEXT PRIMARY KEY,
+      name       TEXT UNIQUE NOT NULL,
+      color      TEXT DEFAULT 'slate',
+      created_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (
       id          TEXT PRIMARY KEY,
@@ -107,19 +123,107 @@ async function initTables() {
 
 async function getUsers() {
   const { rows } = await pool.query(
-    'SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash" FROM users',
+    `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
+            email, role, entity_ids AS "entityIds", active, created_at AS "createdAt"
+     FROM users ORDER BY created_at ASC`,
   );
   return rows;
 }
 
-async function upsertUser({ id, username, displayName, passwordHash }) {
+async function upsertUser({ id, username, displayName, passwordHash, email, role, entityIds }) {
   await pool.query(
-    `INSERT INTO users (id, username, display_name, password_hash)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO users (id, username, display_name, password_hash, email, role, entity_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (id) DO UPDATE
-       SET username = $2, display_name = $3, password_hash = $4`,
-    [id, username, displayName, passwordHash],
+       SET username = $2, display_name = $3, password_hash = $4,
+           email = COALESCE($5, users.email),
+           role = COALESCE($6, users.role),
+           entity_ids = COALESCE($7, users.entity_ids)`,
+    [id, username, displayName, passwordHash, email || '', role || 'member', JSON.stringify(entityIds || [])],
   );
+}
+
+async function updateUser(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+
+  if (fields.displayName !== undefined) { sets.push(`display_name = $${idx++}`); vals.push(fields.displayName); }
+  if (fields.email !== undefined) { sets.push(`email = $${idx++}`); vals.push(fields.email); }
+  if (fields.role !== undefined) { sets.push(`role = $${idx++}`); vals.push(fields.role); }
+  if (fields.entityIds !== undefined) { sets.push(`entity_ids = $${idx++}`); vals.push(JSON.stringify(fields.entityIds)); }
+  if (fields.active !== undefined) { sets.push(`active = $${idx++}`); vals.push(fields.active); }
+  if (fields.passwordHash !== undefined) { sets.push(`password_hash = $${idx++}`); vals.push(fields.passwordHash); }
+
+  if (sets.length === 0) return null;
+
+  const { rows } = await pool.query(
+    `UPDATE users SET ${sets.join(', ')} WHERE id = $1
+     RETURNING id, username, display_name AS "displayName", email, role,
+               entity_ids AS "entityIds", active, created_at AS "createdAt"`,
+    vals,
+  );
+  return rows[0] || null;
+}
+
+async function deleteUser(id) {
+  await pool.query('DELETE FROM users WHERE id = $1', [id]);
+}
+
+// ── Entities ──────────────────────────────────────────────────────────────────
+
+async function getEntities() {
+  const { rows } = await pool.query(
+    'SELECT id, name, color, created_by AS "createdBy", created_at AS "createdAt" FROM entities ORDER BY created_at ASC',
+  );
+  return rows;
+}
+
+async function createEntity({ id, name, color, createdBy }) {
+  const { rows } = await pool.query(
+    `INSERT INTO entities (id, name, color, created_by)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt"`,
+    [id, name, color || 'slate', createdBy || ''],
+  );
+  return rows[0];
+}
+
+async function updateEntity(id, fields) {
+  const { rows } = await pool.query(
+    `UPDATE entities
+     SET name = COALESCE($2, name),
+         color = COALESCE($3, color)
+     WHERE id = $1
+     RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt"`,
+    [id, fields.name ?? null, fields.color ?? null],
+  );
+  return rows[0] || null;
+}
+
+async function deleteEntity(id) {
+  await pool.query('DELETE FROM entities WHERE id = $1', [id]);
+}
+
+async function seedEntitiesIfEmpty() {
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM entities');
+  if (rows[0].count > 0) return;
+
+  const defaults = [
+    { id: 'entity-careific', name: 'Careific', color: 'indigo' },
+    { id: 'entity-rose', name: 'Rose', color: 'pink' },
+    { id: 'entity-buyflip', name: 'Buyflip', color: 'amber' },
+    { id: 'entity-carehome', name: 'Care Home', color: 'teal' },
+    { id: 'entity-personal', name: 'Personal', color: 'slate' },
+  ];
+
+  for (const e of defaults) {
+    await pool.query(
+      'INSERT INTO entities (id, name, color) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+      [e.id, e.name, e.color],
+    );
+  }
+  console.log('[db] Seeded 5 default entities');
 }
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
@@ -134,15 +238,32 @@ async function getTasks() {
   return rows;
 }
 
-async function getTasksForUser(userId) {
+async function getTasksForUser(userId, userEntityIds) {
+  // If no entity filter, fall back to simple owner/visibility check
+  if (!userEntityIds || userEntityIds.length === 0) {
+    const { rows } = await pool.query(
+      `SELECT id, title, description, priority, status, due_date AS "dueDate",
+              tags, visibility, completed, owner, created_by AS "createdBy",
+              created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM tasks
+       WHERE owner = $1 OR visibility = 'private' AND owner = $1
+       ORDER BY created_at DESC`,
+      [userId],
+    );
+    return rows;
+  }
+  // Entity-based access: shared tasks visible if they share at least one entity tag,
+  // plus all the user's own tasks (private or shared).
+  const entityNames = userEntityIds; // these are entity name strings
   const { rows } = await pool.query(
     `SELECT id, title, description, priority, status, due_date AS "dueDate",
             tags, visibility, completed, owner, created_by AS "createdBy",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM tasks
-     WHERE visibility = 'shared' OR owner = $1
+     WHERE owner = $1
+        OR (visibility = 'shared' AND tags ?| $2)
      ORDER BY created_at DESC`,
-    [userId],
+    [userId, entityNames],
   );
   return rows;
 }
@@ -398,7 +519,9 @@ async function updateTask(id, fields) {
 
 async function getUserById(id) {
   const { rows } = await pool.query(
-    'SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash" FROM users WHERE id = $1',
+    `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
+            email, role, entity_ids AS "entityIds", active
+     FROM users WHERE id = $1`,
     [id],
   );
   return rows[0] || null;
@@ -412,7 +535,17 @@ async function updateUserPassword(id, newHash) {
 
 async function seedUsersIfEmpty() {
   const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM users');
-  if (rows[0].count > 0) return;
+  if (rows[0].count > 0) {
+    // Ensure first user (lyle) is admin with all entities if not set
+    const lyle = await getUserById('user-lyle');
+    if (lyle && lyle.role === 'member') {
+      const entities = await getEntities();
+      const allEntityNames = entities.map((e) => e.name);
+      await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames });
+      console.log('[db] Upgraded user-lyle to admin with all entities');
+    }
+    return;
+  }
 
   const fs   = require('fs');
   const path = require('path');
@@ -421,8 +554,15 @@ async function seedUsersIfEmpty() {
 
   try {
     const users = JSON.parse(fs.readFileSync(file, 'utf8'));
-    for (const u of users) {
-      await upsertUser(u);
+    const entities = await getEntities();
+    const allEntityNames = entities.map((e) => e.name);
+    for (let i = 0; i < users.length; i++) {
+      const u = users[i];
+      await upsertUser({
+        ...u,
+        role: i === 0 ? 'admin' : 'member',
+        entityIds: allEntityNames,
+      });
     }
     console.log(`[db] Seeded ${users.length} users from users.json`);
   } catch (err) {
@@ -435,6 +575,13 @@ module.exports = {
   initTables,
   getUsers,
   upsertUser,
+  updateUser,
+  deleteUser,
+  getEntities,
+  createEntity,
+  updateEntity,
+  deleteEntity,
+  seedEntitiesIfEmpty,
   getTasks,
   getTasksForUser,
   replaceTasks,
