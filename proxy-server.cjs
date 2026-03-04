@@ -110,15 +110,33 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
+    if (user.active === false) {
+      return res.status(401).json({ error: 'Account is deactivated' });
+    }
+
     const token = jwt.sign(
-      { id: user.id, username: user.username, displayName: user.displayName },
+      {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        email: user.email || '',
+        role: user.role || 'member',
+        entityIds: user.entityIds || [],
+      },
       JWT_SECRET,
       { expiresIn: '7d' },
     );
 
     return res.json({
       token,
-      user: { id: user.id, username: user.username, displayName: user.displayName },
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        email: user.email || '',
+        role: user.role || 'member',
+        entityIds: user.entityIds || [],
+      },
     });
   } catch (err) {
     console.error('[auth] login failed:', err.message);
@@ -130,8 +148,128 @@ app.post('/api/auth/login', async (req, res) => {
  * GET /api/auth/me
  * Returns the current user from the JWT.
  */
-app.get('/api/auth/me', authenticateToken, (req, res) => {
-  res.json({ user: req.user });
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  // Return fresh user data from DB (not just JWT claims)
+  try {
+    const user = await db.getUserById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { passwordHash, ...safe } = user;
+    res.json({ user: safe });
+  } catch (err) {
+    res.json({ user: req.user });
+  }
+});
+
+// ── Admin middleware ──────────────────────────────────────────────────────────
+
+function requireAdmin(req, res, next) {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+}
+
+// ── Entity routes ────────────────────────────────────────────────────────────
+
+app.get('/api/entities', authenticateToken, async (_req, res) => {
+  try {
+    const entities = await db.getEntities();
+    return res.json(entities);
+  } catch (err) {
+    console.error('[entities] read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/entities', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id, name, color } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const entity = await db.createEntity({ id: id || `entity-${Date.now()}`, name, color, createdBy: req.user.id });
+    return res.json(entity);
+  } catch (err) {
+    console.error('[entities] create failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/entities/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const updated = await db.updateEntity(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Entity not found' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[entities] update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/entities/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await db.deleteEntity(req.params.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[entities] delete failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── User management routes ───────────────────────────────────────────────────
+
+app.get('/api/users', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    const users = await db.getUsers();
+    // Strip password hashes from response
+    const safe = users.map(({ passwordHash, ...u }) => u);
+    return res.json(safe);
+  } catch (err) {
+    console.error('[users] read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/users', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { username, displayName, email, password, role, entityIds } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
+    const id = `user-${Date.now().toString(36)}`;
+    const passwordHash = await bcrypt.hash(password, 10);
+    await db.upsertUser({ id, username, displayName: displayName || username, passwordHash, email, role, entityIds });
+    return res.json({ id, username, displayName: displayName || username, email, role, entityIds });
+  } catch (err) {
+    console.error('[users] create failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const fields = { ...req.body };
+    // If password is provided, hash it
+    if (fields.password) {
+      fields.passwordHash = await bcrypt.hash(fields.password, 10);
+      delete fields.password;
+    }
+    const updated = await db.updateUser(req.params.id, fields);
+    if (!updated) return res.status(404).json({ error: 'User not found' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[users] update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ error: 'Cannot delete yourself' });
+    }
+    await db.deleteUser(req.params.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[users] delete failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ── AI proxy routes ───────────────────────────────────────────────────────────
@@ -492,7 +630,7 @@ app.post('/api/gcal/disconnect', async (req, res) => {
 
 app.get('/api/tasks', authenticateToken, async (req, res) => {
   try {
-    const tasks = await db.getTasksForUser(req.user.id);
+    const tasks = await db.getTasksForUser(req.user.id, req.user.entityIds || []);
     return res.json(tasks);
   } catch (err) {
     console.error('[tasks] read failed:', err.message);
@@ -675,8 +813,9 @@ if (fs.existsSync(DIST_DIR)) {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 async function start() {
-  // Initialise database tables and seed users
+  // Initialise database tables and seed data
   await db.initTables();
+  await db.seedEntitiesIfEmpty();
   await db.seedUsersIfEmpty();
 
   app.listen(PORT, () => {
