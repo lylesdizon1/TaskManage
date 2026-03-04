@@ -541,12 +541,15 @@ function EnvBadge() {
   );
 }
 
-function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {} }) {
+function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken }) {
   const [tab, setTab]               = useState('keys');
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
   const [draftEmail, setDraftEmail] = useState({ ...emailSettings });
   const [testing, setTesting]       = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [pwForm, setPwForm]         = useState({ current: '', newPw: '', confirm: '' });
+  const [pwStatus, setPwStatus]     = useState(null);
+  const [pwSaving, setPwSaving]     = useState(false);
 
   function handleKeyDown(e) {
     if (e.key === 'Escape') onClose();
@@ -606,6 +609,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
           {[
             { key: 'keys',  label: 'API Keys' },
             { key: 'email', label: 'Email & Alerts' },
+            { key: 'password', label: 'Password' },
           ].map(({ key, label }) => (
             <button
               key={key}
@@ -737,6 +741,99 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
                   Save Email Settings
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Password tab */}
+          {tab === 'password' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Current Password</label>
+                <input
+                  type="password"
+                  value={pwForm.current}
+                  onChange={(e) => setPwForm((f) => ({ ...f, current: e.target.value }))}
+                  placeholder="Enter current password"
+                  autoComplete="current-password"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">New Password</label>
+                <input
+                  type="password"
+                  value={pwForm.newPw}
+                  onChange={(e) => setPwForm((f) => ({ ...f, newPw: e.target.value }))}
+                  placeholder="Enter new password"
+                  autoComplete="new-password"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Confirm New Password</label>
+                <input
+                  type="password"
+                  value={pwForm.confirm}
+                  onChange={(e) => setPwForm((f) => ({ ...f, confirm: e.target.value }))}
+                  placeholder="Confirm new password"
+                  autoComplete="new-password"
+                  className={inputCls}
+                />
+              </div>
+
+              {pwStatus && (
+                <div className={`text-xs px-3 py-2 rounded-lg font-medium ${
+                  pwStatus.ok
+                    ? 'bg-green-50 text-green-700 border border-green-200'
+                    : 'bg-red-50 text-red-700 border border-red-200'
+                }`}>
+                  {pwStatus.ok ? '✓ ' : '✗ '}{pwStatus.msg}
+                </div>
+              )}
+
+              <button
+                disabled={pwSaving}
+                onClick={async () => {
+                  setPwStatus(null);
+                  if (!pwForm.current || !pwForm.newPw || !pwForm.confirm) {
+                    setPwStatus({ ok: false, msg: 'All fields are required' });
+                    return;
+                  }
+                  if (pwForm.newPw !== pwForm.confirm) {
+                    setPwStatus({ ok: false, msg: 'New passwords do not match' });
+                    return;
+                  }
+                  if (pwForm.newPw.length < 4) {
+                    setPwStatus({ ok: false, msg: 'New password must be at least 4 characters' });
+                    return;
+                  }
+                  setPwSaving(true);
+                  try {
+                    const res = await fetch('/api/auth/change-password', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${authToken}`,
+                      },
+                      body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.newPw }),
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                      setPwStatus({ ok: true, msg: 'Password changed successfully' });
+                      setPwForm({ current: '', newPw: '', confirm: '' });
+                    } else {
+                      setPwStatus({ ok: false, msg: data.error || 'Failed to change password' });
+                    }
+                  } catch (err) {
+                    setPwStatus({ ok: false, msg: err.message });
+                  } finally {
+                    setPwSaving(false);
+                  }
+                }}
+                className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50"
+              >
+                {pwSaving ? 'Changing…' : 'Change Password'}
+              </button>
             </div>
           )}
         </div>
@@ -2722,6 +2819,7 @@ function AuthenticatedApp({ currentUser, authToken, onLogout }) {
           onSaveEmail={(email) => { setEmailSettings(email); saveSettings(apiKeysRef.current, email, alertRulesRef.current); }}
           onClose={() => setShowSettings(false)}
           envConfigured={envConfigured}
+          authToken={authToken}
         />
       )}
 
