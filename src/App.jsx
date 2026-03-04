@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// API BASE (works in dev via Vite proxy and in prod when served from same origin)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const API_BASE = '';
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -381,6 +387,101 @@ async function callOpenAIChat(messages, systemPrompt, apiKey) {
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || '(no response)';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGIN SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!username.trim() || !password) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Login failed');
+        return;
+      }
+      localStorage.setItem('tm_token', data.token);
+      localStorage.setItem('tm_user', JSON.stringify(data.user));
+      onLogin(data.user, data.token);
+    } catch {
+      setError('Unable to connect to server');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg mx-auto mb-4">
+            <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900">TaskManage</h1>
+          <p className="text-sm text-gray-500 mt-1">Sign in to your account</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-4">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter username"
+              autoFocus
+              autoComplete="username"
+              className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password"
+              autoComplete="current-password"
+              className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading || !username.trim() || !password}
+            className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50"
+          >
+            {loading ? 'Signing in...' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1014,13 +1115,14 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
 // ADD TASK FORM
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AddTaskForm({ onAdd, claudeKey }) {
+function AddTaskForm({ onAdd, claudeKey, currentUser }) {
   const emptyForm = {
     title: '',
     description: '',
     priority: 'medium',
     dueDate: '',
     tags: [],
+    visibility: 'shared',
   };
 
   const [form, setForm] = useState(emptyForm);
@@ -1084,6 +1186,7 @@ function AddTaskForm({ onAdd, claudeKey }) {
       id: uid(),
       ...form,
       completed: false,
+      owner: currentUser?.id || 'unknown',
       createdAt: new Date().toISOString(),
     });
     setForm(emptyForm);
@@ -1221,6 +1324,32 @@ function AddTaskForm({ onAdd, claudeKey }) {
               </div>
             </div>
 
+            {/* Visibility */}
+            <div>
+              <span className="text-xs font-medium text-gray-500 mb-2 block">Visibility</span>
+              <div className="flex gap-2">
+                {[
+                  { key: 'shared', label: 'Shared', desc: 'Visible to all users' },
+                  { key: 'private', label: 'Private', desc: 'Only you' },
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, visibility: key }))}
+                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
+                      form.visibility === key
+                        ? key === 'private'
+                          ? 'bg-amber-50 text-amber-700 border-amber-300 ring-2 ring-offset-1 ring-amber-300'
+                          : 'bg-indigo-50 text-indigo-700 border-indigo-300 ring-2 ring-offset-1 ring-indigo-300'
+                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    {key === 'private' ? '🔒 ' : '👥 '}{label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Actions */}
             <div className="flex gap-2 pt-1">
               <button
@@ -1252,9 +1381,10 @@ function AddTaskForm({ onAdd, claudeKey }) {
 // TASK CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, onToggle, onDelete }) {
+function TaskCard({ task, onToggle, onDelete, onToggleVisibility, currentUser }) {
   const overdue =
     task.dueDate && !task.completed && new Date(task.dueDate) < new Date();
+  const isOwner = !task.owner || task.owner === currentUser?.id;
 
   return (
     <div
@@ -1285,13 +1415,34 @@ function TaskCard({ task, onToggle, onDelete }) {
             >
               {task.title}
             </h4>
-            <button
-              onClick={() => onDelete(task.id)}
-              className="flex-shrink-0 text-gray-200 hover:text-red-400 transition-colors mt-0.5"
-              title="Delete task"
-            >
-              <XIcon className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Visibility toggle */}
+              {isOwner && (
+                <button
+                  onClick={() => onToggleVisibility(task.id)}
+                  className={`text-[10px] px-1.5 py-0.5 rounded font-medium transition-colors ${
+                    task.visibility === 'private'
+                      ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
+                      : 'bg-indigo-50 text-indigo-500 hover:bg-indigo-100'
+                  }`}
+                  title={task.visibility === 'private' ? 'Private — click to share' : 'Shared — click to make private'}
+                >
+                  {task.visibility === 'private' ? '🔒' : '👥'}
+                </button>
+              )}
+              {!isOwner && (
+                <span className="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded font-medium">
+                  👥
+                </span>
+              )}
+              <button
+                onClick={() => onDelete(task.id)}
+                className="flex-shrink-0 text-gray-200 hover:text-red-400 transition-colors mt-0.5"
+                title="Delete task"
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {task.description && (
@@ -1734,6 +1885,15 @@ function ChecklistIcon({ className }) {
   );
 }
 
+function LogoutIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+    </svg>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1747,6 +1907,8 @@ const SAMPLE_TASKS = [
     dueDate: '2026-03-05',
     tags: ['Careific'],
     completed: false,
+    visibility: 'shared',
+    owner: 'user-lyle',
     createdAt: new Date().toISOString(),
   },
   {
@@ -1757,6 +1919,8 @@ const SAMPLE_TASKS = [
     dueDate: '2026-03-04',
     tags: ['Rose', 'Care Home'],
     completed: false,
+    visibility: 'shared',
+    owner: 'user-lyle',
     createdAt: new Date().toISOString(),
   },
   {
@@ -1767,6 +1931,8 @@ const SAMPLE_TASKS = [
     dueDate: '2026-03-07',
     tags: ['Buyflip'],
     completed: false,
+    visibility: 'shared',
+    owner: 'user-lyle',
     createdAt: new Date().toISOString(),
   },
   {
@@ -1777,11 +1943,41 @@ const SAMPLE_TASKS = [
     dueDate: '',
     tags: ['Personal'],
     completed: true,
+    visibility: 'private',
+    owner: 'user-lyle',
     createdAt: new Date().toISOString(),
   },
 ];
 
 export default function App() {
+  // ── Auth state ──────────────────────────────────────────────────────────────
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('tm_user')); } catch { return null; }
+  });
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('tm_token') || null);
+
+  function handleLogin(user, token) {
+    setCurrentUser(user);
+    setAuthToken(token);
+  }
+
+  function handleLogout() {
+    setCurrentUser(null);
+    setAuthToken(null);
+    localStorage.removeItem('tm_token');
+    localStorage.removeItem('tm_user');
+  }
+
+  // If not logged in, show login screen
+  if (!currentUser || !authToken) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  // ── App state ───────────────────────────────────────────────────────────────
+  return <AuthenticatedApp currentUser={currentUser} authToken={authToken} onLogout={handleLogout} />;
+}
+
+function AuthenticatedApp({ currentUser, authToken, onLogout }) {
   const [tasks, setTasks]                       = useState(SAMPLE_TASKS);
   const [activeView, setActiveView]             = useState('daily');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
@@ -1882,8 +2078,26 @@ export default function App() {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   }
 
-  const filteredTasks = useMemo(() => {
+  function toggleVisibility(id) {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === id
+          ? { ...t, visibility: t.visibility === 'private' ? 'shared' : 'private' }
+          : t,
+      ),
+    );
+  }
+
+  // Filter tasks: show shared tasks from anyone + private tasks only from current user
+  const visibleTasks = useMemo(() => {
     return tasks.filter((task) => {
+      if (task.visibility === 'private' && task.owner !== currentUser?.id) return false;
+      return true;
+    });
+  }, [tasks, currentUser]);
+
+  const filteredTasks = useMemo(() => {
+    return visibleTasks.filter((task) => {
       if (activeView === 'priority' && task.priority !== 'high') return false;
       if (
         activeTagFilters.length > 0 &&
@@ -1894,7 +2108,7 @@ export default function App() {
       if (statusFilter === 'done' && !task.completed) return false;
       return true;
     });
-  }, [tasks, activeView, activeTagFilters, statusFilter]);
+  }, [visibleTasks, activeView, activeTagFilters, statusFilter]);
 
   const completedCount    = filteredTasks.filter((t) => t.completed).length;
   const enabledRulesCount = alertRules.filter((r) => r.enabled).length;
@@ -1915,8 +2129,8 @@ export default function App() {
 
         <div className="flex items-center gap-2">
           <span className="hidden sm:inline-flex text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full font-medium">
-            {tasks.filter((t) => !t.completed).length} active ·{' '}
-            {tasks.filter((t) => t.completed).length} done
+            {visibleTasks.filter((t) => !t.completed).length} active ·{' '}
+            {visibleTasks.filter((t) => t.completed).length} done
           </span>
 
           {/* Bell — alert rules */}
@@ -1942,6 +2156,20 @@ export default function App() {
           >
             <GearIcon className="w-5 h-5" />
           </button>
+
+          {/* User badge + Logout */}
+          <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-gray-200">
+            <span className="text-xs font-medium text-gray-600 bg-indigo-50 px-2 py-1 rounded-full">
+              {currentUser.displayName}
+            </span>
+            <button
+              onClick={onLogout}
+              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+              title="Sign out"
+            >
+              <LogoutIcon className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1978,7 +2206,7 @@ export default function App() {
 
           {/* Scrollable content */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
-            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} />
+            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} />
             <FilterBar
               activeTagFilters={activeTagFilters}
               setActiveTagFilters={setActiveTagFilters}
@@ -2016,6 +2244,8 @@ export default function App() {
                     task={task}
                     onToggle={toggleTask}
                     onDelete={deleteTask}
+                    onToggleVisibility={toggleVisibility}
+                    currentUser={currentUser}
                   />
                 ))
               )}
