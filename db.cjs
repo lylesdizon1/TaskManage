@@ -58,6 +58,21 @@ async function initTables() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id         SERIAL PRIMARY KEY,
+      user_id    TEXT NOT NULL,
+      role       TEXT NOT NULL,
+      content    TEXT NOT NULL,
+      model      TEXT DEFAULT 'claude',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages (user_id, created_at DESC);
+  `);
+
   console.log('[db] Tables initialised');
 }
 
@@ -195,6 +210,34 @@ async function deleteGcalTokensForUser(userId) {
   await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
 }
 
+// ── Chat messages ────────────────────────────────────────────────────────────
+
+async function getChatHistory(userId, limit = 50) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", role, content, model, created_at AS "createdAt"
+     FROM chat_messages
+     WHERE user_id = $1
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
+async function saveChatMessage({ userId, role, content, model }) {
+  const { rows } = await pool.query(
+    `INSERT INTO chat_messages (user_id, role, content, model)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, user_id AS "userId", role, content, model, created_at AS "createdAt"`,
+    [userId, role, content, model || 'claude'],
+  );
+  return rows[0];
+}
+
+async function clearChatHistory(userId) {
+  await pool.query('DELETE FROM chat_messages WHERE user_id = $1', [userId]);
+}
+
 // ── Single-task update ───────────────────────────────────────────────────────
 
 async function updateTask(id, fields) {
@@ -275,6 +318,9 @@ module.exports = {
   getGcalTokensForUser,
   setGcalTokensForUser,
   deleteGcalTokensForUser,
+  getChatHistory,
+  saveChatMessage,
+  clearChatHistory,
   updateTask,
   getUserById,
   updateUserPassword,
