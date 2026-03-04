@@ -59,6 +59,22 @@ async function initTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      title       TEXT DEFAULT '',
+      content     TEXT DEFAULT '',
+      visibility  TEXT DEFAULT 'private',
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes (user_id, created_at DESC);
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS user_preferences (
       user_id              TEXT PRIMARY KEY REFERENCES users(id),
       theme                TEXT DEFAULT 'light',
@@ -234,6 +250,61 @@ async function deleteGcalTokensForUser(userId) {
   await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
 }
 
+// ── Notes (privacy-first: default private) ───────────────────────────────────
+
+async function getNotesForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", title, content, visibility,
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM notes
+     WHERE user_id = $1 OR visibility = 'shared'
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function getPrivateNotesForAI(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, title, content, visibility
+     FROM notes
+     WHERE user_id = $1
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function createNote({ id, userId, title, content, visibility }) {
+  const { rows } = await pool.query(
+    `INSERT INTO notes (id, user_id, title, content, visibility)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, user_id AS "userId", title, content, visibility,
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [id, userId, title || '', content || '', visibility || 'private'],
+  );
+  return rows[0];
+}
+
+async function updateNote(id, userId, fields) {
+  const { rows } = await pool.query(
+    `UPDATE notes
+     SET title = COALESCE($3, title),
+         content = COALESCE($4, content),
+         visibility = COALESCE($5, visibility),
+         updated_at = NOW()
+     WHERE id = $1 AND user_id = $2
+     RETURNING id, user_id AS "userId", title, content, visibility,
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [id, userId, fields.title ?? null, fields.content ?? null, fields.visibility ?? null],
+  );
+  return rows[0] || null;
+}
+
+async function deleteNote(id, userId) {
+  await pool.query('DELETE FROM notes WHERE id = $1 AND user_id = $2', [id, userId]);
+}
+
 // ── User preferences ─────────────────────────────────────────────────────────
 
 async function getUserPreferences(userId) {
@@ -373,6 +444,11 @@ module.exports = {
   getGcalTokensForUser,
   setGcalTokensForUser,
   deleteGcalTokensForUser,
+  getNotesForUser,
+  getPrivateNotesForAI,
+  createNote,
+  updateNote,
+  deleteNote,
   getUserPreferences,
   saveUserPreferences,
   getChatHistory,

@@ -552,6 +552,51 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Notes (privacy-first) ────────────────────────────────────────────────────
+
+app.get('/api/notes', authenticateToken, async (req, res) => {
+  try {
+    const notes = await db.getNotesForUser(req.user.id);
+    return res.json(notes);
+  } catch (err) {
+    console.error('[notes] read failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/notes', authenticateToken, async (req, res) => {
+  try {
+    const { id, title, content, visibility } = req.body;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    const note = await db.createNote({ id, userId: req.user.id, title, content, visibility });
+    return res.json(note);
+  } catch (err) {
+    console.error('[notes] create failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/notes/:id', authenticateToken, async (req, res) => {
+  try {
+    const updated = await db.updateNote(req.params.id, req.user.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Note not found or not owned by you' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[notes] update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/notes/:id', authenticateToken, async (req, res) => {
+  try {
+    await db.deleteNote(req.params.id, req.user.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[notes] delete failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── User preferences ─────────────────────────────────────────────────────────
 
 app.get('/api/preferences', authenticateToken, async (req, res) => {
