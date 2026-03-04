@@ -524,8 +524,8 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose })
           {/* API Keys tab */}
           {tab === 'keys' && (
             <div className="space-y-4">
-              <p className="text-xs text-gray-500 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                Keys are stored in memory only and never persisted beyond this session.
+              <p className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                Keys are saved to <span className="font-mono">settings.json</span> on the server and persist across restarts.
               </p>
 
               <div>
@@ -1014,7 +1014,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
 // ADD TASK FORM
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AddTaskForm({ onAdd, claudeKey }) {
+function AddTaskForm({ onAdd, claudeKey, currentUser }) {
   const emptyForm = {
     title: '',
     description: '',
@@ -1024,6 +1024,7 @@ function AddTaskForm({ onAdd, claudeKey }) {
   };
 
   const [form, setForm] = useState(emptyForm);
+  const [shared, setShared] = useState(false);
   const [aiSuggested, setAiSuggested] = useState([]); // tags AI recommended
   const [suggesting, setSuggesting] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
@@ -1083,10 +1084,12 @@ function AddTaskForm({ onAdd, claudeKey }) {
     onAdd({
       id: uid(),
       ...form,
+      owner: shared ? 'shared' : currentUser,
       completed: false,
       createdAt: new Date().toISOString(),
     });
     setForm(emptyForm);
+    setShared(false);
     setAiSuggested([]);
     setIsOpen(false);
   }
@@ -1221,6 +1224,19 @@ function AddTaskForm({ onAdd, claudeKey }) {
               </div>
             </div>
 
+            {/* Visibility toggle */}
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={shared}
+                onChange={(e) => setShared(e.target.checked)}
+                className="w-4 h-4 accent-indigo-600 rounded cursor-pointer"
+              />
+              <span className="text-xs text-gray-600">
+                Share with {currentUser === 'lyle' ? 'wife' : 'Lyle'} (visible to both)
+              </span>
+            </label>
+
             {/* Actions */}
             <div className="flex gap-2 pt-1">
               <button
@@ -1228,6 +1244,7 @@ function AddTaskForm({ onAdd, claudeKey }) {
                 onClick={() => {
                   setIsOpen(false);
                   setForm(emptyForm);
+                  setShared(false);
                   setAiSuggested([]);
                 }}
                 className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
@@ -1309,6 +1326,11 @@ function TaskCard({ task, onToggle, onDelete }) {
             </div>
 
             <div className="flex items-center gap-1.5 flex-shrink-0 ml-1">
+              {task.owner === 'shared' && (
+                <span className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-50 text-blue-500">
+                  shared
+                </span>
+              )}
               <span
                 className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${PRIORITY_BADGE[task.priority]}`}
               >
@@ -1735,6 +1757,99 @@ function ChecklistIcon({ className }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LOGIN SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError]       = useState('');
+  const [loading, setLoading]   = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!username || !password) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.toLowerCase().trim(), password }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        onLogin(data.user);
+      } else {
+        setError(data.error || 'Invalid credentials');
+      }
+    } catch {
+      setError('Cannot connect to server. Is the proxy running?');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const inputCls =
+    'w-full px-3 py-2.5 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition';
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-8">
+        <div className="flex flex-col items-center mb-8">
+          <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-md mb-4">
+            <ChecklistIcon className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900">TaskManage</h1>
+          <p className="text-sm text-gray-400 mt-1">Sign in to continue</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="lyle or wife"
+              autoFocus
+              autoComplete="username"
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="current-password"
+              className={inputCls}
+            />
+          </div>
+
+          {error && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading || !username || !password}
+            className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Signing in…' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1747,6 +1862,7 @@ const SAMPLE_TASKS = [
     dueDate: '2026-03-05',
     tags: ['Careific'],
     completed: false,
+    owner: 'lyle',
     createdAt: new Date().toISOString(),
   },
   {
@@ -1757,6 +1873,7 @@ const SAMPLE_TASKS = [
     dueDate: '2026-03-04',
     tags: ['Rose', 'Care Home'],
     completed: false,
+    owner: 'shared',
     createdAt: new Date().toISOString(),
   },
   {
@@ -1767,6 +1884,7 @@ const SAMPLE_TASKS = [
     dueDate: '2026-03-07',
     tags: ['Buyflip'],
     completed: false,
+    owner: 'lyle',
     createdAt: new Date().toISOString(),
   },
   {
@@ -1777,11 +1895,14 @@ const SAMPLE_TASKS = [
     dueDate: '',
     tags: ['Personal'],
     completed: true,
+    owner: 'lyle',
     createdAt: new Date().toISOString(),
   },
 ];
 
 export default function App() {
+  // Restore logged-in user from localStorage so refreshing keeps you signed in
+  const [currentUser, setCurrentUser]           = useState(() => localStorage.getItem('tm_user') || null);
   const [tasks, setTasks]                       = useState(SAMPLE_TASKS);
   const [activeView, setActiveView]             = useState('daily');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
@@ -1809,6 +1930,31 @@ export default function App() {
   useEffect(() => { alertRulesRef.current = alertRules; },  [alertRules]);
   useEffect(() => { emailSettingsRef.current = emailSettings; }, [emailSettings]);
   useEffect(() => { apiKeysRef.current = apiKeys; },        [apiKeys]);
+
+  // ── Persistent tasks (tasks.json via proxy) ───────────────────────────────
+
+  const tasksLoadedRef = useRef(false);
+
+  // Load tasks from server on mount; fall back to SAMPLE_TASKS if none saved
+  useEffect(() => {
+    fetch('/api/tasks')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.tasks && data.tasks.length > 0) setTasks(data.tasks);
+      })
+      .catch(() => {})
+      .finally(() => { tasksLoadedRef.current = true; });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-save whenever tasks change (skip during initial hydration)
+  useEffect(() => {
+    if (!tasksLoadedRef.current) return;
+    fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks }),
+    }).catch(() => {});
+  }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Persistent settings (settings.json via proxy) ─────────────────────────
 
@@ -1843,6 +1989,22 @@ export default function App() {
     saveSettings(apiKeysRef.current, emailSettingsRef.current, alertRules);
   }, [alertRules]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  function handleLogin(user) {
+    localStorage.setItem('tm_user', user);
+    setCurrentUser(user);
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('tm_user');
+    setCurrentUser(null);
+  }
+
+  // Tasks visible to the current user (own + shared; no owner field = legacy visible to all)
+  const userTasks = useMemo(
+    () => tasks.filter((t) => !t.owner || t.owner === currentUser || t.owner === 'shared'),
+    [tasks, currentUser],
+  );
+
   function addToast(t) {
     const id = uid();
     setToasts((prev) => [...prev, { ...t, id }]);
@@ -1869,7 +2031,7 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function addTask(task) {
-    setTasks((prev) => [task, ...prev]);
+    setTasks((prev) => [{ owner: currentUser, ...task }, ...prev]);
   }
 
   function toggleTask(id) {
@@ -1883,7 +2045,7 @@ export default function App() {
   }
 
   const filteredTasks = useMemo(() => {
-    return tasks.filter((task) => {
+    return userTasks.filter((task) => {
       if (activeView === 'priority' && task.priority !== 'high') return false;
       if (
         activeTagFilters.length > 0 &&
@@ -1894,10 +2056,13 @@ export default function App() {
       if (statusFilter === 'done' && !task.completed) return false;
       return true;
     });
-  }, [tasks, activeView, activeTagFilters, statusFilter]);
+  }, [userTasks, activeView, activeTagFilters, statusFilter]);
 
   const completedCount    = filteredTasks.filter((t) => t.completed).length;
   const enabledRulesCount = alertRules.filter((r) => r.enabled).length;
+
+  // Show login screen until a user is authenticated
+  if (!currentUser) return <LoginScreen onLogin={handleLogin} />;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -1915,9 +2080,22 @@ export default function App() {
 
         <div className="flex items-center gap-2">
           <span className="hidden sm:inline-flex text-xs bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full font-medium">
-            {tasks.filter((t) => !t.completed).length} active ·{' '}
-            {tasks.filter((t) => t.completed).length} done
+            {userTasks.filter((t) => !t.completed).length} active ·{' '}
+            {userTasks.filter((t) => t.completed).length} done
           </span>
+
+          {/* Signed-in user + sign-out */}
+          <span className="hidden sm:flex items-center gap-1.5 text-xs bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-full font-medium capitalize">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            {currentUser}
+          </span>
+          <button
+            onClick={handleLogout}
+            className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+            title="Sign out"
+          >
+            Sign out
+          </button>
 
           {/* Bell — alert rules */}
           <button
@@ -1968,7 +2146,7 @@ export default function App() {
                   {label}
                   {key === 'priority' && (
                     <span className="ml-1.5 text-[10px] bg-red-100 text-red-500 font-semibold px-1.5 py-0.5 rounded-full">
-                      {tasks.filter((t) => t.priority === 'high' && !t.completed).length}
+                      {userTasks.filter((t) => t.priority === 'high' && !t.completed).length}
                     </span>
                   )}
                 </button>
@@ -1978,7 +2156,7 @@ export default function App() {
 
           {/* Scrollable content */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
-            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} />
+            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} />
             <FilterBar
               activeTagFilters={activeTagFilters}
               setActiveTagFilters={setActiveTagFilters}
