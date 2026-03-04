@@ -3481,20 +3481,17 @@ function NotesPanel({ authToken }) {
     return counts;
   }, [notes]);
 
-  async function handleNewNote() {
-    try {
-      const res = await fetch('/api/notes', {
-        method: 'POST', headers,
-        body: JSON.stringify({ title: '', content: '', type: 'quick', pillar: pillarFilter || null }),
-      });
-      const note = await res.json();
-      if (note.id) {
-        setNotes((prev) => [note, ...prev]);
-        setSelectedNote(note);
-        setEditorData({ title: note.title || '', content: note.content || '', pillar: note.pillar || '', category: note.category || '', subcategory: note.subcategory || '', tags: (note.tags || []).join(', ') });
-        setSaveStatus('saved');
-      }
-    } catch {}
+  function handleNewNote() {
+    const tempNote = {
+      id: null, title: '', content: '', type: 'structured',
+      pillar: pillarFilter || null, category: '', subcategory: '',
+      tags: [], pinned: false, archived: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    setSelectedNote(tempNote);
+    setEditorData({ title: '', content: '', pillar: pillarFilter || '', category: '', subcategory: '', tags: '' });
+    setSaveStatus('new');
+    setShowDeleteConfirm(false);
   }
 
   function openNote(note) {
@@ -3531,18 +3528,31 @@ function NotesPanel({ authToken }) {
       tags: data.tags ? data.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
     };
     try {
-      const res = await fetch(`/api/notes/${selectedNote.id}`, { method: 'PUT', headers, body: JSON.stringify(body) });
-      const updated = await res.json();
-      if (updated.id) {
-        setSelectedNote(updated);
-        setNotes((prev) => prev.map((n) => n.id === updated.id ? updated : n));
-        setSaveStatus('saved');
+      if (!selectedNote.id) {
+        // New note — POST to create
+        body.type = 'structured';
+        const res = await fetch('/api/notes', { method: 'POST', headers, body: JSON.stringify(body) });
+        const created = await res.json();
+        if (created.id) {
+          setSelectedNote(created);
+          setNotes((prev) => [created, ...prev]);
+          setSaveStatus('saved');
+        }
+      } else {
+        // Existing note — PUT to update
+        const res = await fetch(`/api/notes/${selectedNote.id}`, { method: 'PUT', headers, body: JSON.stringify(body) });
+        const updated = await res.json();
+        if (updated.id) {
+          setSelectedNote(updated);
+          setNotes((prev) => prev.map((n) => n.id === updated.id ? updated : n));
+          setSaveStatus('saved');
+        }
       }
     } catch { setSaveStatus('error'); }
   }
 
   async function handlePin() {
-    if (!selectedNote) return;
+    if (!selectedNote || !selectedNote.id) return;
     try {
       const res = await fetch(`/api/notes/${selectedNote.id}/pin`, { method: 'PUT', headers });
       const updated = await res.json();
@@ -3555,6 +3565,12 @@ function NotesPanel({ authToken }) {
 
   async function handleDelete() {
     if (!selectedNote) return;
+    if (!selectedNote.id) {
+      // Unsaved new note — just discard
+      setSelectedNote(null);
+      setShowDeleteConfirm(false);
+      return;
+    }
     try {
       await fetch(`/api/notes/${selectedNote.id}`, { method: 'DELETE', headers });
       setNotes((prev) => prev.filter((n) => n.id !== selectedNote.id));
@@ -3566,7 +3582,10 @@ function NotesPanel({ authToken }) {
   function closeEditor() {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
-      saveNote(editorData);
+      // Only save if there's actual content
+      if (selectedNote && (editorData.title || editorData.content)) {
+        saveNote(editorData);
+      }
     }
     setSelectedNote(null);
   }
@@ -3592,8 +3611,8 @@ function NotesPanel({ authToken }) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
         <button onClick={closeEditor} className="text-sm text-gray-500 hover:text-gray-700 md:hidden">← Back</button>
         <div className="flex items-center gap-2">
-          <span className={`text-xs px-2 py-0.5 rounded ${saveStatus === 'saved' ? 'bg-green-50 text-green-600' : saveStatus === 'error' ? 'bg-red-50 text-red-600' : 'bg-yellow-50 text-yellow-600'}`}>
-            {saveStatus === 'saved' ? '✓ Saved' : saveStatus === 'error' ? '✗ Error' : '⏳ Saving...'}
+          <span className={`text-xs px-2 py-0.5 rounded ${saveStatus === 'saved' ? 'bg-green-50 text-green-600' : saveStatus === 'error' ? 'bg-red-50 text-red-600' : saveStatus === 'new' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'}`}>
+            {saveStatus === 'saved' ? '✓ Saved' : saveStatus === 'error' ? '✗ Error' : saveStatus === 'new' ? 'New note' : '⏳ Saving...'}
           </span>
           <button onClick={handlePin} className={`p-1.5 rounded hover:bg-gray-100 ${selectedNote.pinned ? 'text-amber-500' : 'text-gray-400'}`} title={selectedNote.pinned ? 'Unpin' : 'Pin'}>📌</button>
         </div>
@@ -3661,10 +3680,12 @@ function NotesPanel({ authToken }) {
           </div>
 
           {/* Timestamps */}
+          {selectedNote.id && (
           <div className="flex items-center justify-between text-[10px] text-gray-400 pt-2">
             <span>Created {new Date(selectedNote.createdAt).toLocaleString()}</span>
             <span>Updated {new Date(selectedNote.updatedAt).toLocaleString()}</span>
           </div>
+          )}
 
           {/* Delete */}
           <div className="pt-2 border-t border-gray-100">
