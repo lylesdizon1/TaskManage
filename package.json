@@ -3,13 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"vite\" \"node proxy-server.cjs\"",
     "build": "vite build",
     "preview": "vite preview",
     "proxy": "node proxy-server.cjs",
-    "start": "concurrently \"npm run dev\" \"npm run proxy\""
+    "start": "node proxy-server.cjs"
   },
   "dependencies": {
+    "axios": "^1.7.7",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^6.9.16",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -20,11 +26,5 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
     "vite": "^5.4.10"
-  },
-  "proxyDependencies": {
-    "axios": "^1.7.7",
-    "cors": "^2.8.5",
-    "express": "^4.21.1",
-    "nodemailer": "^6.9.16"
   }
 }
