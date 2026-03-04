@@ -1800,12 +1800,48 @@ export default function App() {
 
   // Keep refs current so the 60 s interval always reads fresh values without
   // needing to re-register the effect on every state change.
-  const tasksRef         = useRef(tasks);
-  const alertRulesRef    = useRef(alertRules);
-  const emailSettingsRef = useRef(emailSettings);
-  useEffect(() => { tasksRef.current = tasks; },         [tasks]);
-  useEffect(() => { alertRulesRef.current = alertRules; }, [alertRules]);
+  const tasksRef          = useRef(tasks);
+  const alertRulesRef     = useRef(alertRules);
+  const emailSettingsRef  = useRef(emailSettings);
+  const apiKeysRef        = useRef(apiKeys);
+  const settingsLoadedRef = useRef(false);
+  useEffect(() => { tasksRef.current = tasks; },            [tasks]);
+  useEffect(() => { alertRulesRef.current = alertRules; },  [alertRules]);
   useEffect(() => { emailSettingsRef.current = emailSettings; }, [emailSettings]);
+  useEffect(() => { apiKeysRef.current = apiKeys; },        [apiKeys]);
+
+  // ── Persistent settings (settings.json via proxy) ─────────────────────────
+
+  async function saveSettings(keys, email, rules) {
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKeys: keys, emailSettings: email, alertRules: rules }),
+      });
+    } catch (err) {
+      console.error('[settings] save failed:', err.message);
+    }
+  }
+
+  // Load settings once on mount
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.apiKeys)       setApiKeys(data.apiKeys);
+        if (data.emailSettings) setEmailSettings(data.emailSettings);
+        if (data.alertRules)    setAlertRules(data.alertRules);
+      })
+      .catch(() => {})
+      .finally(() => { settingsLoadedRef.current = true; });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-save alert rules whenever they change (skip during initial hydration)
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return;
+    saveSettings(apiKeysRef.current, emailSettingsRef.current, alertRules);
+  }, [alertRules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function addToast(t) {
     const id = uid();
@@ -1997,9 +2033,9 @@ export default function App() {
       {showSettings && (
         <SettingsModal
           apiKeys={apiKeys}
-          onSave={setApiKeys}
+          onSave={(keys) => { setApiKeys(keys); saveSettings(keys, emailSettingsRef.current, alertRulesRef.current); }}
           emailSettings={emailSettings}
-          onSaveEmail={setEmailSettings}
+          onSaveEmail={(email) => { setEmailSettings(email); saveSettings(apiKeysRef.current, email, alertRulesRef.current); }}
           onClose={() => setShowSettings(false)}
         />
       )}
