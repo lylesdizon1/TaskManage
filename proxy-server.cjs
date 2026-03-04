@@ -38,6 +38,8 @@ const path       = require('path');
 const crypto     = require('crypto');
 
 const db = require('./db.cjs');
+const XLSX = require('xlsx');
+const pdfParse = require('pdf-parse');
 
 const DIST_DIR = path.join(__dirname, 'dist');
 
@@ -899,12 +901,11 @@ app.delete('/api/financial/transactions/:id', authenticateToken, async (req, res
   }
 });
 
-// ── CSV Import ────────────────────────────────────────────────────────────────
+// ── File Import (CSV, Excel, PDF) ─────────────────────────────────────────────
 
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) return { headers: [], rows: [] };
-  // Simple CSV parse: handle quoted fields
   function splitRow(line) {
     const result = [];
     let current = '';
@@ -925,14 +926,10 @@ function parseCSV(text) {
 
 function detectCSVFormat(headers) {
   const h = headers.map((s) => s.toLowerCase().replace(/[^a-z]/g, ''));
-  // Chase: Transaction Date, Post Date, Description, Category, Type, Amount, Memo
-  // or: Date, Description, Amount
   if (h.includes('transactiondate') || (h.includes('date') && h.includes('description') && h.includes('amount'))) {
     return 'chase';
   }
-  // Bank of America: Date, Description, Amount, Running Bal.
   if (h.some((x) => x.includes('runningbal'))) return 'boa';
-  // Amex: Date, Description, Amount  (or Reference, Date, Description, Amount)
   if (h.includes('date') && h.includes('amount')) return 'amex';
   return 'generic';
 }
@@ -949,7 +946,6 @@ function mapCSVRow(format, headers, row) {
   let amountStr = get('amount') || '0';
   let category = get('category') || 'Uncategorized';
 
-  // Normalize date to YYYY-MM-DD
   if (date && !date.match(/^\d{4}-/)) {
     const parts = date.split('/');
     if (parts.length === 3) {
@@ -965,38 +961,153 @@ function mapCSVRow(format, headers, row) {
   return { date, description, amount, type: isCredit ? 'credit' : 'debit', category };
 }
 
+function parseExcelToRows(base64Data) {
+  const buffer = Buffer.from(base64Data, 'base64');
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (jsonRows.length < 2) return { headers: [], rows: [] };
+  const headers = jsonRows[0].map(String);
+  const rows = jsonRows.slice(1).map((r) => r.map(String)).filter((r) => r.some((c) => c.trim()));
+  return { headers, rows };
+}
+
+async function parsePDFWithClaude(base64Data) {
+  const buffer = Buffer.from(base64Data, 'base64');
+  const pdfData = await pdfParse(buffer);
+  const text = pdfData.text;
+
+  if (!text || text.trim().length < 20) {
+    throw new Error('Could not extract readable text from PDF');
+  }
+
+  const apiKey = process.env.CLAUDE_API_KEY;
+  if (!apiKey) {
+    throw new Error('CLAUDE_API_KEY is required for PDF parsing. Set it in your environment variables.');
+  }
+
+  // Truncate to ~12k chars to stay within token limits
+  const truncatedText = text.slice(0, 12000);
+
+  const response = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: `You are a bank statement parser. Extract ALL transactions from this bank statement text into a JSON array.
+
+Each transaction object must have exactly these fields:
+- "date": string in YYYY-MM-DD format
+- "description": string with the transaction description/payee
+- "amount": number (positive value, no currency symbols)
+- "type": either "debit" or "credit"
+- "category": your best guess category (e.g. "Food", "Shopping", "Transfer", "Income", "Utilities", "Entertainment", "Transportation", "Healthcare", "Subscription", "Other")
+
+Return ONLY a valid JSON array, no other text. If you cannot find any transactions, return an empty array [].
+
+Bank statement text:
+${truncatedText}`,
+      }],
+    },
+    {
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      timeout: 60_000,
+    },
+  );
+
+  const content = response.data?.content?.[0]?.text || '[]';
+  // Extract JSON array from response (handle markdown code blocks)
+  const jsonMatch = content.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) return [];
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed)) return [];
+    // Validate and normalize each transaction
+    return parsed
+      .filter((t) => t.date && t.amount !== undefined)
+      .map((t) => ({
+        date: String(t.date),
+        description: String(t.description || ''),
+        amount: Math.abs(parseFloat(t.amount) || 0),
+        type: t.type === 'credit' ? 'credit' : 'debit',
+        category: String(t.category || 'Uncategorized'),
+      }))
+      .filter((t) => t.amount > 0);
+  } catch {
+    return [];
+  }
+}
+
 app.post('/api/financial/import-csv', authenticateToken, async (req, res) => {
   try {
-    const { csvText, accountId, entityId, accountClass } = req.body;
-    if (!csvText || !accountId) {
-      return res.status(400).json({ error: 'csvText and accountId are required' });
+    const { csvText, fileData, fileType, accountId, entityId, accountClass } = req.body;
+    if (!accountId) {
+      return res.status(400).json({ error: 'accountId is required' });
     }
 
-    const { headers, rows } = parseCSV(csvText);
-    if (rows.length === 0) return res.status(400).json({ error: 'No data rows found in CSV' });
+    let mappedRows = [];
+    let format = 'csv';
 
-    const format = detectCSVFormat(headers);
-    const txns = rows.map((row) => {
-      const mapped = mapCSVRow(format, headers, row);
-      return {
-        id: `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-        accountId,
-        userId: req.user.id,
-        date: mapped.date,
-        description: mapped.description,
-        amount: mapped.amount,
-        type: mapped.type,
-        category: mapped.category,
-        entityId: entityId || '',
-        accountClass: accountClass || 'personal',
-        notes: `Imported from CSV (${format})`,
-      };
-    }).filter((t) => t.date && t.amount > 0);
+    if (fileType === 'pdf') {
+      // ── PDF: extract text with pdf-parse, then parse with Claude AI ──
+      if (!fileData) return res.status(400).json({ error: 'fileData (base64) is required for PDF import' });
+      format = 'pdf';
+      const pdfTransactions = await parsePDFWithClaude(fileData);
+      if (pdfTransactions.length === 0) {
+        return res.status(400).json({ error: 'No transactions could be extracted from the PDF. Ensure it contains readable bank statement data.' });
+      }
+      mappedRows = pdfTransactions;
+
+    } else if (fileType === 'xlsx' || fileType === 'xls') {
+      // ── Excel: parse with xlsx package ──
+      if (!fileData) return res.status(400).json({ error: 'fileData (base64) is required for Excel import' });
+      format = 'xlsx';
+      const { headers, rows } = parseExcelToRows(fileData);
+      if (rows.length === 0) return res.status(400).json({ error: 'No data rows found in Excel file' });
+      const csvFormat = detectCSVFormat(headers);
+      format = `xlsx (${csvFormat})`;
+      mappedRows = rows.map((row) => mapCSVRow(csvFormat, headers, row)).filter((r) => r.date && r.amount > 0);
+
+    } else {
+      // ── CSV: parse text directly ──
+      if (!csvText) return res.status(400).json({ error: 'csvText is required for CSV import' });
+      const { headers, rows } = parseCSV(csvText);
+      if (rows.length === 0) return res.status(400).json({ error: 'No data rows found in CSV' });
+      const csvFormat = detectCSVFormat(headers);
+      format = `csv (${csvFormat})`;
+      mappedRows = rows.map((row) => mapCSVRow(csvFormat, headers, row)).filter((r) => r.date && r.amount > 0);
+    }
+
+    if (mappedRows.length === 0) {
+      return res.status(400).json({ error: 'No valid transactions found in file' });
+    }
+
+    const txns = mappedRows.map((mapped) => ({
+      id: `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      accountId,
+      userId: req.user.id,
+      date: mapped.date,
+      description: mapped.description,
+      amount: mapped.amount,
+      type: mapped.type,
+      category: mapped.category,
+      entityId: entityId || '',
+      accountClass: accountClass || 'personal',
+      notes: `Imported from ${format}`,
+    }));
 
     const created = await db.bulkCreateTransactions(txns);
     return res.json({ success: true, count: created.length, format, transactions: created });
   } catch (err) {
-    console.error('[financial] CSV import failed:', err.message);
+    console.error('[financial] file import failed:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
