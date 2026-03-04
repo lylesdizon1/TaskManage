@@ -19,6 +19,22 @@ const express    = require('express');
 const cors       = require('cors');
 const axios      = require('axios');
 const nodemailer = require('nodemailer');
+const fs         = require('fs');
+const path       = require('path');
+
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+function readSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeSettings(data) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -163,6 +179,33 @@ app.post('/api/email/send', async (req, res) => {
   }
 });
 
+// ── Settings routes ───────────────────────────────────────────────────────────
+
+/**
+ * GET /api/settings
+ * Returns the persisted settings object (empty object if file doesn't exist).
+ */
+app.get('/api/settings', (_req, res) => {
+  res.json(readSettings());
+});
+
+/**
+ * POST /api/settings
+ * Merges the incoming body into settings.json and writes it to disk.
+ * Body: { apiKeys, emailSettings, alertRules }
+ */
+app.post('/api/settings', (req, res) => {
+  try {
+    const current = readSettings();
+    const merged  = { ...current, ...req.body };
+    writeSettings(merged);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[settings] write failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>
@@ -177,5 +220,7 @@ app.listen(PORT, () => {
   console.log('  POST /api/openai        → api.openai.com');
   console.log('  POST /api/email/test    → verify Gmail SMTP credentials');
   console.log('  POST /api/email/send    → send email via Gmail SMTP');
+  console.log('  GET  /api/settings      → read settings.json');
+  console.log('  POST /api/settings      → write settings.json');
   console.log('  GET  /health\n');
 });
