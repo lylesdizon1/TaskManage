@@ -4312,7 +4312,6 @@ function useNoteEditor({ content, onUpdate }) {
       Placeholder.configure({ placeholder: 'Start writing...' }),
     ],
     content: content || '',
-    autofocus: 'end',
     editorProps: {
       attributes: {
         class: 'tiptap-editor outline-none',
@@ -5099,13 +5098,13 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              tiptapEditor?.commands.focus('start');
+              tiptapEditor?.view?.dom?.focus();
             }
           }}
           placeholder="Title (optional)"
           className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
         />
-        <div style={{ flex: 1, minHeight: 'calc(100vh - 300px)', cursor: 'text' }} onClick={() => tiptapEditor?.commands.focus()}>
+        <div style={{ flex: 1, cursor: 'text', minHeight: '100%' }} onClick={() => tiptapEditor?.view?.dom?.focus()}>
           <EditorContent editor={tiptapEditor} />
         </div>
 
