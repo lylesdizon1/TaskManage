@@ -4360,15 +4360,15 @@ function ImageLightbox({ images, startIndex, onClose, onDelete }) {
     <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center" onClick={onClose}>
       <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
         <img src={img.url} alt={img.originalName || 'image'} className="max-w-full max-h-[85vh] object-contain rounded-lg" />
-        <button onClick={onClose} className="absolute top-2 right-2 w-8 h-8 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80">✕</button>
+        <button type="button" onClick={onClose} className="absolute top-2 right-2 w-8 h-8 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80">✕</button>
         {images.length > 1 && (
           <>
-            <button onClick={() => setIdx((idx - 1 + images.length) % images.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">←</button>
-            <button onClick={() => setIdx((idx + 1) % images.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">→</button>
+            <button type="button" onClick={() => setIdx((idx - 1 + images.length) % images.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">←</button>
+            <button type="button" onClick={() => setIdx((idx + 1) % images.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">→</button>
           </>
         )}
         {onDelete && (
-          <button onClick={() => onDelete(img.id)} className="absolute bottom-3 right-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 flex items-center gap-1">🗑️ Delete</button>
+          <button type="button" onClick={() => onDelete(img.id)} className="absolute bottom-3 right-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 flex items-center gap-1">🗑️ Delete</button>
         )}
       </div>
     </div>
@@ -4404,12 +4404,12 @@ function NoteImageGallery({ noteId, authToken, images, setImages, onAddClick }) 
           <div key={img.id} className="relative group cursor-pointer" onClick={() => setLightboxIdx(i)}>
             <img src={img.url} alt={img.originalName || 'attachment'} className="w-20 h-20 object-cover rounded-lg border border-gray-200" style={{ minWidth: 80 }} />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 rounded-lg flex items-center justify-center transition-opacity">
-              <button onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="text-white text-sm">🗑️</button>
+              <button type="button" onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="text-white text-sm">🗑️</button>
             </div>
           </div>
         ))}
         {onAddClick && (
-          <button onClick={onAddClick} className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 hover:border-purple-400 hover:text-purple-500 transition-colors text-2xl" title="Add image">+</button>
+          <button type="button" onClick={onAddClick} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 hover:border-purple-400 hover:text-purple-500 transition-colors text-2xl" title="Add image">+</button>
         )}
       </div>
       {lightboxIdx !== null && (
@@ -5057,6 +5057,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
       <div
         className={`flex-1 overflow-y-auto px-4 py-3 space-y-3 relative ${dragOver ? 'ring-2 ring-purple-400 ring-inset' : ''}`}
         onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onPaste={handlePaste}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation(); }}
       >
         {dragOver && (
           <div className="absolute inset-0 bg-purple-50/80 z-10 flex items-center justify-center rounded-lg pointer-events-none">
