@@ -100,6 +100,24 @@ async function initTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS note_images (
+      id            TEXT PRIMARY KEY,
+      note_id       TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+      user_id       TEXT NOT NULL,
+      filename      TEXT NOT NULL,
+      original_name TEXT DEFAULT '',
+      mime_type     TEXT DEFAULT '',
+      size          INTEGER DEFAULT 0,
+      url           TEXT NOT NULL,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_images_note_id ON note_images (note_id);
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS note_categories (
       id         TEXT PRIMARY KEY,
       user_id    TEXT NOT NULL,
@@ -571,6 +589,51 @@ async function deleteNote(id, userId) {
   await pool.query('DELETE FROM notes WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
+// ── Note Images ──────────────────────────────────────────────────────────────
+
+async function getNoteImages(noteId, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, note_id AS "noteId", user_id AS "userId", filename, original_name AS "originalName",
+            mime_type AS "mimeType", size, url, created_at AS "createdAt"
+     FROM note_images WHERE note_id = $1 AND user_id = $2 ORDER BY created_at ASC`,
+    [noteId, userId],
+  );
+  return rows;
+}
+
+async function createNoteImage({ id, noteId, userId, filename, originalName, mimeType, size, url }) {
+  const { rows } = await pool.query(
+    `INSERT INTO note_images (id, note_id, user_id, filename, original_name, mime_type, size, url)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, note_id AS "noteId", user_id AS "userId", filename, original_name AS "originalName",
+               mime_type AS "mimeType", size, url, created_at AS "createdAt"`,
+    [id, noteId, userId, filename, originalName || '', mimeType || '', size || 0, url],
+  );
+  return rows[0];
+}
+
+async function deleteNoteImage(id, userId) {
+  const { rows } = await pool.query(
+    'DELETE FROM note_images WHERE id = $1 AND user_id = $2 RETURNING *',
+    [id, userId],
+  );
+  return rows[0] || null;
+}
+
+// ── Note Search ──────────────────────────────────────────────────────────────
+
+async function searchNotes(userId, query) {
+  const q = `%${query}%`;
+  const { rows } = await pool.query(
+    `SELECT ${NOTE_RETURNING} FROM notes
+     WHERE user_id = $1 AND archived = FALSE
+     AND (title ILIKE $2 OR content ILIKE $2 OR category ILIKE $2)
+     ORDER BY updated_at DESC LIMIT 50`,
+    [userId, q],
+  );
+  return rows;
+}
+
 // ── Note Categories ───────────────────────────────────────────────────────────
 
 async function getNoteCategories(userId) {
@@ -900,6 +963,28 @@ async function runMigrations() {
     await pool.query(sql).catch(() => {});
   }
 
+  // 6. Create note_images table if not exists (idempotent)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS note_images (
+      id            TEXT PRIMARY KEY,
+      note_id       TEXT NOT NULL,
+      user_id       TEXT NOT NULL,
+      filename      TEXT NOT NULL,
+      original_name TEXT DEFAULT '',
+      mime_type     TEXT DEFAULT '',
+      size          INTEGER DEFAULT 0,
+      url           TEXT NOT NULL,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_note_images_note_id ON note_images (note_id)`).catch(() => {});
+
+  // 7. Full text search index on notes
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS notes_search_idx ON notes
+    USING gin(to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')))
+  `).catch(() => {});
+
   // 8. Add conversation_id column to chat_messages (idempotent)
   await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS conversation_id INTEGER`).catch(() => {});
 }
@@ -1140,6 +1225,10 @@ module.exports = {
   createNote,
   updateNote,
   deleteNote,
+  getNoteImages,
+  createNoteImage,
+  deleteNoteImage,
+  searchNotes,
   getNoteCategories,
   createNoteCategory,
   seedNoteCategoriesIfEmpty,

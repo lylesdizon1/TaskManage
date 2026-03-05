@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useEditor, EditorContent } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import Underline from '@tiptap/extension-underline';
+import TiptapImage from '@tiptap/extension-image';
+import Placeholder from '@tiptap/extension-placeholder';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API BASE (works in dev via Vite proxy and in prod when served from same origin)
@@ -4267,6 +4272,153 @@ const PILLAR_CONFIG = {
 
 const PILLAR_KEYS = Object.keys(PILLAR_CONFIG);
 
+// ── Tiptap Rich Text Editor Component ────────────────────────────────────────
+
+function TiptapToolbar({ editor, onImageClick }) {
+  if (!editor) return null;
+  const btnBase = 'w-7 h-7 flex items-center justify-center rounded text-xs transition-colors';
+  const active = 'bg-purple-600 text-white';
+  const inactive = 'text-gray-600 hover:bg-gray-100';
+  const btn = (isActive) => `${btnBase} ${isActive ? active : inactive}`;
+  return (
+    <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-100 flex-wrap overflow-x-auto" style={{ minHeight: 40 }}>
+      <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title="Bold (Cmd+B)"><strong>B</strong></button>
+      <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={btn(editor.isActive('italic'))} title="Italic (Cmd+I)"><em>I</em></button>
+      <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={btn(editor.isActive('underline'))} title="Underline (Cmd+U)"><span style={{ textDecoration: 'underline' }}>U</span></button>
+      <div className="w-px h-5 bg-gray-200 mx-0.5" />
+      <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={btn(editor.isActive('heading', { level: 1 }))} title="Heading 1">H1</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={btn(editor.isActive('heading', { level: 2 }))} title="Heading 2">H2</button>
+      <div className="w-px h-5 bg-gray-200 mx-0.5" />
+      <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title="Bullet list">•</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title="Ordered list">1.</button>
+      <div className="w-px h-5 bg-gray-200 mx-0.5" />
+      <button type="button" onClick={() => editor.chain().focus().toggleBlockquote().run()} className={btn(editor.isActive('blockquote'))} title="Quote">"</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleCodeBlock().run()} className={btn(editor.isActive('codeBlock'))} title="Code block">&lt;/&gt;</button>
+      <button type="button" onClick={() => editor.chain().focus().setHorizontalRule().run()} className={`${btnBase} ${inactive}`} title="Divider">—</button>
+      {onImageClick && (
+        <>
+          <div className="w-px h-5 bg-gray-200 mx-0.5" />
+          <button type="button" onClick={onImageClick} className={`${btnBase} ${inactive}`} title="Add image">📷</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function useNoteEditor({ content, onUpdate }) {
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({ heading: { levels: [1, 2] } }),
+      Underline,
+      TiptapImage.configure({ inline: false, allowBase64: true }),
+      Placeholder.configure({ placeholder: 'Start writing...' }),
+    ],
+    content: content || '',
+    editorProps: {
+      attributes: {
+        class: 'tiptap-editor outline-none',
+        style: 'min-height:300px;padding:16px;font-size:15px;line-height:1.7',
+      },
+    },
+    onUpdate: ({ editor: ed }) => {
+      if (onUpdate) onUpdate(ed.getHTML());
+    },
+  });
+  return editor;
+}
+
+// Strips HTML tags for plain-text display/search
+function stripHtml(html) {
+  if (!html) return '';
+  return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+}
+
+// Highlights matching text in search results
+function highlightMatch(text, query) {
+  if (!query) return text;
+  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  const parts = text.split(regex);
+  return parts.map((part, i) =>
+    regex.test(part) ? <strong key={i} className="text-purple-700 bg-purple-50">{part}</strong> : part
+  );
+}
+
+// Wraps plain text in <p> tags if it doesn't contain HTML
+function ensureHtml(content) {
+  if (!content) return '';
+  if (content.includes('<') && content.includes('>')) return content;
+  return content.split('\n').map((line) => `<p>${line || '<br>'}</p>`).join('');
+}
+
+// ── Image Lightbox Component ─────────────────────────────────────────────────
+
+function ImageLightbox({ images, startIndex, onClose, onDelete }) {
+  const [idx, setIdx] = useState(startIndex || 0);
+  const img = images[idx];
+  if (!img) return null;
+  return (
+    <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center" onClick={onClose}>
+      <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <img src={img.url} alt={img.originalName || 'image'} className="max-w-full max-h-[85vh] object-contain rounded-lg" />
+        <button onClick={onClose} className="absolute top-2 right-2 w-8 h-8 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80">✕</button>
+        {images.length > 1 && (
+          <>
+            <button onClick={() => setIdx((idx - 1 + images.length) % images.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">←</button>
+            <button onClick={() => setIdx((idx + 1) % images.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">→</button>
+          </>
+        )}
+        {onDelete && (
+          <button onClick={() => onDelete(img.id)} className="absolute bottom-3 right-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 flex items-center gap-1">🗑️ Delete</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Note Image Gallery Strip ─────────────────────────────────────────────────
+
+function NoteImageGallery({ noteId, authToken, images, setImages, onAddClick }) {
+  const [lightboxIdx, setLightboxIdx] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  async function handleDelete(imageId) {
+    try {
+      await apiFetch(`/api/notes/${noteId}/images/${imageId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      setImages((prev) => prev.filter((img) => img.id !== imageId));
+      setLightboxIdx(null);
+    } catch {}
+  }
+
+  if (!images.length && !onAddClick) return null;
+
+  return (
+    <div className="border-t border-gray-100 pt-3 mt-3">
+      <div className="text-xs text-gray-400 font-medium mb-2 flex items-center gap-1.5">
+        📷 Attachments ({images.length})
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        {images.map((img, i) => (
+          <div key={img.id} className="relative group cursor-pointer" onClick={() => setLightboxIdx(i)}>
+            <img src={img.url} alt={img.originalName || 'attachment'} className="w-20 h-20 object-cover rounded-lg border border-gray-200" style={{ minWidth: 80 }} />
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 rounded-lg flex items-center justify-center transition-opacity">
+              <button onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="text-white text-sm">🗑️</button>
+            </div>
+          </div>
+        ))}
+        {onAddClick && (
+          <button onClick={onAddClick} className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 hover:border-purple-400 hover:text-purple-500 transition-colors text-2xl" title="Add image">+</button>
+        )}
+      </div>
+      {lightboxIdx !== null && (
+        <ImageLightbox images={images} startIndex={lightboxIdx} onClose={() => setLightboxIdx(null)} onDelete={handleDelete} />
+      )}
+    </div>
+  );
+}
+
 // Map active views to default pillar pre-selection
 const VIEW_TO_PILLAR = {
   daily: 'hustle',
@@ -4544,8 +4696,15 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
   const [saveStatus, setSaveStatus] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState(null); // { pillar, category, confidence, reason }
+  const [noteImages, setNoteImages] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
   const suggestTimerRef = useRef(null);
   const saveTimerRef = useRef(null);
+  const searchTimerRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const searchInputRef = useRef(null);
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
 
   const loadNotes = useCallback(async () => {
@@ -4591,6 +4750,91 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     if (quickCapturedNote) setNotes((prev) => [quickCapturedNote, ...prev]);
   }, [quickCapturedNote]);
 
+  // ── Tiptap editor ──
+  const tiptapEditor = useNoteEditor({
+    content: ensureHtml(editorData.content),
+    onUpdate: (html) => {
+      handleEditorChange('content', html);
+    },
+  });
+
+  // ── Load images when note changes ──
+  useEffect(() => {
+    if (!selectedNote?.id) { setNoteImages([]); return; }
+    apiFetch(`/api/notes/${selectedNote.id}/images`, { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setNoteImages(data); })
+      .catch(() => setNoteImages([]));
+  }, [selectedNote?.id, authToken]);
+
+  // ── Image upload handler ──
+  async function uploadImages(files) {
+    if (!selectedNote?.id || !files?.length) return;
+    for (const file of files) {
+      if (file.size > 10 * 1024 * 1024) { if (addToast) addToast({ type: 'error', message: `${file.name} exceeds 10MB limit` }); continue; }
+      if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type)) { if (addToast) addToast({ type: 'error', message: `${file.name}: unsupported format` }); continue; }
+      const formData = new FormData();
+      formData.append('image', file);
+      try {
+        const res = await apiFetch(`/api/notes/${selectedNote.id}/images`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+          body: formData,
+        });
+        const img = await res.json();
+        if (img.id) setNoteImages((prev) => [...prev, img]);
+      } catch { if (addToast) addToast({ type: 'error', message: `Failed to upload ${file.name}` }); }
+    }
+  }
+
+  // ── Drag & drop handlers for editor area ──
+  function handleDragOver(e) { e.preventDefault(); setDragOver(true); }
+  function handleDragLeave(e) { e.preventDefault(); setDragOver(false); }
+  function handleDrop(e) {
+    e.preventDefault(); setDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
+    if (files.length) uploadImages(files);
+  }
+
+  // ── Paste handler for images ──
+  function handlePaste(e) {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageFiles = items.filter((i) => i.type.startsWith('image/')).map((i) => i.getAsFile()).filter(Boolean);
+    if (imageFiles.length) uploadImages(imageFiles);
+  }
+
+  // ── Search ──
+  useEffect(() => {
+    if (!searchQuery || searchQuery.length < 2) { setSearchResults(null); return; }
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/api/notes/search?q=${encodeURIComponent(searchQuery)}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        const data = await res.json();
+        setSearchResults(Array.isArray(data) ? data : []);
+      } catch { setSearchResults([]); }
+    }, 300);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [searchQuery, authToken]);
+
+  // ── Cmd+F shortcut for search ──
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+      if (e.key === 'Escape' && searchQuery) {
+        setSearchQuery('');
+        setSearchResults(null);
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [searchQuery]);
+
   // Build category tree
   const parentCategories = useMemo(() => categories.filter((c) => !c.parentId), [categories]);
   const childCategories = useMemo(() => categories.filter((c) => c.parentId), [categories]);
@@ -4619,10 +4863,13 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     setEditorData({ title: '', content: '', pillar: pillarFilter || '', category: '', subcategory: '', tags: '' });
     setSaveStatus('new');
     setShowDeleteConfirm(false);
+    setNoteImages([]);
+    if (tiptapEditor) tiptapEditor.commands.setContent('');
   }
 
   function openNote(note) {
     setSelectedNote(note);
+    const htmlContent = ensureHtml(note.content || '');
     setEditorData({
       title: note.title || '',
       content: note.content || '',
@@ -4635,6 +4882,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     setShowDeleteConfirm(false);
     setAiSuggestion(null);
     if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+    if (tiptapEditor) tiptapEditor.commands.setContent(htmlContent);
   }
 
   function handleEditorChange(field, value) {
@@ -4800,21 +5048,39 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
         </div>
       </div>
 
+      {/* Tiptap toolbar */}
+      <TiptapToolbar editor={tiptapEditor} onImageClick={selectedNote?.id ? () => fileInputRef.current?.click() : undefined} />
+      {/* Hidden file input for image uploads */}
+      <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden onChange={(e) => { uploadImages(Array.from(e.target.files)); e.target.value = ''; }} />
+
       {/* Editor body */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div
+        className={`flex-1 overflow-y-auto px-4 py-3 space-y-3 relative ${dragOver ? 'ring-2 ring-purple-400 ring-inset' : ''}`}
+        onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onPaste={handlePaste}
+      >
+        {dragOver && (
+          <div className="absolute inset-0 bg-purple-50/80 z-10 flex items-center justify-center rounded-lg pointer-events-none">
+            <span className="text-purple-600 font-medium text-sm">Drop image here</span>
+          </div>
+        )}
         <input
           type="text" value={editorData.title}
           onChange={(e) => handleEditorChange('title', e.target.value)}
           placeholder="Title (optional)"
           className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
         />
-        <textarea
-          value={editorData.content}
-          onChange={(e) => handleEditorChange('content', e.target.value)}
-          placeholder="Start writing..."
-          className="w-full min-h-[200px] bg-transparent border-0 outline-none resize-none text-gray-700 placeholder-gray-300 leading-relaxed"
-          style={{ height: Math.max(200, (editorData.content || '').split('\n').length * 24 + 40) }}
-        />
+        <EditorContent editor={tiptapEditor} />
+
+        {/* Image gallery strip */}
+        {selectedNote?.id && (
+          <NoteImageGallery
+            noteId={selectedNote.id}
+            authToken={authToken}
+            images={noteImages}
+            setImages={setNoteImages}
+            onAddClick={() => fileInputRef.current?.click()}
+          />
+        )}
 
         {/* AI suggestion pill */}
         {aiSuggestion && aiSuggestion.noteId === selectedNote?.id && (
@@ -4900,8 +5166,29 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
       {/* Left sidebar */}
       <div className={`w-full md:w-[240px] flex-shrink-0 border-r border-gray-100 flex flex-col bg-white overflow-y-auto ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
+        {/* Search bar */}
+        <div className="px-3 pt-3 pb-1">
+          <div className="relative">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none">🔍</span>
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search notes..."
+              className="w-full pl-8 pr-7 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-purple-300"
+              style={{ height: 36, fontSize: 14 }}
+            />
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
+            )}
+          </div>
+          {searchResults !== null && (
+            <div className="text-[10px] text-gray-400 mt-1 px-1">{searchResults.length} note{searchResults.length !== 1 ? 's' : ''} found</div>
+          )}
+        </div>
         {/* New Note button */}
-        <div className="p-3">
+        <div className="px-3 pb-2 pt-1">
           <button onClick={handleNewNote}
             className="w-full px-4 py-2.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2">
             <span className="text-lg leading-none">+</span> New Note
@@ -4948,9 +5235,16 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
         </div>
       )}
 
-      {!selectedNote && (
+      {!selectedNote && (() => {
+        const displayNotes = searchResults !== null ? searchResults : notes;
+        return (
         <div className="flex-1 overflow-y-auto px-4 py-3 md:block">
-          {notes.length === 0 ? (
+          {searchResults !== null && displayNotes.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400 py-20">
+              <p className="text-sm text-gray-500 mb-2">No notes found for '{searchQuery}'</p>
+              <button onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="text-xs text-purple-600 hover:underline">Clear search</button>
+            </div>
+          ) : displayNotes.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-400 py-20">
               <NotesIcon className="w-12 h-12 mb-3 text-gray-300" />
               <p className="text-sm font-medium text-gray-500 mb-1">Capture your first thought →</p>
@@ -4961,7 +5255,20 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
             </div>
           ) : (
             <div className="space-y-2 max-w-2xl">
-              {notes.map((note) => (
+              {displayNotes.map((note) => {
+                const plainContent = stripHtml(note.content || '');
+                const titleText = note.title || plainContent.slice(0, 80) || 'Untitled';
+                // Build snippet around search match
+                let snippet = plainContent.slice(0, 120);
+                if (searchQuery && searchQuery.length >= 2) {
+                  const lc = plainContent.toLowerCase();
+                  const matchIdx = lc.indexOf(searchQuery.toLowerCase());
+                  if (matchIdx >= 0) {
+                    const start = Math.max(0, matchIdx - 40);
+                    snippet = (start > 0 ? '...' : '') + plainContent.slice(start, start + 100);
+                  }
+                }
+                return (
                 <button key={note.id} onClick={() => openNote(note)}
                   className="w-full text-left p-3 rounded-xl border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all bg-white">
                   <div className="flex items-start justify-between gap-2">
@@ -4969,11 +5276,13 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                       <div className="flex items-center gap-2 mb-1">
                         {note.pinned && <span className="text-xs">📌</span>}
                         <span className="text-sm font-medium text-gray-800 truncate">
-                          {note.title || (note.content || '').slice(0, 80) || 'Untitled'}
+                          {searchQuery && titleText.toLowerCase().includes(searchQuery.toLowerCase())
+                            ? highlightMatch(titleText, searchQuery)
+                            : titleText}
                         </span>
                       </div>
-                      {note.content && note.title && (
-                        <p className="text-xs text-gray-400 truncate mb-1.5">{note.content.slice(0, 120)}</p>
+                      {plainContent && note.title && (
+                        <p className="text-xs text-gray-400 truncate mb-1.5">{snippet}</p>
                       )}
                       <div className="flex items-center gap-2 flex-wrap">
                         {note.pillar && PILLAR_CONFIG[note.pillar] && (
@@ -4991,11 +5300,13 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                     </div>
                   </div>
                 </button>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Desktop editor panel (right side) */}
       <div className="hidden md:flex md:flex-1 md:border-l md:border-gray-100">

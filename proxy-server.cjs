@@ -37,9 +37,23 @@ const fs         = require('fs');
 const path       = require('path');
 const crypto     = require('crypto');
 
+const multer = require('multer');
 const db = require('./db.cjs');
 const XLSX = require('xlsx');
 const pdfParse = require('pdf-parse');
+
+// ── Multer config for note image uploads (base64 fallback) ───────────────────
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only jpeg, png, gif, webp images are allowed'));
+    }
+  },
+});
 
 const DIST_DIR = path.join(__dirname, 'dist');
 
@@ -1598,6 +1612,84 @@ Respond in JSON only:
   }
 });
 
+// ── Note Images ──────────────────────────────────────────────────────────────
+
+app.get('/api/notes/:id/images', authenticateToken, async (req, res) => {
+  try {
+    const images = await db.getNoteImages(req.params.id, req.user.id);
+    return res.json(images);
+  } catch (err) {
+    console.error('[notes] images list failed:', err.message);
+    return res.json([]);
+  }
+});
+
+app.post('/api/notes/:id/images', authenticateToken, imageUpload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image file provided' });
+    const noteId = req.params.id;
+    // Verify note belongs to user
+    const note = await db.getNoteById(noteId, req.user.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+
+    const imageId = `nimg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const ext = req.file.originalname.split('.').pop() || 'jpg';
+    const filename = `${imageId}.${ext}`;
+
+    // Try filesystem storage first (Railway volume), fall back to base64 in DB
+    const uploadDir = path.join(__dirname, 'uploads', 'notes', req.user.id, noteId);
+    let url;
+    try {
+      fs.mkdirSync(uploadDir, { recursive: true });
+      fs.writeFileSync(path.join(uploadDir, filename), req.file.buffer);
+      url = `/uploads/notes/${req.user.id}/${noteId}/${filename}`;
+    } catch {
+      // Fallback: store as data URI (base64)
+      const base64 = req.file.buffer.toString('base64');
+      url = `data:${req.file.mimetype};base64,${base64}`;
+    }
+
+    const image = await db.createNoteImage({
+      id: imageId, noteId, userId: req.user.id,
+      filename, originalName: req.file.originalname,
+      mimeType: req.file.mimetype, size: req.file.size, url,
+    });
+    return res.json(image);
+  } catch (err) {
+    console.error('[notes] image upload failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/notes/:id/images/:imageId', authenticateToken, async (req, res) => {
+  try {
+    const deleted = await db.deleteNoteImage(req.params.imageId, req.user.id);
+    if (deleted && deleted.url && !deleted.url.startsWith('data:')) {
+      // Try to remove file from disk
+      const filePath = path.join(__dirname, deleted.url);
+      try { fs.unlinkSync(filePath); } catch {}
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[notes] image delete failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Note Search ──────────────────────────────────────────────────────────────
+
+app.get('/api/notes/search', authenticateToken, async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (!q || q.length < 2) return res.json([]);
+    const results = await db.searchNotes(req.user.id, q);
+    return res.json(results);
+  } catch (err) {
+    console.error('[notes] search failed:', err.message);
+    return res.json([]);
+  }
+});
+
 // ── Daily Digest ─────────────────────────────────────────────────────────────
 
 app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
@@ -1752,6 +1844,9 @@ app.get('/health', (_req, res) =>
 );
 
 // ── Serve React app from dist/ (production) ──────────────────────────────────
+
+// Serve uploaded images
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
