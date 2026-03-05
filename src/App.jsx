@@ -23,8 +23,8 @@ function decodeJwtPayload(token) {
   } catch { return null; }
 }
 
-/** Returns true if the token expires within `thresholdSeconds` (default 24h). */
-function tokenExpiresSoon(token, thresholdSeconds = 86400) {
+/** Returns true if the token expires within `thresholdSeconds` (default 7 days). */
+function tokenExpiresSoon(token, thresholdSeconds = 7 * 86400) {
   const payload = decodeJwtPayload(token);
   if (!payload || !payload.exp) return false;
   return payload.exp - Date.now() / 1000 < thresholdSeconds;
@@ -3787,7 +3787,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   useEffect(() => {
     if (!currentUser?.id) return;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    fetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}`)
+    apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}`)
       .then((r) => r.json())
       .then((data) => {
         if (!Array.isArray(data)) return;
@@ -5332,7 +5332,7 @@ function CalendarPanel({ currentUser, addToast }) {
   async function checkStatus() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`);
+      const res = await apiFetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`);
       const data = await res.json();
       setGcalStatus(data);
     } catch {
@@ -5344,7 +5344,7 @@ function CalendarPanel({ currentUser, addToast }) {
 
   async function handleConnect() {
     try {
-      const res = await fetch(`${API_BASE}/api/gcal/auth-url?userId=${currentUser.id}`);
+      const res = await apiFetch(`${API_BASE}/api/gcal/auth-url?userId=${currentUser.id}`);
       const data = await res.json();
       if (data.error) {
         addToast({ type: 'error', message: data.error });
@@ -5358,7 +5358,7 @@ function CalendarPanel({ currentUser, addToast }) {
 
   async function handleDisconnect() {
     try {
-      await fetch(`${API_BASE}/api/gcal/disconnect`, {
+      await apiFetch(`${API_BASE}/api/gcal/disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id }),
@@ -5534,29 +5534,51 @@ export default function App() {
     localStorage.removeItem('tm_user');
   }
 
+  // Keep chatInput ref in sync for session-expired handler
+  useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
+
   // Listen for session-expired events from apiFetch
   useEffect(() => {
     function onSessionExpired() {
+      // Save unsent chat message so it can be restored after re-login
+      if (chatInputRef.current) {
+        localStorage.setItem('tm_chat_draft', chatInputRef.current);
+      }
       setSessionExpired(true);
     }
     window.addEventListener('session-expired', onSessionExpired);
     return () => window.removeEventListener('session-expired', onSessionExpired);
   }, []);
 
-  // Proactive token refresh — if token expires within 24h, refresh it now
+  // Proactive token refresh on user activity — throttled to once per hour
   useEffect(() => {
     if (!authToken) return;
-    if (tokenExpiresSoon(authToken)) {
-      refreshToken().then((newToken) => {
-        if (newToken) {
-          setAuthToken(newToken);
-          try {
-            const user = JSON.parse(localStorage.getItem('tm_user'));
-            if (user) setCurrentUser(user);
-          } catch {}
-        }
-      });
+    let lastRefreshCheck = 0;
+    function doProactiveRefresh() {
+      const now = Date.now();
+      if (now - lastRefreshCheck < 3600000) return; // max once per hour
+      lastRefreshCheck = now;
+      if (tokenExpiresSoon(authToken)) {
+        refreshToken().then((newToken) => {
+          if (newToken) {
+            setAuthToken(newToken);
+            try {
+              const user = JSON.parse(localStorage.getItem('tm_user'));
+              if (user) setCurrentUser(user);
+            } catch {}
+          }
+        });
+      }
     }
+    // Check immediately on mount / token change
+    doProactiveRefresh();
+    // Check on user activity
+    window.addEventListener('click', doProactiveRefresh);
+    window.addEventListener('keydown', doProactiveRefresh);
+    return () => {
+      window.removeEventListener('click', doProactiveRefresh);
+      window.removeEventListener('keydown', doProactiveRefresh);
+    };
   }, [authToken]);
 
   // Session expired modal
@@ -5570,7 +5592,10 @@ export default function App() {
             </svg>
           </div>
           <h2 className="text-lg font-semibold text-gray-900 mb-2">Session Expired</h2>
-          <p className="text-sm text-gray-500 mb-6">Your session has expired. Please log in again to continue.</p>
+          <p className="text-sm text-gray-500 mb-4">Your session has expired. Please log in again to continue.</p>
+          {localStorage.getItem('tm_chat_draft') && (
+            <p className="text-xs text-gray-400 mb-4">Your unsent message has been saved and will be restored after login.</p>
+          )}
           <button
             onClick={handleLogout}
             className="w-full py-2.5 px-4 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
@@ -5630,7 +5655,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [conversations, setConversations]       = useState([]);
   const [activeConvId, setActiveConvId]         = useState(null);
   const [chatMessages, setChatMessages]         = useState([]);
-  const [chatInput, setChatInput]               = useState('');
+  const [chatInput, setChatInput]               = useState(() => localStorage.getItem('tm_chat_draft') || '');
+  const chatInputRef                            = useRef('');
   const [chatBackend, setChatBackend]           = useState('claude');
   const [chatLoading, setChatLoading]           = useState(false);
   const [chatPanelOpen, setChatPanelOpen]       = useState(false);
@@ -5765,6 +5791,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     const updatedMessages = [...chatMessages, userMsg];
     setChatMessages(updatedMessages);
     setChatInput('');
+    localStorage.removeItem('tm_chat_draft');
     setChatLoading(true);
 
     // Save user message to DB
@@ -5932,7 +5959,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // ── Google Calendar status check ──────────────────────────────────────────
   useEffect(() => {
-    fetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`)
+    apiFetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`)
       .then((r) => r.json())
       .then((data) => setGcalConnected(data.connected))
       .catch(() => {});
@@ -5941,7 +5968,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   async function handleSyncToCalendar(task) {
     if (!task.dueDate) return;
     try {
-      const res = await fetch(`${API_BASE}/api/gcal/sync-task`, {
+      const res = await apiFetch(`${API_BASE}/api/gcal/sync-task`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -140,7 +140,7 @@ app.post('/api/auth/login', async (req, res) => {
         entityIds: user.entityIds || [],
       },
       JWT_SECRET,
-      { expiresIn: '7d' },
+      { expiresIn: '30d' },
     );
 
     return res.json({
@@ -198,7 +198,7 @@ app.put('/api/users/settings', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/auth/refresh
- * Accepts a valid (non-expired) token, returns a fresh token with new 7d expiry.
+ * Accepts a valid (non-expired) token, returns a fresh token with new 30d expiry.
  * Header: Authorization: Bearer <token>
  * Returns: { token, user: { id, username, displayName, ... } }
  */
@@ -219,7 +219,7 @@ app.post('/api/auth/refresh', authenticateToken, async (req, res) => {
         entityIds: user.entityIds || [],
       },
       JWT_SECRET,
-      { expiresIn: '7d' },
+      { expiresIn: '30d' },
     );
 
     const { passwordHash, ...safe } = user;
