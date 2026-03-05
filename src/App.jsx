@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import Underline from '@tiptap/extension-underline';
 import TiptapImage from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 
@@ -4309,7 +4308,6 @@ function useNoteEditor({ content, onUpdate }) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2] } }),
-      Underline,
       TiptapImage.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({ placeholder: 'Start writing...' }),
     ],

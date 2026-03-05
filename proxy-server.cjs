@@ -1752,7 +1752,7 @@ app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
     return res.json(digest);
   } catch (err) {
     console.error('[digest] generation failed:', err.message);
-    return res.status(500).json({ error: err.message });
+    return res.json({ digest: null });
   }
 });
 
