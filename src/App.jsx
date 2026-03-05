@@ -2761,15 +2761,23 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
 // Build AI system prompt (extracted from old ChatPanel for reuse)
 function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions, notes, calendarEvents) {
   const today = new Date();
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const userTZ = 'America/Los_Angeles';
   const dateStr = today.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
-    timeZone: tz,
+    timeZone: userTZ,
   });
-  const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  const timeStr = today.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: userTZ,
+  });
+  // Compute todayISO in PST so date boundaries are correct
+  const pstParts = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(today);
+  const todayISO = pstParts;
   const activeTasks = tasks.filter((t) => !t.completed);
   const taskSummary = activeTasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, dueDate: t.dueDate || null, dueTime: t.dueTime || null }));
   const todayTasks = activeTasks.filter((t) => t.dueDate && t.dueDate.startsWith(todayISO));
@@ -2848,12 +2856,12 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
   } else {
     calendarContext += upcomingEvents.map((e) => {
       const d = parseEventDate(e);
-      const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      const time = (e.allDay || e.start?.date) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: userTZ });
+      const time = (e.allDay || e.start?.date) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: userTZ });
       return `- ${dayLabel}: ${time ? time + ' ' : ''}${e.summary || e.title || 'Untitled'}`;
     }).join('\n');
   }
-  return `You are a business productivity assistant. Today is ${dateStr}. The user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + txContext + notesContext;
+  return `You are a business productivity assistant. Today is ${dateStr}. Current time: ${timeStr} PST. The user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + txContext + notesContext;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
