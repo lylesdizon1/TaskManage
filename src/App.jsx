@@ -2725,7 +2725,18 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
 
 // Build AI system prompt (extracted from old ChatPanel for reuse)
 function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions, notes) {
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+  const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
   const taskSummary = tasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, completed: t.completed, dueDate: t.dueDate || null }));
+  const todayTasks = tasks.filter((t) => t.dueDate && t.dueDate.startsWith(todayISO));
+  const overdueTasks = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < todayISO);
   const allEntities = entities || [];
   const businesses = allEntities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
   const projects = allEntities.filter((e) => e.type === 'project');
@@ -2759,7 +2770,10 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
       notesContext = `\n\nRECENT NOTES (last ${recentNotes.length}, newest first):\n${recentNotes.join('\n---\n')}`;
     }
   }
-  return `You are a business productivity assistant. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + entityContext + txContext + notesContext;
+  let todayContext = '';
+  if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => `${t.title}${t.completed ? ' (done)' : ''}`).join(', ')}`;
+  if (overdueTasks.length > 0) todayContext += `\nOverdue tasks: ${overdueTasks.map((t) => `${t.title} (due ${t.dueDate})`).join(', ')}`;
+  return `You are a business productivity assistant. Today is ${dateStr}. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + entityContext + txContext + notesContext;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
