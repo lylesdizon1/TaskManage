@@ -3723,6 +3723,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
+  const [calendarLoaded, setCalendarLoaded] = useState(false);
   const [timelineSummary, setTimelineSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [ariaBrief, setAriaBrief] = useState(null);
@@ -3783,7 +3784,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     fetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}`)
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setCalendarEvents(data); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setCalendarLoaded(true));
   }, [currentUser?.id]);
 
   // Timeline items: merge calendar events + tasks, sorted chronologically
@@ -3827,8 +3829,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     const cached = localStorage.getItem(cacheKey);
     if (cached) { setTimelineSummary(cached); setSummaryLoading(false); return; }
 
-    // Wait for tasks to be ready
-    if (!tasksReady && tasks.length === 0) return;
+    // Wait for all data sources before generating
+    if (!allDataReady) return;
 
     const eventsData = calendarEvents.map((e) => ({ time: e.allDay ? 'All day' : new Date(e.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), title: e.title }));
     const tasksData = [...overdueTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: true })), ...todayTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: false })), ...highPriorityTasks.filter((t) => !t.dueDate || t.dueDate === today).map((t) => ({ title: t.title, priority: t.priority, overdue: false }))];
@@ -3847,15 +3849,19 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       })
       .catch(() => {})
       .finally(() => setSummaryLoading(false));
-  }, [today, calendarEvents.length, tasksReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Aria brief (persona-aware, once per day, cached)
+  // Wait for ALL data sources before generating to avoid empty/generic briefs
+  const allDataReady = tasksReady && calendarLoaded;
+
   useEffect(() => {
     const cacheKey = `aria_brief_${today}_${currentUser?.id || ''}`;
     const cached = localStorage.getItem(cacheKey);
     if (cached) { setAriaBrief(cached); setAriaBriefLoading(false); return; }
 
-    if (!tasksReady && tasks.length === 0) return;
+    // Don't generate until all data sources have loaded
+    if (!allDataReady) return;
 
     const hour2 = new Date().getHours();
     const tod = hour2 < 12 ? 'morning' : hour2 < 17 ? 'afternoon' : 'evening';
@@ -3867,6 +3873,11 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     const eventsStr = calendarEvents.length > 0 ? calendarEvents.map((e) => e.title).slice(0, 5).join(', ') : 'None';
     const txSummary = netCashFlow !== null ? `Net ${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month` : 'No data';
     const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
+
+    console.log('[aria-brief] Generating with context:', {
+      overdue: overdueStr, dueToday: dueTodayStr, highPriority: highStr,
+      events: eventsStr, cashFlow: txSummary, entities: entStr, notesThisWeek
+    });
 
     const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. TODAY IS ${dateStr} — ONLY reference events and tasks happening TODAY. Never mention future dates or upcoming events unless explicitly in the data below. Be specific — reference actual data. Write naturally like a real person. No bullet points. Do NOT include a sign-off or signature.`;
     const userMsg = `Write my ${tod} brief.\n\nTODAY'S DATA ONLY:\n- Today's calendar events: ${eventsStr}\n- Overdue tasks: ${overdueStr}\n- Due today: ${dueTodayStr}\n- High priority tasks: ${highStr}\n- This month's net cash flow: ${txSummary}\n- Notes this week: ${notesThisWeek}\n- Active businesses: ${entStr}`;
@@ -3882,7 +3893,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       })
       .catch((err) => { console.error('[aria-brief] generation failed:', err.message); })
       .finally(() => setAriaBriefLoading(false));
-  }, [today, calendarEvents.length, tasksReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length, notesThisWeek, netCashFlow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Digest: load from localStorage cache or fetch
   useEffect(() => {
