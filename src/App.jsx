@@ -2571,7 +2571,7 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
 // Universal Prompt Bar
 // ─────────────────────────────────────────────────────────────────────────────
 
-function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, onSend, loading }) {
+function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, onSend, loading, activeTab }) {
   const textareaRef = useRef(null);
 
   useEffect(() => {
@@ -2581,27 +2581,60 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
     el.style.height = Math.min(el.scrollHeight, 90) + 'px';
   }, [input]);
 
+  // Mobile keyboard: keep bar visible via visualViewport resize
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    function onResize() {
+      const diff = window.innerHeight - vv.height;
+      setKeyboardOffset(diff > 80 ? diff : 0); // only if keyboard-sized gap
+    }
+    vv.addEventListener('resize', onResize);
+    return () => vv.removeEventListener('resize', onResize);
+  }, []);
+
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
   }
 
+  const placeholders = {
+    dashboard: 'What do you want to focus on today?',
+    daily: 'Ask about your tasks...',
+    calendar: 'Ask about your schedule...',
+    financials: 'Ask about your finances...',
+    notes: 'Ask about your notes...',
+    chat: 'Ask anything...',
+  };
+  const placeholder = placeholders[activeTab] || 'Ask anything...';
+
+  // On mobile when keyboard is open, reposition above keyboard instead of above nav
+  const mobileBottom = keyboardOffset > 0 ? keyboardOffset : 60; // 60px = mobile bottom nav height
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200 px-3 md:px-4 py-2 mb-14 md:mb-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
-      <div className="flex items-end gap-2 max-w-screen-xl mx-auto">
+    <div
+      className="fixed left-0 right-0 z-50 bg-white border-t border-gray-200"
+      style={{
+        bottom: window.innerWidth < 768 ? mobileBottom : 0,
+        height: window.innerWidth < 768 ? 52 : 64,
+        paddingBottom: keyboardOffset > 0 ? 0 : 'env(safe-area-inset-bottom, 0px)',
+      }}
+    >
+      <div className="flex items-center gap-2 h-full px-3 md:px-4 max-w-screen-xl mx-auto">
         <textarea
           ref={textareaRef}
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask anything..."
+          placeholder={placeholder}
           rows={1}
-          className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
-          style={{ overflowY: 'hidden' }}
+          className="flex-1 min-w-0 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+          style={{ overflowY: 'hidden', maxHeight: window.innerWidth < 768 ? 36 : 44 }}
         />
         <select
           value={backend}
           onChange={(e) => onBackendChange(e.target.value)}
-          className="px-2 py-2 text-xs font-medium bg-gray-50 border border-gray-200 rounded-lg text-gray-700 focus:ring-2 focus:ring-indigo-300"
+          className="flex-shrink-0 px-2 py-1.5 text-[11px] font-semibold bg-gray-100 border border-gray-200 rounded-lg text-gray-600 focus:ring-2 focus:ring-indigo-300 cursor-pointer appearance-auto"
         >
           <option value="claude">Claude</option>
           <option value="chatgpt">ChatGPT</option>
@@ -2609,10 +2642,14 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
         <button
           onClick={onSend}
           disabled={loading || !input.trim()}
-          className="flex-shrink-0 w-9 h-9 flex items-center justify-center text-white rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+          className="flex-shrink-0 w-8 h-8 md:w-9 md:h-9 flex items-center justify-center text-white rounded-full disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
           style={{ backgroundColor: '#7C3AED' }}
         >
-          <SendIcon className="w-4 h-4" />
+          {loading ? (
+            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <SendIcon className="w-4 h-4" />
+          )}
         </button>
       </div>
     </div>
@@ -4151,7 +4188,7 @@ function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, addToast,
         style={{
           width: 56,
           height: 56,
-          bottom: 80,
+          bottom: window.innerWidth < 768 ? 130 : 80,
           right: 20,
           backgroundColor: '#7C3AED',
         }}
@@ -5359,7 +5396,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       </header>
 
       {/* ── Main layout ── */}
-      <main className="flex flex-col md:flex-row pb-16 md:pb-10" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
+      <main className="flex flex-col md:flex-row pb-[140px] md:pb-20" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
         {/* ── Left: Task panel (shrinks when sliding chat is open) ── */}
         <section
           className={`flex-col md:border-r border-gray-200 overflow-hidden w-full ${
@@ -5645,6 +5682,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         onBackendChange={setChatBackend}
         onSend={handleChatSend}
         loading={chatLoading}
+        activeTab={window.innerWidth >= 768 ? activeView : mobileView}
       />
 
       {/* ── Toast notifications ── */}
