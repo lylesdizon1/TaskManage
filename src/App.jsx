@@ -2775,6 +2775,15 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
   if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => `${t.title}${t.completed ? ' (done)' : ''}`).join(', ')}`;
   if (overdueTasks.length > 0) todayContext += `\nOverdue tasks: ${overdueTasks.map((t) => `${t.title} (due ${t.dueDate})`).join(', ')}`;
   // Calendar events for the next 7 days
+  // Parse event start date, handling all-day events (date-only strings) as local dates
+  // to avoid UTC timezone shift (e.g. "2026-03-08" parsed as UTC midnight = Mar 7 in PST)
+  function parseEventDate(ev) {
+    if (ev.allDay || ev.start?.date) {
+      const [y, m, d] = (ev.start?.date || ev.start || '').split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
+    return new Date(ev.start?.dateTime || ev.start);
+  }
   const weekOut = new Date(today);
   weekOut.setDate(weekOut.getDate() + 7);
   weekOut.setHours(23, 59, 59, 999);
@@ -2784,19 +2793,18 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
     .filter((ev) => {
       const startStr = ev.start?.dateTime || ev.start?.date || ev.start;
       if (!startStr) return false;
-      const eventDate = new Date(startStr);
+      const eventDate = parseEventDate(ev);
       return eventDate >= todayStart && eventDate <= weekOut;
     })
-    .sort((a, b) => new Date(a.start?.dateTime || a.start?.date || a.start) - new Date(b.start?.dateTime || b.start?.date || b.start));
+    .sort((a, b) => parseEventDate(a) - parseEventDate(b));
   let calendarContext = `\n\nUPCOMING CALENDAR (next 7 days):\n`;
   if (upcomingEvents.length === 0) {
     calendarContext += 'No events this week';
   } else {
     calendarContext += upcomingEvents.map((e) => {
-      const startStr = e.start?.dateTime || e.start?.date || e.start;
-      const d = new Date(startStr);
-      const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
-      const time = (e.allDay || e.start?.date) ? '' : new Date(startStr).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      const d = parseEventDate(e);
+      const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      const time = (e.allDay || e.start?.date) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
       return `- ${dayLabel}: ${time ? time + ' ' : ''}${e.summary || e.title || 'Untitled'}`;
     }).join('\n');
   }
