@@ -4845,12 +4845,6 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     return childCategories.filter((c) => c.parentId === parent.id);
   }
 
-  // Count notes per category
-  const categoryCounts = useMemo(() => {
-    const counts = {};
-    notes.forEach((n) => { if (n.category) counts[n.category] = (counts[n.category] || 0) + 1; });
-    return counts;
-  }, [notes]);
 
   function handleNewNote() {
     const tempNote = {
@@ -5162,11 +5156,38 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     </div>
   );
 
+  // ── Date grouping helper ──
+  function getDateGroup(dateStr) {
+    const now = new Date();
+    const d = new Date(dateStr);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const weekAgo = new Date(today); weekAgo.setDate(today.getDate() - 7);
+    if (d >= today) return 'Today';
+    if (d >= yesterday) return 'Yesterday';
+    if (d >= weekAgo) return 'This Week';
+    return 'Earlier';
+  }
+
+  const displayNotes = searchResults !== null ? searchResults : notes;
+
+  // Group notes by date
+  const groupedNotes = useMemo(() => {
+    const groups = {};
+    const order = ['Today', 'Yesterday', 'This Week', 'Earlier'];
+    displayNotes.forEach((note) => {
+      const group = getDateGroup(note.updatedAt || note.createdAt);
+      if (!groups[group]) groups[group] = [];
+      groups[group].push(note);
+    });
+    return order.filter((g) => groups[g]?.length).map((g) => ({ label: g, notes: groups[g] }));
+  }, [displayNotes]);
+
   // ── Main layout ──
   return (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-      {/* Left sidebar */}
-      <div className={`w-full md:w-[240px] flex-shrink-0 border-r border-gray-100 flex flex-col bg-white overflow-y-auto ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
+      {/* Left sidebar — notes list */}
+      <div className={`w-full md:w-[260px] flex-shrink-0 border-r border-gray-100 flex flex-col bg-white ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
         {/* Search bar */}
         <div className="px-3 pt-3 pb-1">
           <div className="relative">
@@ -5181,135 +5202,102 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
               style={{ height: 36, fontSize: 14 }}
             />
             {searchQuery && (
-              <button onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
+              <button type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
             )}
           </div>
           {searchResults !== null && (
             <div className="text-[10px] text-gray-400 mt-1 px-1">{searchResults.length} note{searchResults.length !== 1 ? 's' : ''} found</div>
           )}
         </div>
+
         {/* New Note button */}
         <div className="px-3 pb-2 pt-1">
-          <button onClick={handleNewNote}
-            className="w-full px-4 py-2.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2">
+          <button type="button" onClick={handleNewNote}
+            className="w-full px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2">
             <span className="text-lg leading-none">+</span> New Note
           </button>
         </div>
 
-        {/* Pillar filters */}
-        <div className="px-3 pb-2 flex flex-wrap gap-1">
-          <button onClick={() => { setPillarFilter(''); setCategoryFilter(''); }}
-            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${!pillarFilter ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+        {/* Pillar filter pills — slim row */}
+        <div className="px-3 pb-2 flex gap-1 flex-wrap">
+          <button type="button" onClick={() => { setPillarFilter(''); setCategoryFilter(''); }}
+            className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-all ${!pillarFilter ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
             All
           </button>
           {Object.entries(PILLAR_CONFIG).map(([key, cfg]) => (
-            <button key={key} onClick={() => { setPillarFilter(pillarFilter === key ? '' : key); setCategoryFilter(''); }}
-              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${pillarFilter === key ? `${cfg.bg} ${cfg.text}` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+            <button type="button" key={key} onClick={() => { setPillarFilter(pillarFilter === key ? '' : key); setCategoryFilter(''); }}
+              className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-all ${pillarFilter === key ? `${cfg.bg} ${cfg.text}` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
               {cfg.label}
             </button>
           ))}
         </div>
 
-        {/* Category list */}
-        <div className="flex-1 overflow-y-auto px-2 pb-3">
-          {childCategories
-            .filter((c) => !pillarFilter || c.pillar === pillarFilter)
-            .map((cat) => (
-              <button key={cat.id} onClick={() => setCategoryFilter(categoryFilter === cat.name ? '' : cat.name)}
-                className={`w-full text-left px-3 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${categoryFilter === cat.name ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                <span className="flex items-center gap-2">
-                  {cat.pillar && <span className={`w-1.5 h-1.5 rounded-full ${PILLAR_CONFIG[cat.pillar]?.dot || 'bg-gray-400'}`} />}
-                  {cat.name}
-                </span>
-                {categoryCounts[cat.name] > 0 && (
-                  <span className="text-[10px] text-gray-400">{categoryCounts[cat.name]}</span>
-                )}
+        {/* Notes list grouped by date */}
+        <div className="flex-1 overflow-y-auto">
+          {searchResults !== null && displayNotes.length === 0 ? (
+            <div className="flex flex-col items-center text-gray-400 py-10 px-3">
+              <p className="text-sm text-gray-500 mb-2">No notes found for '{searchQuery}'</p>
+              <button type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="text-xs text-purple-600 hover:underline">Clear search</button>
+            </div>
+          ) : displayNotes.length === 0 ? (
+            <div className="flex flex-col items-center text-gray-400 py-10 px-3">
+              <p className="text-sm text-gray-500 mb-1">No notes yet</p>
+              <button type="button" onClick={handleNewNote}
+                className="mt-2 px-4 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 transition-colors">
+                + Create your first note
               </button>
-            ))}
+            </div>
+          ) : (
+            groupedNotes.map(({ label, notes: groupNotes }) => (
+              <div key={label}>
+                <div className="px-3 pt-3 pb-1">
+                  <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
+                </div>
+                {groupNotes.map((note) => {
+                  const plainContent = stripHtml(note.content || '');
+                  const titleText = note.title || plainContent.slice(0, 30) || 'Untitled';
+                  const isActive = selectedNote?.id === note.id || (selectedNote && !selectedNote.id && !note.id);
+                  const pillarCfg = note.pillar && PILLAR_CONFIG[note.pillar];
+                  // Build meta line: "Hustle · Careific · 2 min ago"
+                  const metaParts = [];
+                  if (pillarCfg) metaParts.push(pillarCfg.label);
+                  if (note.category) metaParts.push(note.category);
+                  metaParts.push(relativeTime(note.updatedAt || note.createdAt));
+                  return (
+                    <button type="button" key={note.id || 'new'} onClick={() => openNote(note)}
+                      className={`w-full text-left px-3 py-2.5 transition-colors flex items-start gap-2 ${isActive ? 'bg-purple-50 border-l-2 border-purple-500' : 'hover:bg-gray-50 border-l-2 border-transparent'}`}
+                      style={{ minHeight: 56 }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {note.pinned && <span className="text-[10px]">📌</span>}
+                          <span className="text-sm font-medium text-gray-800 truncate block" style={{ maxWidth: '100%' }}>
+                            {searchQuery && titleText.toLowerCase().includes(searchQuery.toLowerCase())
+                              ? highlightMatch(titleText.slice(0, 30), searchQuery)
+                              : titleText.slice(0, 30)}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+                          {metaParts.join(' · ')}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ))
+          )}
         </div>
       </div>
 
-      {/* Main panel: note list or editor on mobile */}
+      {/* Mobile: full-screen editor when note selected */}
       {selectedNote && (
         <div className="flex-1 flex flex-col md:hidden overflow-hidden">
           {editorPanel}
         </div>
       )}
 
-      {!selectedNote && (() => {
-        const displayNotes = searchResults !== null ? searchResults : notes;
-        return (
-        <div className="flex-1 overflow-y-auto px-4 py-3 md:block">
-          {searchResults !== null && displayNotes.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 py-20">
-              <p className="text-sm text-gray-500 mb-2">No notes found for '{searchQuery}'</p>
-              <button onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="text-xs text-purple-600 hover:underline">Clear search</button>
-            </div>
-          ) : displayNotes.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 py-20">
-              <NotesIcon className="w-12 h-12 mb-3 text-gray-300" />
-              <p className="text-sm font-medium text-gray-500 mb-1">Capture your first thought →</p>
-              <button onClick={handleNewNote}
-                className="mt-3 px-5 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors">
-                New Note
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2 max-w-2xl">
-              {displayNotes.map((note) => {
-                const plainContent = stripHtml(note.content || '');
-                const titleText = note.title || plainContent.slice(0, 80) || 'Untitled';
-                // Build snippet around search match
-                let snippet = plainContent.slice(0, 120);
-                if (searchQuery && searchQuery.length >= 2) {
-                  const lc = plainContent.toLowerCase();
-                  const matchIdx = lc.indexOf(searchQuery.toLowerCase());
-                  if (matchIdx >= 0) {
-                    const start = Math.max(0, matchIdx - 40);
-                    snippet = (start > 0 ? '...' : '') + plainContent.slice(start, start + 100);
-                  }
-                }
-                return (
-                <button key={note.id} onClick={() => openNote(note)}
-                  className="w-full text-left p-3 rounded-xl border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all bg-white">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        {note.pinned && <span className="text-xs">📌</span>}
-                        <span className="text-sm font-medium text-gray-800 truncate">
-                          {searchQuery && titleText.toLowerCase().includes(searchQuery.toLowerCase())
-                            ? highlightMatch(titleText, searchQuery)
-                            : titleText}
-                        </span>
-                      </div>
-                      {plainContent && note.title && (
-                        <p className="text-xs text-gray-400 truncate mb-1.5">{snippet}</p>
-                      )}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {note.pillar && PILLAR_CONFIG[note.pillar] && (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${PILLAR_CONFIG[note.pillar].bg} ${PILLAR_CONFIG[note.pillar].text}`}>
-                            {PILLAR_CONFIG[note.pillar].label}
-                          </span>
-                        )}
-                        {note.category && (
-                          <span className="text-[10px] text-gray-400">
-                            {note.category}{note.subcategory ? ` · ${note.subcategory}` : ''}
-                          </span>
-                        )}
-                        <span className="text-[10px] text-gray-300">{relativeTime(note.updatedAt || note.createdAt)}</span>
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              );
-              })}
-            </div>
-          )}
-        </div>
-        );
-      })()}
-
-      {/* Desktop editor panel (right side) */}
+      {/* Desktop: editor panel (right side) */}
       <div className="hidden md:flex md:flex-1 md:border-l md:border-gray-100">
         {selectedNote ? editorPanel : (
           <div className="flex-1 flex items-center justify-center text-gray-300 text-sm">
