@@ -4318,11 +4318,16 @@ function useNoteEditor({ content, onUpdate }) {
         class: 'tiptap-editor outline-none',
         style: 'min-height:300px;padding:16px;font-size:15px;line-height:1.7',
       },
+      handleKeyDown: (view, event) => {
+        console.log('Tiptap keydown:', event.key, 'editable:', view.editable, 'hasFocus:', view.hasFocus());
+        return false; // never block
+      },
     },
     onUpdate: ({ editor: ed }) => {
       if (onUpdate) onUpdate(ed.getHTML());
     },
   });
+  console.log('Editor created:', editor?.isEditable, editor?.isFocused);
   return editor;
 }
 
