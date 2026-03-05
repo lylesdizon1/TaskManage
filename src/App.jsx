@@ -5503,7 +5503,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     // Open sliding panel on desktop if not on chat tab
     if (window.innerWidth >= 768 && activeView !== 'chat') {
       setChatPanelOpen(true);
-      localStorage.setItem('tm_chat_panel', 'open');
     }
   }
 
@@ -5521,7 +5520,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   function toggleChatPanel() {
     setChatPanelOpen((prev) => {
       const next = !prev;
-      localStorage.setItem('tm_chat_panel', next ? 'open' : 'closed');
       return next;
     });
   }

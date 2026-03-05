@@ -773,7 +773,7 @@ app.get('/api/gcal/events', async (req, res) => {
 
     const events = (data.items || []).map((ev) => ({
       id: ev.id,
-      title: ev.summary || '(No title)',
+      title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
       start: ev.start?.dateTime || ev.start?.date || null,
       end: ev.end?.dateTime || ev.end?.date || null,
       allDay: !ev.start?.dateTime,
