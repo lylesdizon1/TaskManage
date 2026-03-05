@@ -3920,35 +3920,45 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   return (
     <div className="flex-1 overflow-y-auto px-4 md:px-6 pt-5 pb-6 space-y-5" style={{ minHeight: 0 }}>
 
-      {/* ── ROW 1: Greeting + Inline Stats Strip ── */}
-      <div>
-        <h2 className="text-xl md:text-2xl font-bold text-gray-900">
-          {greeting}, {firstName} <span className="font-normal text-gray-400 text-base md:text-lg">&middot; {dateStr}</span>
-        </h2>
-        <div className="flex flex-wrap gap-2 mt-2">
-          {[
-            { icon: '\u26A0\uFE0F', value: overdueTasks.length, label: 'overdue', onClick: () => onNavigate('daily', 'overdue'), color: '#F59E0B' },
-            { icon: '\uD83D\uDD34', value: highPriorityTasks.length, label: 'high priority', onClick: () => onNavigate('daily', 'high'), color: '#EF4444' },
-            { icon: '\uD83D\uDCC5', value: calendarEvents.length, label: 'events today', onClick: () => onNavigate('calendar'), color: '#3B82F6' },
-            { icon: '\u2705', value: doneToday, label: 'done today', onClick: () => onNavigate('daily', 'done'), color: '#10B981' },
-            { icon: '\uD83D\uDCB0', value: netCashFlow !== null ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '\u2014', label: 'this month', onClick: () => onNavigate('financials'), color: netCashFlow !== null && netCashFlow >= 0 ? '#10B981' : '#EF4444' },
-            { icon: '\uD83D\uDCDD', value: notesThisWeek, label: 'notes week', onClick: () => onNavigate('notes'), color: '#8B5CF6' },
-          ].map(({ icon, value, label, onClick, color }) => {
-            const isZero = value === 0 || value === '\u2014';
-            return (
-              <button
-                key={label}
-                onClick={onClick}
-                className="inline-flex items-center gap-1 cursor-pointer transition-opacity hover:opacity-80"
-                style={{ height: 24, borderRadius: 9999, padding: '0 10px', fontSize: 12, fontWeight: 500, backgroundColor: isZero ? '#E5E7EB' : color, color: isZero ? '#6B7280' : '#fff' }}
-              >
-                <span>{icon}</span>
-                <span>{value} {label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      {/* ── ROW 1: Greeting (left 50%) + Stats Pills (right 50%) ── */}
+      {(() => {
+        const statsData = [
+          { icon: '\u26A0\uFE0F', value: overdueTasks.length, label: 'overdue', onClick: () => onNavigate('daily', 'overdue'), color: '#F59E0B', priority: true },
+          { icon: '\uD83D\uDD34', value: highPriorityTasks.length, label: 'high pri', onClick: () => onNavigate('daily', 'high'), color: '#EF4444', priority: true },
+          { icon: '\uD83D\uDCC5', value: calendarEvents.length, label: 'events', onClick: () => onNavigate('calendar'), color: '#3B82F6', priority: true },
+          { icon: '\u2705', value: doneToday, label: 'done', onClick: () => onNavigate('daily', 'done'), color: '#10B981' },
+          { icon: '\uD83D\uDCB0', value: netCashFlow !== null ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '\u2014', label: 'month', onClick: () => onNavigate('financials'), color: netCashFlow !== null && netCashFlow >= 0 ? '#10B981' : '#EF4444' },
+          { icon: '\uD83D\uDCDD', value: notesThisWeek, label: 'notes', onClick: () => onNavigate('notes'), color: '#8B5CF6' },
+        ];
+        return (
+          <div className="flex items-center" style={{ width: '100%' }}>
+            {/* Left 50%: Greeting */}
+            <div style={{ width: '50%', flexShrink: 0 }}>
+              <h2 className="text-xl md:text-2xl font-bold text-gray-900 leading-tight">
+                {greeting}, {firstName}
+              </h2>
+              <p className="text-sm text-gray-400 mt-0.5">{dateStr}</p>
+            </div>
+            {/* Right 50%: Stats pills */}
+            <div className="flex flex-wrap justify-end items-center overflow-hidden" style={{ width: '50%', gap: 4 }}>
+              {statsData.map(({ icon, value, label, onClick, color, priority }) => {
+                const isZero = value === 0 || value === '\u2014';
+                return (
+                  <button
+                    key={label}
+                    onClick={onClick}
+                    className={`inline-flex items-center gap-0.5 cursor-pointer transition-opacity hover:opacity-80 flex-shrink-0${!priority ? ' hidden md:inline-flex' : ''}`}
+                    style={{ height: 22, borderRadius: 9999, padding: '0 8px', fontSize: 11, fontWeight: 500, backgroundColor: isZero ? '#E5E7EB' : color, color: isZero ? '#6B7280' : '#fff' }}
+                  >
+                    <span>{icon}</span>
+                    <span>{value} {label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── ROW 2: Aria Card — 2 columns (brief + actions) ── */}
       <div className="bg-white rounded-xl overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderRadius: 12 }}>
