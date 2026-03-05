@@ -2735,9 +2735,11 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
     timeZone: tz,
   });
   const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
-  const taskSummary = tasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, completed: t.completed, dueDate: t.dueDate || null }));
-  const todayTasks = tasks.filter((t) => t.dueDate && t.dueDate.startsWith(todayISO));
-  const overdueTasks = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < todayISO);
+  const activeTasks = tasks.filter((t) => !t.completed);
+  const taskSummary = activeTasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, dueDate: t.dueDate || null }));
+  const todayTasks = activeTasks.filter((t) => t.dueDate && t.dueDate.startsWith(todayISO));
+  const overdueTasks = activeTasks.filter((t) => t.dueDate && t.dueDate < todayISO);
+  const completedToday = tasks.filter((t) => t.completed && t.dueDate && t.dueDate.startsWith(todayISO));
   const allEntities = entities || [];
   const businesses = allEntities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
   const projects = allEntities.filter((e) => e.type === 'project');
@@ -2772,8 +2774,9 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
     }
   }
   let todayContext = '';
-  if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => `${t.title}${t.completed ? ' (done)' : ''}`).join(', ')}`;
+  if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => t.title).join(', ')}`;
   if (overdueTasks.length > 0) todayContext += `\nOverdue tasks: ${overdueTasks.map((t) => `${t.title} (due ${t.dueDate})`).join(', ')}`;
+  if (completedToday.length > 0) todayContext += `\nCompleted today: ${completedToday.map((t) => `${t.title} ✓`).join(', ')}`;
   // Calendar events for the next 7 days
   // Parse event start date, handling all-day events (date-only strings) as local dates
   // to avoid UTC timezone shift (e.g. "2026-03-08" parsed as UTC midnight = Mar 7 in PST)
@@ -2808,7 +2811,7 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
       return `- ${dayLabel}: ${time ? time + ' ' : ''}${e.summary || e.title || 'Untitled'}`;
     }).join('\n');
   }
-  return `You are a business productivity assistant. Today is ${dateStr}. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + txContext + notesContext;
+  return `You are a business productivity assistant. Today is ${dateStr}. The user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + txContext + notesContext;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
