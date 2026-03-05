@@ -1698,7 +1698,7 @@ app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
 
     // Check if digest already exists for today
     const notes = await db.getNotesForUser(req.user.id);
-    const existing = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
+    const existing = notes.find((n) => n.type === 'digest' && n.createdAt && new Date(n.createdAt).toISOString().slice(0, 10) === today);
     if (existing) return res.json(existing);
 
     // Gather context for the AI

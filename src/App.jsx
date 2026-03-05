@@ -5018,6 +5018,33 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     return getSubcategories(editorData.pillar, editorData.pillar);
   }, [editorData.pillar, categories]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Date grouping helper (must be before useMemo) ──
+  function getDateGroup(dateStr) {
+    const now = new Date();
+    const d = new Date(dateStr);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const weekAgo = new Date(today); weekAgo.setDate(today.getDate() - 7);
+    if (d >= today) return 'Today';
+    if (d >= yesterday) return 'Yesterday';
+    if (d >= weekAgo) return 'This Week';
+    return 'Earlier';
+  }
+
+  const displayNotes = searchResults !== null ? searchResults : notes;
+
+  // Group notes by date — must be called unconditionally (before any early return)
+  const groupedNotes = useMemo(() => {
+    const groups = {};
+    const order = ['Today', 'Yesterday', 'This Week', 'Earlier'];
+    displayNotes.forEach((note) => {
+      const group = getDateGroup(note.updatedAt || note.createdAt);
+      if (!groups[group]) groups[group] = [];
+      groups[group].push(note);
+    });
+    return order.filter((g) => groups[g]?.length).map((g) => ({ label: g, notes: groups[g] }));
+  }, [displayNotes]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -5153,33 +5180,6 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
       </div>
     </div>
   );
-
-  // ── Date grouping helper ──
-  function getDateGroup(dateStr) {
-    const now = new Date();
-    const d = new Date(dateStr);
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
-    const weekAgo = new Date(today); weekAgo.setDate(today.getDate() - 7);
-    if (d >= today) return 'Today';
-    if (d >= yesterday) return 'Yesterday';
-    if (d >= weekAgo) return 'This Week';
-    return 'Earlier';
-  }
-
-  const displayNotes = searchResults !== null ? searchResults : notes;
-
-  // Group notes by date
-  const groupedNotes = useMemo(() => {
-    const groups = {};
-    const order = ['Today', 'Yesterday', 'This Week', 'Earlier'];
-    displayNotes.forEach((note) => {
-      const group = getDateGroup(note.updatedAt || note.createdAt);
-      if (!groups[group]) groups[group] = [];
-      groups[group].push(note);
-    });
-    return order.filter((g) => groups[g]?.length).map((g) => ({ label: g, notes: groups[g] }));
-  }, [displayNotes]);
 
   // ── Main layout ──
   return (
