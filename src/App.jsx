@@ -2724,14 +2724,15 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
 }
 
 // Build AI system prompt (extracted from old ChatPanel for reuse)
-function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions, notes) {
+function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions, notes, calendarEvents) {
   const today = new Date();
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const dateStr = today.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timeZone: tz,
   });
   const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
   const taskSummary = tasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, completed: t.completed, dueDate: t.dueDate || null }));
@@ -2773,7 +2774,27 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
   let todayContext = '';
   if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => `${t.title}${t.completed ? ' (done)' : ''}`).join(', ')}`;
   if (overdueTasks.length > 0) todayContext += `\nOverdue tasks: ${overdueTasks.map((t) => `${t.title} (due ${t.dueDate})`).join(', ')}`;
-  return `You are a business productivity assistant. Today is ${dateStr}. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + entityContext + txContext + notesContext;
+  // Calendar events for today
+  const todayEvents = (calendarEvents || []).filter((ev) => {
+    const startStr = ev.start?.dateTime || ev.start?.date || ev.start;
+    if (!startStr) return false;
+    if (ev.allDay || ev.start?.date) {
+      const d = (ev.start?.date || ev.start || '').slice(0, 10);
+      return d === todayISO;
+    }
+    return new Date(startStr).toLocaleDateString('en-CA', { timeZone: tz }) === todayISO;
+  });
+  let calendarContext = `\n\nTODAY'S CALENDAR EVENTS:\n`;
+  if (todayEvents.length === 0) {
+    calendarContext += 'No events today';
+  } else {
+    calendarContext += todayEvents.map((e) => {
+      const startStr = e.start?.dateTime || e.start;
+      const time = (e.allDay || e.start?.date) ? 'All day' : new Date(startStr).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      return `- ${time}: ${e.summary || e.title || 'Untitled'}`;
+    }).join('\n');
+  }
+  return `You are a business productivity assistant. Today is ${dateStr}. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + txContext + notesContext;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5649,6 +5670,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [chatLoading, setChatLoading]           = useState(false);
   const [chatPanelOpen, setChatPanelOpen]       = useState(false);
 
+  // ── Calendar events for chat context ──
+  const [chatCalendarEvents, setChatCalendarEvents] = useState([]);
+
   // Keep chatInput ref in sync for session-expired handler
   useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
 
@@ -5806,7 +5830,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
 
     // Build system prompt and call AI
-    const sysPrompt = buildSystemPrompt(tasks, userEntities, financialAccounts, financialTransactions, allNotes);
+    const sysPrompt = buildSystemPrompt(tasks, userEntities, financialAccounts, financialTransactions, allNotes, chatCalendarEvents);
     try {
       let reply;
       if (chatBackend === 'claude') {
@@ -5917,6 +5941,18 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       .catch(() => setTasks(SAMPLE_TASKS))
       .finally(() => { tasksLoadedRef.current = true; });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch Google Calendar events for chat context
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setChatCalendarEvents(data);
+      })
+      .catch(() => {});
+  }, [currentUser?.id]);
 
   // Auto-save tasks whenever they change (skip initial hydration)
   useEffect(() => {
