@@ -679,7 +679,7 @@ app.get('/api/gcal/status', async (req, res) => {
  * Creates a Google Calendar all-day event for the task.
  */
 app.post('/api/gcal/sync-task', async (req, res) => {
-  const { userId, title, description, dueDate } = req.body;
+  const { userId, title, description, dueDate, dueTime, timeZone } = req.body;
   if (!userId || !title || !dueDate) {
     return res.status(400).json({ error: 'userId, title, and dueDate are required' });
   }
@@ -698,21 +698,25 @@ app.post('/api/gcal/sync-task', async (req, res) => {
 
   try {
     const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-    // Create an all-day event on the due date
-    const nextDay = new Date(dueDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const endDate = nextDay.toISOString().slice(0, 10);
+    const requestBody = { summary: title, description: description || '' };
 
-    const event = await calendar.events.insert({
-      calendarId: 'primary',
-      requestBody: {
-        summary: title,
-        description: description || '',
-        start: { date: dueDate },
-        end:   { date: endDate },
-      },
-    });
+    if (dueTime) {
+      // Timed event: use dateTime
+      const tz = timeZone || 'America/Los_Angeles';
+      requestBody.start = { dateTime: `${dueDate}T${dueTime}:00`, timeZone: tz };
+      // Default 1-hour duration
+      const [h, m] = dueTime.split(':').map(Number);
+      const endH = String(h + 1).padStart(2, '0');
+      requestBody.end = { dateTime: `${dueDate}T${endH}:${String(m).padStart(2, '0')}:00`, timeZone: tz };
+    } else {
+      // All-day event
+      const nextDay = new Date(dueDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+      requestBody.start = { date: dueDate };
+      requestBody.end = { date: nextDay.toISOString().slice(0, 10) };
+    }
 
+    const event = await calendar.events.insert({ calendarId: 'primary', requestBody });
     console.log(`[gcal] Created event ${event.data.id} for ${userId}`);
     res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
   } catch (err) {
@@ -799,6 +803,52 @@ app.get('/api/gcal/events', async (req, res) => {
   } catch (err) {
     console.error('[gcal] events list failed:', err.message);
     res.json([]);
+  }
+});
+
+/**
+ * POST /api/calendar/events
+ * Create a new Google Calendar event.
+ */
+app.post('/api/calendar/events', async (req, res) => {
+  const { userId, summary, description, start, end, allDay } = req.body;
+  if (!userId || !summary) return res.status(400).json({ error: 'userId and summary required' });
+
+  const tokens = await db.getGcalTokensForUser(userId);
+  if (!tokens) return res.status(401).json({ error: 'Google Calendar not connected' });
+
+  const oauth2 = makeOAuth2Client();
+  if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured' });
+
+  oauth2.setCredentials(tokens);
+  oauth2.on('tokens', async (newTokens) => {
+    const existing = await db.getGcalTokensForUser(userId);
+    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
+  });
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+    const requestBody = { summary, description: description || '' };
+
+    if (allDay) {
+      // All-day event: use date strings
+      requestBody.start = { date: start.date };
+      const endDate = end?.date || start.date;
+      // Google requires end date to be day after for single-day all-day events
+      const nextDay = new Date(endDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+      requestBody.end = { date: nextDay.toISOString().slice(0, 10) };
+    } else {
+      requestBody.start = { dateTime: start.dateTime, timeZone: start.timeZone };
+      requestBody.end = { dateTime: end.dateTime, timeZone: end.timeZone };
+    }
+
+    const event = await calendar.events.insert({ calendarId: 'primary', requestBody });
+    console.log(`[gcal] Created event ${event.data.id} for ${userId}`);
+    res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
+  } catch (err) {
+    console.error('[gcal] create event failed:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -44,21 +44,26 @@ async function initTables() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (
-      id          TEXT PRIMARY KEY,
-      title       TEXT NOT NULL,
-      description TEXT DEFAULT '',
-      priority    TEXT DEFAULT 'medium',
-      status      TEXT DEFAULT 'pending',
-      due_date    TEXT DEFAULT '',
-      tags        JSONB DEFAULT '[]',
-      visibility  TEXT DEFAULT 'shared',
-      completed   BOOLEAN DEFAULT FALSE,
-      owner       TEXT DEFAULT '',
-      created_by  TEXT DEFAULT '',
-      created_at  TIMESTAMPTZ DEFAULT NOW(),
-      updated_at  TIMESTAMPTZ DEFAULT NOW()
+      id              TEXT PRIMARY KEY,
+      title           TEXT NOT NULL,
+      description     TEXT DEFAULT '',
+      priority        TEXT DEFAULT 'medium',
+      status          TEXT DEFAULT 'pending',
+      due_date        TEXT DEFAULT '',
+      due_time        VARCHAR(5) DEFAULT NULL,
+      tags            JSONB DEFAULT '[]',
+      visibility      TEXT DEFAULT 'shared',
+      completed       BOOLEAN DEFAULT FALSE,
+      owner           TEXT DEFAULT '',
+      created_by      TEXT DEFAULT '',
+      google_event_id VARCHAR(255) DEFAULT NULL,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Add columns if they don't exist (for existing databases)
+  await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_time VARCHAR(5) DEFAULT NULL`);
+  await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS google_event_id VARCHAR(255) DEFAULT NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS settings (
@@ -381,8 +386,8 @@ async function getTasksForUser(userId, userEntityIds) {
   if (!userEntityIds || userEntityIds.length === 0) {
     const { rows } = await pool.query(
       `SELECT id, title, description, priority, status, due_date AS "dueDate",
-              tags, visibility, completed, owner, created_by AS "createdBy",
-              created_at AS "createdAt", updated_at AS "updatedAt"
+              due_time AS "dueTime", tags, visibility, completed, owner, created_by AS "createdBy",
+              google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM tasks
        WHERE owner = $1 OR visibility = 'private' AND owner = $1
        ORDER BY created_at DESC`,
@@ -417,9 +422,9 @@ async function replaceTasks(tasks) {
     await client.query('DELETE FROM tasks');
     for (const t of tasks) {
       await client.query(
-        `INSERT INTO tasks (id, title, description, priority, status, due_date,
-                            tags, visibility, completed, owner, created_by, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW())`,
+        `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
+                            tags, visibility, completed, owner, created_by, google_event_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())`,
         [
           t.id,
           t.title || '',
@@ -427,11 +432,13 @@ async function replaceTasks(tasks) {
           t.priority || 'medium',
           t.status || 'pending',
           t.dueDate || '',
+          t.dueTime || null,
           JSON.stringify(t.tags || []),
           t.visibility || 'shared',
           !!t.completed,
           t.owner || '',
           t.createdBy || t.owner || '',
+          t.googleEventId || null,
           t.createdAt || new Date().toISOString(),
         ],
       );
@@ -820,27 +827,31 @@ async function addConversationMessage(conversationId, userId, role, content, mod
 async function updateTask(id, fields) {
   const { rows } = await pool.query(
     `UPDATE tasks
-     SET title       = COALESCE($2, title),
-         description = COALESCE($3, description),
-         priority    = COALESCE($4, priority),
-         due_date    = COALESCE($5, due_date),
-         tags        = COALESCE($6, tags),
-         visibility  = COALESCE($7, visibility),
-         completed   = COALESCE($8, completed),
-         updated_at  = NOW()
+     SET title           = COALESCE($2, title),
+         description     = COALESCE($3, description),
+         priority        = COALESCE($4, priority),
+         due_date        = COALESCE($5, due_date),
+         due_time        = COALESCE($6, due_time),
+         tags            = COALESCE($7, tags),
+         visibility      = COALESCE($8, visibility),
+         completed       = COALESCE($9, completed),
+         google_event_id = COALESCE($10, google_event_id),
+         updated_at      = NOW()
      WHERE id = $1
      RETURNING id, title, description, priority, status, due_date AS "dueDate",
-               tags, visibility, completed, owner, created_by AS "createdBy",
-               created_at AS "createdAt", updated_at AS "updatedAt"`,
+               due_time AS "dueTime", tags, visibility, completed, owner, created_by AS "createdBy",
+               google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"`,
     [
       id,
       fields.title ?? null,
       fields.description ?? null,
       fields.priority ?? null,
       fields.dueDate ?? null,
+      fields.dueTime ?? null,
       fields.tags ? JSON.stringify(fields.tags) : null,
       fields.visibility ?? null,
       fields.completed !== undefined ? fields.completed : null,
+      fields.googleEventId ?? null,
     ],
   );
   return rows[0] || null;

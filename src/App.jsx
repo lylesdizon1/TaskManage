@@ -1843,15 +1843,17 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
 // ADD TASK FORM
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
+function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalConnected }) {
   const userEntityNames = entities.map((e) => e.name);
   const emptyForm = {
     title: '',
     description: '',
     priority: 'medium',
     dueDate: '',
+    dueTime: '',
     tags: [],
     visibility: 'shared',
+    syncToCalendar: false,
   };
 
   const [form, setForm] = useState(emptyForm);
@@ -1913,7 +1915,14 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
     if (!form.title.trim()) return;
     onAdd({
       id: uid(),
-      ...form,
+      title: form.title,
+      description: form.description,
+      priority: form.priority,
+      dueDate: form.dueDate,
+      dueTime: form.dueTime || null,
+      tags: form.tags,
+      visibility: form.visibility,
+      syncToCalendar: form.syncToCalendar,
       completed: false,
       owner: currentUser?.id || 'unknown',
       createdAt: new Date().toISOString(),
@@ -1979,7 +1988,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
               className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
             />
 
-            {/* Priority + Due Date */}
+            {/* Priority + Due Date + Time */}
             <div className="flex gap-3">
               <div className="flex-1">
                 <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -2004,6 +2013,18 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
                   type="date"
                   value={form.dueDate}
                   onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+                  className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px] md:min-h-0"
+                />
+              </div>
+
+              <div style={{ flex: '0 0 100px' }}>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Time
+                </label>
+                <input
+                  type="time"
+                  value={form.dueTime}
+                  onChange={(e) => setForm((f) => ({ ...f, dueTime: e.target.value }))}
                   className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px] md:min-h-0"
                 />
               </div>
@@ -2081,6 +2102,19 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken }) {
                 ))}
               </div>
             </div>
+
+            {/* Google Calendar sync option */}
+            {gcalConnected && form.dueDate && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.syncToCalendar}
+                  onChange={(e) => setForm((f) => ({ ...f, syncToCalendar: e.target.checked }))}
+                  className="w-4 h-4 accent-indigo-600 rounded"
+                />
+                <span className="text-xs font-medium text-gray-600">📅 Add to Google Calendar</span>
+              </label>
+            )}
 
             {/* Actions */}
             <div className="flex gap-2 pt-1">
@@ -2367,6 +2401,7 @@ function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVisibility, onSync
                 >
                   {overdue && '⚠ '}
                   {task.dueDate}
+                  {task.dueTime && (() => { const [h, m] = task.dueTime.split(':').map(Number); const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 || 12; return ` · ${h12}:${String(m).padStart(2, '0')} ${ampm}`; })()}
                 </span>
               )}
             </div>
@@ -2736,7 +2771,7 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
   });
   const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
   const activeTasks = tasks.filter((t) => !t.completed);
-  const taskSummary = activeTasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, dueDate: t.dueDate || null }));
+  const taskSummary = activeTasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, dueDate: t.dueDate || null, dueTime: t.dueTime || null }));
   const todayTasks = activeTasks.filter((t) => t.dueDate && t.dueDate.startsWith(todayISO));
   const overdueTasks = activeTasks.filter((t) => t.dueDate && t.dueDate < todayISO);
   const completedToday = tasks.filter((t) => t.completed && t.dueDate && t.dueDate.startsWith(todayISO));
@@ -2774,8 +2809,15 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
     }
   }
   let todayContext = '';
-  if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => t.title).join(', ')}`;
-  if (overdueTasks.length > 0) todayContext += `\nOverdue tasks: ${overdueTasks.map((t) => `${t.title} (due ${t.dueDate})`).join(', ')}`;
+  function formatTaskTime(timeStr) {
+    if (!timeStr) return '';
+    const [h, m] = timeStr.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+  }
+  if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => { const time = formatTaskTime(t.dueTime); return time ? `${time} - ${t.title} (${t.priority || 'medium'})` : t.title; }).join(', ')}`;
+  if (overdueTasks.length > 0) todayContext += `\nOverdue tasks: ${overdueTasks.map((t) => { const time = formatTaskTime(t.dueTime); return `${time ? time + ' - ' : ''}${t.title} (due ${t.dueDate})`; }).join(', ')}`;
   if (completedToday.length > 0) todayContext += `\nCompleted today: ${completedToday.map((t) => `${t.title} ✓`).join(', ')}`;
   // Calendar events for the next 7 days
   // Parse event start date, handling all-day events (date-only strings) as local dates
@@ -3775,7 +3817,7 @@ function SkeletonBlock({ className = '' }) {
   return <div className={`bg-gray-200 rounded-lg animate-pulse ${className}`} />;
 }
 
-function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onLogExpense }) {
+function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onLogExpense, onAddEvent }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -3880,13 +3922,22 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       items.push({ type: 'calendar', time: timeStr, sortKey, title: ev.title, id: ev.id });
     });
 
-    // Today's tasks + high priority tasks (no due date treated as EOD)
+    // Today's tasks + high priority tasks — slot by time if available
     const taskSet = new Set();
     overdueTasks.forEach((t) => taskSet.add(t.id));
     [...todayTasks, ...highPriorityTasks.filter((t) => !t.dueDate || t.dueDate === today)].forEach((t) => {
       if (taskSet.has(t.id)) return;
       taskSet.add(t.id);
-      items.push({ type: t.priority === 'high' ? 'high' : 'task', time: 'EOD', sortKey: 9999, title: t.title, priority: t.priority, tags: t.tags, id: t.id });
+      let timeStr = 'EOD';
+      let sortKey = 9999;
+      if (t.dueTime) {
+        const [h, m] = t.dueTime.split(':').map(Number);
+        sortKey = h * 60 + m;
+        const ampm = h >= 12 ? 'pm' : 'am';
+        const h12 = h % 12 || 12;
+        timeStr = `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+      }
+      items.push({ type: t.priority === 'high' ? 'high' : 'task', time: timeStr, sortKey, title: t.title, priority: t.priority, tags: t.tags, id: t.id });
     });
 
     // Sort: overdue first (sortKey -1), then by time
@@ -4097,7 +4148,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
               {[
                 { icon: '\uFF0B', label: 'Add Task', onClick: onAddTask },
                 { icon: '\uFF0B', label: 'Quick Note', onClick: onQuickNote },
-                { icon: '\uD83D\uDCC5', label: 'Add Event', onClick: () => onNavigate('calendar') },
+                { icon: '\uD83D\uDCC5', label: 'Add Event', onClick: onAddEvent || (() => onNavigate('calendar')) },
                 { icon: '\uD83D\uDCB0', label: 'Log Expense', onClick: onLogExpense || (() => onNavigate('financials')) },
               ].map(({ icon, label, onClick }) => (
                 <button
@@ -4479,6 +4530,105 @@ const VIEW_TO_PILLAR = {
   priority: 'hustle',
   financials: 'hustle',
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Create Event Modal
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CreateEventModal({ currentUser, onClose, onCreated, addToast }) {
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  const [form, setForm] = useState({ title: '', date: todayStr, startTime: '09:00', endTime: '10:00', description: '', syncToGcal: true });
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!form.title.trim() || !form.date) return;
+    setSaving(true);
+    try {
+      if (form.syncToGcal) {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const body = {
+          userId: currentUser.id,
+          summary: form.title,
+          description: form.description,
+        };
+        if (form.startTime) {
+          body.start = { dateTime: `${form.date}T${form.startTime}:00`, timeZone: tz };
+          body.end = { dateTime: `${form.date}T${form.endTime || form.startTime}:00`, timeZone: tz };
+        } else {
+          body.allDay = true;
+          body.start = { date: form.date };
+          body.end = { date: form.date };
+        }
+        const res = await apiFetch(`${API_BASE}/api/calendar/events`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to create event');
+        if (addToast) addToast({ type: 'success', message: 'Event added to Google Calendar \u2713' });
+      }
+      if (onCreated) onCreated();
+      onClose();
+    } catch (err) {
+      if (addToast) addToast({ type: 'error', message: `Failed: ${err.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 pt-5 pb-3">
+          <h3 className="text-base font-semibold text-gray-900">New Event</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><XIcon className="w-5 h-5" /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="px-5 pb-5 space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Title *</label>
+            <input type="text" required autoFocus value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Date *</label>
+              <input type="date" required value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div style={{ flex: '0 0 100px' }}>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Time</label>
+              <input type="time" value={form.startTime} onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))}
+                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+          </div>
+          <div style={{ flex: '0 0 100px' }}>
+            <label className="block text-xs font-medium text-gray-500 mb-1">End Time (optional)</label>
+            <input type="time" value={form.endTime} onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))}
+              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style={{ width: 120 }} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Description (optional)</label>
+            <textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} rows={2}
+              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.syncToGcal} onChange={(e) => setForm((f) => ({ ...f, syncToGcal: e.target.checked }))}
+              className="w-4 h-4 accent-indigo-600 rounded" />
+            <span className="text-xs font-medium text-gray-600">{'\uD83D\uDCC5'} Add to Google Calendar</span>
+          </label>
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium">Cancel</button>
+            <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">
+              {saving ? 'Creating...' : 'Create Event'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Quick Capture FAB + Modal
@@ -5651,6 +5801,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [statusFilter, setStatusFilter]         = useState('all');
   const [showSettings, setShowSettings]         = useState(false);
   const [showAlerts, setShowAlerts]             = useState(false);
+  const [showCreateEvent, setShowCreateEvent]   = useState(false);
   const [apiKeys, setApiKeys]                   = useState({ claude: '', openai: '' });
   const [emailSettings, setEmailSettings]       = useState({
     gmailUser: '',
@@ -6023,6 +6174,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   async function handleSyncToCalendar(task) {
     if (!task.dueDate) return;
     try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const res = await apiFetch(`${API_BASE}/api/gcal/sync-task`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6031,6 +6183,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           title: task.title,
           description: task.description || '',
           dueDate: task.dueDate,
+          dueTime: task.dueTime || null,
+          timeZone: tz,
         }),
       });
       const data = await res.json();
@@ -6042,7 +6196,19 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   }
 
   function addTask(task) {
-    setTasks((prev) => [task, ...prev]);
+    const { syncToCalendar, ...taskData } = task;
+    setTasks((prev) => [taskData, ...prev]);
+    // Optionally sync to Google Calendar
+    if (syncToCalendar && taskData.dueDate && gcalConnected) {
+      handleSyncToCalendar(taskData).then(() => {
+        // Refresh calendar events so new event appears immediately
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}&days=7`)
+          .then((r) => r.json())
+          .then((data) => { if (Array.isArray(data)) setChatCalendarEvents(data); })
+          .catch(() => {});
+      });
+    }
   }
 
   function toggleTask(id) {
@@ -6245,6 +6411,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onAddTask={() => { setActiveView('daily'); }}
               onQuickNote={() => { document.querySelector('[aria-label="Quick Capture"]')?.click(); }}
               onLogExpense={() => { setActiveView('financials'); if (window.innerWidth < 768) setMobileView('financials'); }}
+              onAddEvent={() => setShowCreateEvent(true)}
             />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
@@ -6267,7 +6434,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : (
           /* Scrollable task content */
           <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5">
-            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} entities={userEntities} authToken={authToken} />
+            <AddTaskForm onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} entities={userEntities} authToken={authToken} gcalConnected={gcalConnected} />
             <FilterBar
               activeTagFilters={activeTagFilters}
               setActiveTagFilters={setActiveTagFilters}
@@ -6411,6 +6578,21 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       </nav>
 
       {/* ── Modals ── */}
+      {showCreateEvent && (
+        <CreateEventModal
+          currentUser={currentUser}
+          onClose={() => setShowCreateEvent(false)}
+          onCreated={() => {
+            // Refresh calendar events
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+            apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}&days=7`)
+              .then((r) => r.json())
+              .then((data) => { if (Array.isArray(data)) setChatCalendarEvents(data); })
+              .catch(() => {});
+          }}
+          addToast={addToast}
+        />
+      )}
       {showSettings && (
         <SettingsModal
           apiKeys={apiKeys}
