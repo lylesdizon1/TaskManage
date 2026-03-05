@@ -2774,24 +2774,30 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
   let todayContext = '';
   if (todayTasks.length > 0) todayContext += `\nTasks due today: ${todayTasks.map((t) => `${t.title}${t.completed ? ' (done)' : ''}`).join(', ')}`;
   if (overdueTasks.length > 0) todayContext += `\nOverdue tasks: ${overdueTasks.map((t) => `${t.title} (due ${t.dueDate})`).join(', ')}`;
-  // Calendar events for today
-  const todayEvents = (calendarEvents || []).filter((ev) => {
-    const startStr = ev.start?.dateTime || ev.start?.date || ev.start;
-    if (!startStr) return false;
-    if (ev.allDay || ev.start?.date) {
-      const d = (ev.start?.date || ev.start || '').slice(0, 10);
-      return d === todayISO;
-    }
-    return new Date(startStr).toLocaleDateString('en-CA', { timeZone: tz }) === todayISO;
-  });
-  let calendarContext = `\n\nTODAY'S CALENDAR EVENTS:\n`;
-  if (todayEvents.length === 0) {
-    calendarContext += 'No events today';
+  // Calendar events for the next 7 days
+  const weekOut = new Date(today);
+  weekOut.setDate(weekOut.getDate() + 7);
+  weekOut.setHours(23, 59, 59, 999);
+  const todayStart = new Date(today);
+  todayStart.setHours(0, 0, 0, 0);
+  const upcomingEvents = (calendarEvents || [])
+    .filter((ev) => {
+      const startStr = ev.start?.dateTime || ev.start?.date || ev.start;
+      if (!startStr) return false;
+      const eventDate = new Date(startStr);
+      return eventDate >= todayStart && eventDate <= weekOut;
+    })
+    .sort((a, b) => new Date(a.start?.dateTime || a.start?.date || a.start) - new Date(b.start?.dateTime || b.start?.date || b.start));
+  let calendarContext = `\n\nUPCOMING CALENDAR (next 7 days):\n`;
+  if (upcomingEvents.length === 0) {
+    calendarContext += 'No events this week';
   } else {
-    calendarContext += todayEvents.map((e) => {
-      const startStr = e.start?.dateTime || e.start;
-      const time = (e.allDay || e.start?.date) ? 'All day' : new Date(startStr).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
-      return `- ${time}: ${e.summary || e.title || 'Untitled'}`;
+    calendarContext += upcomingEvents.map((e) => {
+      const startStr = e.start?.dateTime || e.start?.date || e.start;
+      const d = new Date(startStr);
+      const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
+      const time = (e.allDay || e.start?.date) ? '' : new Date(startStr).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      return `- ${dayLabel}: ${time ? time + ' ' : ''}${e.summary || e.title || 'Untitled'}`;
     }).join('\n');
   }
   return `You are a business productivity assistant. Today is ${dateStr}. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + txContext + notesContext;
@@ -5946,7 +5952,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   useEffect(() => {
     if (!currentUser?.id) return;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}`)
+    apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}&days=7`)
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setChatCalendarEvents(data);

@@ -740,7 +740,8 @@ app.post('/api/gcal/disconnect', async (req, res) => {
  * Returns today's calendar events from Google Calendar.
  */
 app.get('/api/gcal/events', async (req, res) => {
-  const { userId, timeZone } = req.query;
+  const { userId, timeZone, days } = req.query;
+  const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 30);
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
   const tokens = await db.getGcalTokensForUser(userId);
@@ -765,12 +766,13 @@ app.get('/api/gcal/events', async (req, res) => {
       const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
       const todayStr = formatter.format(new Date()); // YYYY-MM-DD in user's tz
       startOfDay = new Date(`${todayStr}T00:00:00`);
-      endOfDay = new Date(`${todayStr}T23:59:59.999`);
+      endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + numDays);
     } else {
       const now = new Date();
       startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       endOfDay = new Date(startOfDay);
-      endOfDay.setDate(endOfDay.getDate() + 1);
+      endOfDay.setDate(endOfDay.getDate() + numDays);
     }
 
     const listParams = {
@@ -779,7 +781,7 @@ app.get('/api/gcal/events', async (req, res) => {
       timeMax: endOfDay.toISOString(),
       singleEvents: true,
       orderBy: 'startTime',
-      maxResults: 20,
+      maxResults: numDays > 1 ? 50 : 20,
     };
     if (timeZone) listParams.timeZone = timeZone;
 
