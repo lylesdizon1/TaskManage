@@ -36,6 +36,8 @@ const { google } = require('googleapis');
 const fs         = require('fs');
 const path       = require('path');
 const crypto     = require('crypto');
+const rateLimit  = require('express-rate-limit');
+const helmet     = require('helmet');
 
 const multer = require('multer');
 const db = require('./db.cjs');
@@ -60,6 +62,83 @@ const DIST_DIR = path.join(__dirname, 'dist');
 // JWT secret: prefer env var, fall back to random (tokens won't survive restart)
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
+// ── Token encryption helpers ────────────────────────────────────────────────
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY; // Must be 32 chars
+
+const encrypt = (text) => {
+  if (!text || !ENCRYPTION_KEY) return text;
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'utf8'), iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+};
+
+const decrypt = (text) => {
+  if (!text || !ENCRYPTION_KEY) return text;
+  try {
+    const [ivHex, encrypted] = text.split(':');
+    if (!ivHex || !encrypted) return text; // not encrypted, return as-is
+    const iv = Buffer.from(ivHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'utf8'), iv);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch {
+    return text; // decryption failed (likely unencrypted legacy data), return as-is
+  }
+};
+
+const encryptTokens = (tokens) => {
+  if (!tokens || !ENCRYPTION_KEY) return tokens;
+  return encrypt(JSON.stringify(tokens));
+};
+
+const decryptTokens = (stored) => {
+  if (!stored || !ENCRYPTION_KEY) return stored;
+  if (typeof stored === 'object') return stored; // already a plain object (unencrypted legacy)
+  try {
+    return JSON.parse(decrypt(stored));
+  } catch {
+    return stored; // couldn't decrypt/parse, return as-is
+  }
+};
+
+// Wrappers that encrypt/decrypt tokens when storing/loading from DB
+// Tokens column is JSONB, so encrypted string is wrapped in { _enc: "..." }
+const saveGcalTokens = async (userId, tokens) => {
+  if (ENCRYPTION_KEY) {
+    const encrypted = encryptTokens(tokens);
+    await db.setGcalTokensForUser(userId, { _enc: encrypted });
+  } else {
+    await saveGcalTokens(userId, tokens);
+  }
+};
+
+const loadGcalTokens = async (userId) => {
+  const stored = await loadGcalTokens(userId);
+  if (!stored) return null;
+  if (stored._enc) return decryptTokens(stored._enc);
+  return stored; // legacy unencrypted tokens
+};
+
+// ── Rate limiters ───────────────────────────────────────────────────────────
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many attempts. Try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 function getAppUrl() {
   return (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/+$/, '');
 }
@@ -76,8 +155,11 @@ const PORT = process.env.PORT || 3001;
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
+app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled to not break SPA
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '4mb' }));
+app.use('/api/auth/login', authLimiter);
+app.use('/api/', apiLimiter);
 
 // Simple request logger
 app.use((req, _res, next) => {
@@ -630,7 +712,7 @@ app.get('/api/gcal/callback', async (req, res) => {
 
   try {
     const { tokens } = await oauth2.getToken(code);
-    await db.setGcalTokensForUser(userId, tokens);
+    await saveGcalTokens(userId, tokens);
     console.log(`[gcal] Stored tokens for ${userId}`);
     // Redirect back to the app's calendar tab
     res.redirect('/?gcal=connected');
@@ -648,7 +730,7 @@ app.get('/api/gcal/status', async (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
-  const tokens = await db.getGcalTokensForUser(userId);
+  const tokens = await loadGcalTokens(userId);
   if (!tokens) return res.json({ connected: false });
 
   const oauth2 = makeOAuth2Client();
@@ -657,8 +739,8 @@ app.get('/api/gcal/status', async (req, res) => {
   oauth2.setCredentials(tokens);
   // Refresh if needed and persist
   oauth2.on('tokens', async (newTokens) => {
-    const existing = await db.getGcalTokensForUser(userId);
-    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
+    const existing = await loadGcalTokens(userId);
+    await saveGcalTokens(userId, { ...existing, ...newTokens });
   });
 
   try {
@@ -684,7 +766,7 @@ app.post('/api/gcal/sync-task', async (req, res) => {
     return res.status(400).json({ error: 'userId, title, and dueDate are required' });
   }
 
-  const tokens = await db.getGcalTokensForUser(userId);
+  const tokens = await loadGcalTokens(userId);
   if (!tokens) return res.status(401).json({ error: 'Google Calendar not connected' });
 
   const oauth2 = makeOAuth2Client();
@@ -692,8 +774,8 @@ app.post('/api/gcal/sync-task', async (req, res) => {
 
   oauth2.setCredentials(tokens);
   oauth2.on('tokens', async (newTokens) => {
-    const existing = await db.getGcalTokensForUser(userId);
-    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
+    const existing = await loadGcalTokens(userId);
+    await saveGcalTokens(userId, { ...existing, ...newTokens });
   });
 
   try {
@@ -748,7 +830,7 @@ app.get('/api/gcal/events', async (req, res) => {
   const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 30);
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
-  const tokens = await db.getGcalTokensForUser(userId);
+  const tokens = await loadGcalTokens(userId);
   if (!tokens) return res.json([]);
 
   const oauth2 = makeOAuth2Client();
@@ -756,8 +838,8 @@ app.get('/api/gcal/events', async (req, res) => {
 
   oauth2.setCredentials(tokens);
   oauth2.on('tokens', async (newTokens) => {
-    const existing = await db.getGcalTokensForUser(userId);
-    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
+    const existing = await loadGcalTokens(userId);
+    await saveGcalTokens(userId, { ...existing, ...newTokens });
   });
 
   try {
@@ -814,7 +896,7 @@ app.post('/api/calendar/events', async (req, res) => {
   const { userId, summary, description, start, end, allDay } = req.body;
   if (!userId || !summary) return res.status(400).json({ error: 'userId and summary required' });
 
-  const tokens = await db.getGcalTokensForUser(userId);
+  const tokens = await loadGcalTokens(userId);
   if (!tokens) return res.status(401).json({ error: 'Google Calendar not connected' });
 
   const oauth2 = makeOAuth2Client();
@@ -822,8 +904,8 @@ app.post('/api/calendar/events', async (req, res) => {
 
   oauth2.setCredentials(tokens);
   oauth2.on('tokens', async (newTokens) => {
-    const existing = await db.getGcalTokensForUser(userId);
-    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
+    const existing = await loadGcalTokens(userId);
+    await saveGcalTokens(userId, { ...existing, ...newTokens });
   });
 
   try {
