@@ -5274,21 +5274,18 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
         </div>
       </div>
 
-      {/* Mobile: full-screen editor when note selected */}
-      {selectedNote && (
-        <div className="flex-1 flex flex-col md:hidden overflow-hidden">
+      {/* Editor panel — single instance for both mobile & desktop */}
+      {selectedNote ? (
+        <div className="flex-1 flex flex-col overflow-hidden md:border-l md:border-gray-100">
           {editorPanel}
         </div>
-      )}
-
-      {/* Desktop: editor panel (right side) */}
-      <div className="hidden md:flex md:flex-1 md:border-l md:border-gray-100">
-        {selectedNote ? editorPanel : (
+      ) : (
+        <div className="hidden md:flex md:flex-1 md:border-l md:border-gray-100">
           <div className="flex-1 flex items-center justify-center text-gray-300 text-sm">
             Select a note or create a new one
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
