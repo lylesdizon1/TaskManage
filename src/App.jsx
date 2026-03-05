@@ -4281,23 +4281,23 @@ function TiptapToolbar({ editor, onImageClick }) {
   const btn = (isActive) => `${btnBase} ${isActive ? active : inactive}`;
   return (
     <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-100 flex-wrap overflow-x-auto" style={{ minHeight: 40 }}>
-      <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title="Bold (Cmd+B)"><strong>B</strong></button>
-      <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={btn(editor.isActive('italic'))} title="Italic (Cmd+I)"><em>I</em></button>
-      <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={btn(editor.isActive('underline'))} title="Underline (Cmd+U)"><span style={{ textDecoration: 'underline' }}>U</span></button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title="Bold (Cmd+B)"><strong>B</strong></button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleItalic().run()} className={btn(editor.isActive('italic'))} title="Italic (Cmd+I)"><em>I</em></button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleUnderline().run()} className={btn(editor.isActive('underline'))} title="Underline (Cmd+U)"><span style={{ textDecoration: 'underline' }}>U</span></button>
       <div className="w-px h-5 bg-gray-200 mx-0.5" />
-      <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={btn(editor.isActive('heading', { level: 1 }))} title="Heading 1">H1</button>
-      <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={btn(editor.isActive('heading', { level: 2 }))} title="Heading 2">H2</button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={btn(editor.isActive('heading', { level: 1 }))} title="Heading 1">H1</button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={btn(editor.isActive('heading', { level: 2 }))} title="Heading 2">H2</button>
       <div className="w-px h-5 bg-gray-200 mx-0.5" />
-      <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title="Bullet list">•</button>
-      <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title="Ordered list">1.</button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title="Bullet list">•</button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title="Ordered list">1.</button>
       <div className="w-px h-5 bg-gray-200 mx-0.5" />
-      <button type="button" onClick={() => editor.chain().focus().toggleBlockquote().run()} className={btn(editor.isActive('blockquote'))} title="Quote">"</button>
-      <button type="button" onClick={() => editor.chain().focus().toggleCodeBlock().run()} className={btn(editor.isActive('codeBlock'))} title="Code block">&lt;/&gt;</button>
-      <button type="button" onClick={() => editor.chain().focus().setHorizontalRule().run()} className={`${btnBase} ${inactive}`} title="Divider">—</button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleBlockquote().run()} className={btn(editor.isActive('blockquote'))} title="Quote">"</button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleCodeBlock().run()} className={btn(editor.isActive('codeBlock'))} title="Code block">&lt;/&gt;</button>
+      <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().setHorizontalRule().run()} className={`${btnBase} ${inactive}`} title="Divider">—</button>
       {onImageClick && (
         <>
           <div className="w-px h-5 bg-gray-200 mx-0.5" />
-          <button type="button" onClick={onImageClick} className={`${btnBase} ${inactive}`} title="Add image">📷</button>
+          <button type="button" tabIndex={-1} onClick={onImageClick} className={`${btnBase} ${inactive}`} title="Add image">📷</button>
         </>
       )}
     </div>
@@ -4358,15 +4358,15 @@ function ImageLightbox({ images, startIndex, onClose, onDelete }) {
     <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center" onClick={onClose}>
       <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
         <img src={img.url} alt={img.originalName || 'image'} className="max-w-full max-h-[85vh] object-contain rounded-lg" />
-        <button type="button" onClick={onClose} className="absolute top-2 right-2 w-8 h-8 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80">✕</button>
+        <button type="button" tabIndex={-1} onClick={onClose} className="absolute top-2 right-2 w-8 h-8 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80">✕</button>
         {images.length > 1 && (
           <>
-            <button type="button" onClick={() => setIdx((idx - 1 + images.length) % images.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">←</button>
-            <button type="button" onClick={() => setIdx((idx + 1) % images.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">→</button>
+            <button type="button" tabIndex={-1} onClick={() => setIdx((idx - 1 + images.length) % images.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">←</button>
+            <button type="button" tabIndex={-1} onClick={() => setIdx((idx + 1) % images.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">→</button>
           </>
         )}
         {onDelete && (
-          <button type="button" onClick={() => onDelete(img.id)} className="absolute bottom-3 right-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 flex items-center gap-1">🗑️ Delete</button>
+          <button type="button" tabIndex={-1} onClick={() => onDelete(img.id)} className="absolute bottom-3 right-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 flex items-center gap-1">🗑️ Delete</button>
         )}
       </div>
     </div>
@@ -4390,7 +4390,7 @@ function NoteImageGallery({ noteId, authToken, images, setImages, onAddClick }) 
     } catch {}
   }
 
-  if (!images.length && !onAddClick) return null;
+  if (!images.length) return null;
 
   return (
     <div className="border-t border-gray-100 pt-3 mt-3">
@@ -4402,12 +4402,12 @@ function NoteImageGallery({ noteId, authToken, images, setImages, onAddClick }) 
           <div key={img.id} className="relative group cursor-pointer" onClick={() => setLightboxIdx(i)}>
             <img src={img.url} alt={img.originalName || 'attachment'} className="w-20 h-20 object-cover rounded-lg border border-gray-200" style={{ minWidth: 80 }} />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 rounded-lg flex items-center justify-center transition-opacity">
-              <button type="button" onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="text-white text-sm">🗑️</button>
+              <button type="button" tabIndex={-1} onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="text-white text-sm">🗑️</button>
             </div>
           </div>
         ))}
         {onAddClick && (
-          <button type="button" onClick={onAddClick} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 hover:border-purple-400 hover:text-purple-500 transition-colors text-2xl" title="Add image">+</button>
+          <button type="button" tabIndex={-1} onClick={onAddClick} className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 hover:border-purple-400 hover:text-purple-500 transition-colors text-2xl" title="Add image">+</button>
         )}
       </div>
       {lightboxIdx !== null && (
@@ -4983,18 +4983,18 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     } catch {}
   }
 
-  async function handleDelete() {
-    if (!selectedNote) return;
-    if (!selectedNote.id) {
+  async function handleDelete(noteId) {
+    const id = noteId || selectedNote?.id;
+    if (!id) {
       // Unsaved new note — just discard
       setSelectedNote(null);
       setShowDeleteConfirm(false);
       return;
     }
     try {
-      await apiFetch(`/api/notes/${selectedNote.id}`, { method: 'DELETE', headers });
-      setNotes((prev) => prev.filter((n) => n.id !== selectedNote.id));
-      setSelectedNote(null);
+      await apiFetch(`/api/notes/${id}`, { method: 'DELETE', headers });
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+      if (selectedNote?.id === id) setSelectedNote(null);
       setShowDeleteConfirm(false);
     } catch {}
   }
@@ -5088,7 +5088,9 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
           placeholder="Title (optional)"
           className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
         />
-        <EditorContent editor={tiptapEditor} onKeyDown={(e) => e.stopPropagation()} />
+        <div style={{ flex: 1, minHeight: 'calc(100vh - 300px)', cursor: 'text' }} onClick={() => tiptapEditor?.commands.focus()}>
+          <EditorContent editor={tiptapEditor} onKeyDown={(e) => e.stopPropagation()} />
+        </div>
 
         {/* Image gallery strip */}
         {selectedNote?.id && (
@@ -5101,81 +5103,6 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
           />
         )}
 
-        {/* AI suggestion pill */}
-        {aiSuggestion && aiSuggestion.noteId === selectedNote?.id && (
-          <div className="flex items-center gap-2 flex-wrap" style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}>
-            <span className="text-gray-700">✨ Aria suggests: <strong>{PILLAR_CONFIG[aiSuggestion.pillar]?.label || aiSuggestion.pillar}</strong> → <strong>{aiSuggestion.category}</strong></span>
-            <button onClick={applyAiSuggestion} className="px-3 py-1 rounded-md text-xs font-medium text-white" style={{ backgroundColor: '#7C3AED' }}>Apply</button>
-            <button onClick={() => setAiSuggestion(null)} className="px-2 py-1 rounded-md text-xs font-medium text-gray-500 hover:text-gray-700">Dismiss</button>
-          </div>
-        )}
-
-        {/* Metadata row */}
-        <div className="border-t border-gray-100 pt-3 space-y-3">
-          {/* Pillar pills */}
-          <div>
-            <label className="text-xs text-gray-400 mb-1 block">Pillar</label>
-            <div className="flex gap-1.5 flex-wrap">
-              {Object.entries(PILLAR_CONFIG).map(([key, cfg]) => (
-                <button key={key} onClick={() => handleEditorChange('pillar', editorData.pillar === key ? '' : key)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${editorData.pillar === key ? `${cfg.bg} ${cfg.text}` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                  {cfg.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Category dropdown */}
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="text-xs text-gray-400 mb-1 block">Category</label>
-              <select value={editorData.category} onChange={(e) => handleEditorChange('category', e.target.value)}
-                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
-                <option value="">None</option>
-                {childCategories
-                  .filter((c) => !editorData.pillar || c.pillar === editorData.pillar)
-                  .map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-              </select>
-            </div>
-            <div className="flex-1">
-              <label className="text-xs text-gray-400 mb-1 block">Subcategory</label>
-              <input type="text" value={editorData.subcategory}
-                onChange={(e) => handleEditorChange('subcategory', e.target.value)}
-                placeholder="Optional"
-                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5" />
-            </div>
-          </div>
-
-          {/* Tags */}
-          <div>
-            <label className="text-xs text-gray-400 mb-1 block">Tags (comma-separated)</label>
-            <input type="text" value={editorData.tags}
-              onChange={(e) => handleEditorChange('tags', e.target.value)}
-              placeholder="idea, important, follow-up"
-              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5" />
-          </div>
-
-          {/* Timestamps */}
-          {selectedNote.id && (
-          <div className="flex items-center justify-between text-[10px] text-gray-400 pt-2">
-            <span>Created {new Date(selectedNote.createdAt).toLocaleString()}</span>
-            <span>Updated {new Date(selectedNote.updatedAt).toLocaleString()}</span>
-          </div>
-          )}
-
-          {/* Delete */}
-          <div className="pt-2 border-t border-gray-100">
-            {showDeleteConfirm ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-red-600">Delete this note?</span>
-                <button onClick={handleDelete} className="text-xs px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600">Yes, delete</button>
-                <button onClick={() => setShowDeleteConfirm(false)} className="text-xs px-3 py-1 bg-gray-100 text-gray-600 rounded hover:bg-gray-200">Cancel</button>
-              </div>
-            ) : (
-              <button onClick={() => setShowDeleteConfirm(true)} className="text-xs text-red-400 hover:text-red-600">Delete note</button>
-            )}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -5262,7 +5189,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                   metaParts.push(relativeTime(note.updatedAt || note.createdAt));
                   return (
                     <button type="button" key={note.id || 'new'} onClick={() => openNote(note)}
-                      className={`w-full text-left px-3 py-2.5 transition-colors flex items-start gap-2 ${isActive ? 'bg-purple-50 border-l-2 border-purple-500' : 'hover:bg-gray-50 border-l-2 border-transparent'}`}
+                      className={`group w-full text-left px-3 py-2.5 transition-colors flex items-start gap-2 ${isActive ? 'bg-purple-50 border-l-2 border-purple-500' : 'hover:bg-gray-50 border-l-2 border-transparent'}`}
                       style={{ minHeight: 56 }}
                     >
                       <div className="flex-1 min-w-0">
@@ -5278,6 +5205,26 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                           {metaParts.join(' · ')}
                         </div>
                       </div>
+                      {note.id && (
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 relative"
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <button type="button" tabIndex={-1}
+                            onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(showDeleteConfirm === note.id ? false : note.id); }}
+                            className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-xs"
+                            title="More options">···</button>
+                          {showDeleteConfirm === note.id && (
+                            <div className="absolute right-0 top-7 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[120px]">
+                              <button type="button" tabIndex={-1}
+                                onClick={(e) => { e.stopPropagation(); handleDelete(note.id); }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-red-50">
+                                Delete note
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </button>
                   );
                 })}

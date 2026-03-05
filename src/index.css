@@ -37,6 +37,27 @@ textarea {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* ProseMirror editor — fill available height */
+.ProseMirror {
+  min-height: calc(100vh - 300px) !important;
+  height: auto !important;
+  outline: none !important;
+  padding: 16px !important;
+  font-size: 15px !important;
+  line-height: 1.7 !important;
+  cursor: text !important;
+}
+.ProseMirror p {
+  margin: 0 0 8px 0;
+}
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #9CA3AF;
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
 /* Tiptap editor styles */
 .tiptap-editor {
   min-height: 300px;
