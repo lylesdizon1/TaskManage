@@ -2613,14 +2613,21 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
 
   return (
     <div
-      className="fixed left-0 right-0 z-50 bg-white border-t border-gray-200"
+      className="fixed z-50 bg-white border border-gray-200"
       style={{
-        bottom: window.innerWidth < 768 ? mobileBottom : 0,
-        height: window.innerWidth < 768 ? 52 : 64,
+        bottom: window.innerWidth < 768 ? (keyboardOffset > 0 ? keyboardOffset : 68) : 16,
+        left: window.innerWidth < 768 ? 8 : '50%',
+        right: window.innerWidth < 768 ? 8 : 'auto',
+        transform: window.innerWidth >= 768 ? 'translateX(-50%)' : 'none',
+        width: window.innerWidth >= 768 ? '70%' : 'auto',
+        maxWidth: 860,
+        height: window.innerWidth < 768 ? 48 : 56,
+        borderRadius: 12,
+        boxShadow: '0 4px 24px rgba(0,0,0,0.10)',
         paddingBottom: keyboardOffset > 0 ? 0 : 'env(safe-area-inset-bottom, 0px)',
       }}
     >
-      <div className="flex items-center gap-2 h-full px-3 md:px-4 max-w-screen-xl mx-auto">
+      <div className="flex items-center gap-2 h-full px-3 md:px-4">
         <textarea
           ref={textareaRef}
           value={input}
