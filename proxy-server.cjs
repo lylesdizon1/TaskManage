@@ -1527,6 +1527,63 @@ app.post('/api/notes/categories', authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/api/notes/:id/suggest-pillar', authenticateToken, async (req, res) => {
+  try {
+    const { content, apiKey: bodyKey } = req.body;
+    if (!content || content.trim().split(/\s+/).length < 10) {
+      return res.json({ pillar: null, category: null, confidence: 0 });
+    }
+    const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.CLAUDE_API_KEY;
+    if (!apiKey) return res.status(401).json({ error: 'Missing API key' });
+
+    const prompt = `Based on this note content, suggest the most appropriate pillar and category.
+Pillars: hustle, home, move, grow
+Categories:
+  hustle → Careific, Rose Motors, Buyflip, Care Homes, AutoVision, General Business
+  home → Family, Liz, Kids, Personal
+  move → Workouts, Health, Nutrition, Recovery
+  grow → Ideas, Journal, Learnings, Goals, Braindump
+
+Note content: ${content.slice(0, 500)}
+
+Respond in JSON only:
+{"pillar": "hustle", "category": "Careific", "confidence": 0.95, "reason": "Mentions MVP and TestFlight"}`;
+
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: prompt }],
+      },
+      {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        timeout: 30000,
+      },
+    );
+
+    const text = response.data?.content?.[0]?.text || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return res.json({
+        pillar: parsed.pillar || null,
+        category: parsed.category || null,
+        confidence: parseFloat(parsed.confidence) || 0,
+        reason: parsed.reason || '',
+      });
+    }
+    return res.json({ pillar: null, category: null, confidence: 0 });
+  } catch (err) {
+    console.error('[notes] suggest-pillar failed:', err.message);
+    return res.json({ pillar: null, category: null, confidence: 0 });
+  }
+});
+
 // ── Daily Digest ─────────────────────────────────────────────────────────────
 
 app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {

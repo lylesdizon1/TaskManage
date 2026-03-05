@@ -2720,7 +2720,7 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
 }
 
 // Build AI system prompt (extracted from old ChatPanel for reuse)
-function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions) {
+function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions, notes) {
   const taskSummary = tasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, completed: t.completed, dueDate: t.dueDate || null }));
   const allEntities = entities || [];
   const businesses = allEntities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
@@ -2744,7 +2744,18 @@ function buildSystemPrompt(tasks, entities, financialAccounts, financialTransact
     const txLines = recent.map((t) => { const n = acctMap[t.accountId] || 'Unknown'; const s = t.type === 'credit' ? '+' : '-'; return `${t.date} | ${n} | ${t.description || ''} | ${s}$${Number(t.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | ${t.category || 'Uncategorized'}`; });
     txContext = `\n\nFinancial transactions (${financialTransactions.length} total, ${recent.length} shown):\nDate | Account | Description | Amount | Category\n${txLines.join('\n')}`;
   }
-  return `You are a business productivity assistant. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + entityContext + txContext;
+  let notesContext = '';
+  if (notes && notes.length > 0) {
+    const recentNotes = notes
+      .filter((n) => !n.archived && n.content)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .slice(0, 50)
+      .map((n) => `[${n.createdAt || ''}] [${n.pillar || 'untagged'}/${n.category || 'uncategorized'}] Title: ${n.title || 'Untitled'}\n${(n.content || '').slice(0, 200)}`);
+    if (recentNotes.length > 0) {
+      notesContext = `\n\nRECENT NOTES (last ${recentNotes.length}, newest first):\n${recentNotes.join('\n---\n')}`;
+    }
+  }
+  return `You are a business productivity assistant. The user manages multiple ventures. Current tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + entityContext + txContext + notesContext;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4487,7 +4498,7 @@ function relativeTime(dateStr) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
-function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickCapturedNote }) {
+function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNotesLoaded, quickCapturedNote, addToast }) {
   const [notes, setNotes] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -4497,6 +4508,8 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickC
   const [editorData, setEditorData] = useState({ title: '', content: '', pillar: '', category: '', subcategory: '', tags: '' });
   const [saveStatus, setSaveStatus] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState(null); // { pillar, category, confidence, reason }
+  const suggestTimerRef = useRef(null);
   const saveTimerRef = useRef(null);
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
 
@@ -4532,6 +4545,11 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickC
   useEffect(() => {
     if (onCategoriesLoaded) onCategoriesLoaded(categories);
   }, [categories, onCategoriesLoaded]);
+
+  // Forward notes to parent (for chat context)
+  useEffect(() => {
+    if (onNotesLoaded) onNotesLoaded(notes);
+  }, [notes, onNotesLoaded]);
 
   // Prepend quick-captured note if received from FAB
   useEffect(() => {
@@ -4580,6 +4598,8 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickC
     });
     setSaveStatus('saved');
     setShowDeleteConfirm(false);
+    setAiSuggestion(null);
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
   }
 
   function handleEditorChange(field, value) {
@@ -4615,6 +4635,9 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickC
         setSelectedNote(created);
         setNotes((prev) => [created, ...prev]);
         setSaveStatus('saved');
+        // Schedule AI pillar suggestion
+        if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+        suggestTimerRef.current = setTimeout(() => requestPillarSuggestion(created.id, data.content, data.pillar), 2000);
       } else {
         // Existing note — PUT to update
         const res = await apiFetch(`/api/notes/${selectedNote.id}`, { method: 'PUT', headers, body: JSON.stringify(body) });
@@ -4627,8 +4650,50 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickC
         setSelectedNote(updated);
         setNotes((prev) => prev.map((n) => n.id === updated.id ? updated : n));
         setSaveStatus('saved');
+        // Schedule AI pillar suggestion
+        if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+        suggestTimerRef.current = setTimeout(() => requestPillarSuggestion(updated.id, data.content, data.pillar), 2000);
       }
     } catch (e) { setSaveStatus(`Save failed — ${e.message || 'network error'}`); }
+  }
+
+  // AI pillar suggestion — called 2s after save completes
+  async function requestPillarSuggestion(noteId, content, currentPillar) {
+    // Only suggest if no pillar manually set and 10+ words
+    if (currentPillar || !content || content.trim().split(/\s+/).length < 10) return;
+    try {
+      const res = await apiFetch(`/api/notes/${noteId}/suggest-pillar`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!data.pillar || data.confidence < 0.5) return;
+      if (data.confidence > 0.85) {
+        // Auto-apply silently
+        await apiFetch(`/api/notes/${noteId}`, {
+          method: 'PUT', headers,
+          body: JSON.stringify({ pillar: data.pillar, category: data.category }),
+        });
+        setSelectedNote((prev) => prev && prev.id === noteId ? { ...prev, pillar: data.pillar, category: data.category } : prev);
+        setEditorData((prev) => ({ ...prev, pillar: data.pillar, category: data.category || prev.category }));
+        setNotes((prev) => prev.map((n) => n.id === noteId ? { ...n, pillar: data.pillar, category: data.category } : n));
+        if (addToast) addToast({ type: 'success', message: `✨ Aria tagged this as ${data.category || PILLAR_CONFIG[data.pillar]?.label || data.pillar}` });
+      } else {
+        // Show suggestion pill
+        setAiSuggestion({ pillar: data.pillar, category: data.category, confidence: data.confidence, reason: data.reason, noteId });
+      }
+    } catch {}
+  }
+
+  function applyAiSuggestion() {
+    if (!aiSuggestion || !selectedNote) return;
+    const { pillar, category, noteId } = aiSuggestion;
+    apiFetch(`/api/notes/${noteId}`, { method: 'PUT', headers, body: JSON.stringify({ pillar, category }) }).catch(() => {});
+    setEditorData((prev) => ({ ...prev, pillar, category: category || prev.category }));
+    setSelectedNote((prev) => prev && prev.id === noteId ? { ...prev, pillar, category } : prev);
+    setNotes((prev) => prev.map((n) => n.id === noteId ? { ...n, pillar, category } : n));
+    setAiSuggestion(null);
+    if (addToast) addToast({ type: 'success', message: `✨ Tagged as ${category || PILLAR_CONFIG[pillar]?.label || pillar}` });
   }
 
   async function handlePin() {
@@ -4667,6 +4732,8 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickC
         saveNote(editorData);
       }
     }
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+    setAiSuggestion(null);
     setSelectedNote(null);
   }
 
@@ -4713,6 +4780,15 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, quickC
           className="w-full min-h-[200px] bg-transparent border-0 outline-none resize-none text-gray-700 placeholder-gray-300 leading-relaxed"
           style={{ height: Math.max(200, (editorData.content || '').split('\n').length * 24 + 40) }}
         />
+
+        {/* AI suggestion pill */}
+        {aiSuggestion && aiSuggestion.noteId === selectedNote?.id && (
+          <div className="flex items-center gap-2 flex-wrap" style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}>
+            <span className="text-gray-700">✨ Aria suggests: <strong>{PILLAR_CONFIG[aiSuggestion.pillar]?.label || aiSuggestion.pillar}</strong> → <strong>{aiSuggestion.category}</strong></span>
+            <button onClick={applyAiSuggestion} className="px-3 py-1 rounded-md text-xs font-medium text-white" style={{ backgroundColor: '#7C3AED' }}>Apply</button>
+            <button onClick={() => setAiSuggestion(null)} className="px-2 py-1 rounded-md text-xs font-medium text-gray-500 hover:text-gray-700">Dismiss</button>
+          </div>
+        )}
 
         {/* Metadata row */}
         <div className="border-t border-gray-100 pt-3 space-y-3">
@@ -5201,6 +5277,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // Quick Capture FAB state
   const [noteCategories, setNoteCategories]     = useState([]);
+  const [allNotes, setAllNotes]                 = useState([]);
   const [notesEditorOpen, setNotesEditorOpen]   = useState(false);
   const [quickCapturedNote, setQuickCapturedNote] = useState(null);
 
@@ -5359,7 +5436,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
 
     // Build system prompt and call AI
-    const sysPrompt = buildSystemPrompt(tasks, userEntities, financialAccounts, financialTransactions);
+    const sysPrompt = buildSystemPrompt(tasks, userEntities, financialAccounts, financialTransactions, allNotes);
     try {
       let reply;
       if (chatBackend === 'claude') {
@@ -5753,7 +5830,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'financials' ? (
             <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
           ) : activeView === 'notes' ? (
-            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} quickCapturedNote={quickCapturedNote} />
+            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} />
           ) : activeView === 'chat' ? (
             <ChatTabPanel
               conversations={conversations}
@@ -5829,7 +5906,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               messages={chatMessages}
               loading={chatLoading}
               backend={chatBackend}
-              contextBadge={`${tasks.filter((t) => !t.completed).length} tasks · ${financialTransactions.length} transactions`}
+              contextBadge={`${tasks.filter((t) => !t.completed).length} tasks · ${financialTransactions.length} transactions${allNotes.filter((n) => !n.archived && n.content).length > 0 ? ` · ${allNotes.filter((n) => !n.archived && n.content).length} note${allNotes.filter((n) => !n.archived && n.content).length !== 1 ? 's' : ''}` : ''}`}
               onHide={toggleChatPanel}
             />
           </section>
@@ -5880,7 +5957,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'notes' ? 'flex' : 'hidden'
           }`}
         >
-          <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} quickCapturedNote={quickCapturedNote} />
+          <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} />
         </section>
         </div>{/* end content row */}
       </main>
