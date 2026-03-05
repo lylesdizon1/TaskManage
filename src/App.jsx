@@ -3811,7 +3811,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     if (!tasksReady && tasks.length === 0) return;
 
     const eventsData = calendarEvents.map((e) => ({ time: e.allDay ? 'All day' : new Date(e.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), title: e.title }));
-    const tasksData = [...overdueTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: true })), ...todayTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: false })), ...highPriorityTasks.filter((t) => !t.dueDate).map((t) => ({ title: t.title, priority: t.priority, overdue: false }))];
+    const tasksData = [...overdueTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: true })), ...todayTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: false })), ...highPriorityTasks.filter((t) => !t.dueDate || t.dueDate === today).map((t) => ({ title: t.title, priority: t.priority, overdue: false }))];
 
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
     apiFetch('/api/dashboard/timeline-summary', {
@@ -3841,13 +3841,15 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     const tod = hour2 < 12 ? 'morning' : hour2 < 17 ? 'afternoon' : 'evening';
     const aName = currentUser?.assistantName || 'Aria';
     const overdueStr = overdueTasks.length > 0 ? overdueTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
-    const highStr = highPriorityTasks.length > 0 ? highPriorityTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
+    const dueTodayStr = todayTasks.length > 0 ? todayTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
+    const highTodayOnly = highPriorityTasks.filter((t) => !t.dueDate || t.dueDate <= today);
+    const highStr = highTodayOnly.length > 0 ? highTodayOnly.map((t) => t.title).slice(0, 5).join(', ') : 'None';
     const eventsStr = calendarEvents.length > 0 ? calendarEvents.map((e) => e.title).slice(0, 5).join(', ') : 'None';
     const txSummary = netCashFlow !== null ? `Net ${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month` : 'No data';
     const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
 
-    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. Be specific — reference actual data below. Write naturally like a real person. No bullet points. Do NOT include a sign-off or signature.`;
-    const userMsg = `Write my ${tod} brief.\n\nData:\n- Overdue tasks: ${overdueStr}\n- High priority tasks: ${highStr}\n- Today's calendar events: ${eventsStr}\n- This month's net cash flow: ${txSummary}\n- Notes this week: ${notesThisWeek}\n- Active businesses: ${entStr}`;
+    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. TODAY IS ${dateStr} — ONLY reference events and tasks happening TODAY. Never mention future dates or upcoming events unless explicitly in the data below. Be specific — reference actual data. Write naturally like a real person. No bullet points. Do NOT include a sign-off or signature.`;
+    const userMsg = `Write my ${tod} brief.\n\nTODAY'S DATA ONLY:\n- Today's calendar events: ${eventsStr}\n- Overdue tasks: ${overdueStr}\n- Due today: ${dueTodayStr}\n- High priority tasks: ${highStr}\n- This month's net cash flow: ${txSummary}\n- Notes this week: ${notesThisWeek}\n- Active businesses: ${entStr}`;
 
     callClaudeChat([{ role: 'user', content: userMsg }], sysPrompt, apiKeys?.claude || '', authToken)
       .then((text) => {
