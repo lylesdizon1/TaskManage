@@ -3916,19 +3916,44 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5 space-y-5">
+    <div className="flex-1 overflow-y-auto px-4 md:px-6 pt-5 pb-6 space-y-5" style={{ minHeight: 0 }}>
 
-      {/* ── ROW 1: Greeting (slim) ── */}
-      <h2 className="text-xl md:text-2xl font-bold text-gray-900">
-        {greeting}, {firstName} <span className="font-normal text-gray-400 text-base md:text-lg">&middot; {dateStr}</span>
-      </h2>
+      {/* ── ROW 1: Greeting + Inline Stats Strip ── */}
+      <div>
+        <h2 className="text-xl md:text-2xl font-bold text-gray-900">
+          {greeting}, {firstName} <span className="font-normal text-gray-400 text-base md:text-lg">&middot; {dateStr}</span>
+        </h2>
+        <div className="flex flex-wrap gap-2 mt-2">
+          {[
+            { icon: '\u26A0\uFE0F', value: overdueTasks.length, label: 'overdue', onClick: () => onNavigate('daily', 'overdue'), color: '#F59E0B' },
+            { icon: '\uD83D\uDD34', value: highPriorityTasks.length, label: 'high priority', onClick: () => onNavigate('daily', 'high'), color: '#EF4444' },
+            { icon: '\uD83D\uDCC5', value: calendarEvents.length, label: 'events today', onClick: () => onNavigate('calendar'), color: '#3B82F6' },
+            { icon: '\u2705', value: doneToday, label: 'done today', onClick: () => onNavigate('daily', 'done'), color: '#10B981' },
+            { icon: '\uD83D\uDCB0', value: netCashFlow !== null ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '\u2014', label: 'this month', onClick: () => onNavigate('financials'), color: netCashFlow !== null && netCashFlow >= 0 ? '#10B981' : '#EF4444' },
+            { icon: '\uD83D\uDCDD', value: notesThisWeek, label: 'notes week', onClick: () => onNavigate('notes'), color: '#8B5CF6' },
+          ].map(({ icon, value, label, onClick, color }) => {
+            const isZero = value === 0 || value === '\u2014';
+            return (
+              <button
+                key={label}
+                onClick={onClick}
+                className="inline-flex items-center gap-1 cursor-pointer transition-opacity hover:opacity-80"
+                style={{ height: 24, borderRadius: 9999, padding: '0 10px', fontSize: 12, fontWeight: 500, backgroundColor: isZero ? '#E5E7EB' : color, color: isZero ? '#6B7280' : '#fff' }}
+              >
+                <span>{icon}</span>
+                <span>{value} {label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      {/* ── ROW 2: Full width 3-column card ── */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="flex flex-col md:flex-row" style={{ alignItems: 'flex-start' }}>
+      {/* ── ROW 2: Aria Card — 2 columns (brief + actions) ── */}
+      <div className="bg-white rounded-xl overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderRadius: 12 }}>
+        <div className="flex flex-col md:flex-row" style={{ alignItems: 'stretch' }}>
 
-          {/* LEFT — AI Brief (50%) */}
-          <div className="p-4 min-w-0" style={{ flex: '0 0 50%', borderRight: '1px solid #f3f4f6' }}>
+          {/* LEFT — AI Brief (60%) */}
+          <div className="min-w-0" style={{ flex: '0 0 60%', borderRight: '1px solid #f3f4f6', padding: 20 }}>
             <div className="flex items-center gap-1.5 mb-2">
               <span className="text-sm">{'\uD83E\uDD16'}</span>
               <span className="text-xs font-semibold text-gray-500">{assistantName}</span>
@@ -3946,37 +3971,11 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                 Read full digest &rarr;
               </button>
             )}
+            <p className="text-xs text-gray-400 italic mt-3 text-right">&mdash; {assistantName}</p>
           </div>
 
-          {/* MIDDLE — Quick Stats (25%) */}
-          <div className="p-4 border-t md:border-t-0" style={{ flex: '0 0 25%', borderRight: '1px solid #f3f4f6' }}>
-            <div className="flex flex-col gap-2">
-              {[
-                { icon: '\u26A0\uFE0F', value: overdueTasks.length, label: 'overdue', onClick: () => onNavigate('daily', 'overdue'), warn: overdueTasks.length > 0 },
-                { icon: '\uD83D\uDD34', value: highPriorityTasks.length, label: 'high priority', onClick: () => onNavigate('daily', 'high'), warn: highPriorityTasks.length > 0 },
-                { icon: '\uD83D\uDCC5', value: calendarEvents.length, label: 'events today', onClick: () => onNavigate('calendar') },
-                { icon: '\u2705', value: doneToday, label: 'done today', onClick: () => onNavigate('daily', 'done') },
-                { icon: '\uD83D\uDCB0', value: netCashFlow !== null ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '\u2014', label: 'this month', onClick: () => onNavigate('financials') },
-                { icon: '\uD83D\uDCDD', value: notesThisWeek, label: 'notes week', onClick: () => onNavigate('notes') },
-              ].map(({ icon, value, label, onClick, warn }) => (
-                <button
-                  key={label}
-                  onClick={onClick}
-                  className="w-full flex items-center gap-2.5 text-left hover:bg-gray-50 rounded-lg px-2 transition-colors"
-                  style={{ minHeight: 32 }}
-                >
-                  <span className="flex-shrink-0" style={{ fontSize: 16 }}>{icon}</span>
-                  <span className={`text-sm font-bold ${warn ? 'text-red-600' : value === 0 || value === '\u2014' ? 'text-gray-400' : 'text-gray-800'}`}>
-                    {value}
-                  </span>
-                  <span className="text-sm text-gray-400">{label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* RIGHT — Quick Actions (25%) */}
-          <div className="p-4 border-t md:border-t-0" style={{ flex: '0 0 25%' }}>
+          {/* RIGHT — Quick Actions (40%) */}
+          <div className="border-t md:border-t-0" style={{ flex: '0 0 40%', padding: 20 }}>
             <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
               {[
                 { icon: '\uFF0B', label: 'Add Task', onClick: onAddTask },
@@ -3987,8 +3986,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                 <button
                   key={label}
                   onClick={onClick}
-                  className="w-full flex items-center justify-center gap-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-purple-600 hover:text-white hover:border-purple-600 transition-all"
-                  style={{ height: 36 }}
+                  className="w-full flex items-center justify-center gap-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-purple-600 hover:text-white hover:border-purple-600 transition-all"
+                  style={{ height: 36, borderRadius: 8 }}
                 >
                   <span>{icon}</span> {label}
                 </button>
@@ -5668,7 +5667,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           className={`flex-col md:border-r border-gray-200 overflow-hidden w-full ${
             mobileView === 'tasks' ? 'flex' : 'hidden md:flex'
           }`}
-          style={{ flex: chatPanelOpen && activeView !== 'chat' ? '0 0 75%' : '1 1 100%', transition: 'flex 0.2s' }}
+          style={{ flex: chatPanelOpen && activeView !== 'chat' ? '0 0 75%' : '1 1 100%', transition: 'flex 0.2s', minHeight: 0 }}
         >
           {/* View Tabs — calendar tab hidden on mobile (use bottom nav) */}
           <div className="bg-white border-b border-gray-100 px-4 md:px-6 pt-3 md:pt-4 pb-0 flex-shrink-0">
