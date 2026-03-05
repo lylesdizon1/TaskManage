@@ -3823,6 +3823,9 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     return items;
   }, [calendarEvents, overdueTasks, todayTasks, highPriorityTasks, today]);
 
+  // All data sources loaded — gate AI generation on this
+  const allDataReady = tasksReady && calendarLoaded;
+
   // Timeline AI summary (once per day, cached)
   useEffect(() => {
     const cacheKey = `timeline_summary_${today}`;
@@ -3852,9 +3855,6 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Aria brief (persona-aware, once per day, cached)
-  // Wait for ALL data sources before generating to avoid empty/generic briefs
-  const allDataReady = tasksReady && calendarLoaded;
-
   useEffect(() => {
     const cacheKey = `aria_brief_${today}_${currentUser?.id || ''}`;
     const cached = localStorage.getItem(cacheKey);
