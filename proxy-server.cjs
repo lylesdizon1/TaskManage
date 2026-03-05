@@ -701,6 +701,57 @@ app.post('/api/gcal/disconnect', async (req, res) => {
   res.json({ success: true });
 });
 
+/**
+ * GET /api/gcal/events?userId=...
+ * Returns today's calendar events from Google Calendar.
+ */
+app.get('/api/gcal/events', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  const tokens = await db.getGcalTokensForUser(userId);
+  if (!tokens) return res.json([]);
+
+  const oauth2 = makeOAuth2Client();
+  if (!oauth2) return res.json([]);
+
+  oauth2.setCredentials(tokens);
+  oauth2.on('tokens', async (newTokens) => {
+    const existing = await db.getGcalTokensForUser(userId);
+    await db.setGcalTokensForUser(userId, { ...existing, ...newTokens });
+  });
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfDay = new Date(startOfDay);
+    endOfDay.setDate(endOfDay.getDate() + 1);
+
+    const { data } = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin: startOfDay.toISOString(),
+      timeMax: endOfDay.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 20,
+    });
+
+    const events = (data.items || []).map((ev) => ({
+      id: ev.id,
+      title: ev.summary || '(No title)',
+      start: ev.start?.dateTime || ev.start?.date || null,
+      end: ev.end?.dateTime || ev.end?.date || null,
+      allDay: !ev.start?.dateTime,
+    }));
+
+    res.json(events);
+  } catch (err) {
+    console.error('[gcal] events list failed:', err.message);
+    res.json([]);
+  }
+});
+
 // ── Task persistence ─────────────────────────────────────────────────────────
 
 app.get('/api/tasks', authenticateToken, async (req, res) => {
@@ -1519,6 +1570,42 @@ app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('[digest] generation failed:', err.message);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Dashboard Timeline Summary ────────────────────────────────────────────────
+
+app.post('/api/dashboard/timeline-summary', authenticateToken, async (req, res) => {
+  try {
+    const apiKey = req.body.apiKey || process.env.CLAUDE_API_KEY;
+    if (!apiKey) return res.json({ summary: '' });
+
+    const { events, tasks } = req.body;
+    const eventsStr = (events || []).map((e) => `${e.time || 'All day'}: ${e.title}`).join(', ') || 'None';
+    const tasksStr = (tasks || []).map((t) => `${t.title} (${t.priority}${t.overdue ? ', overdue' : ''})`).join(', ') || 'None';
+
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 60,
+        system: 'Write ONE sentence summarizing this person\'s day. Be specific and actionable. Max 15 words. No quotes.',
+        messages: [{
+          role: 'user',
+          content: `Today's calendar events: ${eventsStr}\nToday's tasks: ${tasksStr}\n\nSummarize the day in one sentence.`,
+        }],
+      },
+      {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        timeout: 15_000,
+      },
+    );
+
+    const summary = response.data.content?.[0]?.text || '';
+    return res.json({ summary });
+  } catch (err) {
+    console.error('[timeline-summary] failed:', err.message);
+    return res.json({ summary: '' });
   }
 });
 

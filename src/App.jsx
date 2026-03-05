@@ -3648,7 +3648,9 @@ function SkeletonBlock({ className = '' }) {
 function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
-  const [promptInput, setPromptInput] = useState('');
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [timelineSummary, setTimelineSummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
 
   const today = new Date().toISOString().slice(0, 10);
   const tasksReady = tasks.length > 0 || tasks._loaded;
@@ -3665,24 +3667,10 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const highPriorityTasks = useMemo(() => activeTasks.filter((t) => t.priority === 'high'), [activeTasks]);
   const todayTasks = useMemo(() => activeTasks.filter((t) => t.dueDate === today), [activeTasks, today]);
 
-  // Top 5 focus tasks: overdue first, then high priority due today, then high priority no date
-  const focusTasks = useMemo(() => {
-    const scored = activeTasks.map((t) => {
-      let score = 0;
-      if (t.dueDate && t.dueDate < today) score += 1000;
-      if (t.priority === 'high') score += 100;
-      if (t.dueDate === today) score += 50;
-      if (t.dueDate) score += 10;
-      return { ...t, _score: score };
-    });
-    scored.sort((a, b) => b._score - a._score);
-    return scored.slice(0, 5);
-  }, [activeTasks, today]);
-
   // Financial: net cash flow this month
   const netCashFlow = useMemo(() => {
     if (!financialTransactions || financialTransactions.length === 0) return null;
-    const monthPrefix = today.slice(0, 7); // YYYY-MM
+    const monthPrefix = today.slice(0, 7);
     let net = 0;
     financialTransactions.forEach((t) => {
       if (t.date && t.date.startsWith(monthPrefix)) {
@@ -3704,6 +3692,78 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     return notes.find((n) => n.type !== 'digest') || null;
   }, [notes]);
 
+  // Fetch calendar events for today
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    fetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}`)
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setCalendarEvents(data); })
+      .catch(() => {});
+  }, [currentUser?.id]);
+
+  // Timeline items: merge calendar events + tasks, sorted chronologically
+  const timelineItems = useMemo(() => {
+    const items = [];
+
+    // Overdue tasks first
+    overdueTasks.forEach((t) => {
+      items.push({ type: 'overdue', time: null, sortKey: -1, title: t.title, priority: t.priority, tags: t.tags, id: t.id });
+    });
+
+    // Calendar events
+    calendarEvents.forEach((ev) => {
+      let timeStr = 'All day';
+      let sortKey = 0;
+      if (ev.start && !ev.allDay) {
+        const d = new Date(ev.start);
+        sortKey = d.getHours() * 60 + d.getMinutes();
+        timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+      }
+      items.push({ type: 'calendar', time: timeStr, sortKey, title: ev.title, id: ev.id });
+    });
+
+    // Today's tasks + high priority tasks (no due date treated as EOD)
+    const taskSet = new Set();
+    overdueTasks.forEach((t) => taskSet.add(t.id));
+    [...todayTasks, ...highPriorityTasks.filter((t) => !t.dueDate || t.dueDate === today)].forEach((t) => {
+      if (taskSet.has(t.id)) return;
+      taskSet.add(t.id);
+      items.push({ type: t.priority === 'high' ? 'high' : 'task', time: 'EOD', sortKey: 9999, title: t.title, priority: t.priority, tags: t.tags, id: t.id });
+    });
+
+    // Sort: overdue first (sortKey -1), then by time
+    items.sort((a, b) => a.sortKey - b.sortKey);
+    return items;
+  }, [calendarEvents, overdueTasks, todayTasks, highPriorityTasks, today]);
+
+  // Timeline AI summary (once per day, cached)
+  useEffect(() => {
+    const cacheKey = `timeline_summary_${today}`;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) { setTimelineSummary(cached); setSummaryLoading(false); return; }
+
+    // Wait for tasks to be ready
+    if (!tasksReady && tasks.length === 0) return;
+
+    const eventsData = calendarEvents.map((e) => ({ time: e.allDay ? 'All day' : new Date(e.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), title: e.title }));
+    const tasksData = [...overdueTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: true })), ...todayTasks.map((t) => ({ title: t.title, priority: t.priority, overdue: false })), ...highPriorityTasks.filter((t) => !t.dueDate).map((t) => ({ title: t.title, priority: t.priority, overdue: false }))];
+
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
+    apiFetch('/api/dashboard/timeline-summary', {
+      method: 'POST', headers,
+      body: JSON.stringify({ apiKey: apiKeys?.claude || '', events: eventsData, tasks: tasksData }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.summary) {
+          setTimelineSummary(data.summary);
+          localStorage.setItem(cacheKey, data.summary);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setSummaryLoading(false));
+  }, [today, calendarEvents.length, tasksReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Digest: load from localStorage cache or fetch
   useEffect(() => {
     const cacheKey = `digest_${today}`;
@@ -3716,7 +3776,6 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       } catch { /* invalid cache, refetch */ }
     }
 
-    // Check if already generated today (from notes)
     const existingDigest = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
     if (existingDigest) {
       setDigest(existingDigest);
@@ -3725,11 +3784,9 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       return;
     }
 
-    // Fire POST to generate
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
     apiFetch('/api/notes/daily-digest', {
-      method: 'POST',
-      headers,
+      method: 'POST', headers,
       body: JSON.stringify({ apiKey: apiKeys?.claude || '' }),
     })
       .then((r) => r.json())
@@ -3743,19 +3800,20 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       .finally(() => setDigestLoading(false));
   }, [today]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function handlePromptSubmit(e) {
-    e.preventDefault();
-    const text = promptInput.trim();
-    if (!text) return;
-    setPromptInput('');
-    onAIPrompt(text);
-  }
-
   const pillarBadge = (pillar) => {
     if (!pillar) return null;
     const cfg = { hustle: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Hustle' }, home: { bg: 'bg-green-100', text: 'text-green-700', label: 'Home' }, move: { bg: 'bg-orange-100', text: 'text-orange-700', label: 'Move' }, grow: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Grow' } }[pillar];
     if (!cfg) return null;
     return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cfg.bg} ${cfg.text}`}>{cfg.label}</span>;
+  };
+
+  // Entity badge for tasks
+  const entityBadge = (tags) => {
+    if (!tags || tags.length === 0) return null;
+    const tag = tags[0];
+    const pillarLower = tag.toLowerCase();
+    if (['hustle', 'home', 'move', 'grow'].includes(pillarLower)) return pillarBadge(pillarLower);
+    return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
   };
 
   return (
@@ -3770,14 +3828,14 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       </div>
 
       {/* ── Urgency strip ── */}
-      {(overdueTasks.length > 0 || highPriorityTasks.length > 0) && (
+      {overdueTasks.length > 0 || highPriorityTasks.length > 0 ? (
         <div className="flex gap-3 flex-wrap">
           {overdueTasks.length > 0 && (
             <button
               onClick={() => onNavigate('daily', 'overdue')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors"
             >
-              <span>&#9888;&#65039;</span> {overdueTasks.length} overdue
+              <span>{'\u26A0\uFE0F'}</span> {overdueTasks.length} overdue
             </button>
           )}
           {highPriorityTasks.length > 0 && (
@@ -3789,46 +3847,112 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
             </button>
           )}
         </div>
-      )}
+      ) : activeTasks.length === 0 || activeTasks.every((t) => t.completed) ? (
+        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+          {'\u2705'} All caught up!
+        </div>
+      ) : null}
 
-      {/* ── Today's Focus ── */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow">
-        <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-          <span>&#127919;</span> Today&rsquo;s Focus
-        </h3>
-        {!tasksReady ? (
-          <div className="space-y-3">
-            {[1,2,3].map((i) => <SkeletonBlock key={i} className="h-10 w-full" />)}
-          </div>
-        ) : focusTasks.length === 0 ? (
-          <p className="text-sm text-gray-400 py-3">No active tasks — nice work!</p>
-        ) : (
-          <div className="space-y-2">
-            {focusTasks.map((task) => (
-              <button
-                key={task.id}
-                onClick={() => onNavigate('daily')}
-                className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors text-left group"
-              >
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                    task.dueDate && task.dueDate < today ? 'bg-red-500' : task.priority === 'high' ? 'bg-orange-500' : 'bg-gray-300'
-                  }`} />
-                  <span className="text-sm text-gray-800 truncate">{task.title.length > 40 ? task.title.slice(0, 40) + '…' : task.title}</span>
-                  {task.tags?.[0] && pillarBadge(task.tags[0].toLowerCase())}
-                </div>
-                <svg className="w-4 h-4 text-gray-300 group-hover:text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 18l6-6-6-6" />
-                </svg>
+      {/* ── Timeline + Digest 50/50 ── */}
+      <div className="flex flex-col md:flex-row gap-4" style={{ alignItems: 'stretch' }}>
+
+        {/* Today's Timeline (left) */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow h-full flex flex-col">
+            <h3 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
+              {'\uD83D\uDCC5'} Today&rsquo;s Timeline
+            </h3>
+            {/* AI one-liner summary */}
+            {summaryLoading ? (
+              <p className="text-xs text-gray-400 italic mb-3">...</p>
+            ) : timelineSummary ? (
+              <p className="text-xs text-gray-400 italic mb-3">{timelineSummary}</p>
+            ) : null}
+
+            {!tasksReady ? (
+              <div className="space-y-3 flex-1">
+                {[1,2,3].map((i) => <SkeletonBlock key={i} className="h-10 w-full" />)}
+              </div>
+            ) : timelineItems.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center">
+                <p className="text-sm text-gray-400 py-4">{`Clear day \u2014 great time to get ahead \uD83C\uDFAF`}</p>
+              </div>
+            ) : (
+              <div className="space-y-1 flex-1">
+                {timelineItems.slice(0, 6).map((item, i) => (
+                  <button
+                    key={`${item.type}-${item.id}-${i}`}
+                    onClick={() => item.type === 'calendar' ? onNavigate('calendar') : onNavigate('daily')}
+                    className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-50 transition-colors text-left group"
+                  >
+                    {/* Time column */}
+                    <span className="w-16 flex-shrink-0 text-[11px] font-medium text-gray-400 text-right">
+                      {item.type === 'overdue' ? (
+                        <span className="text-red-500">{'\u26A0\uFE0F'} OVR</span>
+                      ) : item.time}
+                    </span>
+                    {/* Icon */}
+                    <span className="flex-shrink-0 text-sm">
+                      {item.type === 'calendar' ? '\uD83D\uDCC5' : item.type === 'high' || item.type === 'overdue' ? '\uD83D\uDD34' : (
+                        <span className="inline-block w-2 h-2 rounded-full bg-gray-400" />
+                      )}
+                    </span>
+                    {/* Title */}
+                    <span className="text-sm text-gray-800 truncate flex-1 min-w-0">
+                      {item.title.length > 35 ? item.title.slice(0, 35) + '\u2026' : item.title}
+                    </span>
+                    {/* Badge */}
+                    <span className="flex-shrink-0">
+                      {item.type === 'calendar' ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">Calendar</span>
+                      ) : item.type === 'overdue' ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">Overdue</span>
+                      ) : item.type === 'high' ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">High Pri</span>
+                      ) : item.tags ? entityBadge(item.tags) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">Task</span>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {timelineItems.length > 6 && (
+              <button onClick={() => onNavigate('daily')} className="mt-2 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
+                View all {timelineItems.length} items &rarr;
               </button>
-            ))}
+            )}
           </div>
-        )}
-        {activeTasks.length > 5 && (
-          <button onClick={() => onNavigate('daily')} className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
-            See all {activeTasks.length} tasks &rarr;
-          </button>
-        )}
+        </div>
+
+        {/* Daily Digest (right) */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow border-l-4 border-l-purple-500 h-full flex flex-col">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+              {'\uD83E\uDDE0'} Daily Digest <span className="text-gray-400 font-normal">&middot; {dateStr}</span>
+            </h3>
+            <div className="flex-1">
+              {digestLoading ? (
+                <div className="flex items-center gap-2 py-3">
+                  <SpinnerIcon className="w-4 h-4 animate-spin text-purple-400" />
+                  <span className="text-sm text-gray-400">Generating...</span>
+                </div>
+              ) : digest ? (
+                <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+                  {digest.content.split('\n').slice(0, 4).join('\n')}
+                  {digest.content.split('\n').length > 4 && '\u2026'}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 py-2">No digest yet &mdash; check back tomorrow</p>
+              )}
+            </div>
+            {digest && digest.content.split('\n').length > 4 && (
+              <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
+                Read full digest &rarr;
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ── Pillar Strip ── */}
@@ -3921,49 +4045,6 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         </div>
       </div>
 
-      {/* ── AI Daily Digest ── */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow border-l-4 border-l-purple-500">
-        <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-          <span>&#129504;</span> Daily Digest <span className="text-gray-400 font-normal">&middot; {dateStr}</span>
-        </h3>
-        {digestLoading ? (
-          <div className="flex items-center gap-2 py-3">
-            <SpinnerIcon className="w-4 h-4 animate-spin text-purple-400" />
-            <span className="text-sm text-gray-400">Generating your digest...</span>
-          </div>
-        ) : digest ? (
-          <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
-            {digest.content.split('\n').slice(0, 4).join('\n')}
-            {digest.content.split('\n').length > 4 && '…'}
-          </div>
-        ) : (
-          <p className="text-sm text-gray-400 py-2">No digest yet — check back tomorrow</p>
-        )}
-        {digest && (
-          <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
-            Read full digest &rarr;
-          </button>
-        )}
-      </div>
-
-      {/* ── AI Prompt Bar ── */}
-      <form onSubmit={handlePromptSubmit} className="flex items-center gap-2 bg-white rounded-full shadow-sm border border-gray-200 px-4 py-2 hover:shadow-md transition-shadow">
-        <input
-          type="text"
-          value={promptInput}
-          onChange={(e) => setPromptInput(e.target.value)}
-          placeholder="What do you want to focus on today?"
-          className="flex-1 text-sm text-gray-700 placeholder-gray-400 bg-transparent border-0 outline-none focus:ring-0"
-        />
-        <button
-          type="submit"
-          disabled={!promptInput.trim()}
-          className="w-9 h-9 flex items-center justify-center rounded-full transition-all disabled:opacity-30"
-          style={{ backgroundColor: '#7C3AED' }}
-        >
-          <SendIcon className="w-4 h-4 text-white" />
-        </button>
-      </form>
     </div>
   );
 }
