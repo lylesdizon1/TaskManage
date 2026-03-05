@@ -3,7 +3,6 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import TiptapImage from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
-import Underline from '@tiptap/extension-underline';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API BASE (works in dev via Vite proxy and in prod when served from same origin)
@@ -4307,12 +4306,10 @@ function TiptapToolbar({ editor, onImageClick }) {
 
 function useNoteEditor({ content, onUpdate }) {
   const editor = useEditor({
-    immediatelyRender: false,
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2] } }),
       TiptapImage.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({ placeholder: 'Start writing...' }),
-      Underline,
     ],
     content: content || '',
     editorProps: {
@@ -4329,7 +4326,6 @@ function useNoteEditor({ content, onUpdate }) {
       if (onUpdate) onUpdate(ed.getHTML());
     },
   });
-  console.log('Editor created:', editor?.isEditable, editor?.isFocused);
   return editor;
 }
 
@@ -4768,18 +4764,30 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
   const pendingContentRef = useRef(null);
   useEffect(() => {
     if (!tiptapEditor || !selectedNote) return;
-    // Set content from pendingContentRef (set by openNote / handleNewNote)
-    const html = pendingContentRef.current;
-    if (html !== null) {
-      pendingContentRef.current = null;
-      tiptapEditor.commands.setContent(html);
-    }
-    // Focus after EditorContent has mounted & view is attached to DOM
-    const timer = setTimeout(() => {
+    let cancelled = false;
+
+    function applyContentAndFocus() {
+      if (cancelled) return;
+      const dom = tiptapEditor.view?.dom;
+      // Wait until the editor's contenteditable is actually in the document
+      if (!dom || !dom.isConnected) {
+        requestAnimationFrame(applyContentAndFocus);
+        return;
+      }
+      // Set content from pendingContentRef (set by openNote / handleNewNote)
+      const html = pendingContentRef.current;
+      if (html !== null) {
+        pendingContentRef.current = null;
+        tiptapEditor.commands.setContent(html);
+      }
+      // Focus the contenteditable directly, then set cursor position
+      dom.focus({ preventScroll: true });
       tiptapEditor.commands.focus('end');
-      console.log('Editor focus attempted:', tiptapEditor.isFocused, document.activeElement?.tagName, document.activeElement?.className);
-    }, 150);
-    return () => clearTimeout(timer);
+      console.log('Editor focus result:', tiptapEditor.isFocused, document.activeElement?.tagName, document.activeElement?.contentEditable);
+    }
+    requestAnimationFrame(applyContentAndFocus);
+
+    return () => { cancelled = true; };
   }, [selectedNote?.id, tiptapEditor]);
 
   // ── Load images when note changes ──
