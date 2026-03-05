@@ -3937,9 +3937,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
             {/* Left 50%: Greeting */}
             <div style={{ width: '50%', flexShrink: 0 }}>
               <h2 className="text-xl md:text-2xl font-bold text-gray-900 leading-tight">
-                {greeting}, {firstName}
+                {greeting}, {firstName} <span style={{ fontWeight: 400, color: '#6B7280', fontSize: 'inherit' }}>&middot; {dateStr}</span>
               </h2>
-              <p className="text-sm text-gray-400 mt-0.5">{dateStr}</p>
             </div>
             {/* Right 50%: Stats pills */}
             <div className="flex flex-wrap justify-end items-center overflow-hidden" style={{ width: '50%', gap: 4 }}>
@@ -3990,7 +3989,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
 
           {/* RIGHT — Quick Actions (40%) */}
           <div className="border-t md:border-t-0" style={{ flex: '0 0 40%', padding: 20 }}>
-            <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               {[
                 { icon: '\uFF0B', label: 'Add Task', onClick: onAddTask },
                 { icon: '\uFF0B', label: 'Quick Note', onClick: onQuickNote },
@@ -4000,8 +3999,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                 <button
                   key={label}
                   onClick={onClick}
-                  className="w-full flex items-center justify-center gap-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-purple-600 hover:text-white hover:border-purple-600 transition-all"
-                  style={{ height: 36, borderRadius: 8 }}
+                  className="w-full flex items-center justify-center gap-1.5 font-medium text-gray-600 bg-white hover:bg-purple-600 hover:text-white hover:border-purple-600 transition-all"
+                  style={{ height: 36, borderRadius: 8, fontSize: 12, border: '1px solid #e5e7eb', transition: 'all 150ms ease' }}
                 >
                   <span>{icon}</span> {label}
                 </button>
@@ -4430,8 +4429,8 @@ function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, addToast,
         onClick={onToggleChat}
         className="fixed z-50 flex items-center justify-center rounded-full shadow-lg transition-all duration-150 hover:scale-105 active:scale-95"
         style={{
-          width: 48,
-          height: 48,
+          width: 56,
+          height: 56,
           bottom: bottomBase + 48 + 12, // above note FAB + spacing
           right: fabRight,
           backgroundColor: chatPanelOpen ? '#6366F1' : '#7C3AED',
@@ -4439,11 +4438,13 @@ function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, addToast,
         title={chatPanelOpen ? 'Hide chat' : 'Open chat'}
       >
         {chatPanelOpen ? (
-          <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M13 17l5-5-5-5M6 17l5-5-5-5" />
+          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6L6 18M6 6l12 12" />
           </svg>
         ) : (
-          <ChatIcon className="w-5 h-5 text-white" />
+          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
+          </svg>
         )}
       </button>
       {/* Quick Note FAB (bottom) */}
@@ -5212,7 +5213,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [chatInput, setChatInput]               = useState('');
   const [chatBackend, setChatBackend]           = useState('claude');
   const [chatLoading, setChatLoading]           = useState(false);
-  const [chatPanelOpen, setChatPanelOpen]       = useState(() => localStorage.getItem('tm_chat_panel') !== 'closed');
+  const [chatPanelOpen, setChatPanelOpen]       = useState(false);
 
   // Load entities + refresh current user on mount
   useEffect(() => {

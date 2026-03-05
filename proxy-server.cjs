@@ -692,7 +692,7 @@ app.post('/api/gcal/sync-task', async (req, res) => {
     const event = await calendar.events.insert({
       calendarId: 'primary',
       requestBody: {
-        summary: `[Dizon.ai] ${title}`,
+        summary: title,
         description: description || '',
         start: { date: dueDate },
         end:   { date: endDate },
