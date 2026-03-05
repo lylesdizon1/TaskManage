@@ -3,6 +3,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import TiptapImage from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
+import Underline from '@tiptap/extension-underline';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API BASE (works in dev via Vite proxy and in prod when served from same origin)
@@ -4311,6 +4312,7 @@ function useNoteEditor({ content, onUpdate }) {
       StarterKit.configure({ heading: { levels: [1, 2] } }),
       TiptapImage.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({ placeholder: 'Start writing...' }),
+      Underline,
     ],
     content: content || '',
     editorProps: {
@@ -4762,18 +4764,22 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     },
   });
 
-  // ── Focus editor when note is selected ──
+  // ── Sync editor content & focus when note changes ──
+  const pendingContentRef = useRef(null);
   useEffect(() => {
-    if (selectedNote && tiptapEditor) {
-      // Wait for EditorContent to mount and connect the view to the DOM
-      const timer = setTimeout(() => {
-        if (tiptapEditor.view?.dom) {
-          tiptapEditor.view.dom.focus();
-          console.log('Editor focus attempted:', tiptapEditor.isFocused, document.activeElement?.className);
-        }
-      }, 100);
-      return () => clearTimeout(timer);
+    if (!tiptapEditor || !selectedNote) return;
+    // Set content from pendingContentRef (set by openNote / handleNewNote)
+    const html = pendingContentRef.current;
+    if (html !== null) {
+      pendingContentRef.current = null;
+      tiptapEditor.commands.setContent(html);
     }
+    // Focus after EditorContent has mounted & view is attached to DOM
+    const timer = setTimeout(() => {
+      tiptapEditor.commands.focus('end');
+      console.log('Editor focus attempted:', tiptapEditor.isFocused, document.activeElement?.tagName, document.activeElement?.className);
+    }, 150);
+    return () => clearTimeout(timer);
   }, [selectedNote?.id, tiptapEditor]);
 
   // ── Load images when note changes ──
@@ -4876,12 +4882,13 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     setSaveStatus('new');
     setShowDeleteConfirm(false);
     setNoteImages([]);
-    if (tiptapEditor) tiptapEditor.commands.setContent('');
+    pendingContentRef.current = '';
   }
 
   function openNote(note) {
-    setSelectedNote(note);
     const htmlContent = ensureHtml(note.content || '');
+    pendingContentRef.current = htmlContent;
+    setSelectedNote(note);
     setEditorData({
       title: note.title || '',
       content: note.content || '',
@@ -4894,12 +4901,6 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     setShowDeleteConfirm(false);
     setAiSuggestion(null);
     if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
-    if (tiptapEditor) {
-      tiptapEditor.commands.setContent(htmlContent);
-      setTimeout(() => {
-        tiptapEditor.commands.focus('end');
-      }, 50);
-    }
   }
 
   function handleEditorChange(field, value) {
@@ -5113,13 +5114,13 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              tiptapEditor?.view?.dom?.focus();
+              tiptapEditor?.commands?.focus('start');
             }
           }}
           placeholder="Title (optional)"
           className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
         />
-        <div style={{ flex: 1, cursor: 'text', minHeight: '100%' }} onClick={() => tiptapEditor?.view?.dom?.focus()}>
+        <div style={{ flex: 1, cursor: 'text', minHeight: '100%' }} onClick={() => tiptapEditor?.commands?.focus()}>
           <EditorContent editor={tiptapEditor} />
         </div>
 
