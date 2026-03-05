@@ -4880,7 +4880,12 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     setShowDeleteConfirm(false);
     setAiSuggestion(null);
     if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
-    if (tiptapEditor) tiptapEditor.commands.setContent(htmlContent);
+    if (tiptapEditor) {
+      tiptapEditor.commands.setContent(htmlContent);
+      setTimeout(() => {
+        tiptapEditor.commands.focus('end');
+      }, 50);
+    }
   }
 
   function handleEditorChange(field, value) {
@@ -5091,6 +5096,12 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
         <input
           type="text" value={editorData.title}
           onChange={(e) => handleEditorChange('title', e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              tiptapEditor?.commands.focus('start');
+            }
+          }}
           placeholder="Title (optional)"
           className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
         />
