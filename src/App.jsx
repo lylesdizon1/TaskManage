@@ -2570,7 +2570,7 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
   }, [conversations]);
 
   return (
-    <div className="flex h-full">
+    <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* Left sidebar */}
       <div className="w-64 flex-shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
         <div className="px-4 pt-4 pb-3 flex-shrink-0">
