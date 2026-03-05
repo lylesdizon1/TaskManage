@@ -5532,9 +5532,6 @@ export default function App() {
     localStorage.removeItem('tm_user');
   }
 
-  // Keep chatInput ref in sync for session-expired handler
-  useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
-
   // Listen for session-expired events from apiFetch
   useEffect(() => {
     function onSessionExpired() {
@@ -5655,6 +5652,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [chatMessages, setChatMessages]         = useState([]);
   const [chatInput, setChatInput]               = useState(() => localStorage.getItem('tm_chat_draft') || '');
   const chatInputRef                            = useRef('');
+  // Keep chatInput ref in sync for session-expired handler
+  useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
   const [chatBackend, setChatBackend]           = useState('claude');
   const [chatLoading, setChatLoading]           = useState(false);
   const [chatPanelOpen, setChatPanelOpen]       = useState(false);
