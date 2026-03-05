@@ -2680,7 +2680,7 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
   const placeholder = placeholders[activeTab] || 'Ask anything...';
 
   return (
-    <div className="sticky top-0 z-40 bg-white border-b border-gray-200 flex-shrink-0">
+    <div className="z-40 bg-white border-b border-gray-200 flex-shrink-0">
       <div className="flex items-center justify-center px-3 md:px-4" style={{ height: 56 }}>
         <div className="flex items-center gap-2 w-full" style={{ maxWidth: 720, height: 40, borderRadius: 20, border: '1px solid #e5e7eb', backgroundColor: '#f9fafb', padding: '0 12px' }}>
           <input
@@ -3844,14 +3844,16 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     const txSummary = netCashFlow !== null ? `Net ${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month` : 'No data';
     const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
 
-    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. Be specific — reference actual data below. Write naturally like a real person. No bullet points. Sign off as — ${aName}`;
+    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. Be specific — reference actual data below. Write naturally like a real person. No bullet points. Do NOT include a sign-off or signature.`;
     const userMsg = `Write my ${tod} brief.\n\nData:\n- Overdue tasks: ${overdueStr}\n- High priority tasks: ${highStr}\n- Today's calendar events: ${eventsStr}\n- This month's net cash flow: ${txSummary}\n- Notes this week: ${notesThisWeek}\n- Active businesses: ${entStr}`;
 
     callClaudeChat([{ role: 'user', content: userMsg }], sysPrompt, apiKeys?.claude || '', authToken)
       .then((text) => {
         if (text && text !== '(no response)') {
-          setAriaBrief(text);
-          localStorage.setItem(cacheKey, text);
+          // Strip any trailing signature like "— Aria" or "- Aria" to avoid duplicate
+          const cleaned = text.replace(/\s*[—–-]\s*\w+\s*$/, '').trim();
+          setAriaBrief(cleaned);
+          localStorage.setItem(cacheKey, cleaned);
         }
       })
       .catch((err) => { console.error('[aria-brief] generation failed:', err.message); })
@@ -5648,7 +5650,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       </header>
 
       {/* ── Main layout ── */}
-      <main className="flex flex-col" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
+      <main className="flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
         {/* Sticky prompt bar — always visible on all tabs */}
         <UniversalPromptBar
           input={chatInput}
