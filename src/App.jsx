@@ -2681,20 +2681,22 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
 
   return (
     <div className="z-40 bg-white border-b border-gray-200 flex-shrink-0">
-      <div className="flex items-center justify-center px-3 md:px-4" style={{ height: 56 }}>
-        <div className="flex items-center gap-2 w-full" style={{ maxWidth: 720, height: 40, borderRadius: 20, border: '1px solid #e5e7eb', backgroundColor: '#f9fafb', padding: '0 12px' }}>
+      <div className="flex items-center justify-center" style={{ height: 72, padding: '12px 24px' }}>
+        <div className="flex items-center gap-2 w-full" style={{ maxWidth: 860, height: 52, borderRadius: 26, border: '1px solid #e5e7eb', backgroundColor: '#f9fafb', padding: '0 20px' }}>
           <input
             type="text"
             value={input}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            className="flex-1 min-w-0 bg-transparent text-sm text-gray-900 placeholder-gray-400 border-0 outline-none focus:ring-0"
+            className="flex-1 min-w-0 bg-transparent text-gray-900 placeholder-gray-400 border-0 outline-none focus:ring-0"
+            style={{ fontSize: 16 }}
           />
           <select
             value={backend}
             onChange={(e) => onBackendChange(e.target.value)}
-            className="flex-shrink-0 px-1.5 py-1 text-[11px] font-semibold bg-transparent border-0 text-gray-500 focus:ring-0 cursor-pointer"
+            className="flex-shrink-0 px-2 py-1 font-semibold bg-transparent border-0 text-gray-500 focus:ring-0 cursor-pointer"
+            style={{ fontSize: 15 }}
           >
             <option value="claude">Claude</option>
             <option value="chatgpt">ChatGPT</option>
@@ -2702,13 +2704,13 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
           <button
             onClick={onSend}
             disabled={loading || !input.trim()}
-            className="flex-shrink-0 w-7 h-7 flex items-center justify-center text-white rounded-full disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            style={{ backgroundColor: '#7C3AED' }}
+            className="flex-shrink-0 flex items-center justify-center text-white rounded-full disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            style={{ backgroundColor: '#7C3AED', width: 40, height: 40 }}
           >
             {loading ? (
-              <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : (
-              <SendIcon className="w-3.5 h-3.5" />
+              <SendIcon className="w-4 h-4" />
             )}
           </button>
         </div>
