@@ -726,7 +726,7 @@ app.post('/api/gcal/disconnect', async (req, res) => {
  * Returns today's calendar events from Google Calendar.
  */
 app.get('/api/gcal/events', async (req, res) => {
-  const { userId } = req.query;
+  const { userId, timeZone } = req.query;
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
   const tokens = await db.getGcalTokensForUser(userId);
@@ -743,19 +743,33 @@ app.get('/api/gcal/events', async (req, res) => {
 
   try {
     const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfDay = new Date(startOfDay);
-    endOfDay.setDate(endOfDay.getDate() + 1);
 
-    const { data } = await calendar.events.list({
+    // Use client timezone to determine "today", falling back to server local time
+    let startOfDay, endOfDay;
+    if (timeZone) {
+      // Build today's date string in the user's timezone, then create proper boundaries
+      const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+      const todayStr = formatter.format(new Date()); // YYYY-MM-DD in user's tz
+      startOfDay = new Date(`${todayStr}T00:00:00`);
+      endOfDay = new Date(`${todayStr}T23:59:59.999`);
+    } else {
+      const now = new Date();
+      startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + 1);
+    }
+
+    const listParams = {
       calendarId: 'primary',
       timeMin: startOfDay.toISOString(),
       timeMax: endOfDay.toISOString(),
       singleEvents: true,
       orderBy: 'startTime',
       maxResults: 20,
-    });
+    };
+    if (timeZone) listParams.timeZone = timeZone;
+
+    const { data } = await calendar.events.list(listParams);
 
     const events = (data.items || []).map((ev) => ({
       id: ev.id,

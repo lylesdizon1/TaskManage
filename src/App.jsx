@@ -3781,9 +3781,24 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   // Fetch calendar events for today
   useEffect(() => {
     if (!currentUser?.id) return;
-    fetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}`)
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    fetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}`)
       .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setCalendarEvents(data); })
+      .then((data) => {
+        if (!Array.isArray(data)) return;
+        // Client-side safety filter: only keep events that overlap with today in user's local timezone
+        const todayLocal = new Date().toISOString().slice(0, 10);
+        const filtered = data.filter((ev) => {
+          if (ev.allDay) {
+            // All-day events use date strings (YYYY-MM-DD)
+            return ev.start === todayLocal || ev.end === todayLocal || (ev.start <= todayLocal && ev.end > todayLocal);
+          }
+          // Timed events: check if start date in local time matches today
+          const startLocal = new Date(ev.start).toLocaleDateString('en-CA'); // YYYY-MM-DD format
+          return startLocal === todayLocal;
+        });
+        setCalendarEvents(filtered);
+      })
       .catch(() => {})
       .finally(() => setCalendarLoaded(true));
   }, [currentUser?.id]);
