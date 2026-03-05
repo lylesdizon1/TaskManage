@@ -5070,13 +5070,12 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
       {/* Tiptap toolbar */}
       <TiptapToolbar editor={tiptapEditor} onImageClick={selectedNote?.id ? () => fileInputRef.current?.click() : undefined} />
       {/* Hidden file input for image uploads */}
-      <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden onChange={(e) => { uploadImages(Array.from(e.target.files)); e.target.value = ''; }} />
+      <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple style={{ display: 'none' }} onChange={(e) => { uploadImages(Array.from(e.target.files)); e.target.value = ''; }} />
 
       {/* Editor body */}
       <div
         className={`flex-1 overflow-y-auto px-4 py-3 space-y-3 relative ${dragOver ? 'ring-2 ring-purple-400 ring-inset' : ''}`}
         onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onPaste={handlePaste}
-        onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation(); }}
       >
         {dragOver && (
           <div className="absolute inset-0 bg-purple-50/80 z-10 flex items-center justify-center rounded-lg pointer-events-none">
@@ -5089,7 +5088,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
           placeholder="Title (optional)"
           className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
         />
-        <EditorContent editor={tiptapEditor} />
+        <EditorContent editor={tiptapEditor} onKeyDown={(e) => e.stopPropagation()} />
 
         {/* Image gallery strip */}
         {selectedNote?.id && (
