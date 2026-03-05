@@ -3731,6 +3731,15 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const today = new Date().toISOString().slice(0, 10);
   const tasksReady = tasks.length > 0 || tasks._loaded;
 
+  // Clear stale date-keyed caches on mount
+  useEffect(() => {
+    Object.keys(localStorage).forEach((key) => {
+      if ((key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) && !key.includes(today)) {
+        localStorage.removeItem(key);
+      }
+    });
+  }, [today]);
+
   // Greeting
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -5180,6 +5189,12 @@ export default function App() {
   const [sessionExpired, setSessionExpired] = useState(false);
 
   function handleLogin(user, token) {
+    // Clear all Aria/digest/timeline caches so fresh login always generates fresh brief
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) {
+        localStorage.removeItem(key);
+      }
+    });
     setCurrentUser(user);
     setAuthToken(token);
     setSessionExpired(false);
