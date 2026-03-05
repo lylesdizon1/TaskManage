@@ -163,6 +163,26 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 });
 
 /**
+ * PUT /api/users/settings
+ * Body: { persona?, assistantName? }
+ * Updates the current user's persona and assistant name.
+ */
+app.put('/api/users/settings', authenticateToken, async (req, res) => {
+  try {
+    const { persona, assistantName } = req.body;
+    const fields = {};
+    if (persona !== undefined) fields.persona = persona;
+    if (assistantName !== undefined) fields.assistantName = assistantName;
+    const updated = await db.updateUser(req.user.id, fields);
+    if (!updated) return res.status(404).json({ error: 'User not found' });
+    return res.json(updated);
+  } catch (err) {
+    console.error('[users] settings update failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /api/auth/refresh
  * Accepts a valid (non-expired) token, returns a fresh token with new 7d expiry.
  * Header: Authorization: Bearer <token>
@@ -1570,6 +1590,51 @@ app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('[digest] generation failed:', err.message);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Dashboard AI Brief (persona-aware) ────────────────────────────────────────
+
+app.post('/api/dashboard/aria-brief', authenticateToken, async (req, res) => {
+  try {
+    const apiKey = req.body.apiKey || process.env.CLAUDE_API_KEY;
+    if (!apiKey) return res.json({ brief: '' });
+
+    const { assistantName, persona, userName, timeOfDay, data } = req.body;
+
+    const personaTones = {
+      executive_assistant: 'warm and professional',
+      coo: 'direct and strategic',
+      best_friend: 'casual and real',
+      life_coach: 'motivating and big-picture focused',
+      cfo: 'numbers-first and analytical',
+    };
+    const tone = personaTones[persona] || personaTones.executive_assistant;
+    const name = assistantName || 'Aria';
+
+    const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-3 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. Sign off with just your name: — ${name}`;
+
+    const dataStr = `Overdue tasks: ${data.overdue || 'None'}\nHigh priority tasks: ${data.highPriority || 'None'}\nToday's calendar events: ${data.events || 'None'}\nRecent transactions: ${data.transactions || 'None'}\nNotes this week: ${data.notesCount || 0}\nBusinesses: ${data.entities || 'None'}`;
+
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 150,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: `Write my ${timeOfDay || 'morning'} brief.\n\n${dataStr}` }],
+      },
+      {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        timeout: 15_000,
+      },
+    );
+
+    const brief = response.data.content?.[0]?.text || '';
+    return res.json({ brief });
+  } catch (err) {
+    console.error('[aria-brief] failed:', err.message);
+    return res.json({ brief: '' });
   }
 });
 

@@ -29,6 +29,8 @@ async function initTables() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'member'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS entity_ids JSONB DEFAULT '[]'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS persona VARCHAR(50) DEFAULT 'executive_assistant'`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_name VARCHAR(50) DEFAULT 'Aria'`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entities (
@@ -229,13 +231,16 @@ async function updateUser(id, fields) {
   if (fields.entityIds !== undefined) { sets.push(`entity_ids = $${idx++}`); vals.push(JSON.stringify(fields.entityIds)); }
   if (fields.active !== undefined) { sets.push(`active = $${idx++}`); vals.push(fields.active); }
   if (fields.passwordHash !== undefined) { sets.push(`password_hash = $${idx++}`); vals.push(fields.passwordHash); }
+  if (fields.persona !== undefined) { sets.push(`persona = $${idx++}`); vals.push(fields.persona); }
+  if (fields.assistantName !== undefined) { sets.push(`assistant_name = $${idx++}`); vals.push(fields.assistantName); }
 
   if (sets.length === 0) return null;
 
   const { rows } = await pool.query(
     `UPDATE users SET ${sets.join(', ')} WHERE id = $1
      RETURNING id, username, display_name AS "displayName", email, role,
-               entity_ids AS "entityIds", active, created_at AS "createdAt"`,
+               entity_ids AS "entityIds", active, created_at AS "createdAt",
+               persona, assistant_name AS "assistantName"`,
     vals,
   );
   return rows[0] || null;
@@ -783,7 +788,8 @@ async function updateTask(id, fields) {
 async function getUserById(id) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
-            email, role, entity_ids AS "entityIds", active
+            email, role, entity_ids AS "entityIds", active,
+            persona, assistant_name AS "assistantName"
      FROM users WHERE id = $1`,
     [id],
   );

@@ -656,7 +656,7 @@ function EnvBadge() {
   );
 }
 
-function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged }) {
+function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged, onUserUpdated }) {
   const isAdmin = currentUser?.role === 'admin';
   const [tab, setTab]               = useState('keys');
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
@@ -666,6 +666,12 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   const [pwForm, setPwForm]         = useState({ current: '', newPw: '', confirm: '' });
   const [pwStatus, setPwStatus]     = useState(null);
   const [pwSaving, setPwSaving]     = useState(false);
+
+  // Persona state
+  const [personaName, setPersonaName] = useState(currentUser?.assistantName || 'Aria');
+  const [personaType, setPersonaType] = useState(currentUser?.persona || 'executive_assistant');
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaStatus, setPersonaStatus] = useState(null);
 
   // ── Entity management state ──
   const [entityList, setEntityList] = useState([]);
@@ -851,6 +857,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
           {[
             { key: 'keys',  label: 'API Keys' },
             { key: 'email', label: 'Alerts' },
+            { key: 'assistant', label: 'AI Assistant' },
             { key: 'password', label: 'Password' },
             ...(isAdmin ? [
               { key: 'entities', label: 'Entities' },
@@ -987,6 +994,92 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
                   Save Email Settings
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* AI Assistant tab */}
+          {tab === 'assistant' && (
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Assistant Name</label>
+                <input
+                  type="text"
+                  value={personaName}
+                  onChange={(e) => setPersonaName(e.target.value)}
+                  placeholder="Aria"
+                  maxLength={30}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                />
+                <p className="text-xs text-gray-400 mt-1">Your AI assistant&rsquo;s name — used in briefs and greetings.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Persona</label>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {[
+                    { key: 'executive_assistant', label: 'Executive Assistant' },
+                    { key: 'coo', label: 'COO' },
+                    { key: 'best_friend', label: 'Best Friend' },
+                    { key: 'life_coach', label: 'Life Coach' },
+                    { key: 'cfo', label: 'CFO' },
+                  ].map(({ key, label }) => (
+                    <button
+                      key={key}
+                      onClick={() => { setPersonaType(key); setPersonaStatus(null); }}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                        personaType === key
+                          ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                          : 'bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5 text-xs text-gray-500 italic">
+                  {personaType === 'executive_assistant' && `"You have one overdue item and LJ's game at 3:30. Careific is your priority."`}
+                  {personaType === 'coo' && `"One blocker: overdue task. Careific is your bottleneck. Clear it today."`}
+                  {personaType === 'best_friend' && `"Yo don't sleep on that overdue task. LJ's game at 3:30 — don't be late bro."`}
+                  {personaType === 'life_coach' && `"Every task you close today compounds. One overdue — handle it and move forward."`}
+                  {personaType === 'cfo' && `"Net +$42k this month. One overdue task blocking operational momentum."`}
+                </div>
+              </div>
+
+              {personaStatus && (
+                <div className={`text-xs px-3 py-2 rounded-lg font-medium ${
+                  personaStatus.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+                }`}>
+                  {personaStatus.ok ? '\u2713 ' : '\u2717 '}{personaStatus.msg}
+                </div>
+              )}
+
+              <button
+                disabled={personaSaving}
+                onClick={async () => {
+                  setPersonaSaving(true);
+                  setPersonaStatus(null);
+                  try {
+                    const res = await apiFetch('/api/users/settings', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                      body: JSON.stringify({ persona: personaType, assistantName: personaName.trim() || 'Aria' }),
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                      setPersonaStatus({ ok: true, msg: 'Saved!' });
+                      if (onUserUpdated) onUserUpdated(data);
+                    } else {
+                      setPersonaStatus({ ok: false, msg: data.error || 'Failed to save' });
+                    }
+                  } catch (err) {
+                    setPersonaStatus({ ok: false, msg: err.message });
+                  } finally {
+                    setPersonaSaving(false);
+                  }
+                }}
+                className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50"
+              >
+                {personaSaving ? 'Saving\u2026' : 'Save Assistant Settings'}
+              </button>
             </div>
           )}
 
@@ -2572,28 +2665,6 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
 // ─────────────────────────────────────────────────────────────────────────────
 
 function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, onSend, loading, activeTab }) {
-  const textareaRef = useRef(null);
-
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 90) + 'px';
-  }, [input]);
-
-  // Mobile keyboard: keep bar visible via visualViewport resize
-  const [keyboardOffset, setKeyboardOffset] = useState(0);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    function onResize() {
-      const diff = window.innerHeight - vv.height;
-      setKeyboardOffset(diff > 80 ? diff : 0); // only if keyboard-sized gap
-    }
-    vv.addEventListener('resize', onResize);
-    return () => vv.removeEventListener('resize', onResize);
-  }, []);
-
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
   }
@@ -2608,56 +2679,39 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
   };
   const placeholder = placeholders[activeTab] || 'Ask anything...';
 
-  // On mobile when keyboard is open, reposition above keyboard instead of above nav
-  const mobileBottom = keyboardOffset > 0 ? keyboardOffset : 60; // 60px = mobile bottom nav height
-
   return (
-    <div
-      className="fixed z-50 bg-white border border-gray-200"
-      style={{
-        bottom: window.innerWidth < 768 ? (keyboardOffset > 0 ? keyboardOffset : 68) : 16,
-        left: window.innerWidth < 768 ? 8 : '50%',
-        right: window.innerWidth < 768 ? 8 : 'auto',
-        transform: window.innerWidth >= 768 ? 'translateX(-50%)' : 'none',
-        width: window.innerWidth >= 768 ? '70%' : 'auto',
-        maxWidth: 860,
-        height: window.innerWidth < 768 ? 48 : 56,
-        borderRadius: 12,
-        boxShadow: '0 4px 24px rgba(0,0,0,0.10)',
-        paddingBottom: keyboardOffset > 0 ? 0 : 'env(safe-area-inset-bottom, 0px)',
-      }}
-    >
-      <div className="flex items-center gap-2 h-full px-3 md:px-4">
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(e) => onInputChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          rows={1}
-          className="flex-1 min-w-0 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
-          style={{ overflowY: 'hidden', maxHeight: window.innerWidth < 768 ? 36 : 44 }}
-        />
-        <select
-          value={backend}
-          onChange={(e) => onBackendChange(e.target.value)}
-          className="flex-shrink-0 px-2 py-1.5 text-[11px] font-semibold bg-gray-100 border border-gray-200 rounded-lg text-gray-600 focus:ring-2 focus:ring-indigo-300 cursor-pointer appearance-auto"
-        >
-          <option value="claude">Claude</option>
-          <option value="chatgpt">ChatGPT</option>
-        </select>
-        <button
-          onClick={onSend}
-          disabled={loading || !input.trim()}
-          className="flex-shrink-0 w-8 h-8 md:w-9 md:h-9 flex items-center justify-center text-white rounded-full disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
-          style={{ backgroundColor: '#7C3AED' }}
-        >
-          {loading ? (
-            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          ) : (
-            <SendIcon className="w-4 h-4" />
-          )}
-        </button>
+    <div className="sticky top-0 z-40 bg-white border-b border-gray-200 flex-shrink-0">
+      <div className="flex items-center justify-center px-3 md:px-4" style={{ height: 56 }}>
+        <div className="flex items-center gap-2 w-full" style={{ maxWidth: 720, height: 40, borderRadius: 20, border: '1px solid #e5e7eb', backgroundColor: '#f9fafb', padding: '0 12px' }}>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => onInputChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            className="flex-1 min-w-0 bg-transparent text-sm text-gray-900 placeholder-gray-400 border-0 outline-none focus:ring-0"
+          />
+          <select
+            value={backend}
+            onChange={(e) => onBackendChange(e.target.value)}
+            className="flex-shrink-0 px-1.5 py-1 text-[11px] font-semibold bg-transparent border-0 text-gray-500 focus:ring-0 cursor-pointer"
+          >
+            <option value="claude">Claude</option>
+            <option value="chatgpt">ChatGPT</option>
+          </select>
+          <button
+            onClick={onSend}
+            disabled={loading || !input.trim()}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center text-white rounded-full disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            style={{ backgroundColor: '#7C3AED' }}
+          >
+            {loading ? (
+              <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <SendIcon className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -3652,12 +3706,14 @@ function SkeletonBlock({ className = '' }) {
   return <div className={`bg-gray-200 rounded-lg animate-pulse ${className}`} />;
 }
 
-function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt }) {
+function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onLogExpense }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [timelineSummary, setTimelineSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  const [ariaBrief, setAriaBrief] = useState(null);
+  const [ariaBriefLoading, setAriaBriefLoading] = useState(true);
 
   const today = new Date().toISOString().slice(0, 10);
   const tasksReady = tasks.length > 0 || tasks._loaded;
@@ -3771,6 +3827,42 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       .finally(() => setSummaryLoading(false));
   }, [today, calendarEvents.length, tasksReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Aria brief (persona-aware, once per day, cached)
+  useEffect(() => {
+    const cacheKey = `aria_brief_${today}_${currentUser?.id || ''}`;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) { setAriaBrief(cached); setAriaBriefLoading(false); return; }
+
+    if (!tasksReady && tasks.length === 0) return;
+
+    const hour2 = new Date().getHours();
+    const tod = hour2 < 12 ? 'morning' : hour2 < 17 ? 'afternoon' : 'evening';
+    const overdueStr = overdueTasks.length > 0 ? overdueTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
+    const highStr = highPriorityTasks.length > 0 ? highPriorityTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
+    const eventsStr = calendarEvents.length > 0 ? calendarEvents.map((e) => e.title).slice(0, 5).join(', ') : 'None';
+    const txSummary = netCashFlow !== null ? `Net ${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month` : 'No data';
+    const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
+
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
+    apiFetch('/api/dashboard/aria-brief', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        apiKey: apiKeys?.claude || '',
+        assistantName: currentUser?.assistantName || 'Aria',
+        persona: currentUser?.persona || 'executive_assistant',
+        userName: firstName,
+        timeOfDay: tod,
+        data: { overdue: overdueStr, highPriority: highStr, events: eventsStr, transactions: txSummary, notesCount: notesThisWeek, entities: entStr },
+      }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.brief) { setAriaBrief(data.brief); localStorage.setItem(cacheKey, data.brief); }
+      })
+      .catch(() => {})
+      .finally(() => setAriaBriefLoading(false));
+  }, [today, calendarEvents.length, tasksReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Digest: load from localStorage cache or fetch
   useEffect(() => {
     const cacheKey = `digest_${today}`;
@@ -3807,6 +3899,11 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       .finally(() => setDigestLoading(false));
   }, [today]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Done today count
+  const doneToday = useMemo(() => tasks.filter((t) => t.completed && t.completedAt && t.completedAt.slice(0, 10) === today).length, [tasks, today]);
+
+  const assistantName = currentUser?.assistantName || 'Aria';
+
   const pillarBadge = (pillar) => {
     if (!pillar) return null;
     const cfg = { hustle: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Hustle' }, home: { bg: 'bg-green-100', text: 'text-green-700', label: 'Home' }, move: { bg: 'bg-orange-100', text: 'text-orange-700', label: 'Move' }, grow: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Grow' } }[pillar];
@@ -3826,39 +3923,85 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   return (
     <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5 space-y-5">
 
-      {/* ── Header / Greeting ── */}
-      <div>
-        <h2 className="text-xl md:text-2xl font-bold text-gray-900">
-          {greeting}, {firstName} <span className="font-normal text-gray-400 text-base md:text-lg">&middot; {dateStr}</span>
-        </h2>
-        <p className="text-sm text-gray-500 mt-1">Here&rsquo;s what needs your attention today</p>
-      </div>
+      {/* ── ROW 1: Greeting (slim) ── */}
+      <h2 className="text-xl md:text-2xl font-bold text-gray-900">
+        {greeting}, {firstName} <span className="font-normal text-gray-400 text-base md:text-lg">&middot; {dateStr}</span>
+      </h2>
 
-      {/* ── Urgency strip ── */}
-      {overdueTasks.length > 0 || highPriorityTasks.length > 0 ? (
-        <div className="flex gap-3 flex-wrap">
-          {overdueTasks.length > 0 && (
-            <button
-              onClick={() => onNavigate('daily', 'overdue')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors"
-            >
-              <span>{'\u26A0\uFE0F'}</span> {overdueTasks.length} overdue
-            </button>
-          )}
-          {highPriorityTasks.length > 0 && (
-            <button
-              onClick={() => onNavigate('daily', 'high')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
-            >
-              <span className="w-2 h-2 bg-red-500 rounded-full" /> {highPriorityTasks.length} high priority
-            </button>
-          )}
+      {/* ── ROW 2: Full width 3-column card ── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="flex flex-col md:flex-row" style={{ alignItems: 'stretch' }}>
+
+          {/* LEFT — AI Brief (50%) */}
+          <div className="flex-1 p-5 md:border-r border-gray-100 min-w-0" style={{ flex: '0 0 50%' }}>
+            <div className="flex items-center gap-1.5 mb-2">
+              <span className="text-sm">{'\uD83E\uDD16'}</span>
+              <span className="text-xs font-semibold text-gray-500">{assistantName}</span>
+            </div>
+            {ariaBriefLoading ? (
+              <div className="flex items-center gap-2">
+                <SpinnerIcon className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                <span className="text-sm text-gray-400">...</span>
+              </div>
+            ) : ariaBrief ? (
+              <p className="text-sm text-gray-700 leading-relaxed">{ariaBrief}</p>
+            ) : (
+              <p className="text-sm text-gray-400 italic">Brief unavailable</p>
+            )}
+            {digest && (
+              <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
+                Read full digest &rarr;
+              </button>
+            )}
+          </div>
+
+          {/* MIDDLE — Quick Stats (25%) */}
+          <div className="p-4 md:border-r border-gray-100 border-t md:border-t-0" style={{ flex: '0 0 25%' }}>
+            <div className="space-y-2">
+              {[
+                { icon: '\u26A0\uFE0F', value: overdueTasks.length, label: 'overdue', onClick: () => onNavigate('daily', 'overdue'), warn: overdueTasks.length > 0 },
+                { icon: '\uD83D\uDD34', value: highPriorityTasks.length, label: 'high priority', onClick: () => onNavigate('daily', 'high'), warn: highPriorityTasks.length > 0 },
+                { icon: '\uD83D\uDCC5', value: calendarEvents.length, label: 'events today', onClick: () => onNavigate('calendar') },
+                { icon: '\u2705', value: doneToday, label: 'done today', onClick: () => onNavigate('daily', 'done') },
+                { icon: '\uD83D\uDCB0', value: netCashFlow !== null ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '\u2014', label: 'this month', onClick: () => onNavigate('financials') },
+                { icon: '\uD83D\uDCDD', value: notesThisWeek, label: 'notes week', onClick: () => onNavigate('notes') },
+              ].map(({ icon, value, label, onClick, warn }) => (
+                <button
+                  key={label}
+                  onClick={onClick}
+                  className="w-full flex items-center gap-2 text-left hover:bg-gray-50 rounded-lg px-1.5 py-1 transition-colors"
+                >
+                  <span className="text-xs flex-shrink-0">{icon}</span>
+                  <span className={`text-xs font-semibold ${warn ? 'text-red-600' : value === 0 || value === '\u2014' ? 'text-gray-400' : 'text-gray-700'}`}>
+                    {value}
+                  </span>
+                  <span className="text-[11px] text-gray-400">{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* RIGHT — Quick Actions (25%) */}
+          <div className="p-4 border-t md:border-t-0" style={{ flex: '0 0 25%' }}>
+            <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
+              {[
+                { label: '+ Add Task', onClick: onAddTask },
+                { label: '+ Quick Note', onClick: onQuickNote },
+                { label: '\uD83D\uDCC5 Add Event', onClick: () => onNavigate('calendar') },
+                { label: '\uD83D\uDCB0 Log Expense', onClick: onLogExpense || (() => onNavigate('financials')) },
+              ].map(({ label, onClick }) => (
+                <button
+                  key={label}
+                  onClick={onClick}
+                  className="w-full px-3 py-2 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50 transition-all text-left"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-      ) : activeTasks.length === 0 || activeTasks.every((t) => t.completed) ? (
-        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
-          {'\u2705'} All caught up!
-        </div>
-      ) : null}
+      </div>
 
       {/* ── Timeline + Digest 50/50 ── */}
       <div className="flex flex-col md:flex-row gap-4" style={{ alignItems: 'stretch' }}>
@@ -4251,12 +4394,11 @@ function QuickCaptureModal({ authToken, categories, activeView, onClose, onSaved
   );
 }
 
-function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, addToast, onNoteSaved }) {
+function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, addToast, onNoteSaved, chatPanelOpen, onToggleChat }) {
   const [open, setOpen] = useState(false);
 
-  if (hideFAB || open) {
-    // When modal is open, render only the modal (no FAB button)
-    return open ? (
+  if (open) {
+    return (
       <QuickCaptureModal
         authToken={authToken}
         categories={categories}
@@ -4265,24 +4407,52 @@ function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, addToast,
         onSaved={onNoteSaved}
         addToast={addToast}
       />
-    ) : null;
+    );
   }
+
+  if (hideFAB) return null;
+
+  const fabRight = 24;
+  const bottomBase = window.innerWidth < 768 ? 80 : 24;
 
   return (
     <>
+      {/* Chat FAB (top) */}
+      <button
+        onClick={onToggleChat}
+        className="fixed z-50 flex items-center justify-center rounded-full shadow-lg transition-all duration-150 hover:scale-105 active:scale-95"
+        style={{
+          width: 48,
+          height: 48,
+          bottom: bottomBase + 48 + 12, // above note FAB + spacing
+          right: fabRight,
+          backgroundColor: chatPanelOpen ? '#6366F1' : '#7C3AED',
+        }}
+        title={chatPanelOpen ? 'Hide chat' : 'Open chat'}
+      >
+        {chatPanelOpen ? (
+          <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M13 17l5-5-5-5M6 17l5-5-5-5" />
+          </svg>
+        ) : (
+          <ChatIcon className="w-5 h-5 text-white" />
+        )}
+      </button>
+      {/* Quick Note FAB (bottom) */}
       <button
         onClick={() => setOpen(true)}
         className="fixed z-50 flex items-center justify-center rounded-full shadow-lg transition-all duration-150 hover:scale-105 active:scale-95"
         style={{
-          width: 56,
-          height: 56,
-          bottom: window.innerWidth < 768 ? 130 : 80,
-          right: 20,
+          width: 48,
+          height: 48,
+          bottom: bottomBase,
+          right: fabRight,
           backgroundColor: '#7C3AED',
         }}
         aria-label="Quick Capture"
+        title="Quick capture"
       >
-        <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}>
+        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}>
           <path d="M12 20h9" />
           <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
         </svg>
@@ -5484,7 +5654,20 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       </header>
 
       {/* ── Main layout ── */}
-      <main className="flex flex-col md:flex-row pb-[140px] md:pb-20" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
+      <main className="flex flex-col" style={{ height: 'calc(100vh - 49px)', minHeight: 0 }}>
+        {/* Sticky prompt bar — always visible on all tabs */}
+        <UniversalPromptBar
+          input={chatInput}
+          onInputChange={setChatInput}
+          backend={chatBackend}
+          onBackendChange={setChatBackend}
+          onSend={handleChatSend}
+          loading={chatLoading}
+          activeTab={window.innerWidth >= 768 ? activeView : mobileView}
+        />
+
+        {/* Content row */}
+        <div className="flex flex-col md:flex-row flex-1 pb-20 md:pb-6 overflow-hidden" style={{ minHeight: 0 }}>
         {/* ── Left: Task panel (shrinks when sliding chat is open) ── */}
         <section
           className={`flex-col md:border-r border-gray-200 overflow-hidden w-full ${
@@ -5533,9 +5716,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               authToken={authToken}
               apiKeys={apiKeys}
               notes={dashboardNotes}
+              entities={userEntities}
               onNavigate={(view, filter) => {
                 setActiveView(view);
-                // On mobile, switch mobileView for panels that have their own mobile section
                 if (window.innerWidth < 768) {
                   if (view === 'calendar') setMobileView('calendar');
                   else if (view === 'financials') setMobileView('financials');
@@ -5543,12 +5726,16 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   else setMobileView('tasks');
                 }
                 if (view === 'daily' && filter === 'overdue') setStatusFilter('active');
-                if (view === 'daily' && filter === 'high') { setStatusFilter('active'); }
+                if (view === 'daily' && filter === 'high') setStatusFilter('active');
+                if (view === 'daily' && filter === 'done') setStatusFilter('done');
               }}
               onAIPrompt={(msg) => {
                 setChatInitialMsg(msg);
                 if (window.innerWidth < 768) setMobileView('chat');
               }}
+              onAddTask={() => { setActiveView('daily'); }}
+              onQuickNote={() => { document.querySelector('[aria-label="Quick Capture"]')?.click(); }}
+              onLogExpense={() => { setActiveView('financials'); if (window.innerWidth < 768) setMobileView('financials'); }}
             />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
@@ -5637,17 +5824,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           </section>
         )}
 
-        {/* Sliding panel toggle tab (desktop only, when panel is closed) */}
-        {!chatPanelOpen && activeView !== 'chat' && (
-          <button
-            onClick={toggleChatPanel}
-            className="hidden md:flex fixed right-0 top-1/2 -translate-y-1/2 z-30 flex-col items-center gap-1 bg-white border border-r-0 border-gray-200 rounded-l-lg px-1.5 py-3 shadow-sm hover:bg-indigo-50 transition-colors"
-            title="Open chat panel"
-          >
-            <ChatIcon className="w-4 h-4 text-indigo-600" />
-            <span className="text-[9px] text-gray-500 font-medium" style={{ writingMode: 'vertical-rl' }}>Chat</span>
-          </button>
-        )}
+
 
         {/* ── Chat panel (mobile only — full screen when mobileView is 'chat') ── */}
         <section
@@ -5694,6 +5871,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         >
           <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} quickCapturedNote={quickCapturedNote} />
         </section>
+        </div>{/* end content row */}
       </main>
 
       {/* ── Mobile bottom navigation ── */}
@@ -5736,6 +5914,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           currentUser={currentUser}
           entities={entities}
           onEntitiesChanged={reloadEntities}
+          onUserUpdated={(u) => { setCurrentUser(u); localStorage.setItem('tm_user', JSON.stringify(u)); }}
         />
       )}
 
@@ -5760,17 +5939,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         hideFAB={(activeView === 'notes' || mobileView === 'notes') && notesEditorOpen}
         addToast={addToast}
         onNoteSaved={(saved) => setQuickCapturedNote(saved)}
-      />
-
-      {/* ── Universal Prompt Bar (fixed bottom, all tabs) ── */}
-      <UniversalPromptBar
-        input={chatInput}
-        onInputChange={setChatInput}
-        backend={chatBackend}
-        onBackendChange={setChatBackend}
-        onSend={handleChatSend}
-        loading={chatLoading}
-        activeTab={window.innerWidth >= 768 ? activeView : mobileView}
+        chatPanelOpen={chatPanelOpen}
+        onToggleChat={toggleChatPanel}
       />
 
       {/* ── Toast notifications ── */}
