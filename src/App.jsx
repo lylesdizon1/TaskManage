@@ -4306,6 +4306,7 @@ function TiptapToolbar({ editor, onImageClick }) {
 
 function useNoteEditor({ content, onUpdate }) {
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2] } }),
       TiptapImage.configure({ inline: false, allowBase64: true }),
@@ -4760,6 +4761,20 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
       handleEditorChange('content', html);
     },
   });
+
+  // ── Focus editor when note is selected ──
+  useEffect(() => {
+    if (selectedNote && tiptapEditor) {
+      // Wait for EditorContent to mount and connect the view to the DOM
+      const timer = setTimeout(() => {
+        if (tiptapEditor.view?.dom) {
+          tiptapEditor.view.dom.focus();
+          console.log('Editor focus attempted:', tiptapEditor.isFocused, document.activeElement?.className);
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [selectedNote?.id, tiptapEditor]);
 
   // ── Load images when note changes ──
   useEffect(() => {
