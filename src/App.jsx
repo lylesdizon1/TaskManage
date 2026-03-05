@@ -344,7 +344,7 @@ function buildEmailHtml(ruleName, ruleDesc, tasks) {
     </table>
   </div>
   <div style="background:#f9fafb;padding:14px 24px;border-top:1px solid #f3f4f6;display:flex;justify-content:space-between;align-items:center;">
-    <span style="color:#9ca3af;font-size:11px;font-weight:500;">TaskManage Alerts</span>
+    <span style="color:#9ca3af;font-size:11px;font-weight:500;">Dizon.ai Alerts</span>
     <span style="color:#9ca3af;font-size:11px;">${new Date().toLocaleString()}</span>
   </div>
 </div>
@@ -402,7 +402,7 @@ async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
     }
 
     const count   = tasksToSend.length;
-    const subject = `[TaskManage] ${rule.name} — ${count} task${count !== 1 ? 's' : ''}`;
+    const subject = `[Dizon.ai] ${rule.name} — ${count} task${count !== 1 ? 's' : ''}`;
     const html    = buildEmailHtml(rule.name, conditionDescription(rule.condition), tasksToSend);
 
     try {
@@ -541,8 +541,8 @@ function LoginScreen({ onLogin }) {
                 d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">TaskManage</h1>
-          <p className="text-sm text-gray-500 mt-1">Sign in to your account</p>
+          <h1 className="text-2xl font-bold text-gray-900">Dizon.ai</h1>
+          <p className="text-sm text-gray-500 mt-1">Life OS for high performers</p>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-4">
@@ -1634,13 +1634,13 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
       const sampleTasks = tasks.filter((t) => !t.completed).slice(0, 3);
       const html = buildEmailHtml(
         'Test Email',
-        'This is a test from TaskManage',
+        'This is a test from Dizon.ai',
         sampleTasks.length ? sampleTasks : tasks.slice(0, 2),
       );
       await sendAlertEmail(
         emailSettings,
         emailSettings.recipientEmail,
-        '[TaskManage] Test Email',
+        '[Dizon.ai] Test Email',
         html,
       );
       addToast({ type: 'success', message: 'Test email sent!' });
@@ -3837,29 +3837,24 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
 
     const hour2 = new Date().getHours();
     const tod = hour2 < 12 ? 'morning' : hour2 < 17 ? 'afternoon' : 'evening';
+    const aName = currentUser?.assistantName || 'Aria';
     const overdueStr = overdueTasks.length > 0 ? overdueTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
     const highStr = highPriorityTasks.length > 0 ? highPriorityTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
     const eventsStr = calendarEvents.length > 0 ? calendarEvents.map((e) => e.title).slice(0, 5).join(', ') : 'None';
     const txSummary = netCashFlow !== null ? `Net ${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month` : 'No data';
     const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
 
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
-    apiFetch('/api/dashboard/aria-brief', {
-      method: 'POST', headers,
-      body: JSON.stringify({
-        apiKey: apiKeys?.claude || '',
-        assistantName: currentUser?.assistantName || 'Aria',
-        persona: currentUser?.persona || 'executive_assistant',
-        userName: firstName,
-        timeOfDay: tod,
-        data: { overdue: overdueStr, highPriority: highStr, events: eventsStr, transactions: txSummary, notesCount: notesThisWeek, entities: entStr },
-      }),
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.brief) { setAriaBrief(data.brief); localStorage.setItem(cacheKey, data.brief); }
+    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. Be specific — reference actual data below. Write naturally like a real person. No bullet points. Sign off as — ${aName}`;
+    const userMsg = `Write my ${tod} brief.\n\nData:\n- Overdue tasks: ${overdueStr}\n- High priority tasks: ${highStr}\n- Today's calendar events: ${eventsStr}\n- This month's net cash flow: ${txSummary}\n- Notes this week: ${notesThisWeek}\n- Active businesses: ${entStr}`;
+
+    callClaudeChat([{ role: 'user', content: userMsg }], sysPrompt, apiKeys?.claude || '', authToken)
+      .then((text) => {
+        if (text && text !== '(no response)') {
+          setAriaBrief(text);
+          localStorage.setItem(cacheKey, text);
+        }
       })
-      .catch(() => {})
+      .catch((err) => { console.error('[aria-brief] generation failed:', err.message); })
       .finally(() => setAriaBriefLoading(false));
   }, [today, calendarEvents.length, tasksReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3930,10 +3925,10 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
 
       {/* ── ROW 2: Full width 3-column card ── */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="flex flex-col md:flex-row" style={{ alignItems: 'stretch' }}>
+        <div className="flex flex-col md:flex-row" style={{ alignItems: 'flex-start' }}>
 
           {/* LEFT — AI Brief (50%) */}
-          <div className="flex-1 p-5 md:border-r border-gray-100 min-w-0" style={{ flex: '0 0 50%' }}>
+          <div className="p-4 min-w-0" style={{ flex: '0 0 50%', borderRight: '1px solid #f3f4f6' }}>
             <div className="flex items-center gap-1.5 mb-2">
               <span className="text-sm">{'\uD83E\uDD16'}</span>
               <span className="text-xs font-semibold text-gray-500">{assistantName}</span>
@@ -3945,19 +3940,17 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
               </div>
             ) : ariaBrief ? (
               <p className="text-sm text-gray-700 leading-relaxed">{ariaBrief}</p>
-            ) : (
-              <p className="text-sm text-gray-400 italic">Brief unavailable</p>
-            )}
+            ) : null}
             {digest && (
-              <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
+              <button onClick={() => onNavigate('notes')} className="mt-2 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
                 Read full digest &rarr;
               </button>
             )}
           </div>
 
           {/* MIDDLE — Quick Stats (25%) */}
-          <div className="p-4 md:border-r border-gray-100 border-t md:border-t-0" style={{ flex: '0 0 25%' }}>
-            <div className="space-y-2">
+          <div className="p-4 border-t md:border-t-0" style={{ flex: '0 0 25%', borderRight: '1px solid #f3f4f6' }}>
+            <div className="flex flex-col gap-2">
               {[
                 { icon: '\u26A0\uFE0F', value: overdueTasks.length, label: 'overdue', onClick: () => onNavigate('daily', 'overdue'), warn: overdueTasks.length > 0 },
                 { icon: '\uD83D\uDD34', value: highPriorityTasks.length, label: 'high priority', onClick: () => onNavigate('daily', 'high'), warn: highPriorityTasks.length > 0 },
@@ -3969,13 +3962,14 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                 <button
                   key={label}
                   onClick={onClick}
-                  className="w-full flex items-center gap-2 text-left hover:bg-gray-50 rounded-lg px-1.5 py-1 transition-colors"
+                  className="w-full flex items-center gap-2.5 text-left hover:bg-gray-50 rounded-lg px-2 transition-colors"
+                  style={{ minHeight: 32 }}
                 >
-                  <span className="text-xs flex-shrink-0">{icon}</span>
-                  <span className={`text-xs font-semibold ${warn ? 'text-red-600' : value === 0 || value === '\u2014' ? 'text-gray-400' : 'text-gray-700'}`}>
+                  <span className="flex-shrink-0" style={{ fontSize: 16 }}>{icon}</span>
+                  <span className={`text-sm font-bold ${warn ? 'text-red-600' : value === 0 || value === '\u2014' ? 'text-gray-400' : 'text-gray-800'}`}>
                     {value}
                   </span>
-                  <span className="text-[11px] text-gray-400">{label}</span>
+                  <span className="text-sm text-gray-400">{label}</span>
                 </button>
               ))}
             </div>
@@ -3985,17 +3979,18 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           <div className="p-4 border-t md:border-t-0" style={{ flex: '0 0 25%' }}>
             <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
               {[
-                { label: '+ Add Task', onClick: onAddTask },
-                { label: '+ Quick Note', onClick: onQuickNote },
-                { label: '\uD83D\uDCC5 Add Event', onClick: () => onNavigate('calendar') },
-                { label: '\uD83D\uDCB0 Log Expense', onClick: onLogExpense || (() => onNavigate('financials')) },
-              ].map(({ label, onClick }) => (
+                { icon: '\uFF0B', label: 'Add Task', onClick: onAddTask },
+                { icon: '\uFF0B', label: 'Quick Note', onClick: onQuickNote },
+                { icon: '\uD83D\uDCC5', label: 'Add Event', onClick: () => onNavigate('calendar') },
+                { icon: '\uD83D\uDCB0', label: 'Log Expense', onClick: onLogExpense || (() => onNavigate('financials')) },
+              ].map(({ icon, label, onClick }) => (
                 <button
                   key={label}
                   onClick={onClick}
-                  className="w-full px-3 py-2 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50 transition-all text-left"
+                  className="w-full flex items-center justify-center gap-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-purple-600 hover:text-white hover:border-purple-600 transition-all"
+                  style={{ height: 36 }}
                 >
-                  {label}
+                  <span>{icon}</span> {label}
                 </button>
               ))}
             </div>
@@ -5602,8 +5597,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <ChecklistIcon className="w-4 h-4 md:w-5 md:h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-sm md:text-base font-bold text-gray-900 leading-none">TaskManage</h1>
-            <p className="hidden md:block text-[11px] text-gray-400 mt-0.5">Multi-venture productivity</p>
+            <h1 className="text-sm md:text-base font-bold text-gray-900 leading-none">Dizon.ai</h1>
+            <p className="hidden md:block text-[11px] text-gray-400 mt-0.5">Life OS for high performers</p>
           </div>
         </div>
 

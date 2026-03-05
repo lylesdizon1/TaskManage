@@ -1,0 +1,10 @@
+{
+  "name": "Dizon.ai",
+  "short_name": "Dizon",
+  "description": "Life OS for high performers",
+  "theme_color": "#7C3AED",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "start_url": "/",
+  "icons": []
+}

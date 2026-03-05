@@ -439,7 +439,7 @@ function getResendClient() {
 }
 
 function getFromEmail() {
-  return process.env.RESEND_FROM_EMAIL || 'TaskManage <onboarding@resend.dev>';
+  return process.env.RESEND_FROM_EMAIL || 'Dizon.ai <onboarding@resend.dev>';
 }
 
 /**
@@ -469,7 +469,7 @@ app.post('/api/email/test', async (req, res) => {
     const response = await resend.emails.send({
       from: getFromEmail(),
       to,
-      subject: '[TaskManage] Connection Test',
+      subject: '[Dizon.ai] Connection Test',
       html: '<p>Your Resend email integration is working.</p>',
     });
     console.log('[email/test] Resend API response:', JSON.stringify(response, null, 2));
@@ -692,7 +692,7 @@ app.post('/api/gcal/sync-task', async (req, res) => {
     const event = await calendar.events.insert({
       calendarId: 'primary',
       requestBody: {
-        summary: `[TaskManage] ${title}`,
+        summary: `[Dizon.ai] ${title}`,
         description: description || '',
         start: { date: dueDate },
         end:   { date: endDate },
@@ -1704,7 +1704,7 @@ async function start() {
   }
 
   app.listen(PORT, () => {
-    console.log(`\n✓ TaskManage server running at http://localhost:${PORT}`);
+    console.log(`\n✓ Dizon.ai server running at http://localhost:${PORT}`);
     console.log('  POST /api/auth/login    → JWT login');
     console.log('  GET  /api/auth/me       → current user');
     console.log('  POST /api/claude        → api.anthropic.com');
