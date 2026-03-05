@@ -5535,10 +5535,6 @@ export default function App() {
   // Listen for session-expired events from apiFetch
   useEffect(() => {
     function onSessionExpired() {
-      // Save unsent chat message so it can be restored after re-login
-      if (chatInputRef.current) {
-        localStorage.setItem('tm_chat_draft', chatInputRef.current);
-      }
       setSessionExpired(true);
     }
     window.addEventListener('session-expired', onSessionExpired);
@@ -5652,11 +5648,23 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [chatMessages, setChatMessages]         = useState([]);
   const [chatInput, setChatInput]               = useState(() => localStorage.getItem('tm_chat_draft') || '');
   const chatInputRef                            = useRef('');
-  // Keep chatInput ref in sync for session-expired handler
-  useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
   const [chatBackend, setChatBackend]           = useState('claude');
   const [chatLoading, setChatLoading]           = useState(false);
   const [chatPanelOpen, setChatPanelOpen]       = useState(false);
+
+  // Keep chatInput ref in sync for session-expired handler
+  useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
+
+  // Save unsent chat message on session-expired so it survives re-login
+  useEffect(() => {
+    function onSessionExpired() {
+      if (chatInputRef.current) {
+        localStorage.setItem('tm_chat_draft', chatInputRef.current);
+      }
+    }
+    window.addEventListener('session-expired', onSessionExpired);
+    return () => window.removeEventListener('session-expired', onSessionExpired);
+  }, []);
 
   // Load entities + refresh current user on mount
   useEffect(() => {
