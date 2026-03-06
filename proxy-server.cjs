@@ -111,12 +111,12 @@ const saveGcalTokens = async (userId, tokens) => {
     const encrypted = encryptTokens(tokens);
     await db.setGcalTokensForUser(userId, { _enc: encrypted });
   } else {
-    await saveGcalTokens(userId, tokens);
+    await db.setGcalTokensForUser(userId, tokens);
   }
 };
 
 const loadGcalTokens = async (userId) => {
-  const stored = await loadGcalTokens(userId);
+  const stored = await db.getGcalTokensForUser(userId);
   if (!stored) return null;
   if (stored._enc) return decryptTokens(stored._enc);
   return stored; // legacy unencrypted tokens
@@ -2003,7 +2003,7 @@ async function start() {
     console.error('[migration] Error (non-fatal):', err.message);
   }
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n✓ Dizon.ai server running at http://localhost:${PORT}`);
     console.log('  POST /api/auth/login    → JWT login');
     console.log('  GET  /api/auth/me       → current user');
