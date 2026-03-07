@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useToast } from './contexts/ToastContext';
 import { useAuthLogout } from './hooks/useAuthLogout';
 import { buildContext } from './lib/context-engine/buildContext';
+import { usePersona } from './contexts/PersonaContext';
+import PersonaSettings from './components/settings/PersonaSettings';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import TiptapImage from '@tiptap/extension-image';
@@ -1019,37 +1021,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
                 />
                 <p className="text-xs text-gray-400 mt-1">Your AI assistant&rsquo;s name — used in briefs and greetings.</p>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Persona</label>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {[
-                    { key: 'executive_assistant', label: 'Executive Assistant' },
-                    { key: 'coo', label: 'COO' },
-                    { key: 'best_friend', label: 'Best Friend' },
-                    { key: 'life_coach', label: 'Life Coach' },
-                    { key: 'cfo', label: 'CFO' },
-                  ].map(({ key, label }) => (
-                    <button
-                      key={key}
-                      onClick={() => { setPersonaType(key); setPersonaStatus(null); }}
-                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                        personaType === key
-                          ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
-                          : 'bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-300'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5 text-xs text-gray-500 italic">
-                  {personaType === 'executive_assistant' && `"You have one overdue item and LJ's game at 3:30. Careific is your priority."`}
-                  {personaType === 'coo' && `"One blocker: overdue task. Careific is your bottleneck. Clear it today."`}
-                  {personaType === 'best_friend' && `"Yo don't sleep on that overdue task. LJ's game at 3:30 — don't be late bro."`}
-                  {personaType === 'life_coach' && `"Every task you close today compounds. One overdue — handle it and move forward."`}
-                  {personaType === 'cfo' && `"Net +$42k this month. One overdue task blocking operational momentum."`}
-                </div>
-              </div>
+              <PersonaSettings />
 
               {personaStatus && (
                 <div className={`text-xs px-3 py-2 rounded-lg font-medium ${
@@ -6009,7 +5981,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
 
     // Build system prompt and call AI
-    const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents });
+    const { activePersona } = usePersona();
+    const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents, personaSystemPrompt: activePersona.systemPrompt });
     try {
       let reply;
       if (chatBackend === 'claude') {
