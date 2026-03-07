@@ -38,6 +38,7 @@ const path       = require('path');
 const crypto     = require('crypto');
 const rateLimit  = require('express-rate-limit');
 const helmet     = require('helmet');
+const Anthropic  = require('@anthropic-ai/sdk');
 
 const multer = require('multer');
 const db = require('./db.cjs');
@@ -493,6 +494,48 @@ app.post('/api/claude', authenticateToken, async (req, res) => {
     return res.status(err.response?.status || 502).json(
       err.response?.data || { error: err.message },
     );
+  }
+});
+
+/**
+ * Claude streaming proxy (SSE)
+ * Body: { apiKey?: string, ...anthropicPayload }
+ * Falls back to CLAUDE_API_KEY env var if apiKey not in body.
+ */
+app.post('/api/chat/stream', authenticateToken, async (req, res) => {
+  const { apiKey: bodyKey, ...body } = req.body;
+  const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.CLAUDE_API_KEY;
+  if (!apiKey) return res.status(401).json({ error: 'Missing apiKey' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  try {
+    const client = new Anthropic({ apiKey });
+    const stream = client.messages.stream(body);
+
+    stream.on('text', (text) => {
+      res.write(`data: ${JSON.stringify({ delta: text })}\n\n`);
+    });
+
+    stream.on('end', () => {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    });
+
+    stream.on('error', (err) => {
+      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.end();
+    });
+
+    req.on('close', () => {
+      stream.abort();
+    });
+  } catch (err) {
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.end();
   }
 });
 
