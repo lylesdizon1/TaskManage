@@ -1,7 +1,12 @@
-export function buildContextPayload(slices, intent) {
+// src/lib/context-engine/contextBuilder.js
+
+const DEFAULT_SYSTEM_PROMPT = `You are Aria, the AI core of Dizon.ai — a Life OS for high performers.`;
+
+export function buildContextPayload(slices, intent, personaSystemPrompt) {
   const parts = [];
 
-  parts.push(`You are Aria, the AI core of Dizon.ai — a Life OS for high performers.`);
+  const systemPrompt = personaSystemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+  parts.push(systemPrompt);
   parts.push(`Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.`);
   parts.push(`User intent detected: ${intent}.`);
 
