@@ -894,7 +894,12 @@ app.get('/api/gcal/events', async (req, res) => {
       // Build today's date string in the user's timezone, then create proper boundaries
       const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
       const todayStr = formatter.format(new Date()); // YYYY-MM-DD in user's tz
-      startOfDay = new Date(`${todayStr}T00:00:00`);
+      // Compute UTC offset for user's timezone so midnight is correct locally
+      const midpoint = new Date(`${todayStr}T12:00:00Z`);
+      const localMs = new Date(midpoint.toLocaleString('en-US', { timeZone })).getTime();
+      const offsetMs = midpoint.getTime() - localMs;
+      startOfDay = new Date(`${todayStr}T00:00:00Z`);
+      startOfDay = new Date(startOfDay.getTime() + offsetMs);
       endOfDay = new Date(startOfDay);
       endOfDay.setDate(endOfDay.getDate() + numDays);
     } else {
