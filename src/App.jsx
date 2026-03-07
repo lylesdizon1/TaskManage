@@ -4233,10 +4233,14 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                   <span className="text-sm text-gray-400">Generating...</span>
                 </div>
               ) : digest ? (
-                <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
-                  {digest.content.split('\n').slice(0, 4).join('\n')}
-                  {digest.content.split('\n').length > 4 && '\u2026'}
-                </div>
+                <div className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none"
+                dangerouslySetInnerHTML={{ __html: digest.content
+                  .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                  .replace(/##\s?(.+)/g, '<strong>$1</strong>')
+                  .replace(/<br\s*\/?>/gi, '')
+                  .split('\n').filter(l => l.trim()).slice(0, 5).join('<br/>')
+                }}
+              />
               ) : (
                 <p className="text-sm text-gray-400 py-2">No digest yet &mdash; check back tomorrow</p>
               )}
