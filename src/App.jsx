@@ -4312,7 +4312,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           ) : (
             <div className="space-y-1.5 text-sm">
               <p className="text-gray-500">{notesThisWeek} note{notesThisWeek !== 1 ? 's' : ''} this week</p>
-              <p className="text-gray-400 truncate">{latestNote ? (latestNote.content || '').slice(0, 40) : 'No notes yet'}</p>
+              <p className="text-gray-400 truncate">{latestNote ? (latestNote.content || '').replace(/<[^>]*>/g, '').slice(0, 40) : 'No notes yet'}</p>
               <p className={digest ? 'text-purple-600 font-medium' : 'text-gray-400'}>
                 {digest ? 'Daily Digest ready \u2728' : 'No digest yet'}
               </p>
