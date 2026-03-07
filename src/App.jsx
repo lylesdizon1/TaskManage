@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useToast } from './contexts/ToastContext';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import TiptapImage from '@tiptap/extension-image';
@@ -5817,7 +5818,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     recipientEmail: '',
   });
   const [alertRules, setAlertRules]             = useState(DEFAULT_ALERT_RULES);
-  const [toasts, setToasts]                     = useState([]);
+
   const [gcalConnected, setGcalConnected]       = useState(false);
   const [envConfigured, setEnvConfigured]       = useState({});
   const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'financials' | 'notes'
@@ -6146,14 +6147,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     saveSettings(apiKeysRef.current, emailSettingsRef.current, alertRules);
   }, [alertRules]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const _toast = useToast();
   function addToast(t) {
-    const id = uid();
-    setToasts((prev) => [...prev, { ...t, id }]);
-    setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 5000);
-  }
-
-  function dismissToast(id) {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    const fn = _toast[t.type] ?? _toast.info;
+    fn(t.message);
   }
 
   // Evaluate rules on mount (catches session-scoped digest) + every 60 s
@@ -6642,8 +6639,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         onToggleChat={toggleChatPanel}
       />
 
-      {/* ── Toast notifications ── */}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      {/* ── Toast notifications handled by ToastProvider in main.jsx ── */}
     </div>
   );
 }
