@@ -5818,6 +5818,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [chatInput, setChatInput]               = useState(() => localStorage.getItem('tm_chat_draft') || '');
   const chatInputRef                            = useRef('');
   const [chatBackend, setChatBackend]           = useState('claude');
+  const { activePersona } = usePersona();
   const [chatLoading, setChatLoading]           = useState(false);
   const [chatPanelOpen, setChatPanelOpen]       = useState(false);
 
@@ -5981,7 +5982,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
 
     // Build system prompt and call AI
-    const { activePersona } = usePersona();
     const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents, personaSystemPrompt: activePersona.systemPrompt });
     try {
       let reply;
