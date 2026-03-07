@@ -398,7 +398,7 @@ app.delete('/api/entities/:id', authenticateToken, requireAdmin, async (req, res
     if (existing.shared && existing.createdBy !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Cannot delete a shared entity' });
     }
-    await db.deleteEntity(req.params.id);
+    await db.deleteEntity(req.params.id, req.user.id);
     return res.json({ success: true });
   } catch (err) {
     console.error('[entities] delete failed:', err.message);
@@ -995,7 +995,7 @@ app.post('/api/tasks', authenticateToken, async (req, res) => {
     if (!Array.isArray(tasks)) {
       return res.status(400).json({ error: 'Body must be an array of tasks' });
     }
-    await db.replaceTasks(tasks);
+    await db.replaceTasks(tasks, req.user.id);
     return res.json({ success: true, count: tasks.length });
   } catch (err) {
     console.error('[tasks] write failed:', err.message);

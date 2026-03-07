@@ -344,8 +344,8 @@ async function getEntityById(id) {
   return rows[0] || null;
 }
 
-async function deleteEntity(id) {
-  await pool.query('DELETE FROM entities WHERE id = $1', [id]);
+async function deleteEntity(id, userId) {
+  await pool.query('DELETE FROM entities WHERE id = $1 AND created_by = $2', [id, userId]);
 }
 
 async function seedEntitiesIfEmpty() {
@@ -415,11 +415,11 @@ async function getTasksForUser(userId, userEntityIds) {
  * Replace ALL tasks in the database with the provided array.
  * This mirrors the original "overwrite tasks.json" behaviour.
  */
-async function replaceTasks(tasks) {
+async function replaceTasks(tasks, userId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM tasks');
+    await client.query('DELETE FROM tasks WHERE created_by = $1', [userId]);
     for (const t of tasks) {
       await client.query(
         `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
