@@ -19,25 +19,26 @@ export default function PersonaSettings() {
   };
 
   return (
-    <div className="persona-settings">
-      <h2 className="settings-section-title">AI Personas</h2>
-      <p className="settings-section-sub">
-        Choose your active persona. Rename any to make it yours.
-      </p>
-      <div className="persona-grid">
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-2">Persona</label>
+      <div className="flex flex-wrap gap-2 mb-3">
         {personas.map((p) => {
           const isActive = p.id === activePersonaId;
           const displayName = getPersonaName(p.id);
           return (
-            <div
+            <button
               key={p.id}
-              className={`persona-card ${isActive ? 'persona-card--active' : ''}`}
               onClick={() => selectPersona(p.id)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 ${
+                isActive
+                  ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                  : 'bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-300'
+              }`}
             >
-              <div className="persona-card__emoji">{p.emoji}</div>
+              <span>{p.emoji}</span>
               {editing === p.id ? (
                 <input
-                  className="persona-card__name-input"
+                  className="w-20 bg-transparent outline-none text-xs font-medium"
                   value={draft}
                   autoFocus
                   onChange={(e) => setDraft(e.target.value)}
@@ -49,27 +50,23 @@ export default function PersonaSettings() {
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <div className="persona-card__name">
-                  {displayName}
-                  <button
-                    className="persona-card__rename-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startEdit(p.id);
-                    }}
-                    title="Rename"
-                  >
-                    ✏️
-                  </button>
-                </div>
+                <span>{displayName}</span>
               )}
-              <div className="persona-card__desc">{p.description}</div>
               {isActive && (
-                <div className="persona-card__active-badge">Active</div>
+                <span
+                  className="ml-0.5 opacity-50 hover:opacity-100 text-indigo-400"
+                  onClick={(e) => { e.stopPropagation(); startEdit(p.id); }}
+                  title="Rename"
+                >
+                  ✏️
+                </span>
               )}
-            </div>
+            </button>
           );
         })}
+      </div>
+      <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5 text-xs text-gray-500 italic">
+        {personas.find((p) => p.id === activePersonaId)?.description}
       </div>
     </div>
   );
