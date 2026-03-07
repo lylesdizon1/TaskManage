@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useToast } from './contexts/ToastContext';
+import { useAuthLogout } from './hooks/useAuthLogout';
+import { buildContext } from './lib/context-engine/buildContext';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import TiptapImage from '@tiptap/extension-image';
@@ -6007,7 +6009,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
 
     // Build system prompt and call AI
-    const sysPrompt = buildSystemPrompt(tasks, userEntities, financialAccounts, financialTransactions, allNotes, chatCalendarEvents);
+    const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents });
     try {
       let reply;
       if (chatBackend === 'claude') {
@@ -6148,6 +6150,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   }, [alertRules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const _toast = useToast();
+  useAuthLogout(onLogout);
   function addToast(t) {
     const fn = _toast[t.type] ?? _toast.info;
     fn(t.message);
