@@ -4236,7 +4236,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                 <div className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none"
                 dangerouslySetInnerHTML={{ __html: digest.content
                   .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-                  .replace(/##\s?(.+)/g, '<strong>$1</strong>')
+                  .replace(/#{1,3}\s*/g, '')
                   .replace(/<br\s*\/?>/gi, '')
                   .split('\n').filter(l => l.trim()).slice(0, 5).join('<br/>')
                 }}
