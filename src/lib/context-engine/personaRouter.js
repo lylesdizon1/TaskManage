@@ -1,15 +1,15 @@
 // src/lib/context-engine/personaRouter.js
-// Maps detected intent to the best persona for that domain
+// Aria handles most things. Specialists only for deep domain requests.
 
 const INTENT_TO_PERSONA = {
-  FINANCIAL: 'cfo',
-  TASK:      'coo',
-  CALENDAR:  'coo',
-  FAMILY:    'home',
-  HEALTH:    'health',
-  JOURNAL:   'lifecoach',
-  ENTITY:    'aria',
-  GENERAL:   'aria',
+  FINANCIAL: 'cfo',      // explicit money/finance analysis
+  FAMILY:    'home',     // liz, kids, household
+  HEALTH:    'health',   // workouts, sleep, nutrition
+  JOURNAL:   'lifecoach', // reflection, habits, growth
+  TASK:      'aria',     // casual task questions → Aria
+  CALENDAR:  'aria',     // schedule questions → Aria
+  ENTITY:    'aria',     // contacts/companies → Aria
+  GENERAL:   'aria',     // everything else → Aria
 };
 
 export function routePersona(intent) {

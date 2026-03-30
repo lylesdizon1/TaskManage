@@ -13,8 +13,8 @@ export function buildContextPayload(slices, intent, personaSystemPrompt) {
   if (slices.tasks?.length) {
     parts.push(`\n## Tasks (${slices.tasks.length})\n${JSON.stringify(slices.tasks, null, 2)}`);
   }
-  if (slices.financials?.length) {
-    parts.push(`\n## Financial Transactions (${slices.financials.length})\n${JSON.stringify(slices.financials, null, 2)}`);
+  if (slices.transactions?.length) {
+    parts.push(`\n## Financial Transactions (${slices.transactions.length})\n${JSON.stringify(slices.transactions, null, 2)}`);
   }
   if (slices.notes?.length) {
     parts.push(`\n## Notes (${slices.notes.length})\n${JSON.stringify(slices.notes, null, 2)}`);
