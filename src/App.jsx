@@ -5934,6 +5934,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
 
     // Build system prompt and call AI
+    console.log("[DEBUG] chatCalendarEvents:", JSON.stringify(chatCalendarEvents));
     const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents, personaSystemPrompt: effectivePersona.systemPrompt, autoPersonaEmoji: effectivePersona.emoji, autoPersonaName: effectivePersona.defaultName });
     try {
       let reply;
