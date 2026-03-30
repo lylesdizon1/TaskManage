@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useToast } from './contexts/ToastContext';
 import { useAuthLogout } from './hooks/useAuthLogout';
 import { buildContext } from './lib/context-engine/buildContext';
+import { detectIntent } from './lib/context-engine/intentDetector';
+import { routePersona } from './lib/context-engine/personaRouter';
 import { usePersona } from './contexts/PersonaContext';
 import PersonaSettings from './components/settings/PersonaSettings';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -2678,7 +2680,7 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
 // Universal Prompt Bar
 // ─────────────────────────────────────────────────────────────────────────────
 
-function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, onSend, loading, activeTab }) {
+function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, onSend, loading, activeTab, personaPill }) {
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
   }
@@ -2697,6 +2699,11 @@ function UniversalPromptBar({ input, onInputChange, backend, onBackendChange, on
     <div className="z-40 bg-white border-b border-gray-200 flex-shrink-0">
       <div className="flex items-center justify-center" style={{ height: 72, padding: '12px 24px' }}>
         <div className="flex items-center gap-2 w-full" style={{ maxWidth: 860, height: 52, borderRadius: 26, border: '1px solid #e5e7eb', backgroundColor: '#f9fafb', padding: '0 20px' }}>
+          {personaPill && (
+            <span className="flex-shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 select-none">
+              {personaPill.emoji} {personaPill.name}
+            </span>
+          )}
           <input
             type="text"
             value={input}
@@ -3852,11 +3859,11 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
     const weekAgoStr = weekAgo.toISOString();
-    return notes.filter((n) => n.type !== 'daily-digest' && n.createdAt && n.createdAt >= weekAgoStr).length;
+    return notes.filter((n) => n.type !== 'digest' && n.createdAt && n.createdAt >= weekAgoStr).length;
   }, [notes]);
 
   const latestNote = useMemo(() => {
-    return notes.find((n) => n.type !== 'daily-digest') || null;
+    return notes.find((n) => n.type !== 'digest') || null;
   }, [notes]);
 
   // Fetch calendar events for today
@@ -4011,7 +4018,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           return;
         } catch { /* invalid cache, refetch */ }
       }
-      const existingDigest = notes.find((n) => n.type === 'daily-digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
+      const existingDigest = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
       if (existingDigest) {
         setDigest(existingDigest);
         localStorage.setItem(cacheKey, JSON.stringify(existingDigest));
@@ -4922,7 +4929,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     try {
       const res = await apiFetch(`/api/notes?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
-      if (Array.isArray(data)) setNotes(data.filter((n) => n.type !== 'daily-digest'));
+      if (Array.isArray(data)) setNotes(data.filter((n) => n.type !== 'digest'));
     } catch {}
   }, [authToken, pillarFilter, categoryFilter]);
 
@@ -5841,6 +5848,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [chatBackend, setChatBackend]           = useState('claude');
   const { activePersona } = usePersona();
   const [chatLoading, setChatLoading]           = useState(false);
+  const [lastAutoPersona, setLastAutoPersona]     = useState(null);
   const [chatPanelOpen, setChatPanelOpen]       = useState(false);
 
   // ── Calendar events for chat context ──
@@ -5878,7 +5886,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     // Load notes for dashboard
     apiFetch('/api/notes', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setDashboardNotes(data.filter((n) => n.type !== 'daily-digest')); })
+      .then((data) => { if (Array.isArray(data)) setDashboardNotes(data.filter((n) => n.type !== 'digest')); })
       .catch(() => {});
     // Refresh user data (role, entityIds) from server
     apiFetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -5991,6 +5999,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     setChatMessages(updatedMessages);
     setChatInput('');
     localStorage.removeItem('tm_chat_draft');
+    // Auto-route to best persona for this message
+    const detectedIntent = detectIntent(text);
+    const routedPersonaId = routePersona(detectedIntent);
+    const { getPersonaById: _getPersonaById } = await import('./config/personas');
+    const routedPersona = _getPersonaById(routedPersonaId);
+    const effectivePersona = routedPersona ?? activePersona;
+    setLastAutoPersona(effectivePersona);
     setChatLoading(true);
 
     // Save user message to DB
@@ -6003,7 +6018,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
 
     // Build system prompt and call AI
-    const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents, personaSystemPrompt: activePersona.systemPrompt });
+    const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents, personaSystemPrompt: effectivePersona.systemPrompt, autoPersonaEmoji: effectivePersona.emoji, autoPersonaName: effectivePersona.defaultName });
     try {
       let reply;
       if (chatBackend === 'claude') {
@@ -6341,6 +6356,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           onSend={handleChatSend}
           loading={chatLoading}
           activeTab={window.innerWidth >= 768 ? activeView : mobileView}
+          personaPill={lastAutoPersona ? { emoji: lastAutoPersona.emoji, name: lastAutoPersona.defaultName } : null}
         />
 
         {/* Content row */}
