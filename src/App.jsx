@@ -4104,7 +4104,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
               </h2>
             </div>
             {/* Right 50%: Stats pills */}
-            <div className="flex flex-wrap justify-end items-center overflow-hidden" style={{ width: '50%', gap: 4 }}>
+            <div className="flex flex-wrap justify-end items-center overflow-hidden" style={{ width: '50%', gap: 8 }}>
               {statsData.map(({ icon, value, label, onClick, color, priority }) => {
                 const isZero = value === 0 || value === '\u2014';
                 return (
@@ -4112,7 +4112,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                     key={label}
                     onClick={onClick}
                     className={`inline-flex items-center gap-0.5 cursor-pointer transition-opacity hover:opacity-80 flex-shrink-0${!priority ? ' hidden md:inline-flex' : ''}`}
-                    style={{ height: 22, borderRadius: 9999, padding: '0 8px', fontSize: 11, fontWeight: 500, backgroundColor: isZero ? '#E5E7EB' : color, color: isZero ? '#6B7280' : '#fff' }}
+                    style={{ height: 28, borderRadius: 9999, padding: '0 12px', fontSize: 12, fontWeight: 500, backgroundColor: isZero ? '#E5E7EB' : color, color: isZero ? '#6B7280' : '#fff' }}
                   >
                     <span>{icon}</span>
                     <span>{value} {label}</span>
