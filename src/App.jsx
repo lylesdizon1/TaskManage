@@ -4000,30 +4000,33 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       .finally(() => setAriaBriefLoading(false));
   }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length, notesThisWeek, netCashFlow]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Digest: load from localStorage cache or fetch
-  useEffect(() => {
+  const fetchDigest = (force = false) => {
     const cacheKey = `digest_${today}`;
-    const cached = localStorage.getItem(cacheKey);
-    if (cached) {
-      try {
-        setDigest(JSON.parse(cached));
+    if (!force) {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          setDigest(JSON.parse(cached));
+          setDigestLoading(false);
+          return;
+        } catch { /* invalid cache, refetch */ }
+      }
+      const existingDigest = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
+      if (existingDigest) {
+        setDigest(existingDigest);
+        localStorage.setItem(cacheKey, JSON.stringify(existingDigest));
         setDigestLoading(false);
         return;
-      } catch { /* invalid cache, refetch */ }
+      }
+    } else {
+      localStorage.removeItem(cacheKey);
+      setDigest(null);
+      setDigestLoading(true);
     }
-
-    const existingDigest = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
-    if (existingDigest) {
-      setDigest(existingDigest);
-      localStorage.setItem(cacheKey, JSON.stringify(existingDigest));
-      setDigestLoading(false);
-      return;
-    }
-
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
     apiFetch('/api/notes/daily-digest', {
       method: 'POST', headers,
-      body: JSON.stringify({ apiKey: apiKeys?.claude || '' }),
+      body: JSON.stringify({ apiKey: apiKeys?.claude || '', force }),
     })
       .then((r) => r.json())
       .then((data) => {
@@ -4034,6 +4037,11 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       })
       .catch(() => {})
       .finally(() => setDigestLoading(false));
+  };
+
+  // Digest: load from localStorage cache or fetch
+  useEffect(() => {
+    fetchDigest(false);
   }, [today]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Done today count
@@ -4245,11 +4253,20 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
                 <p className="text-sm text-gray-400 py-2">No digest yet &mdash; check back tomorrow</p>
               )}
             </div>
-            {digest && digest.content.split('\n').length > 4 && (
-              <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
-                Read full digest &rarr;
+            <div className="mt-3 flex items-center gap-3">
+              {digest && digest.content.split('\n').length > 4 && (
+                <button onClick={() => onNavigate('notes')} className="text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
+                  Read full digest &rarr;
+                </button>
+              )}
+              <button
+                onClick={() => fetchDigest(true)}
+                className="text-xs font-medium text-gray-400 hover:text-gray-600 transition-colors ml-auto"
+                title="Regenerate digest"
+              >
+                ↺ Regenerate
               </button>
-            )}
+            </div>
           </div>
         </div>
       </div>
