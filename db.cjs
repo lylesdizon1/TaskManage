@@ -525,7 +525,7 @@ const NOTE_RETURNING = `id, user_id AS "userId", title, content, visibility,
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 async function getNotesForUser(userId, filters = {}) {
-  const where = ['user_id = $1'];
+  const where = ['user_id = $1', "type != 'digest'"];
   const vals = [userId];
   let idx = 2;
   if (filters.pillar) { where.push(`pillar = $${idx++}`); vals.push(filters.pillar); }
