@@ -5878,7 +5878,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     // Load notes for dashboard
     apiFetch('/api/notes', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setDashboardNotes(data); })
+      .then((data) => { if (Array.isArray(data)) setDashboardNotes(data.filter((n) => n.type !== 'digest')); })
       .catch(() => {});
     // Refresh user data (role, entityIds) from server
     apiFetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
