@@ -2495,7 +2495,12 @@ function ChatMessageThread({ messages, loading }) {
         </div>
       )}
       {messages.map((msg, i) => (
-        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+        <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+          {msg.role === 'assistant' && msg.persona && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700 mb-1 ml-9">
+              {msg.persona.emoji} {msg.persona.name}
+            </span>
+          )}
           {msg.role === 'assistant' && (
             <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center mr-2 mt-0.5 flex-shrink-0 text-xs">{'\u{1F916}'}</div>
           )}
@@ -2525,7 +2530,7 @@ function ChatMessageThread({ messages, loading }) {
 // Sliding Chat Panel (no input — universal prompt bar handles input)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SlidingChatPanel({ messages, loading, backend, contextBadge, onHide }) {
+function SlidingChatPanel({ messages, loading, backend, contextBadge, onHide, activePersona }) {
   return (
     <div className="flex flex-col h-full bg-white border-l border-gray-200 overflow-hidden">
       {/* Header */}
@@ -2536,6 +2541,11 @@ function SlidingChatPanel({ messages, loading, backend, contextBadge, onHide }) 
           <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${backend === 'claude' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700'}`}>
             {backend === 'claude' ? 'Claude' : 'ChatGPT'}
           </span>
+          {activePersona && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">
+              {activePersona.emoji} {activePersona.name}
+            </span>
+          )}
         </div>
         <button onClick={onHide} className="text-xs text-gray-400 hover:text-gray-700 font-medium px-2 py-1 flex items-center gap-1 transition-colors">
           <span>&rarr;</span> Hide
@@ -6026,7 +6036,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       } else {
         reply = await callOpenAIChat(updatedMessages, sysPrompt, apiKeys.openai, authToken);
       }
-      const assistantMsg = { role: 'assistant', content: reply };
+      const assistantMsg = { role: 'assistant', content: reply, persona: { emoji: effectivePersona.emoji, name: effectivePersona.defaultName, id: effectivePersona.id } };
       setChatMessages((prev) => [...prev, assistantMsg]);
       // Save assistant message to DB
       try {
@@ -6514,6 +6524,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               backend={chatBackend}
               contextBadge={`${tasks.filter((t) => !t.completed).length} tasks · ${financialTransactions.length} transactions${allNotes.filter((n) => !n.archived && n.content).length > 0 ? ` · ${allNotes.filter((n) => !n.archived && n.content).length} note${allNotes.filter((n) => !n.archived && n.content).length !== 1 ? 's' : ''}` : ''}`}
               onHide={toggleChatPanel}
+              activePersona={lastAutoPersona ? { emoji: lastAutoPersona.emoji, name: lastAutoPersona.defaultName } : null}
             />
           </section>
         )}
