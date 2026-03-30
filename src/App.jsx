@@ -4922,7 +4922,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     try {
       const res = await apiFetch(`/api/notes?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
-      if (Array.isArray(data)) setNotes(data);
+      if (Array.isArray(data)) setNotes(data.filter((n) => n.type !== 'digest'));
     } catch {}
   }, [authToken, pillarFilter, categoryFilter]);
 
