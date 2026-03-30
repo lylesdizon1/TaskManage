@@ -4245,138 +4245,44 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           </div>
         </div>
 
-        {/* Daily Digest (right) */}
+        {/* Today's Tasks + Overdue (right) */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow border-l-4 border-l-purple-500 h-full flex flex-col">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow border-l-4 border-l-indigo-400 h-full flex flex-col">
             <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              {'\uD83E\uDDE0'} Daily Digest <span className="text-gray-400 font-normal">&middot; {dateStr}</span>
+              {'\uD83D\uDCCB'} Today&rsquo;s Tasks
+              {overdueTasks.length > 0 && (
+                <span className="ml-auto text-xs font-medium bg-red-100 text-red-600 px-2 py-0.5 rounded-full">{overdueTasks.length} overdue</span>
+              )}
             </h3>
-            <div className="flex-1">
-              {digestLoading ? (
-                <div className="flex items-center gap-2 py-3">
-                  <SpinnerIcon className="w-4 h-4 animate-spin text-purple-400" />
-                  <span className="text-sm text-gray-400">Generating...</span>
-                </div>
-              ) : digest ? (
-                <div className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none"
-                dangerouslySetInnerHTML={{ __html: digest.content
-                  .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-                  .replace(/#{1,3}\s*/g, '')
-                  .replace(/<br\s*\/?>/gi, '')
-                  .split('\n').filter(l => l.trim()).slice(0, 5).join('<br/>')
-                }}
-              />
+            <div className="flex-1 overflow-y-auto space-y-1.5">
+              {!tasksReady ? (
+                <div className="space-y-2">{[1,2,3].map(i => <SkeletonBlock key={i} className="h-8 w-full" />)}</div>
+              ) : overdueTasks.length === 0 && todayTasks.length === 0 ? (
+                <p className="text-sm text-gray-400 py-4 text-center">Nothing due today {'\uD83C\uDF89'}</p>
               ) : (
-                <p className="text-sm text-gray-400 py-2">No digest yet &mdash; check back tomorrow</p>
+                <>
+                  {overdueTasks.slice(0, 3).map(t => (
+                    <div key={t.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-100">
+                      <span className="text-xs text-red-500 font-medium flex-shrink-0">Overdue</span>
+                      <span className="text-sm text-gray-800 truncate">{t.title}</span>
+                    </div>
+                  ))}
+                  {todayTasks.slice(0, 5).map(t => (
+                    <div key={t.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100">
+                      <span className={'text-xs font-medium flex-shrink-0 ' + (t.priority === 'high' ? 'text-red-500' : 'text-gray-400')}>{t.priority === 'high' ? 'High' : 'Today'}</span>
+                      <span className="text-sm text-gray-800 truncate">{t.title}</span>
+                    </div>
+                  ))}
+                </>
               )}
             </div>
-            <div className="mt-3 flex items-center gap-3">
-              {digest && digest.content.split('\n').length > 4 && (
-                <button onClick={() => onNavigate('notes')} className="text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
-                  Read full digest &rarr;
-                </button>
-              )}
-              <button
-                onClick={() => fetchDigest(true)}
-                className="text-xs font-medium text-gray-400 hover:text-gray-600 transition-colors ml-auto"
-                title="Regenerate digest"
-              >
-                ↺ Regenerate
-              </button>
-            </div>
+            <button onClick={() => onNavigate('daily')} className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
+              View all tasks &rarr;
+            </button>
           </div>
         </div>
       </div>
 
-      {/* ── Pillar Strip ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-
-        {/* Hustle */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-            <h4 className="text-sm font-semibold text-gray-900">Hustle</h4>
-          </div>
-          {!tasksReady ? (
-            <div className="space-y-2"><SkeletonBlock className="h-4 w-3/4" /><SkeletonBlock className="h-4 w-1/2" /><SkeletonBlock className="h-4 w-2/3" /></div>
-          ) : (
-            <div className="space-y-1.5 text-sm">
-              <p className={highPriorityTasks.length > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
-                {highPriorityTasks.length} high priority
-              </p>
-              <p className={overdueTasks.length > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
-                {overdueTasks.length} overdue
-              </p>
-              <p className={netCashFlow !== null ? (netCashFlow >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium') : 'text-gray-400'}>
-                {netCashFlow !== null
-                  ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month`
-                  : '\u2014'}
-              </p>
-            </div>
-          )}
-          <button onClick={() => onNavigate('daily')} className="mt-3 text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors">
-            View Tasks &rarr;
-          </button>
-        </div>
-
-        {/* Home */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
-            <h4 className="text-sm font-semibold text-gray-900">Home</h4>
-          </div>
-          {!tasksReady ? (
-            <div className="space-y-2"><SkeletonBlock className="h-4 w-3/4" /><SkeletonBlock className="h-4 w-1/2" /><SkeletonBlock className="h-4 w-2/3" /></div>
-          ) : (
-            <div className="space-y-1.5 text-sm">
-              <p className="text-gray-500">No events today</p>
-              <p className="text-gray-400">&mdash;</p>
-              <p className="text-gray-500">{todayTasks.length} task{todayTasks.length !== 1 ? 's' : ''} due today</p>
-            </div>
-          )}
-          <button onClick={() => onNavigate('calendar')} className="mt-3 text-xs font-medium text-green-600 hover:text-green-800 transition-colors">
-            View Calendar &rarr;
-          </button>
-        </div>
-
-        {/* Grow */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-            <h4 className="text-sm font-semibold text-gray-900">Grow</h4>
-          </div>
-          {notes.length === 0 && !tasksReady ? (
-            <div className="space-y-2"><SkeletonBlock className="h-4 w-3/4" /><SkeletonBlock className="h-4 w-1/2" /><SkeletonBlock className="h-4 w-2/3" /></div>
-          ) : (
-            <div className="space-y-1.5 text-sm">
-              <p className="text-gray-500">{notesThisWeek} note{notesThisWeek !== 1 ? 's' : ''} this week</p>
-              <p className="text-gray-400 truncate">{latestNote ? (latestNote.content || '').replace(/<[^>]*>/g, '').slice(0, 40) : 'No notes yet'}</p>
-              <p className={digest ? 'text-purple-600 font-medium' : 'text-gray-400'}>
-                {digest ? 'Daily Digest ready \u2728' : 'No digest yet'}
-              </p>
-            </div>
-          )}
-          <button onClick={() => onNavigate('notes')} className="mt-3 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
-            View Notes &rarr;
-          </button>
-        </div>
-
-        {/* Move (placeholder) */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 opacity-60">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-orange-400" />
-            <h4 className="text-sm font-semibold text-gray-500">Move</h4>
-          </div>
-          <div className="space-y-1.5 text-sm">
-            <p className="text-gray-400">Coming soon</p>
-            <p className="text-gray-400">Workouts &amp; health tracking</p>
-            <p className="text-gray-400">&mdash;</p>
-          </div>
-          <span className="mt-3 inline-block text-xs font-medium text-gray-300 cursor-not-allowed">
-            View Move &rarr;
-          </span>
-        </div>
-      </div>
 
     </div>
   );
