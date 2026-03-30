@@ -19,8 +19,8 @@ export function buildContextPayload(slices, intent, personaSystemPrompt) {
   if (slices.notes?.length) {
     parts.push(`\n## Notes (${slices.notes.length})\n${JSON.stringify(slices.notes, null, 2)}`);
   }
-  if (slices.calendarEvents?.length) {
-    parts.push(`\n## Calendar Events (${slices.calendarEvents.length})\n${JSON.stringify(slices.calendarEvents, null, 2)}`);
+  if (slices.events?.length) {
+    parts.push(`\n## Calendar Events (${slices.events.length})\n${JSON.stringify(slices.events, null, 2)}`);
   }
 
   return parts.join('\n');
