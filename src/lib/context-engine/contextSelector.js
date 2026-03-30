@@ -22,7 +22,7 @@ export function selectContext(intent, appData) {
     case 'TASK':
       return {
         transactions: [],
-        tasks: openTasks,
+        tasks: openTasks.slice(0, 20),
         notes: notes.slice(-5),
         events: upcomingEvents(in7days).slice(0, 3),
         entities: [],
