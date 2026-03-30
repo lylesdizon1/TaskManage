@@ -3852,11 +3852,11 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
     const weekAgoStr = weekAgo.toISOString();
-    return notes.filter((n) => n.type !== 'digest' && n.createdAt && n.createdAt >= weekAgoStr).length;
+    return notes.filter((n) => n.type !== 'daily-digest' && n.createdAt && n.createdAt >= weekAgoStr).length;
   }, [notes]);
 
   const latestNote = useMemo(() => {
-    return notes.find((n) => n.type !== 'digest') || null;
+    return notes.find((n) => n.type !== 'daily-digest') || null;
   }, [notes]);
 
   // Fetch calendar events for today
@@ -4011,7 +4011,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           return;
         } catch { /* invalid cache, refetch */ }
       }
-      const existingDigest = notes.find((n) => n.type === 'digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
+      const existingDigest = notes.find((n) => n.type === 'daily-digest' && n.createdAt && n.createdAt.slice(0, 10) === today);
       if (existingDigest) {
         setDigest(existingDigest);
         localStorage.setItem(cacheKey, JSON.stringify(existingDigest));
@@ -4922,7 +4922,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     try {
       const res = await apiFetch(`/api/notes?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
-      if (Array.isArray(data)) setNotes(data.filter((n) => n.type !== 'digest'));
+      if (Array.isArray(data)) setNotes(data.filter((n) => n.type !== 'daily-digest'));
     } catch {}
   }, [authToken, pillarFilter, categoryFilter]);
 
@@ -5878,7 +5878,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     // Load notes for dashboard
     apiFetch('/api/notes', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setDashboardNotes(data.filter((n) => n.type !== 'digest')); })
+      .then((data) => { if (Array.isArray(data)) setDashboardNotes(data.filter((n) => n.type !== 'daily-digest')); })
       .catch(() => {});
     // Refresh user data (role, entityIds) from server
     apiFetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
