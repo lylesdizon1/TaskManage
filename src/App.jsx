@@ -5935,7 +5935,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
     // Build system prompt and call AI
     const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, financials: financialTransactions, notes: allNotes, calendarEvents: chatCalendarEvents, personaSystemPrompt: effectivePersona.systemPrompt, autoPersonaEmoji: effectivePersona.emoji, autoPersonaName: effectivePersona.defaultName });
-    console.log("[DEBUG] sysPrompt has calendar:", sysPrompt.includes("Calendar Events"), "| events count:", chatCalendarEvents.length);
     try {
       let reply;
       if (chatBackend === 'claude') {
