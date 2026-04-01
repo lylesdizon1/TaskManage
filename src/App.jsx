@@ -3830,7 +3830,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const [ariaBrief, setAriaBrief] = useState(null);
   const [ariaBriefLoading, setAriaBriefLoading] = useState(true);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const _d = new Date();
+  const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
   const tasksReady = tasks.length > 0 || tasks._loaded;
 
   // Clear stale date-keyed caches on mount
