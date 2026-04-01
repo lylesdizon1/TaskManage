@@ -4128,39 +4128,39 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
 
       {/* ROW 3: Quick Actions + Stat Tiles */}
       <div className="grid grid-cols-5 gap-3">
-        <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group border border-primary/10">
-          <span className="text-primary group-hover:text-on-primary text-base transition-colors">✅</span>
-          <span className="text-xs font-bold uppercase">Add Task</span>
+        <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center py-3 px-2 gap-1.5 group border border-primary/10 h-14">
+          <span className="text-base">✅</span>
+          <span className="text-[10px] font-bold uppercase tracking-wide">Add Task</span>
         </button>
-        <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group border border-primary/10">
-          <span className="text-primary group-hover:text-on-primary text-base transition-colors">📝</span>
-          <span className="text-xs font-bold uppercase">Quick Note</span>
+        <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center py-3 px-2 gap-1.5 group border border-primary/10 h-14">
+          <span className="text-base">📝</span>
+          <span className="text-[10px] font-bold uppercase tracking-wide">Quick Note</span>
         </button>
-        <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low">
-          <div className="bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
-            <span className="text-base">⚠️</span>
+        <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest rounded-xl flex items-center gap-2.5 px-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low h-14">
+          <div className="bg-error/10 p-1.5 rounded-full group-hover:scale-110 transition-transform flex-shrink-0">
+            <span className="text-sm">⚠️</span>
           </div>
-          <div>
-            <p className="text-lg font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(overdueTasks.length).padStart(2,'0')}</p>
-            <p className="text-xs text-on-surface-variant font-bold uppercase mt-0.5">Overdue</p>
-          </div>
-        </button>
-        <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low">
-          <div className="bg-primary/10 p-2 rounded-full group-hover:scale-110 transition-transform">
-            <span className="text-base">🔴</span>
-          </div>
-          <div>
-            <p className="text-lg font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(highPriorityTasks.length).padStart(2,'0')}</p>
-            <p className="text-xs text-on-surface-variant font-bold uppercase mt-0.5">Priority</p>
+          <div className="text-left">
+            <p className="text-xl font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(overdueTasks.length).padStart(2,'0')}</p>
+            <p className="text-[9px] text-on-surface-variant font-bold uppercase tracking-wide mt-0.5">Overdue</p>
           </div>
         </button>
-        <button onClick={() => onNavigate('daily', 'done')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low">
-          <div className="bg-tertiary-container/30 p-2 rounded-full group-hover:scale-110 transition-transform">
-            <span className="text-base">✅</span>
+        <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest rounded-xl flex items-center gap-2.5 px-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low h-14">
+          <div className="bg-primary/10 p-1.5 rounded-full group-hover:scale-110 transition-transform flex-shrink-0">
+            <span className="text-sm">🔴</span>
           </div>
-          <div>
-            <p className="text-lg font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(doneToday).padStart(2,'0')}</p>
-            <p className="text-xs text-on-surface-variant font-bold uppercase mt-0.5">Completed</p>
+          <div className="text-left">
+            <p className="text-xl font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(highPriorityTasks.length).padStart(2,'0')}</p>
+            <p className="text-[9px] text-on-surface-variant font-bold uppercase tracking-wide mt-0.5">Priority</p>
+          </div>
+        </button>
+        <button onClick={() => onNavigate('daily', 'done')} className="bg-surface-container-lowest rounded-xl flex items-center gap-2.5 px-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low h-14">
+          <div className="bg-tertiary-container/30 p-1.5 rounded-full group-hover:scale-110 transition-transform flex-shrink-0">
+            <span className="text-sm">✅</span>
+          </div>
+          <div className="text-left">
+            <p className="text-xl font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(doneToday).padStart(2,'0')}</p>
+            <p className="text-[9px] text-on-surface-variant font-bold uppercase tracking-wide mt-0.5">Completed</p>
           </div>
         </button>
       </div>
