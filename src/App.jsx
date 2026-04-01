@@ -6388,9 +6388,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <div className="flex gap-1 w-fit">
               {[
                 { key: 'dashboard', label: 'Dashboard' },
-                { key: 'daily', label: 'Daily Tasks' },
+                { key: 'daily', label: 'Tasks' },
                 { key: 'calendar', label: 'Calendar', desktopOnly: true },
-                { key: 'financials', label: 'Financials', desktopOnly: true },
                 { key: 'notes', label: 'Notes', desktopOnly: true },
                 { key: 'chat', label: 'Chat', desktopOnly: true },
               ].map(({ key, label, desktopOnly }) => (
@@ -6401,12 +6400,11 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                     desktopOnly ? 'hidden md:flex' : 'flex'
                   } ${
                     activeView === key
-                      ? 'border-indigo-600 text-indigo-700'
+                      ? 'border-primary text-primary'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-200'
                   }`}
                 >
                   {key === 'calendar' && <CalendarIcon className="w-3.5 h-3.5" />}
-                  {key === 'financials' && <DollarIcon className="w-3.5 h-3.5" />}
                   {key === 'notes' && <NotesIcon className="w-3.5 h-3.5" />}
                   {key === 'chat' && <ChatIcon className="w-3.5 h-3.5" />}
                   {label}
