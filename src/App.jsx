@@ -4097,7 +4097,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const missedPct = Math.round(missedTasks/totalPerf*100);
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-4 max-w-7xl mx-auto space-y-6" style={{ minHeight: 0 }}>
+    <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6 w-full" style={{ minHeight: 0 }}>
 
       {/* ROW 1: Greeting + Search + Weather */}
       <div className="flex items-center justify-between gap-6">
