@@ -4105,7 +4105,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none text-6xl">✨</div>
         <div className="relative">
           <div className="flex items-center gap-2 mb-2">
-            <span className="text-lg">✨</span>
+            <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
             <h3 className="text-sm font-bold text-primary" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{assistantName}&apos;s Daily Brief</h3>
           </div>
           {ariaBriefLoading ? (
@@ -4129,16 +4129,16 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       {/* ROW 3: Quick Actions + Stat Tiles */}
       <div className="grid grid-cols-5 gap-3">
         <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center py-3 px-2 gap-1.5 group border border-primary/10 h-14">
-          <span className="text-base">✅</span>
+          <span className="material-symbols-outlined text-primary group-hover:text-on-primary text-lg" style={{fontVariationSettings:"'FILL' 1"}}>add_task</span>
           <span className="text-[10px] font-bold uppercase tracking-wide">Add Task</span>
         </button>
         <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center py-3 px-2 gap-1.5 group border border-primary/10 h-14">
-          <span className="text-base">📝</span>
+          <span className="material-symbols-outlined text-primary group-hover:text-on-primary text-lg">edit_note</span>
           <span className="text-[10px] font-bold uppercase tracking-wide">Quick Note</span>
         </button>
         <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest rounded-xl flex items-center gap-2.5 px-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low h-14">
           <div className="bg-error/10 p-1.5 rounded-full group-hover:scale-110 transition-transform flex-shrink-0">
-            <span className="text-sm">⚠️</span>
+            <span className="material-symbols-outlined text-error text-lg">event_busy</span>
           </div>
           <div className="text-left">
             <p className="text-xl font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(overdueTasks.length).padStart(2,'0')}</p>
@@ -4147,7 +4147,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         </button>
         <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest rounded-xl flex items-center gap-2.5 px-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low h-14">
           <div className="bg-primary/10 p-1.5 rounded-full group-hover:scale-110 transition-transform flex-shrink-0">
-            <span className="text-sm">🔴</span>
+            <span className="material-symbols-outlined text-primary text-lg">priority_high</span>
           </div>
           <div className="text-left">
             <p className="text-xl font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(highPriorityTasks.length).padStart(2,'0')}</p>
@@ -4156,7 +4156,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         </button>
         <button onClick={() => onNavigate('daily', 'done')} className="bg-surface-container-lowest rounded-xl flex items-center gap-2.5 px-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low h-14">
           <div className="bg-tertiary-container/30 p-1.5 rounded-full group-hover:scale-110 transition-transform flex-shrink-0">
-            <span className="text-sm">✅</span>
+            <span className="material-symbols-outlined text-tertiary text-lg">task_alt</span>
           </div>
           <div className="text-left">
             <p className="text-xl font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(doneToday).padStart(2,'0')}</p>
@@ -4263,7 +4263,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           ))}
         </div>
         <div className="bg-primary/5 border border-primary/10 rounded-xl px-4 py-3 flex items-center gap-3">
-          <span className="text-lg flex-shrink-0">✨</span>
+          <span className="material-symbols-outlined text-primary text-lg flex-shrink-0">auto_awesome</span>
           <p className="text-xs text-on-surface-variant leading-relaxed">
             <span className="font-bold text-on-background">{assistantName}&apos;s read: </span>
             {missedTasks > completedOnTime
