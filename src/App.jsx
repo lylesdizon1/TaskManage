@@ -5824,6 +5824,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [activeView, setActiveView]             = useState('dashboard');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
   const [statusFilter, setStatusFilter]         = useState('all');
+  const [taskFilter, setTaskFilter]             = useState('');
   const [showSettings, setShowSettings]         = useState(false);
   const [showAlerts, setShowAlerts]             = useState(false);
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
@@ -6514,18 +6515,25 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 >{entity.name}</button>
               ))}
               <div className="h-4 w-px bg-outline-variant/30 mx-1" />
-              <button
-                onClick={() => setStatusFilter(statusFilter === 'overdue' ? 'all' : 'overdue')}
-                className={`px-4 py-1.5 rounded-full text-[10px] font-bold transition-all ${statusFilter === 'overdue' ? 'bg-error text-white' : 'bg-error/10 text-error'}`}
-              >Overdue</button>
+              <div className="relative">
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50" style={{fontSize:"14px"}}>filter_list</span>
+                <input
+                  type="text"
+                  value={taskFilter}
+                  onChange={(e) => setTaskFilter(e.target.value)}
+                  placeholder="Filter tasks..."
+                  className="text-[10px] bg-surface-container-lowest border border-surface-container-high rounded-full pl-8 pr-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/20 text-on-background w-32"
+                />
+              </div>
             </div>
 
             {/* Task sections */}
             {(() => {
               const todayStr = new Date().toISOString().slice(0,10);
-              const base = activeTagFilters.length > 0
+              const base = (activeTagFilters.length > 0
                 ? visibleTasks.filter((t) => t.tags?.some((tag) => activeTagFilters.includes(tag)))
-                : visibleTasks;
+                : visibleTasks
+              ).filter((t) => !taskFilter || t.title?.toLowerCase().includes(taskFilter.toLowerCase()));
               const overdue = base.filter((t) => !t.completed && t.dueDate && t.dueDate < todayStr);
               const todayTasks = base.filter((t) => !t.completed && t.dueDate === todayStr);
               const upcoming = base.filter((t) => !t.completed && (!t.dueDate || t.dueDate > todayStr));
@@ -6560,6 +6568,42 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 </div>
               );
 
+              const priorityDot = {
+                high:   'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]',
+                medium: 'bg-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.4)]',
+                low:    'bg-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]',
+              };
+              const priorityLabel = { high: 'High Priority', medium: 'Medium Priority', low: 'Low Priority' };
+
+              const taskCard = (t) => (
+                <div key={t.id} className="group bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md hover:scale-[1.01] transition-all border border-transparent hover:border-primary/10">
+                  <div className="flex items-start gap-3">
+                    <button
+                      onClick={() => toggleTask(t.id)}
+                      className="mt-0.5 w-5 h-5 rounded-lg border-2 border-primary/20 flex-shrink-0 hover:border-primary transition-colors"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className={`w-2 h-2 rounded-full flex-shrink-0 ${priorityDot[t.priority] || priorityDot.medium}`} />
+                        <span className="text-[10px] font-bold uppercase text-on-surface-variant">{priorityLabel[t.priority] || 'Medium Priority'}</span>
+                      </div>
+                      <h3 className="text-sm font-bold text-on-background truncate group-hover:text-primary transition-colors">{t.title}</h3>
+                      <div className="flex items-center gap-2 mt-3">
+                        {t.tags?.[0] && (
+                          <span className="text-[10px] px-2 py-0.5 bg-secondary-container text-on-secondary-container rounded-full font-bold">{t.tags[0]}</span>
+                        )}
+                        {t.dueTime && (
+                          <div className="flex items-center gap-1 text-[10px] text-on-surface-variant font-medium ml-auto">
+                            <span className="material-symbols-outlined" style={{fontSize:"12px"}}>schedule</span>
+                            {t.dueTime}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+
               return (
                 <div className="px-8 space-y-8 pb-12">
 
@@ -6585,7 +6629,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         <div className="h-px flex-1 bg-primary/10" />
                         <span className="text-[9px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">{todayTasks.length} task{todayTasks.length !== 1 ? 's' : ''}</span>
                       </div>
-                      <div className="space-y-2">{todayTasks.map((t) => taskRow(t, false))}</div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{todayTasks.map((t) => taskCard(t))}</div>
                     </section>
                   )}
 
@@ -6604,7 +6648,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
                   {/* COMPLETED TODAY */}
                   {completedToday.length > 0 && (
-                    <section className="opacity-60">
+                    <section className="opacity-60 grayscale-[0.5]">
                       <div className="flex items-center gap-3 mb-3">
                         <span className="material-symbols-outlined text-emerald-500 text-base">task_alt</span>
                         <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-slate-400">Completed Today</h2>
