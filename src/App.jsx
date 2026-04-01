@@ -4001,10 +4001,6 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     const txSummary = netCashFlow !== null ? `Net ${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this month` : 'No data';
     const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
 
-    console.log('[aria-brief] Generating with context:', {
-      overdue: overdueStr, dueToday: dueTodayStr, highPriority: highStr,
-      events: eventsStr, cashFlow: txSummary, entities: entStr, notesThisWeek
-    });
 
     const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. Focus ONLY on what needs attention today: overdue tasks, tasks due today, high priority items, and calendar events. Do not mention finances, businesses, or anything not directly actionable today. If everything is clear, say so briefly. Write naturally. No bullet points. No sign-off.`;
     const userMsg = `Write my ${tod} brief.\n\nTODAY'S DATA:\n- Calendar events today: ${eventsStr}\n- Overdue tasks: ${overdueStr}\n- Due today: ${dueTodayStr}\n- High priority: ${highStr}`;
@@ -6248,7 +6244,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   function toggleTask(id) {
     setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)),
+      prev.map((t) => t.id === id
+        ? { ...t, completed: !t.completed, completedAt: !t.completed ? new Date().toISOString() : null }
+        : t
+      ),
     );
   }
 
