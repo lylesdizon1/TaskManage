@@ -4099,10 +4099,26 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   return (
     <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6 w-full" style={{ minHeight: 0 }}>
 
-      {/* ROW 1: Greeting */}
-      <div>
-        <h2 className="text-2xl font-extrabold tracking-tight text-on-background font-headline">{greeting}, {firstName}.</h2>
-        <p className="text-on-surface-variant text-[11px] font-medium">{dateStr}</p>
+      {/* ROW 1: Greeting + Search + Weather */}
+      <div className="flex items-center justify-between gap-6">
+        <div className="flex-shrink-0">
+          <h2 className="text-2xl font-extrabold tracking-tight text-on-background font-headline">{greeting}, {firstName}.</h2>
+          <p className="text-on-surface-variant text-[11px] font-medium">{dateStr}</p>
+        </div>
+        <div className="flex-1 flex justify-center">
+          <div className="flex items-center gap-3 bg-surface-container-low px-4 py-2 rounded-xl w-full shadow-sm border border-primary/10 transition-all hover:shadow-md focus-within:ring-2 focus-within:ring-primary/20">
+            <span className="material-symbols-outlined text-primary text-lg">search</span>
+            <input
+              className="bg-transparent border-none focus:ring-0 text-[11px] w-full placeholder:text-slate-400 font-medium outline-none"
+              placeholder="Ask Aria anything..."
+              onKeyDown={(e) => { if (e.key === 'Enter' && e.target.value.trim()) { onAIPrompt(e.target.value.trim()); e.target.value = ''; } }}
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-full border border-primary/5 flex-shrink-0">
+          <span className="material-symbols-outlined text-amber-500 text-lg">sunny</span>
+          <span className="text-[11px] font-bold text-on-surface">Danville</span>
+        </div>
       </div>
 
       {/* ROW 2: Aria Daily Brief */}
