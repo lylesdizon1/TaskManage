@@ -6457,24 +6457,15 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           <div className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
 
             {/* Page header */}
-            <div className="px-8 pt-6 pb-4 flex items-end justify-between">
-              <div>
-                <h1 className="text-2xl font-extrabold font-headline text-on-background tracking-tight">Tasks</h1>
-                <p className="text-on-surface-variant text-[11px] font-medium mt-0.5">
-                  {visibleTasks.filter((t) => !t.completed && t.dueDate && t.dueDate < new Date().toISOString().slice(0,10)).length} overdue
-                  {' · '}
-                  {visibleTasks.filter((t) => !t.completed && t.dueDate === new Date().toISOString().slice(0,10)).length} due today
-                  {' · '}
-                  {visibleTasks.filter((t) => !t.completed && (!t.dueDate || t.dueDate > new Date().toISOString().slice(0,10))).length} upcoming
-                </p>
-              </div>
-              <button
-                onClick={() => setShowTaskModal(true)}
-                className="flex items-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-xl text-[11px] font-bold shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform"
-              >
-                <span className="material-symbols-outlined text-base">add</span>
-                Add Task
-              </button>
+            <div className="px-8 pt-6 pb-4">
+              <h1 className="text-2xl font-extrabold font-headline text-on-background tracking-tight">Tasks</h1>
+              <p className="text-on-surface-variant text-[11px] font-medium mt-0.5">
+                {visibleTasks.filter((t) => !t.completed && t.dueDate && t.dueDate < new Date().toISOString().slice(0,10)).length} overdue
+                {' · '}
+                {visibleTasks.filter((t) => !t.completed && t.dueDate === new Date().toISOString().slice(0,10)).length} due today
+                {' · '}
+                {visibleTasks.filter((t) => !t.completed && (!t.dueDate || t.dueDate > new Date().toISOString().slice(0,10))).length} upcoming
+              </p>
             </div>
 
             {/* Add Task Modal */}
@@ -6525,6 +6516,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   className="text-[10px] bg-surface-container-lowest border border-surface-container-high rounded-full pl-8 pr-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/20 text-on-background w-32"
                 />
               </div>
+              <button
+                onClick={() => setShowTaskModal(true)}
+                className="flex items-center gap-1.5 bg-primary text-on-primary px-3 py-1.5 rounded-full text-[10px] font-bold shadow shadow-primary/20 hover:scale-[0.97] transition-transform flex-shrink-0"
+              >
+                <span className="material-symbols-outlined" style={{fontSize:"14px"}}>add</span>
+                New Task
+              </button>
             </div>
 
             {/* Task sections */}
