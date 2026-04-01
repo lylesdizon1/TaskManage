@@ -6547,7 +6547,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         <span className="material-symbols-outlined text-error text-base">event_busy</span>
                         <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-error">Overdue</h2>
                         <div className="h-px flex-1 bg-error/10" />
-                        <span className="text-[9px] font-bold text-error bg-error/10 px-2 py-0.5 rounded-full">{overdue.length} tasks</span>
+                        <span className="text-[9px] font-bold text-error bg-error/10 px-2 py-0.5 rounded-full">{overdue.length} task{overdue.length !== 1 ? 's' : ''}</span>
                       </div>
                       <div className="space-y-2">{overdue.map((t) => taskRow(t, true))}</div>
                     </section>
@@ -6560,7 +6560,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         <span className="material-symbols-outlined text-primary text-base">today</span>
                         <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-primary/70">Today</h2>
                         <div className="h-px flex-1 bg-primary/10" />
-                        <span className="text-[9px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">{todayTasks.length} tasks</span>
+                        <span className="text-[9px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">{todayTasks.length} task{todayTasks.length !== 1 ? 's' : ''}</span>
                       </div>
                       <div className="space-y-2">{todayTasks.map((t) => taskRow(t, false))}</div>
                     </section>
@@ -6573,7 +6573,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         <span className="material-symbols-outlined text-on-surface-variant text-base">upcoming</span>
                         <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-on-surface-variant">Upcoming</h2>
                         <div className="h-px flex-1 bg-surface-container-high" />
-                        <span className="text-[9px] font-bold text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full">{upcoming.length} tasks</span>
+                        <span className="text-[9px] font-bold text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full">{upcoming.length} task{upcoming.length !== 1 ? 's' : ''}</span>
                       </div>
                       <div className="space-y-2">{upcoming.map((t) => taskRow(t, false))}</div>
                     </section>
