@@ -4106,7 +4106,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           <p className="text-on-surface-variant text-[11px] font-medium">{dateStr}</p>
         </div>
         <div className="flex-1 flex justify-center">
-          <div className="flex items-center gap-3 bg-surface-container-lowest px-4 py-2.5 rounded-xl w-full shadow-sm border border-primary/10 transition-all hover:shadow-md focus-within:ring-2 focus-within:ring-primary/20">
+          <div className="flex items-center gap-3 bg-surface-container-lowest px-4 py-3 rounded-xl w-full shadow-sm border border-primary/10 transition-all hover:shadow-md focus-within:ring-2 focus-within:ring-primary/20">
             <span className="material-symbols-outlined text-primary text-lg">search</span>
             <input
               className="bg-transparent border-none focus:ring-0 text-[11px] w-full placeholder:text-slate-400 font-medium outline-none"
