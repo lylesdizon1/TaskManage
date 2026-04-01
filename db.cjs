@@ -64,6 +64,7 @@ async function initTables() {
   // Add columns if they don't exist (for existing databases)
   await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_time VARCHAR(5) DEFAULT NULL`);
   await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS google_event_id VARCHAR(255) DEFAULT NULL`);
+  await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS entity_id TEXT REFERENCES entities(id) ON DELETE SET NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS settings (
@@ -526,7 +527,7 @@ async function deleteGcalTokensForUser(userId) {
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 const NOTE_RETURNING = `id, user_id AS "userId", title, content, visibility,
-  type, pillar, category, subcategory, tags, pinned, archived,
+  type, pillar, category, subcategory, tags, pinned, archived, entity_id AS "entityId",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 async function getNotesForUser(userId, filters = {}) {
@@ -562,14 +563,14 @@ async function getPrivateNotesForAI(userId) {
   return rows;
 }
 
-async function createNote({ id, userId, title, content, visibility, type, pillar, category, subcategory, tags }) {
+async function createNote({ id, userId, title, content, visibility, type, pillar, category, subcategory, tags, entityId }) {
   const { rows } = await pool.query(
-    `INSERT INTO notes (id, user_id, title, content, visibility, type, pillar, category, subcategory, tags)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO notes (id, user_id, title, content, visibility, type, pillar, category, subcategory, tags, entity_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING ${NOTE_RETURNING}`,
     [id, userId, title || '', content || '', visibility || 'private',
      type || 'quick', pillar || null, category || '', subcategory || '',
-     JSON.stringify(tags || [])],
+     JSON.stringify(tags || []), entityId || null],
   );
   return rows[0];
 }
@@ -588,6 +589,7 @@ async function updateNote(id, userId, fields) {
   if (fields.tags !== undefined) { sets.push(`tags = $${idx++}`); vals.push(JSON.stringify(fields.tags)); }
   if (fields.pinned !== undefined) { sets.push(`pinned = $${idx++}`); vals.push(fields.pinned); }
   if (fields.archived !== undefined) { sets.push(`archived = $${idx++}`); vals.push(fields.archived); }
+  if (fields.entityId !== undefined) { sets.push(`entity_id = $${idx++}`); vals.push(fields.entityId || null); }
   if (sets.length === 0) return null;
   sets.push('updated_at = NOW()');
   const { rows } = await pool.query(

@@ -4920,7 +4920,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
   const [pillarFilter, setPillarFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [selectedNote, setSelectedNote] = useState(null);
-  const [editorData, setEditorData] = useState({ title: '', content: '', pillar: '', category: '', subcategory: '', tags: '' });
+  const [editorData, setEditorData] = useState({ title: '', content: '', pillar: '', category: '', subcategory: '', tags: '', entityId: '' });
   const [saveStatus, setSaveStatus] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState(null); // { pillar, category, confidence, reason }
@@ -5112,7 +5112,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     };
     setSelectedNote(tempNote);
-    setEditorData({ title: '', content: '', pillar: pillarFilter || '', category: '', subcategory: '', tags: '' });
+    setEditorData({ title: '', content: '', pillar: pillarFilter || '', category: '', subcategory: '', tags: '', entityId: '' });
     setSaveStatus('new');
     setShowDeleteConfirm(false);
     setNoteImages([]);
@@ -5130,6 +5130,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
       category: note.category || '',
       subcategory: note.subcategory || '',
       tags: (note.tags || []).join(', '),
+      entityId: note.entityId || '',
     });
     setSaveStatus('saved');
     setShowDeleteConfirm(false);
@@ -5155,6 +5156,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
       category: data.category,
       subcategory: data.subcategory,
       tags: data.tags ? data.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+      entityId: data.entityId || null,
     };
     try {
       if (!selectedNote.id) {
@@ -5291,7 +5293,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     return 'Earlier';
   }
 
-  const displayNotes = searchResults !== null ? searchResults : notes;
+  const displayNotes = (searchResults !== null ? searchResults : notes).filter((n) => !pillarFilter || n.entityId === pillarFilter || (entities || []).find((e) => e.name === pillarFilter)?.id === n.entityId);
 
   // Group notes by date — must be called unconditionally (before any early return)
   const groupedNotes = useMemo(() => {
@@ -5354,6 +5356,21 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
           placeholder="Title (optional)"
           className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
         />
+        {/* Entity picker */}
+        <div className="flex gap-2 flex-wrap pb-1">
+          <button type="button"
+            onClick={() => handleEditorChange('entityId', '')}
+            className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors ${!editorData.entityId ? 'bg-primary text-on-primary' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70'}`}>
+            None
+          </button>
+          {(entities || []).map((ent) => (
+            <button type="button" key={ent.id}
+              onClick={() => handleEditorChange('entityId', editorData.entityId === ent.id ? '' : ent.id)}
+              className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors ${editorData.entityId === ent.id ? 'bg-primary text-on-primary' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70'}`}>
+              {ent.name}
+            </button>
+          ))}
+        </div>
         <div style={{ flex: 1, cursor: 'text', minHeight: '100%' }} onClick={() => tiptapEditor?.commands?.focus()}>
           <EditorContent editor={tiptapEditor} />
         </div>

@@ -1669,10 +1669,10 @@ app.get('/api/notes', authenticateToken, async (req, res) => {
 
 app.post('/api/notes', authenticateToken, async (req, res) => {
   try {
-    const { title, content, type, pillar, category, subcategory, tags } = req.body;
+    const { title, content, type, pillar, category, subcategory, tags, entityId } = req.body;
     const id = `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const note = await db.createNote({
-      id, userId: req.user.id, title, content, type, pillar, category, subcategory, tags,
+      id, userId: req.user.id, title, content, type, pillar, category, subcategory, tags, entityId,
     });
     return res.json(note);
   } catch (err) {
