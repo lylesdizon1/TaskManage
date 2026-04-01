@@ -4090,7 +4090,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const totalPerf = completedOnTime + completedLate + completedEarly + missedTasks || 1;
 
   return (
-    <div className="flex-1 overflow-y-auto bg-background px-6 pt-5 pb-8 space-y-6" style={{ minHeight: 0, fontFamily: "'Manrope', sans-serif" }}>
+    <div className="flex-1 overflow-y-auto bg-background px-8 pt-7 pb-10 space-y-8" style={{ minHeight: 0, fontFamily: "'Manrope', sans-serif" }}>
 
       {/* ROW 1: Greeting */}
       <div>
