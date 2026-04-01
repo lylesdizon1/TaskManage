@@ -6558,9 +6558,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         >
           <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} />
         </section>
-        </div>{/* end content row */}
-        </div>{/* end main content */}
-      </div>{/* end ml-52 wrapper */}
+        </div>
+      </div>
 
       {/* ── Mobile bottom navigation ── */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-outline-variant/10 flex z-40 rounded-t-2xl shadow-[0px_-10px_30px_rgba(79,77,207,0.06)]">
