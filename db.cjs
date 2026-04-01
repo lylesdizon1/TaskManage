@@ -419,7 +419,7 @@ async function replaceTasks(tasks, userId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM tasks WHERE created_by = $1', [userId]);
+    await client.query('DELETE FROM tasks WHERE created_by = $1 OR owner = $1', [userId]);
     for (const t of tasks) {
       await client.query(
         `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
