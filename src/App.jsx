@@ -1820,7 +1820,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
 // ADD TASK FORM
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalConnected }) {
+function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalConnected, forceOpen, onClose }) {
   const userEntityNames = entities.map((e) => e.name);
   const emptyForm = {
     title: '',
@@ -1907,11 +1907,12 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalC
     setForm(emptyForm);
     setAiSuggested([]);
     setIsOpen(false);
+    onClose?.();
   }
 
   return (
-    <div className="mb-5">
-      {!isOpen ? (
+    <div className={forceOpen ? '' : 'mb-5'}>
+      {!forceOpen && !isOpen ? (
         <button
           onClick={() => setIsOpen(true)}
           className="w-full flex items-center gap-2 px-4 py-3 md:py-3 min-h-[48px] bg-white border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50/30 transition-all text-sm font-medium group"
@@ -1922,7 +1923,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalC
           Add new task
         </button>
       ) : (
-        <div className="fixed inset-0 z-50 bg-white overflow-y-auto md:static md:inset-auto md:z-auto md:bg-transparent md:overflow-visible">
+        <div className={forceOpen ? '' : 'fixed inset-0 z-50 bg-white overflow-y-auto md:static md:inset-auto md:z-auto md:bg-transparent md:overflow-visible'}>
         <form
           onSubmit={handleSubmit}
           className="p-5 md:bg-white md:rounded-xl md:border md:border-gray-200 md:shadow-sm"
@@ -1935,6 +1936,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalC
                 setIsOpen(false);
                 setForm(emptyForm);
                 setAiSuggested([]);
+                onClose?.();
               }}
               className="text-gray-400 hover:text-gray-600 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
             >
@@ -2101,6 +2103,7 @@ function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalC
                   setIsOpen(false);
                   setForm(emptyForm);
                   setAiSuggested([]);
+                  onClose?.();
                 }}
                 className="flex-1 px-4 py-3 md:py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors min-h-[44px]"
               >
@@ -5824,6 +5827,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [showSettings, setShowSettings]         = useState(false);
   const [showAlerts, setShowAlerts]             = useState(false);
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
+  const [showTaskModal, setShowTaskModal]       = useState(false);
   const [apiKeys, setApiKeys]                   = useState({ claude: '', openai: '' });
   const [emailSettings, setEmailSettings]       = useState({
     gmailUser: '',
@@ -6464,7 +6468,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 </p>
               </div>
               <button
-                onClick={() => document.querySelector('[data-add-task]')?.click()}
+                onClick={() => setShowTaskModal(true)}
                 className="flex items-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-xl text-[11px] font-bold shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform"
               >
                 <span className="material-symbols-outlined text-base">add</span>
@@ -6472,10 +6476,29 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               </button>
             </div>
 
-            {/* Hidden AddTaskForm — triggered by button above */}
-            <div className="hidden">
-              <AddTaskForm data-add-task onAdd={addTask} claudeKey={apiKeys.claude} currentUser={currentUser} entities={userEntities} authToken={authToken} gcalConnected={gcalConnected} />
-            </div>
+            {/* Add Task Modal */}
+            {showTaskModal && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+                onClick={() => setShowTaskModal(false)}
+              >
+                <div
+                  className="bg-surface rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <AddTaskForm
+                    onAdd={(task) => { addTask(task); setShowTaskModal(false); }}
+                    claudeKey={apiKeys.claude}
+                    currentUser={currentUser}
+                    entities={userEntities}
+                    authToken={authToken}
+                    gcalConnected={gcalConnected}
+                    forceOpen={true}
+                    onClose={() => setShowTaskModal(false)}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Filter pills — dynamic from active entities */}
             <div className="px-8 pb-5 flex items-center gap-2 flex-wrap">
