@@ -4346,7 +4346,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           <span className="material-symbols-outlined text-primary text-lg flex-shrink-0">auto_awesome</span>
           <p className="text-[11px] text-on-surface-variant leading-relaxed">
             <span className="font-bold text-on-background">{assistantName}&apos;s read: </span>
-            {missedTasks > completedOnTime ? 'Missing more than completing on time. Focus on adding due dates to high-priority items.' : completedEarly > completedOnTime ? 'You tend to finish early — consider tightening your deadlines to build momentum.' : `On-time rate is strong at ${onTimePct}%. Most slippage happens on tasks without hard deadlines.`}
+            {(completedOnTime + completedEarly + completedLate + missedTasks) === 0 ? 'No completed tasks in the last 30 days yet. Complete tasks to start tracking performance.' : missedTasks > completedOnTime ? 'Missing more than completing on time. Focus on adding due dates to high-priority items.' : completedEarly > completedOnTime ? 'You tend to finish early — consider tightening your deadlines to build momentum.' : `On-time rate is ${onTimePct}% over the last 30 days.${onTimePct === 100 ? ' Perfect streak.' : ' Add due dates to tasks to improve tracking.'}`}
           </p>
         </div>
       </div>
