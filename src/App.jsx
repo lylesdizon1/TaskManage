@@ -4913,7 +4913,7 @@ function relativeTime(dateStr) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
-function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNotesLoaded, quickCapturedNote, addToast }) {
+function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNotesLoaded, quickCapturedNote, addToast, entities = [] }) {
   const [notes, setNotes] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -5406,20 +5406,28 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
 
 
 
-        {/* Pillar filter pills */}
+        {/* Entity filter pills */}
         <div className="px-6 pb-4 flex gap-2 flex-wrap">
           <button type="button" onClick={() => { setPillarFilter(''); setCategoryFilter(''); }}
             className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${!pillarFilter ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
             All
           </button>
-          {Object.entries(PILLAR_CONFIG).map(([key, cfg]) => (
-            <button type="button" key={key} onClick={() => { setPillarFilter(pillarFilter === key ? '' : key); setCategoryFilter(''); }}
-              className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${pillarFilter === key ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
-              {cfg.label}
+          {(entities || []).map((ent) => (
+            <button type="button" key={ent.id} onClick={() => { setPillarFilter(pillarFilter === ent.name ? '' : ent.name); setCategoryFilter(''); }}
+              className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${pillarFilter === ent.name ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
+              {ent.name}
             </button>
           ))}
         </div>
 
+        {/* New Note button — above list */}
+        <div className="px-6 pb-4 flex-shrink-0">
+          <button type="button" onClick={handleNewNote}
+            className="w-full bg-gradient-to-br from-primary to-primary-container text-on-primary py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-[0px_10px_30px_rgba(79,77,207,0.2)] hover:scale-[1.02] active:scale-[0.98] transition-all text-sm">
+            <span className="material-symbols-outlined text-lg">add</span>
+            New Note
+          </button>
+        </div>
         {/* Notes list grouped by date */}
         <div className="flex-1 overflow-y-auto">
           {searchResults !== null && displayNotes.length === 0 ? (
@@ -5502,14 +5510,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
             ))
           )}
         </div>
-        {/* New Note button — bottom */}
-        <div className="px-6 py-6">
-          <button type="button" onClick={handleNewNote}
-            className="w-full bg-gradient-to-br from-primary to-primary-container text-on-primary py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-[0px_10px_30px_rgba(79,77,207,0.2)] hover:scale-[1.02] active:scale-[0.98] transition-all text-sm">
-            <span className="material-symbols-outlined text-lg">add</span>
-            New Note
-          </button>
-        </div>
+
       </div>
 
       {/* Editor panel — single instance for both mobile & desktop */}
@@ -6453,7 +6454,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'financials' ? (
             <FinancialsPanel authToken={authToken} currentUser={currentUser} entities={userEntities} onDataChange={reloadFinancialData} />
           ) : activeView === 'notes' ? (
-            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} />
+            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} />
           ) : activeView === 'chat' ? (
             <ChatTabPanel
               conversations={conversations}
@@ -6758,7 +6759,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'notes' ? 'flex' : 'hidden'
           }`}
         >
-          <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} />
+          <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} />
         </section>
         </div>
       </div>
