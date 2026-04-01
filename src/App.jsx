@@ -4006,8 +4006,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       events: eventsStr, cashFlow: txSummary, entities: entStr, notesThisWeek
     });
 
-    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. TODAY IS ${dateStr} — ONLY reference events and tasks happening TODAY. Never mention future dates or upcoming events unless explicitly in the data below. Be specific — reference actual data. Write naturally like a real person. No bullet points. Do NOT include a sign-off or signature.`;
-    const userMsg = `Write my ${tod} brief.\n\nTODAY'S DATA ONLY:\n- Today's calendar events: ${eventsStr}\n- Overdue tasks: ${overdueStr}\n- Due today: ${dueTodayStr}\n- High priority tasks: ${highStr}\n- This month's net cash flow: ${txSummary}\n- Notes this week: ${notesThisWeek}\n- Active businesses: ${entStr}`;
+    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. Focus ONLY on what needs attention today: overdue tasks, tasks due today, high priority items, and calendar events. Do not mention finances, businesses, or anything not directly actionable today. If everything is clear, say so briefly. Write naturally. No bullet points. No sign-off.`;
+    const userMsg = `Write my ${tod} brief.\n\nTODAY'S DATA:\n- Calendar events today: ${eventsStr}\n- Overdue tasks: ${overdueStr}\n- Due today: ${dueTodayStr}\n- High priority: ${highStr}`;
 
     callClaudeChat([{ role: 'user', content: userMsg }], sysPrompt, apiKeys?.claude || '', authToken)
       .then((text) => {
