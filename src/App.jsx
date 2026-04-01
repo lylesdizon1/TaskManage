@@ -4092,25 +4092,12 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   return (
     <div className="flex-1 overflow-y-auto bg-background px-6 pt-5 pb-8 space-y-6" style={{ minHeight: 0, fontFamily: "'Manrope', sans-serif" }}>
 
-      {/* ROW 1: Greeting + Search */}
-      <div className="flex items-center justify-between gap-6">
-        <div className="flex-shrink-0">
-          <h2 className="text-2xl font-extrabold tracking-tight text-on-background" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-            {greeting}, {firstName}.
-          </h2>
-          <p className="text-on-surface-variant text-xs font-medium mt-0.5">{dateStr}</p>
-        </div>
-        <div className="flex-1 flex justify-center">
-          <div className="flex items-center gap-3 bg-surface-container-low px-4 py-2 rounded-xl w-full max-w-md border border-primary/10 focus-within:ring-2 focus-within:ring-primary/20 transition-all">
-            <span className="text-primary text-sm">🔍</span>
-            <input
-              className="bg-transparent border-none focus:ring-0 text-xs w-full placeholder:text-slate-400 font-medium outline-none"
-              placeholder="Ask Aria anything..."
-              onKeyDown={(e) => { if (e.key === 'Enter' && e.target.value.trim()) { onAIPrompt(e.target.value.trim()); e.target.value = ''; } }}
-            />
-            <span className="text-xs font-bold text-outline bg-surface-container-high px-1.5 py-0.5 rounded">⌘K</span>
-          </div>
-        </div>
+      {/* ROW 1: Greeting */}
+      <div>
+        <h2 className="text-2xl font-extrabold tracking-tight text-on-background" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          {greeting}, {firstName}.
+        </h2>
+        <p className="text-on-surface-variant text-xs font-medium mt-0.5">{dateStr}</p>
       </div>
 
       {/* ROW 2: Aria Daily Brief */}
