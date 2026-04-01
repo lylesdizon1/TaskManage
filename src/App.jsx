@@ -3981,7 +3981,9 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
 
   // Aria brief (persona-aware, once per day, cached)
   useEffect(() => {
-    const cacheKey = `aria_brief_${today}_${currentUser?.id || ''}`;
+    const _h = new Date().getHours();
+    const _tod = _h < 12 ? 'morning' : _h < 17 ? 'afternoon' : 'evening';
+    const cacheKey = `aria_brief_${today}_${_tod}_${currentUser?.id || ''}`;
     const cached = localStorage.getItem(cacheKey);
     if (cached) { setAriaBrief(cached); setAriaBriefLoading(false); return; }
 
