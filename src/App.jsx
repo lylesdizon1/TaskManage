@@ -4082,207 +4082,245 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
     return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
   };
 
-  return (
-    <div className="flex-1 overflow-y-auto px-4 md:px-6 pt-5 pb-6 space-y-5" style={{ minHeight: 0 }}>
+  // Performance stats
+  const completedOnTime = tasks.filter((t) => t.completed && t.completedAt && t.dueDate && t.completedAt.slice(0,10) <= t.dueDate).length;
+  const completedLate = tasks.filter((t) => t.completed && t.completedAt && t.dueDate && t.completedAt.slice(0,10) > t.dueDate).length;
+  const completedEarly = tasks.filter((t) => t.completed && t.completedAt && t.dueDate && t.completedAt.slice(0,10) < t.dueDate).length;
+  const missedTasks = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < today).length;
+  const totalPerf = completedOnTime + completedLate + completedEarly + missedTasks || 1;
 
-      {/* ── ROW 1: Greeting (left 50%) + Stats Pills (right 50%) ── */}
-      {(() => {
-        const statsData = [
-          { icon: '\u26A0\uFE0F', value: overdueTasks.length, label: 'overdue', onClick: () => onNavigate('daily', 'overdue'), color: '#F59E0B', priority: true },
-          { icon: '\uD83D\uDD34', value: highPriorityTasks.length, label: 'high pri', onClick: () => onNavigate('daily', 'high'), color: '#EF4444', priority: true },
-          { icon: '\uD83D\uDCC5', value: calendarEvents.length, label: 'events', onClick: () => onNavigate('calendar'), color: '#3B82F6', priority: true },
-          { icon: '\u2705', value: doneToday, label: 'done', onClick: () => onNavigate('daily', 'done'), color: '#10B981' },
-          { icon: '\uD83D\uDCB0', value: netCashFlow !== null ? `${netCashFlow >= 0 ? '+' : ''}$${Math.abs(netCashFlow).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '\u2014', label: 'month', onClick: () => onNavigate('financials'), color: netCashFlow !== null && netCashFlow >= 0 ? '#10B981' : '#EF4444' },
-          { icon: '\uD83D\uDCDD', value: notesThisWeek, label: 'notes', onClick: () => onNavigate('notes'), color: '#8B5CF6' },
-        ];
-        return (
-          <div className="flex items-center" style={{ width: '100%' }}>
-            {/* Left 50%: Greeting */}
-            <div style={{ width: '50%', flexShrink: 0 }}>
-              <h2 className="text-xl md:text-2xl font-bold text-gray-900 leading-tight">
-                {greeting}, {firstName} <span style={{ fontWeight: 400, color: '#6B7280', fontSize: 'inherit' }}>&middot; {dateStr}</span>
-              </h2>
+  return (
+    <div className="flex-1 overflow-y-auto bg-background px-6 pt-5 pb-8 space-y-6" style={{ minHeight: 0, fontFamily: "'Manrope', sans-serif" }}>
+
+      {/* ROW 1: Greeting + Search */}
+      <div className="flex items-center justify-between gap-6">
+        <div className="flex-shrink-0">
+          <h2 className="text-2xl font-extrabold tracking-tight text-on-background" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+            {greeting}, {firstName}.
+          </h2>
+          <p className="text-on-surface-variant text-xs font-medium mt-0.5">{dateStr}</p>
+        </div>
+        <div className="flex-1 flex justify-center">
+          <div className="flex items-center gap-3 bg-surface-container-low px-4 py-2 rounded-xl w-full max-w-md border border-primary/10 focus-within:ring-2 focus-within:ring-primary/20 transition-all">
+            <span className="text-primary text-sm">🔍</span>
+            <input
+              className="bg-transparent border-none focus:ring-0 text-xs w-full placeholder:text-slate-400 font-medium outline-none"
+              placeholder="Ask Aria anything..."
+              onKeyDown={(e) => { if (e.key === 'Enter' && e.target.value.trim()) { onAIPrompt(e.target.value.trim()); e.target.value = ''; } }}
+            />
+            <span className="text-xs font-bold text-outline bg-surface-container-high px-1.5 py-0.5 rounded">⌘K</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ROW 2: Aria Daily Brief */}
+      <div className="bg-surface-container-lowest p-5 rounded-xl border border-primary/5 relative overflow-hidden group" style={{ boxShadow: '0 10px 30px rgba(79,77,207,0.05)' }}>
+        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none text-6xl">✨</div>
+        <div className="relative">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">✨</span>
+            <h3 className="text-sm font-bold text-primary" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{assistantName}&apos;s Daily Brief</h3>
+          </div>
+          {ariaBriefLoading ? (
+            <p className="text-xs text-on-surface-variant animate-pulse">Preparing your brief...</p>
+          ) : ariaBrief ? (
+            <p className="text-xs text-on-surface-variant leading-relaxed max-w-4xl">{ariaBrief}</p>
+          ) : (
+            <p className="text-xs text-on-surface-variant">No brief yet — check back in a moment.</p>
+          )}
+          <div className="flex gap-2 mt-3 flex-wrap">
+            {overdueTasks.length > 0 && (
+              <span className="bg-error/10 text-error px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider">{overdueTasks.length} Overdue</span>
+            )}
+            {calendarEvents.length > 0 && (
+              <span className="bg-surface-container-highest text-on-surface-variant px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider">{calendarEvents.length} Events Today</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ROW 3: Quick Actions + Stat Tiles */}
+      <div className="grid grid-cols-5 gap-3">
+        <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group border border-primary/10">
+          <span className="text-primary group-hover:text-on-primary text-base transition-colors">✅</span>
+          <span className="text-xs font-bold uppercase">Add Task</span>
+        </button>
+        <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group border border-primary/10">
+          <span className="text-primary group-hover:text-on-primary text-base transition-colors">📝</span>
+          <span className="text-xs font-bold uppercase">Quick Note</span>
+        </button>
+        <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low">
+          <div className="bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
+            <span className="text-base">⚠️</span>
+          </div>
+          <div>
+            <p className="text-lg font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(overdueTasks.length).padStart(2,'0')}</p>
+            <p className="text-xs text-on-surface-variant font-bold uppercase mt-0.5">Overdue</p>
+          </div>
+        </button>
+        <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low">
+          <div className="bg-primary/10 p-2 rounded-full group-hover:scale-110 transition-transform">
+            <span className="text-base">🔴</span>
+          </div>
+          <div>
+            <p className="text-lg font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(highPriorityTasks.length).padStart(2,'0')}</p>
+            <p className="text-xs text-on-surface-variant font-bold uppercase mt-0.5">Priority</p>
+          </div>
+        </button>
+        <button onClick={() => onNavigate('daily', 'done')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group border border-surface-container-low">
+          <div className="bg-tertiary-container/30 p-2 rounded-full group-hover:scale-110 transition-transform">
+            <span className="text-base">✅</span>
+          </div>
+          <div>
+            <p className="text-lg font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(doneToday).padStart(2,'0')}</p>
+            <p className="text-xs text-on-surface-variant font-bold uppercase mt-0.5">Completed</p>
+          </div>
+        </button>
+      </div>
+
+      {/* ROW 4: Timeline + Tasks */}
+      <div className="grid grid-cols-2 gap-6">
+        <div className="space-y-3">
+          <div className="flex justify-between items-end px-1">
+            <h3 className="text-base font-extrabold text-on-background" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Today&apos;s Timeline</h3>
+            <button onClick={() => onNavigate('calendar')} className="text-primary font-bold text-xs hover:underline">View Calendar</button>
+          </div>
+          {calendarEvents.length === 0 ? (
+            <div className="bg-surface-container-lowest rounded-xl p-6 text-center border border-surface-container-low">
+              <p className="text-xs text-on-surface-variant">No events today</p>
+              <button onClick={() => onNavigate('calendar')} className="text-primary text-xs font-bold mt-2 hover:underline block mx-auto">Open Calendar →</button>
             </div>
-            {/* Right 50%: Stats pills */}
-            <div className="flex flex-wrap justify-end items-center overflow-hidden" style={{ width: '50%', gap: 8 }}>
-              {statsData.map(({ icon, value, label, onClick, color, priority }) => {
-                const isZero = value === 0 || value === '\u2014';
+          ) : (
+            <div className="space-y-3 relative before:absolute before:left-[13px] before:top-4 before:bottom-4 before:w-0.5 before:bg-surface-container-high">
+              {calendarEvents.slice(0, 4).map((ev, i) => {
+                const timeStr = ev.allDay ? 'All day' : new Date(ev.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
                 return (
-                  <button
-                    key={label}
-                    onClick={onClick}
-                    className={`inline-flex items-center gap-0.5 cursor-pointer transition-opacity hover:opacity-80 flex-shrink-0${!priority ? ' hidden md:inline-flex' : ''}`}
-                    style={{ height: 28, borderRadius: 9999, padding: '0 12px', fontSize: 12, fontWeight: 500, backgroundColor: isZero ? '#E5E7EB' : color, color: isZero ? '#6B7280' : '#fff' }}
-                  >
-                    <span>{icon}</span>
-                    <span>{value} {label}</span>
-                  </button>
+                  <div key={ev.id || i} className="relative pl-10 group">
+                    <div className={`absolute left-0 top-1 w-7 h-7 rounded-full flex items-center justify-center z-10 ring-4 ring-background group-hover:scale-110 transition-transform text-sm ${i === 0 ? 'bg-primary text-white' : 'bg-secondary-container'}`}>
+                      {i === 0 ? '🕐' : '📅'}
+                    </div>
+                    <div className="bg-surface-container-lowest p-3 rounded-xl border border-surface-container-low hover:shadow-sm transition-shadow">
+                      <span className="text-xs font-bold text-primary uppercase tracking-widest">{timeStr}</span>
+                      <h4 className="text-xs font-bold mt-0.5 text-on-surface">{ev.title}</h4>
+                    </div>
+                  </div>
                 );
               })}
             </div>
-          </div>
-        );
-      })()}
-
-      {/* ── ROW 2: Aria Card — 2 columns (brief + actions) ── */}
-      <div className="bg-white rounded-xl overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderRadius: 12 }}>
-        <div className="flex flex-col md:flex-row" style={{ alignItems: 'stretch' }}>
-
-          {/* LEFT — AI Brief (60%) */}
-          <div className="min-w-0" style={{ flex: '0 0 60%', borderRight: '1px solid #f3f4f6', padding: 20 }}>
-            <div className="flex items-center gap-1.5 mb-2">
-              <span className="text-sm">{'\uD83E\uDD16'}</span>
-              <span className="text-xs font-semibold text-gray-500">{assistantName}</span>
-            </div>
-            {ariaBriefLoading ? (
-              <div className="flex items-center gap-2">
-                <SpinnerIcon className="w-3.5 h-3.5 animate-spin text-indigo-400" />
-                <span className="text-sm text-gray-400">...</span>
-              </div>
-            ) : ariaBrief ? (
-              <p className="text-sm text-gray-700 leading-relaxed">{ariaBrief}</p>
-            ) : null}
-            {digest && (
-              <button onClick={() => onNavigate('notes')} className="mt-2 text-xs font-medium text-purple-600 hover:text-purple-800 transition-colors">
-                Read full digest &rarr;
-              </button>
-            )}
-            <p className="text-xs text-gray-400 italic mt-3 text-right">&mdash; {assistantName}</p>
-          </div>
-
-          {/* RIGHT — Quick Actions (40%) */}
-          <div className="border-t md:border-t-0" style={{ flex: '0 0 40%', padding: 20 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              {[
-                { icon: '\uFF0B', label: 'Add Task', onClick: onAddTask },
-                { icon: '\uFF0B', label: 'Quick Note', onClick: onQuickNote },
-                { icon: '\uD83D\uDCC5', label: 'Add Event', onClick: onAddEvent || (() => onNavigate('calendar')) },
-                { icon: '\uD83D\uDCB0', label: 'Log Expense', onClick: onLogExpense || (() => onNavigate('financials')) },
-              ].map(({ icon, label, onClick }) => (
-                <button
-                  key={label}
-                  onClick={onClick}
-                  className="w-full flex items-center justify-center gap-1.5 font-medium text-gray-600 bg-white hover:bg-purple-600 hover:text-white hover:border-purple-600 transition-all"
-                  style={{ height: 36, borderRadius: 8, fontSize: 12, border: '1px solid #e5e7eb', transition: 'all 150ms ease' }}
-                >
-                  <span>{icon}</span> {label}
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
-      </div>
 
-      {/* ── Timeline + Digest 50/50 ── */}
-      <div className="flex flex-col md:flex-row gap-4" style={{ alignItems: 'stretch' }}>
-
-        {/* Today's Timeline (left) */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow h-full flex flex-col">
-            <h3 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
-              {'\uD83D\uDCC5'} Today&rsquo;s Timeline
-            </h3>
-            {/* AI one-liner summary */}
-            {summaryLoading ? (
-              <p className="text-xs text-gray-400 italic mb-3">...</p>
-            ) : timelineSummary ? (
-              <p className="text-xs text-gray-400 italic mb-3">{timelineSummary}</p>
-            ) : null}
-
-            {!tasksReady ? (
-              <div className="space-y-3 flex-1">
-                {[1,2,3].map((i) => <SkeletonBlock key={i} className="h-10 w-full" />)}
-              </div>
-            ) : timelineItems.length === 0 ? (
-              <div className="flex-1 flex items-center justify-center">
-                <p className="text-sm text-gray-400 py-4">{`Clear day \u2014 great time to get ahead \uD83C\uDFAF`}</p>
+        <div className="space-y-3">
+          <div className="flex justify-between items-end px-1">
+            <h3 className="text-base font-extrabold text-on-background" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Today&apos;s Tasks</h3>
+            <button onClick={() => onNavigate('daily')} className="text-primary font-bold text-xs hover:underline">Manage All</button>
+          </div>
+          <div className="bg-surface-container-lowest rounded-xl border border-surface-container-low overflow-hidden">
+            {overdueTasks.length === 0 && todayTasks.length === 0 ? (
+              <div className="p-6 text-center">
+                <p className="text-xs text-on-surface-variant">All clear 🎉</p>
               </div>
             ) : (
-              <div className="space-y-1 flex-1">
-                {timelineItems.slice(0, 6).map((item, i) => (
-                  <button
-                    key={`${item.type}-${item.id}-${i}`}
-                    onClick={() => item.type === 'calendar' ? onNavigate('calendar') : onNavigate('daily')}
-                    className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-50 transition-colors text-left group"
-                  >
-                    {/* Time column */}
-                    <span className="w-16 flex-shrink-0 text-[11px] font-medium text-gray-400 text-right">
-                      {item.type === 'overdue' ? (
-                        <span className="text-red-500">{'\u26A0\uFE0F'} OVR</span>
-                      ) : item.time}
-                    </span>
-                    {/* Icon */}
-                    <span className="flex-shrink-0 text-sm">
-                      {item.type === 'calendar' ? '\uD83D\uDCC5' : item.type === 'high' || item.type === 'overdue' ? '\uD83D\uDD34' : (
-                        <span className="inline-block w-2 h-2 rounded-full bg-gray-400" />
-                      )}
-                    </span>
-                    {/* Title */}
-                    <span className="text-sm text-gray-800 truncate flex-1 min-w-0">
-                      {item.title.length > 35 ? item.title.slice(0, 35) + '\u2026' : item.title}
-                    </span>
-                    {/* Badge */}
-                    <span className="flex-shrink-0">
-                      {item.type === 'calendar' ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">Calendar</span>
-                      ) : item.type === 'overdue' ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">Overdue</span>
-                      ) : item.type === 'high' ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">High Pri</span>
-                      ) : item.tags ? entityBadge(item.tags) : (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">Task</span>
-                      )}
-                    </span>
-                  </button>
+              <div className="divide-y divide-surface-container-low">
+                {overdueTasks.slice(0, 2).map((t) => (
+                  <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-error/5 transition-colors">
+                    <button className="mt-0.5 h-4 w-4 rounded-full border-2 border-error flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <h5 className="text-xs font-bold text-error leading-tight truncate">{t.title}</h5>
+                      <p className="text-xs text-error/70 mt-0.5">Overdue</p>
+                    </div>
+                    {entityBadge(t.tags)}
+                  </div>
+                ))}
+                {todayTasks.slice(0, 4).map((t) => (
+                  <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors">
+                    <button className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant hover:border-primary flex-shrink-0 transition-colors" />
+                    <div className="flex-1 min-w-0">
+                      <h5 className="text-xs font-bold text-on-surface leading-tight truncate">{t.title}</h5>
+                      <p className="text-xs text-on-surface-variant mt-0.5">Due today</p>
+                    </div>
+                    {entityBadge(t.tags)}
+                  </div>
                 ))}
               </div>
             )}
-            {timelineItems.length > 6 && (
-              <button onClick={() => onNavigate('daily')} className="mt-2 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
-                View all {timelineItems.length} items &rarr;
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Today's Tasks + Overdue (right) */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow border-l-4 border-l-indigo-400 h-full flex flex-col">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              {'\uD83D\uDCCB'} Today&rsquo;s Tasks
-              {overdueTasks.length > 0 && (
-                <span className="ml-auto text-xs font-medium bg-red-100 text-red-600 px-2 py-0.5 rounded-full">{overdueTasks.length} overdue</span>
-              )}
-            </h3>
-            <div className="flex-1 overflow-y-auto space-y-1.5">
-              {!tasksReady ? (
-                <div className="space-y-2">{[1,2,3].map(i => <SkeletonBlock key={i} className="h-8 w-full" />)}</div>
-              ) : overdueTasks.length === 0 && todayTasks.length === 0 ? (
-                <p className="text-sm text-gray-400 py-4 text-center">Nothing due today {'\uD83C\uDF89'}</p>
-              ) : (
-                <>
-                  {overdueTasks.slice(0, 3).map(t => (
-                    <div key={t.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-100">
-                      <span className="text-xs text-red-500 font-medium flex-shrink-0">Overdue</span>
-                      <span className="text-sm text-gray-800 truncate">{t.title}</span>
-                    </div>
-                  ))}
-                  {todayTasks.slice(0, 5).map(t => (
-                    <div key={t.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100">
-                      <span className={'text-xs font-medium flex-shrink-0 ' + (t.priority === 'high' ? 'text-red-500' : 'text-gray-400')}>{t.priority === 'high' ? 'High' : 'Today'}</span>
-                      <span className="text-sm text-gray-800 truncate">{t.title}</span>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-            <button onClick={() => onNavigate('daily')} className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
-              View all tasks &rarr;
-            </button>
           </div>
         </div>
       </div>
 
+      {/* ROW 5: Task Performance */}
+      <div className="space-y-3">
+        <div className="flex justify-between items-end px-1">
+          <h3 className="text-base font-extrabold text-on-background" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Task Performance</h3>
+          <span className="text-on-surface-variant text-xs font-bold uppercase tracking-wider">Last 30 days</span>
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: 'On Time', value: completedOnTime, pct: Math.round(completedOnTime/totalPerf*100), color: 'bg-emerald-400', badge: 'text-emerald-600 bg-emerald-50', icon: '✅' },
+            { label: 'Early', value: completedEarly, pct: Math.round(completedEarly/totalPerf*100), color: 'bg-primary', badge: 'text-primary bg-primary/10', icon: '⚡' },
+            { label: 'Late', value: completedLate, pct: Math.round(completedLate/totalPerf*100), color: 'bg-amber-400', badge: 'text-amber-600 bg-amber-50', icon: '🕐' },
+            { label: 'Missed', value: missedTasks, pct: Math.round(missedTasks/totalPerf*100), color: 'bg-error', badge: 'text-error bg-error/10', icon: '❌' },
+          ].map(({ label, value, pct, color, badge, icon }) => (
+            <div key={label} className="bg-surface-container-lowest rounded-xl p-4 border border-surface-container-low hover:shadow-sm transition-shadow">
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-base">{icon}</div>
+                <span className={`text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badge}`}>{label}</span>
+              </div>
+              <p className="text-3xl font-extrabold text-on-background leading-none" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{String(value).padStart(2,'0')}</p>
+              <p className="text-xs text-on-surface-variant font-medium mt-1">tasks</p>
+              <div className="mt-3 h-1 bg-surface-container-high rounded-full overflow-hidden">
+                <div className={`h-full ${color} rounded-full`} style={{ width: pct + '%' }} />
+              </div>
+              <p className="text-xs text-on-surface-variant mt-1">{pct}% of total</p>
+            </div>
+          ))}
+        </div>
+        <div className="bg-primary/5 border border-primary/10 rounded-xl px-4 py-3 flex items-center gap-3">
+          <span className="text-lg flex-shrink-0">✨</span>
+          <p className="text-xs text-on-surface-variant leading-relaxed">
+            <span className="font-bold text-on-background">{assistantName}&apos;s read: </span>
+            {missedTasks > completedOnTime
+              ? 'Missing more than completing on time. Add due dates to high-priority items.'
+              : completedEarly > completedOnTime
+              ? 'You tend to finish early — consider tightening deadlines to build momentum.'
+              : `On-time rate is ${Math.round(completedOnTime/totalPerf*100)}%. Keep it up.`}
+          </p>
+        </div>
+      </div>
+
+      {/* ROW 6: Active Notes */}
+      <div className="space-y-3">
+        <div className="flex justify-between items-end px-1">
+          <h3 className="text-base font-extrabold text-on-background" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Active Notes</h3>
+          <button onClick={() => onNavigate('notes')} className="text-primary font-bold text-xs hover:underline">See All Notes</button>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          {notes.filter((n) => n.type !== 'digest').slice(0, 3).map((note, i) => {
+            const borderColors = ['border-primary', 'border-tertiary', 'border-error'];
+            const bc = borderColors[i % 3];
+            const timeAgo = note.updatedAt ? (() => {
+              const diff = Date.now() - new Date(note.updatedAt).getTime();
+              const h = Math.floor(diff / 3600000);
+              if (h < 1) return 'Just now';
+              if (h < 24) return h + 'h ago';
+              return Math.floor(h/24) + 'd ago';
+            })() : '';
+            return (
+              <button key={note.id} onClick={() => onNavigate('notes')} className={"bg-surface-container-lowest p-4 rounded-xl text-left hover:scale-[1.01] transition-transform border-t-4 " + bc + " border-x border-b border-x-surface-container-low border-b-surface-container-low"}>
+                <span className="text-xs font-bold uppercase text-slate-400 tracking-widest">{timeAgo}</span>
+                <h4 className="text-sm font-bold mt-2 text-on-surface line-clamp-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{note.title || 'Untitled'}</h4>
+                <p className="text-on-surface-variant text-xs mt-2 line-clamp-3 leading-relaxed">{(note.content || '').replace(/<[^>]+>/g, '').slice(0, 100)}</p>
+              </button>
+            );
+          })}
+          {notes.filter((n) => n.type !== 'digest').length === 0 && (
+            <div className="col-span-3 bg-surface-container-lowest rounded-xl p-6 text-center border border-surface-container-low">
+              <p className="text-xs text-on-surface-variant">No notes yet</p>
+              <button onClick={onQuickNote} className="text-primary text-xs font-bold mt-2 hover:underline block mx-auto">Create your first note →</button>
+            </div>
+          )}
+        </div>
+      </div>
 
     </div>
   );
