@@ -152,6 +152,7 @@ function makeOAuth2Client() {
 }
 
 const app  = express();
+app.set('trust proxy', 1); // Railway sits behind a proxy
 const PORT = process.env.PORT || 3001;
 
 // ── Middleware ────────────────────────────────────────────────────────────────
