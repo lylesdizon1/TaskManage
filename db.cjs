@@ -419,7 +419,12 @@ async function replaceTasks(tasks, userId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Delete by user ownership AND by incoming IDs to prevent duplicate key on stale rows
     await client.query('DELETE FROM tasks WHERE created_by = $1 OR owner = $1', [userId]);
+    if (tasks.length > 0) {
+      const ids = tasks.map(t => t.id);
+      await client.query('DELETE FROM tasks WHERE id = ANY($1::text[])', [ids]);
+    }
     for (const t of tasks) {
       await client.query(
         `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
