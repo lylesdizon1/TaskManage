@@ -5377,46 +5377,44 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
   return (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
       {/* Left sidebar — notes list */}
-      <div className={`w-full md:w-[260px] flex-shrink-0 border-r border-gray-100 flex flex-col bg-white ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`w-full md:w-96 flex-shrink-0 flex flex-col bg-surface-container-low ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
+        {/* Library header */}
+        <div className="px-6 pt-6 pb-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold font-headline tracking-tight text-on-background">Library</h2>
+          <span className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">{notes.length} Notes</span>
+        </div>
         {/* Search bar */}
-        <div className="px-3 pt-3 pb-1">
+        <div className="px-6 pb-4">
           <div className="relative">
-            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none">🔍</span>
+            <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline text-lg">search</span>
             <input
               ref={searchInputRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search notes..."
-              className="w-full pl-8 pr-7 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-purple-300"
-              style={{ height: 36, fontSize: 14 }}
+              className="w-full bg-surface-container-lowest rounded-xl py-3 pl-11 pr-4 border-none text-sm focus:ring-2 focus:ring-primary/10 text-on-background placeholder:text-outline"
             />
             {searchQuery && (
-              <button type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
+              <button type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-background text-xs">✕</button>
             )}
           </div>
           {searchResults !== null && (
-            <div className="text-[10px] text-gray-400 mt-1 px-1">{searchResults.length} note{searchResults.length !== 1 ? 's' : ''} found</div>
+            <div className="text-[10px] text-on-surface-variant mt-1 px-1">{searchResults.length} note{searchResults.length !== 1 ? 's' : ''} found</div>
           )}
         </div>
 
-        {/* New Note button */}
-        <div className="px-3 pb-2 pt-1">
-          <button type="button" onClick={handleNewNote}
-            className="w-full px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2">
-            <span className="text-lg leading-none">+</span> New Note
-          </button>
-        </div>
 
-        {/* Pillar filter pills — slim row */}
-        <div className="px-3 pb-2 flex gap-1 flex-wrap">
+
+        {/* Pillar filter pills */}
+        <div className="px-6 pb-4 flex gap-2 flex-wrap">
           <button type="button" onClick={() => { setPillarFilter(''); setCategoryFilter(''); }}
-            className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-all ${!pillarFilter ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+            className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${!pillarFilter ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
             All
           </button>
           {Object.entries(PILLAR_CONFIG).map(([key, cfg]) => (
             <button type="button" key={key} onClick={() => { setPillarFilter(pillarFilter === key ? '' : key); setCategoryFilter(''); }}
-              className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-all ${pillarFilter === key ? `${cfg.bg} ${cfg.text}` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+              className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${pillarFilter === key ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
               {cfg.label}
             </button>
           ))}
@@ -5455,21 +5453,27 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                   metaParts.push(relativeTime(note.updatedAt || note.createdAt));
                   return (
                     <button type="button" key={note.id || 'new'} onClick={() => openNote(note)}
-                      className={`group w-full text-left px-3 py-2.5 transition-colors flex items-start gap-2 ${isActive ? 'bg-purple-50 border-l-2 border-purple-500' : 'hover:bg-gray-50 border-l-2 border-transparent'}`}
-                      style={{ minHeight: 56 }}
+                      className={`group w-full text-left px-6 py-1.5 transition-all hover:translate-x-1`}
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          {note.pinned && <span className="text-[10px]">📌</span>}
-                          <span className="text-sm font-medium text-gray-800 truncate block" style={{ maxWidth: '100%' }}>
+                      <div className={`bg-surface-container-lowest p-5 rounded-xl border-l-4 shadow-[0px_4px_12px_rgba(0,0,0,0.02)] transition-all ${isActive ? 'border-primary shadow-[0px_4px_20px_rgba(79,77,207,0.06)]' : 'border-transparent hover:border-surface-variant'}`}>
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          {note.pinned && <span className="material-symbols-outlined text-sm text-outline" style={{fontVariationSettings:"'FILL' 1"}}>push_pin</span>}
+                          <h3 className="font-bold text-on-surface line-clamp-1 text-sm">
                             {searchQuery && titleText.toLowerCase().includes(searchQuery.toLowerCase())
-                              ? highlightMatch(titleText.slice(0, 30), searchQuery)
-                              : titleText.slice(0, 30)}
-                          </span>
+                              ? highlightMatch(titleText.slice(0, 40), searchQuery)
+                              : titleText.slice(0, 40)}
+                          </h3>
                         </div>
-                        <div className="text-[11px] text-gray-400 mt-0.5 truncate">
-                          {metaParts.join(' · ')}
-                        </div>
+                        {isActive && <span className="text-[10px] font-bold text-primary bg-primary-container/10 px-2 py-0.5 rounded-full flex-shrink-0 ml-2">ACTIVE</span>}
+                      </div>
+                      <p className="text-sm text-on-surface-variant line-clamp-2 mb-3 leading-relaxed">
+                        {stripHtml(note.content || '').slice(0, 80) || 'No content'}
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <span className="text-[11px] font-bold text-outline">{metaParts[metaParts.length - 1]}</span>
+                        {metaParts.length > 1 && <><div className="w-1 h-1 rounded-full bg-outline-variant" /><span className="text-[11px] font-bold text-outline">{metaParts.slice(0, -1).join(' · ')}</span></>}
+                      </div>
                       </div>
                       {note.id && (
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 relative"
@@ -5498,11 +5502,19 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
             ))
           )}
         </div>
+        {/* New Note button — bottom */}
+        <div className="px-6 py-6">
+          <button type="button" onClick={handleNewNote}
+            className="w-full bg-gradient-to-br from-primary to-primary-container text-on-primary py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-[0px_10px_30px_rgba(79,77,207,0.2)] hover:scale-[1.02] active:scale-[0.98] transition-all text-sm">
+            <span className="material-symbols-outlined text-lg">add</span>
+            New Note
+          </button>
+        </div>
       </div>
 
       {/* Editor panel — single instance for both mobile & desktop */}
       {selectedNote ? (
-        <div className="flex-1 flex flex-col overflow-hidden md:border-l md:border-gray-100">
+        <div className="flex-1 flex flex-col overflow-hidden">
           {editorPanel}
         </div>
       ) : (
