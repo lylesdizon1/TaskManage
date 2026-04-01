@@ -5430,8 +5430,8 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
             All
           </button>
           {(entities || []).map((ent) => (
-            <button type="button" key={ent.id} onClick={() => { setPillarFilter(pillarFilter === ent.name ? '' : ent.name); setCategoryFilter(''); }}
-              className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${pillarFilter === ent.name ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
+            <button type="button" key={ent.id} onClick={() => { setPillarFilter(pillarFilter === ent.id ? '' : ent.id); setCategoryFilter(''); }}
+              className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${pillarFilter === ent.id ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
               {ent.name}
             </button>
           ))}
