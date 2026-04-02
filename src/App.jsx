@@ -5858,6 +5858,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [showAlerts, setShowAlerts]             = useState(false);
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
   const [showTaskModal, setShowTaskModal]       = useState(false);
+  const [editingTask, setEditingTask]           = useState(null);
   const [apiKeys, setApiKeys]                   = useState({ claude: '', openai: '' });
   const [emailSettings, setEmailSettings]       = useState({
     gmailUser: '',
@@ -6524,6 +6525,87 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               </div>
             )}
 
+            {/* Edit Task Modal */}
+            {editingTask && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+                onClick={() => setEditingTask(null)}
+              >
+                <div
+                  className="bg-surface rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between mb-5">
+                    <h2 className="text-base font-extrabold text-on-background font-headline">Edit Task</h2>
+                    <button onClick={() => setEditingTask(null)} className="text-on-surface-variant hover:text-on-background transition-colors">
+                      <span className="material-symbols-outlined text-xl">close</span>
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Title</label>
+                      <input
+                        type="text"
+                        value={editingTask.title}
+                        onChange={(e) => setEditingTask((t) => ({ ...t, title: e.target.value }))}
+                        className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Priority</label>
+                        <select
+                          value={editingTask.priority || 'medium'}
+                          onChange={(e) => setEditingTask((t) => ({ ...t, priority: e.target.value }))}
+                          className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        >
+                          <option value="high">High</option>
+                          <option value="medium">Medium</option>
+                          <option value="low">Low</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Due Date</label>
+                        <input
+                          type="date"
+                          value={editingTask.dueDate || ''}
+                          onChange={(e) => setEditingTask((t) => ({ ...t, dueDate: e.target.value }))}
+                          className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Entity</label>
+                      <select
+                        value={editingTask.tags?.[0] || ''}
+                        onChange={(e) => setEditingTask((t) => ({ ...t, tags: e.target.value ? [e.target.value] : [] }))}
+                        className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      >
+                        <option value="">None</option>
+                        {(userEntities || []).map((ent) => (
+                          <option key={ent.id} value={ent.name}>{ent.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex gap-3 pt-2">
+                      <button
+                        onClick={() => setEditingTask(null)}
+                        className="flex-1 px-4 py-2.5 rounded-xl border border-surface-variant text-sm font-bold text-on-surface-variant hover:bg-surface-container transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => { editTask(editingTask.id, { title: editingTask.title, priority: editingTask.priority, dueDate: editingTask.dueDate, tags: editingTask.tags }); setEditingTask(null); }}
+                        className="flex-1 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-bold shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Filter pills — dynamic from active entities */}
             <div className="px-8 pb-5 flex items-center gap-2 flex-wrap">
               <button
@@ -6570,9 +6652,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               const completedToday = base.filter((t) => t.completed && t.completedAt && t.completedAt.slice(0,10) === todayStr);
 
               const taskRow = (t, isOverdue = false) => (
-                <div key={t.id} className={`flex items-center gap-3 p-3 rounded-xl transition-colors group ${isOverdue ? 'bg-error/5 border border-error/10 hover:bg-error/10' : 'bg-surface-container-lowest border border-surface-container-low hover:bg-surface-container-low'}`}>
+                <div key={t.id} onClick={() => setEditingTask(t)} className={`flex items-center gap-3 p-3 rounded-xl transition-colors group cursor-pointer ${isOverdue ? 'bg-error/5 border border-error/10 hover:bg-error/10' : 'bg-surface-container-lowest border border-surface-container-low hover:bg-surface-container-low'}`}>
                   <button
-                    onClick={() => toggleTask(t.id)}
+                    onClick={(e) => { e.stopPropagation(); toggleTask(t.id); }}
                     className={`h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors ${isOverdue ? 'border-error' : 'border-outline-variant hover:border-primary'}`}
                   />
                   <div className="flex-1 min-w-0">
@@ -6606,10 +6688,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               const priorityLabel = { high: 'High Priority', medium: 'Medium Priority', low: 'Low Priority' };
 
               const taskCard = (t) => (
-                <div key={t.id} className="group bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md hover:scale-[1.01] transition-all border border-transparent hover:border-primary/10">
+                <div key={t.id} onClick={() => setEditingTask(t)} className="group bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md hover:scale-[1.01] transition-all border border-transparent hover:border-primary/10 cursor-pointer">
                   <div className="flex items-start gap-3">
                     <button
-                      onClick={() => toggleTask(t.id)}
+                      onClick={(e) => { e.stopPropagation(); toggleTask(t.id); }}
                       className="mt-0.5 w-5 h-5 rounded-lg border-2 border-primary/20 flex-shrink-0 hover:border-primary transition-colors"
                     />
                     <div className="flex-1 min-w-0">
