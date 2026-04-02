@@ -3820,7 +3820,7 @@ function SkeletonBlock({ className = '' }) {
   return <div className={`bg-gray-200 rounded-lg animate-pulse ${className}`} />;
 }
 
-function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onLogExpense, onAddEvent }) {
+function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onLogExpense, onAddEvent, backend, onBackendChange }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -4134,6 +4134,14 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
               placeholder="Ask Aria anything..."
               onKeyDown={(e) => { if (e.key === 'Enter' && e.target.value.trim()) { onAIPrompt(e.target.value.trim()); e.target.value = ''; } }}
             />
+            <select
+              value={backend}
+              onChange={(e) => onBackendChange(e.target.value)}
+              className="flex-shrink-0 bg-transparent border-none text-[10px] font-bold text-primary focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
+            >
+              <option value="claude">Claude</option>
+              <option value="chatgpt">ChatGPT</option>
+            </select>
           </div>
         </div>
         <div className="flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-full border border-primary/5 flex-shrink-0">
@@ -6485,6 +6493,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onQuickNote={() => { document.querySelector('[aria-label="Quick Capture"]')?.click(); }}
               onLogExpense={() => { setActiveView('financials'); if (window.innerWidth < 768) setMobileView('financials'); }}
               onAddEvent={() => setShowCreateEvent(true)}
+              backend={chatBackend}
+              onBackendChange={setChatBackend}
             />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
