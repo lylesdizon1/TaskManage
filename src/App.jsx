@@ -6462,7 +6462,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 setChatInitialMsg(msg);
                 if (window.innerWidth < 768) setMobileView('chat');
               }}
-              onAddTask={() => { setActiveView('daily'); }}
+              onAddTask={() => setShowTaskModal(true)}
               onQuickNote={() => { document.querySelector('[aria-label="Quick Capture"]')?.click(); }}
               onLogExpense={() => { setActiveView('financials'); if (window.innerWidth < 768) setMobileView('financials'); }}
               onAddEvent={() => setShowCreateEvent(true)}
