@@ -3820,6 +3820,119 @@ function SkeletonBlock({ className = '' }) {
   return <div className={`bg-gray-200 rounded-lg animate-pulse ${className}`} />;
 }
 
+// ── Inbox Panel ─────────────────────────────────────────────────────────────
+function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
+  const [dismissed, setDismissed] = useState(new Set());
+  const [editingDue, setEditingDue] = useState(null);
+  const toast = useToast();
+
+  const today = new Date().toISOString().slice(0, 10);
+  const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const cutoff = sevenDaysAgo.toISOString().slice(0, 10);
+
+  const activeTasks = tasks.filter((t) => !t.completed);
+
+  const inboxItems = useMemo(() => {
+    const items = [];
+    activeTasks.forEach((t) => {
+      if (dismissed.has(t.id)) return;
+      if (t.dueDate && t.dueDate < cutoff) {
+        const days = Math.floor((new Date(today) - new Date(t.dueDate)) / 86400000);
+        items.push({ ...t, inboxType: 'MISSED', context: `${days} days overdue`, sort: 0 });
+      } else if (t.dueDate && t.dueDate < today) {
+        const days = Math.floor((new Date(today) - new Date(t.dueDate)) / 86400000);
+        items.push({ ...t, inboxType: 'OVERDUE', context: `${days} day${days !== 1 ? 's' : ''} overdue`, sort: 1 });
+      } else if (t.priority === 'high' && !t.dueDate) {
+        items.push({ ...t, inboxType: 'HIGH PRIORITY', context: 'No due date set', sort: 2 });
+      }
+    });
+    return items.sort((a, b) => a.sort - b.sort);
+  }, [activeTasks, dismissed, today, cutoff]);
+
+  function handleDismiss(id) {
+    setDismissed((prev) => new Set(prev).add(id));
+    toast.info('Item dismissed from inbox');
+  }
+
+  function handleSetDue(id, date) {
+    onEditTask(id, { dueDate: date });
+    setEditingDue(null);
+    toast.success('Due date updated');
+  }
+
+  const badgeStyle = {
+    'MISSED': 'bg-error/10 text-error',
+    'OVERDUE': 'bg-amber-100 text-amber-700',
+    'HIGH PRIORITY': 'bg-primary/10 text-primary',
+  };
+  const iconMap = {
+    'MISSED': 'event_busy',
+    'OVERDUE': 'schedule',
+    'HIGH PRIORITY': 'priority_high',
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6 md:p-10">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-extrabold font-headline text-on-background">Inbox</h1>
+            <p className="text-sm text-on-surface-variant mt-1">{inboxItems.length} item{inboxItems.length !== 1 ? 's' : ''} need{inboxItems.length === 1 ? 's' : ''} attention</p>
+          </div>
+        </div>
+
+        {inboxItems.length === 0 ? (
+          <div className="text-center py-16">
+            <span className="material-symbols-outlined text-5xl text-primary/30">inbox</span>
+            <p className="text-on-surface-variant font-medium mt-3">You're all caught up!</p>
+            <p className="text-sm text-outline mt-1">No overdue, missed, or unscheduled high-priority tasks.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {inboxItems.map((item) => (
+              <div key={item.id} className="bg-surface-container-lowest rounded-xl p-4 shadow-sm border border-outline-variant/30 flex items-start gap-4 group hover:shadow-md transition-shadow">
+                <div className="bg-surface-variant/50 p-2 rounded-full flex-shrink-0 mt-0.5">
+                  <span className="material-symbols-outlined text-lg text-on-surface-variant">{iconMap[item.inboxType]}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badgeStyle[item.inboxType]}`}>{item.inboxType}</span>
+                    {item.priority === 'high' && item.inboxType !== 'HIGH PRIORITY' && (
+                      <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-error/10 text-error">HIGH</span>
+                    )}
+                  </div>
+                  <h3 className="font-bold text-on-surface text-sm">{item.title}</h3>
+                  <p className="text-xs text-outline mt-0.5">{item.context}{item.dueDate ? ` · Due ${item.dueDate}` : ''}</p>
+                  {editingDue === item.id && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <input type="date" defaultValue={today} className="text-xs border border-outline-variant rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 outline-none" autoFocus
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleSetDue(item.id, e.target.value); if (e.key === 'Escape') setEditingDue(null); }}
+                      />
+                      <button onClick={(e) => handleSetDue(item.id, e.target.closest('div').querySelector('input').value)} className="text-xs font-bold text-primary hover:underline">Save</button>
+                      <button onClick={() => setEditingDue(null)} className="text-xs text-outline hover:underline">Cancel</button>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => onToggleTask(item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-primary text-on-primary hover:opacity-90 transition-opacity" title="Complete">
+                    <span className="material-symbols-outlined text-sm">check</span>
+                  </button>
+                  <button onClick={() => setEditingDue(editingDue === item.id ? null : item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors" title="Edit due date">
+                    <span className="material-symbols-outlined text-sm">edit_calendar</span>
+                  </button>
+                  <button onClick={() => handleDismiss(item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors" title="Dismiss">
+                    <span className="material-symbols-outlined text-sm">close</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onLogExpense, onAddEvent, backend, onBackendChange }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
@@ -3873,6 +3986,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const overdueTasks = useMemo(() => activeTasks.filter((t) => t.dueDate && t.dueDate < today), [activeTasks, today]);
   const highPriorityTasks = useMemo(() => activeTasks.filter((t) => t.priority === 'high'), [activeTasks]);
   const todayTasks = useMemo(() => activeTasks.filter((t) => t.dueDate === today), [activeTasks, today]);
+  const highNoDue = useMemo(() => activeTasks.filter((t) => t.priority === 'high' && !t.dueDate), [activeTasks]);
+  const inboxCount = overdueTasks.length + highNoDue.length;
 
   // Financial: net cash flow this month
   const netCashFlow = useMemo(() => {
@@ -4196,6 +4311,16 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">{briefSending ? 'hourglass_empty' : 'send'}</span>
           <span className="text-[10px] font-bold uppercase">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
         </button>
+        <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm relative">
+          <div className="bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
+            <span className="material-symbols-outlined text-error text-lg">inbox</span>
+          </div>
+          <div>
+            <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(inboxCount).padStart(2,'0')}</p>
+            <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Inbox</p>
+          </div>
+          {inboxCount > 0 && <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error animate-pulse" />}
+        </button>
         <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
           <div className="bg-error-container/20 p-2 rounded-full group-hover:scale-110 transition-transform">
             <span className="material-symbols-outlined text-error text-lg">event_busy</span>
@@ -4212,15 +4337,6 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
           <div>
             <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(highPriorityTasks.length).padStart(2,'0')}</p>
             <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Priority</p>
-          </div>
-        </button>
-        <button onClick={() => onNavigate('daily', 'done')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
-          <div className="bg-tertiary-container/30 p-2 rounded-full group-hover:scale-110 transition-transform">
-            <span className="material-symbols-outlined text-tertiary text-lg">task_alt</span>
-          </div>
-          <div>
-            <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(doneToday).padStart(2,'0')}</p>
-            <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Completed</p>
           </div>
         </button>
       </div>
@@ -6381,6 +6497,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         <nav className="flex-1 space-y-1">
           {[
             { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+            { key: 'inbox', label: 'Inbox', icon: 'inbox' },
             { key: 'daily', label: 'Tasks', icon: 'task' },
             { key: 'calendar', label: 'Calendar', icon: 'calendar_today' },
             { key: 'notes', label: 'Notes', icon: 'sticky_note_2' },
@@ -6505,6 +6622,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               backend={chatBackend}
               onBackendChange={setChatBackend}
             />
+          ) : activeView === 'inbox' ? (
+            <InboxPanel tasks={tasks} authToken={authToken} onToggleTask={(id) => { toggleTask(id); }} onEditTask={(id, fields) => { editTask(id, fields); }} addToast={addToast} />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
           ) : activeView === 'financials' ? (
