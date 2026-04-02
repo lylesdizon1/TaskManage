@@ -6045,8 +6045,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     } catch {}
   }
 
-  async function handleChatSend() {
-    const text = chatInput.trim();
+  async function handleChatSend(overrideText) {
+    const text = (overrideText || chatInput).trim();
     if (!text || chatLoading) return;
 
     let convId = activeConvId;
@@ -6112,13 +6112,15 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   // Load conversations on mount
   useEffect(() => { loadConversations(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle chatInitialMsg from Dashboard
+  // Handle chatInitialMsg from Dashboard — auto-send
   useEffect(() => {
     if (chatInitialMsg) {
-      setChatInput(chatInitialMsg);
+      const msg = chatInitialMsg;
       setChatInitialMsg('');
+      setChatInput('');
+      handleChatSend(msg);
     }
-  }, [chatInitialMsg]);
+  }, [chatInitialMsg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggleChatPanel() {
     setChatPanelOpen((prev) => {
