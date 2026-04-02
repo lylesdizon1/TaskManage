@@ -5497,21 +5497,11 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                             onMouseDown={(e) => e.stopPropagation()}
                           >
                             <button type="button" tabIndex={-1}
-                              onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(showDeleteConfirm === note.id ? false : note.id); }}
-                              className="w-6 h-6 flex items-center justify-center rounded text-outline hover:text-on-surface hover:bg-surface-variant"
-                              title="More options">
-                              <span className="material-symbols-outlined" style={{fontSize:'16px'}}>more_vert</span>
+                              onClick={(e) => { e.stopPropagation(); handleDelete(note.id); }}
+                              className="w-7 h-7 flex items-center justify-center rounded-full text-error bg-error-container/20 hover:bg-error-container/50 transition-colors"
+                              title="Delete note">
+                              <span className="material-symbols-outlined" style={{fontSize:'16px'}}>close</span>
                             </button>
-                            {showDeleteConfirm === note.id && (
-                              <div className="absolute right-0 top-7 z-50 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-lg py-1 min-w-[120px]">
-                                <button type="button" tabIndex={-1}
-                                  onClick={(e) => { e.stopPropagation(); handleDelete(note.id); }}
-                                  className="w-full text-left px-3 py-1.5 text-xs text-error hover:bg-error-container/30 flex items-center gap-2">
-                                  <span className="material-symbols-outlined" style={{fontSize:'14px'}}>delete</span>
-                                  Delete note
-                                </button>
-                              </div>
-                            )}
                           </div>
                         )}
                       </div>
