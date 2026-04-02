@@ -3953,7 +3953,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       });
       const data = await res.json();
-      if (res.ok) toast.success('Morning brief sent to Slack!');
+      if (res.ok) toast.success(data.message || 'Morning brief sent!');
       else toast.error(data.error || 'Failed to send morning brief');
     } catch {
       toast.error('Failed to send morning brief');

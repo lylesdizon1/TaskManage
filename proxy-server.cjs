@@ -2049,7 +2049,10 @@ if (fs.existsSync(DIST_DIR)) {
 app.post('/api/alerts/morning', authenticateToken, async (req, res) => {
   try {
     const webhookUrl = process.env.SLACK_WEBHOOK_URL;
-    if (!webhookUrl) return res.status(500).json({ error: 'SLACK_WEBHOOK_URL not configured' });
+    const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+    const ultraToken = process.env.ULTRAMSG_TOKEN;
+    const ultraPhone = process.env.ULTRAMSG_PHONE;
+    if (!webhookUrl && !ultraInstance) return res.status(500).json({ error: 'No messaging channels configured (SLACK_WEBHOOK_URL or ULTRAMSG_INSTANCE)' });
 
     const user = await db.getUserById(req.user.id);
     const userEntities = (user?.entityIds || []);
@@ -2118,20 +2121,42 @@ app.post('/api/alerts/morning', authenticateToken, async (req, res) => {
 
     const text = lines.join('\n');
 
-    // POST to Slack webhook
-    const slackRes = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
+    // Fire Slack + WhatsApp in parallel
+    const channels = [];
 
-    if (!slackRes.ok) {
-      const body = await slackRes.text();
-      console.error('[morning-brief] Slack webhook failed:', slackRes.status, body);
-      return res.status(502).json({ error: 'Slack webhook failed' });
+    if (webhookUrl) {
+      channels.push(
+        fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`Slack ${r.status}: ${await r.text()}`);
+          return 'Slack';
+        })
+      );
     }
 
-    return res.json({ success: true, message: 'Morning brief sent to Slack' });
+    if (ultraInstance && ultraToken && ultraPhone) {
+      channels.push(
+        fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: ultraToken, to: ultraPhone, body: text }),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`WhatsApp ${r.status}: ${await r.text()}`);
+          return 'WhatsApp';
+        })
+      );
+    }
+
+    const results = await Promise.allSettled(channels);
+    const sent = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason.message);
+    failed.forEach((msg) => console.error('[morning-brief]', msg));
+
+    if (sent.length === 0) return res.status(502).json({ error: `All channels failed: ${failed.join('; ')}` });
+    return res.json({ success: true, message: `Morning brief sent to ${sent.join(', ')}${failed.length ? ` (failed: ${failed.join(', ')})` : ''}` });
   } catch (err) {
     console.error('[morning-brief] failed:', err.message);
     return res.status(500).json({ error: err.message });
