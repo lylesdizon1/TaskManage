@@ -1656,6 +1656,7 @@ app.get('/api/notes', authenticateToken, async (req, res) => {
     await db.seedNoteCategoriesIfEmpty(req.user.id);
     const filters = {};
     if (req.query.pillar) filters.pillar = req.query.pillar;
+    if (req.query.entityId) filters.entityId = req.query.entityId;
     if (req.query.category) filters.category = req.query.category;
     if (req.query.archived) filters.archived = req.query.archived === 'true';
     if (req.query.pinned) filters.pinned = req.query.pinned === 'true';

@@ -4937,7 +4937,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
 
   const loadNotes = useCallback(async () => {
     const params = new URLSearchParams();
-    if (pillarFilter) params.set('pillar', pillarFilter);
+    if (pillarFilter) params.set('entityId', pillarFilter);
     if (categoryFilter) params.set('category', categoryFilter);
     try {
       const res = await apiFetch(`/api/notes?${params}`, { headers: { Authorization: `Bearer ${authToken}` } });

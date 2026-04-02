@@ -535,6 +535,7 @@ async function getNotesForUser(userId, filters = {}) {
   const vals = [userId];
   let idx = 2;
   if (filters.pillar) { where.push(`pillar = $${idx++}`); vals.push(filters.pillar); }
+  if (filters.entityId) { where.push(`entity_id = $${idx++}`); vals.push(filters.entityId); }
   if (filters.category) { where.push(`category = $${idx++}`); vals.push(filters.category); }
   if (filters.pinned !== undefined) { where.push(`pinned = $${idx++}`); vals.push(filters.pinned); }
   if (filters.archived !== undefined) { where.push(`archived = $${idx++}`); vals.push(filters.archived); }
