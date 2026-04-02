@@ -5970,6 +5970,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Sync dashboardNotes when NotesPanel updates allNotes (deletes, creates, edits)
+  useEffect(() => { if (allNotes.length) setDashboardNotes(allNotes); }, [allNotes]);
+
   function reloadFinancialData() {
     apiFetch('/api/financial/transactions', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
