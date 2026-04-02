@@ -6301,12 +6301,18 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   }
 
   function toggleTask(id) {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    const nowCompleted = !task.completed;
+    const completedAt = nowCompleted ? new Date().toISOString() : null;
     setTasks((prev) =>
-      prev.map((t) => t.id === id
-        ? { ...t, completed: !t.completed, completedAt: !t.completed ? new Date().toISOString() : null }
-        : t
-      ),
+      prev.map((t) => t.id === id ? { ...t, completed: nowCompleted, completedAt } : t),
     );
+    apiFetch(`/api/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ completed: nowCompleted, completedAt }),
+    }).catch((err) => console.error('[tasks] toggle failed:', err.message));
   }
 
   function deleteTask(id) {
