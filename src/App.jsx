@@ -5293,7 +5293,7 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
     return 'Earlier';
   }
 
-  const displayNotes = (searchResults !== null ? searchResults : notes).filter((n) => !pillarFilter || n.entityId === pillarFilter || (entities || []).find((e) => e.name === pillarFilter)?.id === n.entityId);
+  const displayNotes = (searchResults !== null ? searchResults : notes).filter((n) => !pillarFilter || n.entityId === pillarFilter);
 
   // Group notes by date — must be called unconditionally (before any early return)
   const groupedNotes = useMemo(() => {
