@@ -5491,6 +5491,26 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                           </h3>
                         </div>
                         {isActive && <span className="text-[10px] font-bold text-primary bg-primary-container/10 px-2 py-0.5 rounded-full flex-shrink-0 ml-2">ACTIVE</span>}
+                        {note.id && (
+                          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 relative ml-auto"
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <button type="button" tabIndex={-1}
+                              onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(showDeleteConfirm === note.id ? false : note.id); }}
+                              className="w-6 h-6 flex items-center justify-center rounded text-outline hover:text-on-surface hover:bg-surface-variant text-xs"
+                              title="More options">···</button>
+                            {showDeleteConfirm === note.id && (
+                              <div className="absolute right-0 top-7 z-50 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-lg py-1 min-w-[120px]">
+                                <button type="button" tabIndex={-1}
+                                  onClick={(e) => { e.stopPropagation(); handleDelete(note.id); }}
+                                  className="w-full text-left px-3 py-1.5 text-xs text-error hover:bg-error-container/30">
+                                  Delete note
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <p className="text-sm text-on-surface-variant line-clamp-2 mb-3 leading-relaxed">
                         {stripHtml(note.content || '').slice(0, 80) || 'No content'}
@@ -5500,26 +5520,6 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                         {metaParts.length > 1 && <><div className="w-1 h-1 rounded-full bg-outline-variant" /><span className="text-[11px] font-bold text-outline">{metaParts.slice(0, -1).join(' · ')}</span></>}
                       </div>
                       </div>
-                      {note.id && (
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 relative"
-                          onClick={(e) => e.stopPropagation()}
-                          onMouseDown={(e) => e.stopPropagation()}
-                        >
-                          <button type="button" tabIndex={-1}
-                            onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(showDeleteConfirm === note.id ? false : note.id); }}
-                            className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-xs"
-                            title="More options">···</button>
-                          {showDeleteConfirm === note.id && (
-                            <div className="absolute right-0 top-7 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[120px]">
-                              <button type="button" tabIndex={-1}
-                                onClick={(e) => { e.stopPropagation(); handleDelete(note.id); }}
-                                className="w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-red-50">
-                                Delete note
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </button>
                   );
                 })}
