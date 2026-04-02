@@ -5492,19 +5492,22 @@ function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNote
                         </div>
                         {isActive && <span className="text-[10px] font-bold text-primary bg-primary-container/10 px-2 py-0.5 rounded-full flex-shrink-0 ml-2">ACTIVE</span>}
                         {note.id && (
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 relative ml-auto"
+                          <div className="flex-shrink-0 relative ml-auto"
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
                           >
                             <button type="button" tabIndex={-1}
                               onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(showDeleteConfirm === note.id ? false : note.id); }}
-                              className="w-6 h-6 flex items-center justify-center rounded text-outline hover:text-on-surface hover:bg-surface-variant text-xs"
-                              title="More options">···</button>
+                              className="w-6 h-6 flex items-center justify-center rounded text-outline hover:text-on-surface hover:bg-surface-variant"
+                              title="More options">
+                              <span className="material-symbols-outlined" style={{fontSize:'16px'}}>more_vert</span>
+                            </button>
                             {showDeleteConfirm === note.id && (
                               <div className="absolute right-0 top-7 z-50 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-lg py-1 min-w-[120px]">
                                 <button type="button" tabIndex={-1}
                                   onClick={(e) => { e.stopPropagation(); handleDelete(note.id); }}
-                                  className="w-full text-left px-3 py-1.5 text-xs text-error hover:bg-error-container/30">
+                                  className="w-full text-left px-3 py-1.5 text-xs text-error hover:bg-error-container/30 flex items-center gap-2">
+                                  <span className="material-symbols-outlined" style={{fontSize:'14px'}}>delete</span>
                                   Delete note
                                 </button>
                               </div>
