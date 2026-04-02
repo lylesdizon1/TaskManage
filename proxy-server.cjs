@@ -2044,6 +2044,100 @@ if (fs.existsSync(DIST_DIR)) {
   console.log('[static] Serving React build from dist/');
 }
 
+// ── Alerts ────────────────────────────────────────────────────────────────────
+
+app.post('/api/alerts/morning', authenticateToken, async (req, res) => {
+  try {
+    const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+    if (!webhookUrl) return res.status(500).json({ error: 'SLACK_WEBHOOK_URL not configured' });
+
+    const user = await db.getUserById(req.user.id);
+    const userEntities = (user?.entityIds || []);
+    const tasks = await db.getTasksForUser(req.user.id, userEntities);
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const overdue = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < todayStr);
+    const todayTasks = tasks.filter((t) => !t.completed && t.dueDate === todayStr);
+    const highPriority = tasks.filter((t) => !t.completed && t.priority === 'high');
+
+    // Fetch calendar events for today
+    let calendarEvents = [];
+    try {
+      const tokens = await loadGcalTokens(req.user.id);
+      if (tokens) {
+        const oauth2 = makeOAuth2Client();
+        if (oauth2) {
+          oauth2.setCredentials(tokens);
+          const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+          const now = new Date();
+          const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          const endOfDay = new Date(startOfDay);
+          endOfDay.setDate(endOfDay.getDate() + 1);
+          const { data } = await calendar.events.list({
+            calendarId: 'primary',
+            timeMin: startOfDay.toISOString(),
+            timeMax: endOfDay.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 20,
+          });
+          calendarEvents = (data.items || []).map((ev) => ({
+            title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+            start: ev.start?.dateTime || ev.start?.date || '',
+          }));
+        }
+      }
+    } catch (calErr) {
+      console.error('[morning-brief] calendar fetch failed:', calErr.message);
+    }
+
+    // Format date
+    const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+    // Build message
+    const lines = [`☀️ Good morning ${user?.displayName || 'Lyle'} — ${dateLabel}\n`];
+
+    lines.push(`📋 *OVERDUE (${overdue.length})*`);
+    if (overdue.length === 0) lines.push('- None! You\'re all caught up');
+    else overdue.forEach((t) => {
+      const daysOver = Math.floor((new Date(todayStr) - new Date(t.dueDate)) / 86400000);
+      lines.push(`- ${t.title} (${daysOver} day${daysOver !== 1 ? 's' : ''} overdue)`);
+    });
+
+    lines.push('');
+    lines.push(`📅 *TODAY (${todayTasks.length + calendarEvents.length})*`);
+    calendarEvents.forEach((ev) => {
+      const time = ev.start.includes('T') ? new Date(ev.start).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : 'All day';
+      lines.push(`- ${time} — ${ev.title}`);
+    });
+    todayTasks.forEach((t) => lines.push(`- Task: ${t.title}`));
+    if (todayTasks.length === 0 && calendarEvents.length === 0) lines.push('- Nothing scheduled');
+
+    lines.push('');
+    lines.push(`🔥 High priority: ${highPriority.length}`);
+
+    const text = lines.join('\n');
+
+    // POST to Slack webhook
+    const slackRes = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+
+    if (!slackRes.ok) {
+      const body = await slackRes.text();
+      console.error('[morning-brief] Slack webhook failed:', slackRes.status, body);
+      return res.status(502).json({ error: 'Slack webhook failed' });
+    }
+
+    return res.json({ success: true, message: 'Morning brief sent to Slack' });
+  } catch (err) {
+    console.error('[morning-brief] failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 async function start() {

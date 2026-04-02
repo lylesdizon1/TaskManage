@@ -3829,6 +3829,25 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [ariaBrief, setAriaBrief] = useState(null);
   const [ariaBriefLoading, setAriaBriefLoading] = useState(true);
+  const [briefSending, setBriefSending] = useState(false);
+  const toast = useToast();
+
+  async function sendMorningBrief() {
+    setBriefSending(true);
+    try {
+      const res = await apiFetch('/api/alerts/morning', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (res.ok) toast.success('Morning brief sent to Slack!');
+      else toast.error(data.error || 'Failed to send morning brief');
+    } catch {
+      toast.error('Failed to send morning brief');
+    } finally {
+      setBriefSending(false);
+    }
+  }
 
   const _d = new Date();
   const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
@@ -4156,7 +4175,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       </div>
 
       {/* ROW 3: Quick Actions + Stat Tiles */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-6 gap-3">
         <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
           <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">add_task</span>
           <span className="text-[10px] font-bold uppercase">Add Task</span>
@@ -4164,6 +4183,10 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
           <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">edit_note</span>
           <span className="text-[10px] font-bold uppercase">Quick Note</span>
+        </button>
+        <button onClick={sendMorningBrief} disabled={briefSending} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10 disabled:opacity-50">
+          <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">{briefSending ? 'hourglass_empty' : 'send'}</span>
+          <span className="text-[10px] font-bold uppercase">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
         </button>
         <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
           <div className="bg-error-container/20 p-2 rounded-full group-hover:scale-110 transition-transform">
