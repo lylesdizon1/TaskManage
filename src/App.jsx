@@ -6477,6 +6477,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onAIPrompt={(msg) => {
                 setChatInitialMsg(msg);
                 if (window.innerWidth < 768) setMobileView('chat');
+                else setChatPanelOpen(true);
               }}
               onAddTask={() => setShowTaskModal(true)}
               onQuickNote={() => { document.querySelector('[aria-label="Quick Capture"]')?.click(); }}
