@@ -6631,17 +6631,31 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'notes' ? (
             <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} />
           ) : activeView === 'chat' ? (
-            <ChatTabPanel
-              conversations={conversations}
-              activeConvId={activeConvId}
-              activeMessages={chatMessages}
-              loading={chatLoading}
-              backend={chatBackend}
-              onSelectConv={selectConversation}
-              onNewChat={createNewChat}
-              onDeleteConv={deleteConversation}
-              onRenameConv={renameConversation}
-            />
+            <div className="flex flex-col flex-1 overflow-hidden">
+              <ChatTabPanel
+                conversations={conversations}
+                activeConvId={activeConvId}
+                activeMessages={chatMessages}
+                loading={chatLoading}
+                backend={chatBackend}
+                onSelectConv={selectConversation}
+                onNewChat={createNewChat}
+                onDeleteConv={deleteConversation}
+                onRenameConv={renameConversation}
+              />
+              <div className="flex-shrink-0 hidden md:block">
+                <UniversalPromptBar
+                  input={chatInput}
+                  onInputChange={setChatInput}
+                  backend={chatBackend}
+                  onBackendChange={setChatBackend}
+                  onSend={handleChatSend}
+                  loading={chatLoading}
+                  activeTab="chat"
+                  personaPill={lastAutoPersona ? { emoji: lastAutoPersona.emoji, name: lastAutoPersona.defaultName } : null}
+                />
+              </div>
+            </div>
           ) : (
           /* Tasks panel — exact comp */
           <div className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
