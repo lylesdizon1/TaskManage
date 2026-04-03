@@ -6,7 +6,6 @@ import { detectIntent } from './lib/context-engine/intentDetector';
 import { routePersona } from './lib/context-engine/personaRouter';
 import { usePersona } from './contexts/PersonaContext';
 import SettingsModal from './components/settings/SettingsModal';
-import { AlertsModal } from './components/alerts/AlertsModal.jsx';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API BASE (works in dev via Vite proxy and in prod when served from same origin)
@@ -85,7 +84,7 @@ import { buildGroupedEntities } from './utils/helpers.js';
 import FilterBar from './components/tasks/FilterBar.jsx';
 import { ChatMessageThread, SlidingChatPanel, ChatTabPanel, UniversalPromptBar } from './components/chat/ChatComponents.jsx';
 import buildSystemPrompt from './utils/systemPrompt.js';
-import { GearIcon, XIcon, SendIcon, ChatIcon, SpinnerIcon, BellIcon, MailIcon, ChecklistIcon, LogoutIcon, CalendarIcon, NotesIcon, UploadIcon, SyncIcon, PencilIcon } from './components/icons/Icons.jsx';
+import { GearIcon, XIcon, SendIcon, ChatIcon, SpinnerIcon, MailIcon, ChecklistIcon, LogoutIcon, CalendarIcon, NotesIcon, UploadIcon, SyncIcon, PencilIcon } from './components/icons/Icons.jsx';
 import CalendarPanel from './panels/CalendarPanel.jsx';
 import InboxPanel from './panels/InboxPanel.jsx';
 import NotesPanel, { PILLAR_CONFIG, PILLAR_KEYS, VIEW_TO_PILLAR } from './panels/NotesPanel.jsx';
@@ -383,7 +382,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [statusFilter, setStatusFilter]         = useState('all');
   const [taskFilter, setTaskFilter]             = useState('');
   const [showSettings, setShowSettings]         = useState(false);
-  const [showAlerts, setShowAlerts]             = useState(false);
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
   const [showTaskModal, setShowTaskModal]       = useState(false);
   const [editingTask, setEditingTask]           = useState(null);
@@ -878,7 +876,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   }, [visibleTasks, activeView, activeTagFilters, statusFilter]);
 
   const completedCount    = filteredTasks.filter((t) => t.completed).length;
-  const enabledRulesCount = alertRules.filter((r) => r.enabled).length;
 
   return (
     <div className="min-h-screen bg-background flex" style={{ fontFamily: "'Manrope', sans-serif" }}>
@@ -931,13 +928,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         {/* ── Top bar ── */}
         <header className="hidden md:flex items-center justify-end px-8 h-12 bg-background/80 backdrop-blur-xl sticky top-0 z-40 border-b border-surface-container-low flex-shrink-0">
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowAlerts(true)} className="relative p-1.5 text-slate-400 hover:text-primary transition-colors" title="Alerts">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-              </svg>
-              {enabledRulesCount > 0 && <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-primary rounded-full" />}
-            </button>
             <button onClick={() => setShowSettings(true)} className="p-1.5 text-slate-400 hover:text-primary transition-colors" title="Settings">
               <GearIcon className="w-4 h-4" />
             </button>
@@ -953,9 +943,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <h1 className="text-sm font-bold text-primary">Dizon.ai</h1>
           </div>
           <div className="flex items-center gap-1">
-            <button onClick={() => setShowAlerts(true)} className="p-2 text-slate-400 hover:text-primary">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-            </button>
             <button onClick={() => setShowSettings(true)} className="p-2 text-slate-400 hover:text-primary">
               <GearIcon className="w-4 h-4" />
             </button>
@@ -1371,26 +1358,17 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           onEntitiesChanged={reloadEntities}
           onUserUpdated={(u) => { setCurrentUser(u); localStorage.setItem('tm_user', JSON.stringify(u)); }}
           apiFetch={apiFetch}
-        />
-      )}
-
-      {showAlerts && (
-        <AlertsModal
-          rules={alertRules}
-          onUpdateRules={setAlertRules}
-          emailSettings={emailSettings}
+          alertRules={alertRules}
+          onUpdateAlertRules={setAlertRules}
           tasks={tasks}
           firedAlertsRef={firedAlertsRef}
-          addToast={addToast}
-          onClose={() => setShowAlerts(false)}
-          entities={userEntities}
           envStatus={{
             slack:    !!envConfigured.channelSlack,
             whatsapp: !!envConfigured.channelWhatsapp,
             sms:      !!envConfigured.channelSms,
             email:    !!envConfigured.channelEmail,
           }}
-          apiFetch={apiFetch}
+          addToast={addToast}
           EntitySelectOptions={EntitySelectOptions}
         />
       )}
