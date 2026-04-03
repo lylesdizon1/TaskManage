@@ -1105,7 +1105,7 @@ app.get('/api/gmail/config', async (req, res) => {
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
   const config = await db.getGmailConfigForUser(userId);
-  res.json(config || { vipSenders: [], triggerKeywords: [], commitmentDetection: true });
+  res.json(config || { vipSenders: [], triggerKeywords: [], commitmentDetection: true, excludedSenders: [], autoExcludeNoreply: true });
 });
 
 /**
@@ -1133,8 +1133,8 @@ app.post('/api/gmail/scan', authenticateToken, async (req, res) => {
   const tokens = await loadGmailTokens(userId);
   if (!tokens) return res.status(401).json({ error: 'Gmail not connected' });
 
-  const config = (await db.getGmailConfigForUser(userId)) || { vipSenders: [], triggerKeywords: [], commitmentDetection: true };
-  const { vipSenders, triggerKeywords, commitmentDetection } = config;
+  const config = (await db.getGmailConfigForUser(userId)) || { vipSenders: [], triggerKeywords: [], commitmentDetection: true, excludedSenders: [], autoExcludeNoreply: true };
+  const { vipSenders, triggerKeywords, commitmentDetection, excludedSenders = [], autoExcludeNoreply = true } = config;
 
   const oauth2 = makeGmailOAuth2Client();
   if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured' });
@@ -1183,12 +1183,22 @@ app.post('/api/gmail/scan', authenticateToken, async (req, res) => {
     // ── Flag inbox messages ──
     const flagged = [];
 
+    const NOREPLY_PATTERN = /noreply|no-reply|donotreply|do-not-reply|notifications@|mailer@/i;
+
     for (const msg of inboxMessages) {
       if (!msg) continue;
       const from = getHeader(msg, 'From').toLowerCase();
       const subject = getHeader(msg, 'Subject');
       const snippet = msg.snippet || '';
       const searchText = `${subject} ${snippet}`.toLowerCase();
+
+      // Skip excluded senders
+      if (autoExcludeNoreply && NOREPLY_PATTERN.test(from)) continue;
+      const isExcluded = excludedSenders.some((ex) => {
+        const el = ex.toLowerCase();
+        return el.startsWith('@') ? from.includes(el) : from.includes(el);
+      });
+      if (isExcluded) continue;
 
       // Check VIP
       const isVip = vipSenders.some((v) => {
@@ -1289,6 +1299,7 @@ app.post('/api/gmail/scan', authenticateToken, async (req, res) => {
           sourceId: f.msg.id,
           gmailThreadId: f.msg.threadId || null,
           gmailLink: `https://mail.google.com/mail/u/0/#inbox/${f.msg.id}`,
+          sender: f.type !== 'COMMITMENT' ? getHeader(f.msg, 'From') : null,
         });
         newCount++;
       }
@@ -1312,6 +1323,24 @@ app.get('/api/inbox/items', authenticateToken, async (req, res) => {
     res.json(items);
   } catch (err) {
     console.error('[inbox] fetch failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/inbox/items/:id
+ * Body: { action } — e.g. 'dismissed'
+ * Sets action_taken on the inbox item.
+ */
+app.patch('/api/inbox/items/:id', authenticateToken, async (req, res) => {
+  const { action } = req.body;
+  if (!action) return res.status(400).json({ error: 'action required' });
+
+  try {
+    await db.updateInboxItemAction(req.params.id, action);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[inbox] action update failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

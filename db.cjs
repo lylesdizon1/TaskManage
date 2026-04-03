@@ -114,6 +114,7 @@ async function initTables() {
       created_at       TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE inbox_items ADD COLUMN IF NOT EXISTS sender TEXT DEFAULT NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notes (
@@ -607,9 +608,9 @@ async function getInboxItemsForUser(userId) {
 
 async function createInboxItem(item) {
   await pool.query(
-    `INSERT INTO inbox_items (id, user_id, type, title, summary, source, source_id, gmail_thread_id, gmail_link, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
-    [item.id, item.userId, item.type, item.title, item.summary, item.source, item.sourceId, item.gmailThreadId || null, item.gmailLink || null],
+    `INSERT INTO inbox_items (id, user_id, type, title, summary, source, source_id, gmail_thread_id, gmail_link, sender, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+    [item.id, item.userId, item.type, item.title, item.summary, item.source, item.sourceId, item.gmailThreadId || null, item.gmailLink || null, item.sender || null],
   );
 }
 

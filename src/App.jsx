@@ -690,6 +690,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   const [gmailLoading, setGmailLoading] = useState(false);
   const [newVip, setNewVip] = useState('');
   const [newKeyword, setNewKeyword] = useState('');
+  const [newExclusion, setNewExclusion] = useState('');
   const [configSaving, setConfigSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
   const settingsToast = useToast();
@@ -726,7 +727,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
       const statusData = await statusRes.json();
       const configData = await configRes.json();
       setGmailStatus(statusData);
-      setGmailConfig(configData);
+      setGmailConfig({ excludedSenders: [], autoExcludeNoreply: true, ...configData });
     } catch {}
   }
 
@@ -1354,6 +1355,57 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
                     </span>
                   ))}
                   {gmailConfig.triggerKeywords.length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
+                </div>
+              </div>
+
+              {/* Excluded Senders */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-1">Excluded Senders</h3>
+                <p className="text-xs text-gray-400 mb-2">Skip emails from these senders during scan</p>
+                <label className="inline-flex items-center gap-2 cursor-pointer mb-3">
+                  <div
+                    className={`relative w-9 h-5 rounded-full transition-colors ${gmailConfig.autoExcludeNoreply ? 'bg-indigo-600' : 'bg-gray-300'}`}
+                    onClick={() => setGmailConfig((c) => ({ ...c, autoExcludeNoreply: !c.autoExcludeNoreply }))}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${gmailConfig.autoExcludeNoreply ? 'translate-x-4' : ''}`} />
+                  </div>
+                  <span className="text-sm text-gray-600">Auto-exclude no-reply senders</span>
+                </label>
+                <div className="flex gap-2 mb-2">
+                  <input
+                    type="text"
+                    value={newExclusion}
+                    onChange={(e) => setNewExclusion(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newExclusion.trim()) {
+                        setGmailConfig((c) => ({ ...c, excludedSenders: [...(c.excludedSenders || []), newExclusion.trim()] }));
+                        setNewExclusion('');
+                      }
+                    }}
+                    placeholder="Add email or @domain to exclude"
+                    className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      if (newExclusion.trim()) {
+                        setGmailConfig((c) => ({ ...c, excludedSenders: [...(c.excludedSenders || []), newExclusion.trim()] }));
+                        setNewExclusion('');
+                      }
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+                  >Add</button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(gmailConfig.excludedSenders || []).map((s, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                      {s}
+                      <button
+                        onClick={() => setGmailConfig((c) => ({ ...c, excludedSenders: (c.excludedSenders || []).filter((_, j) => j !== i) }))}
+                        className="text-gray-400 hover:text-gray-600 ml-0.5"
+                      >&times;</button>
+                    </span>
+                  ))}
+                  {(gmailConfig.excludedSenders || []).length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
                 </div>
               </div>
 
@@ -4064,10 +4116,11 @@ function SkeletonBlock({ className = '' }) {
 }
 
 // ── Inbox Panel ─────────────────────────────────────────────────────────────
-function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
+function InboxPanel({ tasks, authToken, currentUser, onToggleTask, onEditTask, addToast }) {
   const [dismissed, setDismissed] = useState(new Set());
   const [editingDue, setEditingDue] = useState(null);
   const [dbItems, setDbItems] = useState([]);
+  const [openMenuId, setOpenMenuId] = useState(null);
   const toast = useToast();
 
   const today = new Date().toISOString().slice(0, 10);
@@ -4118,14 +4171,63 @@ function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
         source: 'gmail',
         gmailLink: d.gmail_link,
         gmailThreadId: d.gmail_thread_id,
+        sender: d.sender || null,
       });
     });
     return items.sort((a, b) => a.sort - b.sort);
   }, [activeTasks, dbItems, dismissed, today, cutoff]);
 
-  function handleDismiss(id) {
+  // Extract email from "Name <email@domain.com>" or plain "email@domain.com"
+  function extractEmail(sender) {
+    if (!sender) return null;
+    const match = sender.match(/<([^>]+)>/);
+    return match ? match[1].toLowerCase() : sender.trim().toLowerCase();
+  }
+
+  function extractDomain(sender) {
+    const email = extractEmail(sender);
+    if (!email) return null;
+    const at = email.indexOf('@');
+    return at >= 0 ? email.slice(at) : null;
+  }
+
+  async function handleDismiss(id, isDbItem) {
+    if (isDbItem) {
+      try {
+        await apiFetch(`/api/inbox/items/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ action: 'dismissed' }),
+        });
+      } catch {}
+    }
     setDismissed((prev) => new Set(prev).add(id));
+    setOpenMenuId(null);
     toast.info('Item dismissed from inbox');
+  }
+
+  async function handleExcludeSender(item, mode) {
+    const value = mode === 'domain' ? extractDomain(item.sender) : extractEmail(item.sender);
+    if (!value) return;
+    try {
+      // Load current config, add exclusion, save
+      const cfgRes = await apiFetch(`/api/gmail/config?userId=${currentUser.id}`);
+      const cfg = await cfgRes.json();
+      const excluded = cfg.excludedSenders || [];
+      if (!excluded.some((e) => e.toLowerCase() === value)) {
+        excluded.push(value);
+        await apiFetch('/api/gmail/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUser.id, config: { ...cfg, excludedSenders: excluded } }),
+        });
+      }
+      // Dismiss the item too
+      await handleDismiss(item.id, item.source === 'gmail');
+      toast.success(`Excluded ${value}`);
+    } catch {
+      toast.error('Failed to exclude sender');
+    }
   }
 
   function handleSetDue(id, date) {
@@ -4209,9 +4311,46 @@ function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
                       </button>
                     </>
                   )}
-                  <button onClick={() => handleDismiss(item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors" title="Dismiss">
-                    <span className="material-symbols-outlined text-sm">close</span>
-                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setOpenMenuId(openMenuId === item.id ? null : item.id)}
+                      className="px-2 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors"
+                      title="More actions"
+                    >
+                      <span className="material-symbols-outlined text-sm">more_horiz</span>
+                    </button>
+                    {openMenuId === item.id && (
+                      <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1">
+                        <button
+                          onClick={() => handleDismiss(item.id, item.source === 'gmail')}
+                          className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                        >
+                          <span className="material-symbols-outlined text-sm">visibility_off</span>
+                          Dismiss
+                        </button>
+                        {item.source === 'gmail' && item.sender && (
+                          <>
+                            <button
+                              onClick={() => handleExcludeSender(item, 'email')}
+                              className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                            >
+                              <span className="material-symbols-outlined text-sm">person_off</span>
+                              Exclude Sender
+                            </button>
+                            {extractDomain(item.sender) && (
+                              <button
+                                onClick={() => handleExcludeSender(item, 'domain')}
+                                className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                              >
+                                <span className="material-symbols-outlined text-sm">domain_disabled</span>
+                                Exclude {extractDomain(item.sender)}
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -6912,7 +7051,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onBackendChange={setChatBackend}
             />
           ) : activeView === 'inbox' ? (
-            <InboxPanel tasks={tasks} authToken={authToken} onToggleTask={(id) => { toggleTask(id); }} onEditTask={(id, fields) => { editTask(id, fields); }} addToast={addToast} />
+            <InboxPanel tasks={tasks} authToken={authToken} currentUser={currentUser} onToggleTask={(id) => { toggleTask(id); }} onEditTask={(id, fields) => { editTask(id, fields); }} addToast={addToast} />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} />
           ) : activeView === 'financials' ? (
