@@ -5,6 +5,7 @@ import { buildContext } from './lib/context-engine/buildContext';
 import { detectIntent } from './lib/context-engine/intentDetector';
 import { routePersona } from './lib/context-engine/personaRouter';
 import { usePersona } from './contexts/PersonaContext';
+import SkeletonBlock from './components/ui/SkeletonBlock.jsx';
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,7 +90,6 @@ const CalendarPanel = lazy(() => import('./panels/CalendarPanel.jsx'));
 const InboxPanel = lazy(() => import('./panels/InboxPanel.jsx'));
 const NotesPanel = lazy(() => import('./panels/NotesPanel.jsx'));
 const AddTaskForm = lazy(() => import('./components/tasks/AddTaskForm.jsx'));
-const TaskCard = lazy(() => import('./components/tasks/TaskCard.jsx'));
 const DashboardPanel = lazy(() => import('./panels/DashboardPanel.jsx'));
 import { CreateEventModal, QuickCaptureModal, QuickCaptureFAB } from './components/modals/QuickCaptureModal.jsx';
 
@@ -971,6 +971,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         >
 
           {/* View routing */}
+          <Suspense fallback={<div className="flex-1 p-10"><SkeletonBlock className="h-64" /></div>}>
           {activeView === 'dashboard' ? (
             <DashboardPanel
               tasks={tasks}
@@ -1244,6 +1245,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             })()}
           </div>
           )}
+          </Suspense>
         </section>
 
         {/* ── Right: Sliding Chat panel (25% desktop, hidden on chat tab and mobile) ── */}
@@ -1287,7 +1289,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'calendar' ? 'flex' : 'hidden'
           }`}
         >
-          <CalendarPanel currentUser={currentUser} addToast={addToast} apiFetch={apiFetch} />
+          <Suspense fallback={<div className="flex-1 p-10"><SkeletonBlock className="h-64" /></div>}>
+            <CalendarPanel currentUser={currentUser} addToast={addToast} apiFetch={apiFetch} />
+          </Suspense>
         </section>
 
         {/* ── Notes panel (mobile only — on desktop it's in the task section tabs) ── */}
@@ -1296,7 +1300,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             mobileView === 'notes' ? 'flex' : 'hidden'
           }`}
         >
-          <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} apiFetch={apiFetch} />
+          <Suspense fallback={<div className="flex-1 p-10"><SkeletonBlock className="h-64" /></div>}>
+            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} apiFetch={apiFetch} />
+          </Suspense>
         </section>
         </div>
       </div>
@@ -1345,6 +1351,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         />
       )}
       {showSettings && (
+        <Suspense fallback={null}>
         <SettingsModal
           apiKeys={apiKeys}
           onSave={(keys) => { setApiKeys(keys); saveSettings(keys, emailSettingsRef.current, alertRulesRef.current); }}
@@ -1371,6 +1378,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           addToast={addToast}
           EntitySelectOptions={EntitySelectOptions}
         />
+        </Suspense>
       )}
 
 
@@ -1384,6 +1392,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             className="bg-surface rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
+            <Suspense fallback={null}>
             <AddTaskForm
               onAdd={(task) => { addTask(task); setShowTaskModal(false); }}
               claudeKey={apiKeys.claude}
@@ -1394,6 +1403,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               forceOpen={true}
               onClose={() => setShowTaskModal(false)}
             />
+            </Suspense>
           </div>
         </div>
       )}

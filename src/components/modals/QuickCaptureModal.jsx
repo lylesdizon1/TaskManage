@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { PILLAR_CONFIG, PILLAR_KEYS, VIEW_TO_PILLAR } from '../../panels/NotesPanel.jsx';
+import { PILLAR_CONFIG, PILLAR_KEYS, VIEW_TO_PILLAR } from '../../constants/pillars.js';
 import { XIcon } from '../icons/Icons.jsx';
 
 const API_BASE = '';
