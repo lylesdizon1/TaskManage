@@ -1936,7 +1936,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
           </div>
 
           {/* Re-notify interval — shown when rule has remindIntervalHours */}
-          {rule.remindIntervalHours !== undefined && (
+          {['overdue','due-in-hours','high-priority','tag-overdue','tag-match'].includes(rule.condition.type) && (
             <div className="mt-3">
               <label className="text-xs font-medium text-gray-500">Remind again after</label>
               <div className="flex gap-2 mt-1.5 flex-wrap">
@@ -6972,7 +6972,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       .then((data) => {
         if (data.apiKeys)       setApiKeys(data.apiKeys);
         if (data.emailSettings) setEmailSettings(data.emailSettings);
-        if (data.alertRules)    setAlertRules(data.alertRules);
+        if (data.alertRules) {
+          const merged = data.alertRules.map((r) => {
+            const def = DEFAULT_ALERT_RULES.find((d) => d.id === r.id);
+            return def ? { ...def, ...r } : r;
+          });
+          setAlertRules(merged);
+        }
         if (data.envConfigured) setEnvConfigured(data.envConfigured);
       })
       .catch(() => {})
