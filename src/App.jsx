@@ -2878,6 +2878,7 @@ function chatDateGroup(dateStr) {
 
 function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, backend, onSelectConv, onNewChat, onDeleteConv, onRenameConv }) {
   const [editingTitle, setEditingTitle] = useState(null);
+  const [showMobileChat, setShowMobileChat] = useState(false);
 
   // Group conversations by date
   const grouped = useMemo(() => {
@@ -2889,10 +2890,16 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
     return groups;
   }, [conversations]);
 
+  // When a conversation is selected, show chat panel on mobile
+  const handleSelectConv = (id) => {
+    onSelectConv(id);
+    setShowMobileChat(true);
+  };
+
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
-      {/* Left sidebar */}
-      <div className="w-64 flex-shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
+      {/* Left sidebar — hidden on mobile when viewing a chat */}
+      <div className={`${showMobileChat ? 'hidden' : 'flex'} flex-col w-full md:flex md:w-64 md:flex-shrink-0 border-r border-gray-200 bg-white overflow-hidden`}>
         <div className="px-4 pt-4 pb-3 flex-shrink-0">
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-semibold text-gray-900">{'\u{1F4AC}'} Conversations</span>
@@ -2914,7 +2921,7 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
                 {items.map((conv) => (
                   <div
                     key={conv.id}
-                    onClick={() => onSelectConv(conv.id)}
+                    onClick={() => handleSelectConv(conv.id)}
                     className={`group flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition-colors ${
                       activeConvId === conv.id ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'
                     }`}
@@ -2939,8 +2946,8 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
         </div>
       </div>
 
-      {/* Right panel */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+      {/* Right panel — hidden on mobile until a conversation is selected */}
+      <div className={`${showMobileChat ? 'flex' : 'hidden'} flex-col flex-1 md:flex overflow-hidden bg-gray-50`}>
         {!activeConvId ? (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
             <div className="text-4xl mb-3">{'\u{1F4AC}'}</div>
@@ -2954,6 +2961,13 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
             {/* Conversation header */}
             <div className="bg-white border-b border-gray-200 px-5 py-3 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2 min-w-0 flex-1">
+                {/* Mobile back button */}
+                <button
+                  className="md:hidden flex items-center gap-1 text-primary font-bold text-sm mr-2 flex-shrink-0"
+                  onClick={() => setShowMobileChat(false)}
+                >
+                  <span className="material-symbols-outlined text-lg">arrow_back</span>
+                </button>
                 {editingTitle === activeConvId ? (
                   <input
                     autoFocus
@@ -4725,38 +4739,43 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         </div>
       </div>
 
-      {/* ROW 3a: Quick Actions — grid-cols-3, Stitch comp pattern */}
-      <section className="grid grid-cols-3 gap-3">
-        <button onClick={onAddTask} className="flex items-center justify-center gap-2 bg-primary-container/10 border border-primary/10 py-3 rounded-xl hover:bg-primary/5 transition-colors">
-          <span className="material-symbols-outlined text-primary text-lg" style={{fontVariationSettings: "'FILL' 1"}}>add_circle</span>
-          <span className="font-label font-bold text-[13px] text-primary">Add Task</span>
-        </button>
-        <button onClick={onQuickNote} className="flex items-center justify-center gap-2 bg-secondary-container/30 border border-secondary/10 py-3 rounded-xl hover:bg-secondary/10 transition-colors">
-          <span className="material-symbols-outlined text-secondary text-lg">edit_note</span>
-          <span className="font-label font-bold text-[13px] text-secondary">Quick Note</span>
-        </button>
-        <button onClick={sendMorningBrief} disabled={briefSending} className="flex items-center justify-center gap-2 bg-secondary-container/30 border border-secondary/10 py-3 rounded-xl hover:bg-secondary/10 transition-colors disabled:opacity-50">
-          <span className="material-symbols-outlined text-secondary text-lg">{briefSending ? 'hourglass_empty' : 'wb_twilight'}</span>
-          <span className="font-label font-bold text-[13px] text-secondary">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
-        </button>
-      </section>
+      {/* ROW 3: Quick Actions + Stat Tiles — grid on mobile, compact inline on desktop */}
+      <div className="md:flex md:items-center md:gap-3">
 
-      {/* ROW 3b: Stat Tiles — grid-cols-3, Stitch comp pattern */}
-      <section className="grid grid-cols-3 gap-3">
-        <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center relative">
-          <span className="block font-headline font-extrabold text-lg text-primary">{String(inboxCount).padStart(2,'0')}</span>
-          <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Inbox</span>
-          {inboxCount > 0 && <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error animate-pulse" />}
-        </button>
-        <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center">
-          <span className="block font-headline font-extrabold text-lg text-error">{String(overdueTasks.length).padStart(2,'0')}</span>
-          <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Overdue</span>
-        </button>
-        <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center">
-          <span className="block font-headline font-extrabold text-lg text-primary">{String(highPriorityTasks.length).padStart(2,'0')}</span>
-          <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Priority</span>
-        </button>
-      </section>
+        {/* Quick Actions */}
+        <section className="grid grid-cols-3 gap-3 md:flex md:gap-2 md:shrink-0">
+          <button onClick={onAddTask} className="flex items-center justify-center gap-2 bg-primary-container/10 border border-primary/10 py-3 px-4 rounded-xl hover:bg-primary/5 transition-colors">
+            <span className="material-symbols-outlined text-primary text-lg" style={{fontVariationSettings: "'FILL' 1"}}>add_circle</span>
+            <span className="font-label font-bold text-[13px] text-primary">Add Task</span>
+          </button>
+          <button onClick={onQuickNote} className="flex items-center justify-center gap-2 bg-secondary-container/30 border border-secondary/10 py-3 px-4 rounded-xl hover:bg-secondary/10 transition-colors">
+            <span className="material-symbols-outlined text-secondary text-lg">edit_note</span>
+            <span className="font-label font-bold text-[13px] text-secondary">Quick Note</span>
+          </button>
+          <button onClick={sendMorningBrief} disabled={briefSending} className="flex items-center justify-center gap-2 bg-secondary-container/30 border border-secondary/10 py-3 px-4 rounded-xl hover:bg-secondary/10 transition-colors disabled:opacity-50">
+            <span className="material-symbols-outlined text-secondary text-lg">{briefSending ? 'hourglass_empty' : 'wb_twilight'}</span>
+            <span className="font-label font-bold text-[13px] text-secondary">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
+          </button>
+        </section>
+
+        {/* Stat Tiles */}
+        <section className="grid grid-cols-3 gap-3 mt-3 md:mt-0 md:flex md:gap-2">
+          <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:px-5 relative">
+            <span className="block font-headline font-extrabold text-lg text-primary">{String(inboxCount).padStart(2,'0')}</span>
+            <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Inbox</span>
+            {inboxCount > 0 && <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error animate-pulse" />}
+          </button>
+          <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:px-5">
+            <span className="block font-headline font-extrabold text-lg text-error">{String(overdueTasks.length).padStart(2,'0')}</span>
+            <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Overdue</span>
+          </button>
+          <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:px-5">
+            <span className="block font-headline font-extrabold text-lg text-primary">{String(highPriorityTasks.length).padStart(2,'0')}</span>
+            <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Priority</span>
+          </button>
+        </section>
+
+      </div>
 
       {/* ROW 4: Timeline + Tasks */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
