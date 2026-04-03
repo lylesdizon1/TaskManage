@@ -6,6 +6,7 @@ import { detectIntent } from './lib/context-engine/intentDetector';
 import { routePersona } from './lib/context-engine/personaRouter';
 import { usePersona } from './contexts/PersonaContext';
 import SettingsModal from './components/settings/SettingsModal';
+import { AlertsModal } from './components/alerts/AlertsModal.jsx';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API BASE (works in dev via Vite proxy and in prod when served from same origin)
