@@ -4739,42 +4739,53 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
         </div>
       </div>
 
-      {/* ROW 3: Quick Actions + Stat Tiles — grid on mobile, compact inline on desktop */}
-      <div className="md:flex md:items-center md:gap-3">
-
-        {/* Quick Actions */}
-        <section className="grid grid-cols-3 gap-3 md:flex md:gap-2 md:shrink-0">
-          <button onClick={onAddTask} className="flex items-center justify-center gap-2 bg-primary-container/10 border border-primary/10 py-3 px-4 rounded-xl hover:bg-primary/5 transition-colors">
-            <span className="material-symbols-outlined text-primary text-lg" style={{fontVariationSettings: "'FILL' 1"}}>add_circle</span>
-            <span className="font-label font-bold text-[13px] text-primary">Add Task</span>
+      {/* ROW 3: Quick Actions + Stat Tiles — Stitch comp layout */}
+      {/* Mobile: two 3-col grids stacked. Desktop: single 6-col row matching comp */}
+      <div className="space-y-3 md:space-y-0">
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+          {/* Quick Action Buttons */}
+          <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
+            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">add_task</span>
+            <span className="text-[10px] font-bold uppercase">Add Task</span>
           </button>
-          <button onClick={onQuickNote} className="flex items-center justify-center gap-2 bg-secondary-container/30 border border-secondary/10 py-3 px-4 rounded-xl hover:bg-secondary/10 transition-colors">
-            <span className="material-symbols-outlined text-secondary text-lg">edit_note</span>
-            <span className="font-label font-bold text-[13px] text-secondary">Quick Note</span>
+          <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
+            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">edit_note</span>
+            <span className="text-[10px] font-bold uppercase">Quick Note</span>
           </button>
-          <button onClick={sendMorningBrief} disabled={briefSending} className="flex items-center justify-center gap-2 bg-secondary-container/30 border border-secondary/10 py-3 px-4 rounded-xl hover:bg-secondary/10 transition-colors disabled:opacity-50">
-            <span className="material-symbols-outlined text-secondary text-lg">{briefSending ? 'hourglass_empty' : 'wb_twilight'}</span>
-            <span className="font-label font-bold text-[13px] text-secondary">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
+          <button onClick={sendMorningBrief} disabled={briefSending} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10 disabled:opacity-50">
+            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">{briefSending ? 'hourglass_empty' : 'wb_twilight'}</span>
+            <span className="text-[10px] font-bold uppercase">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
           </button>
-        </section>
-
-        {/* Stat Tiles */}
-        <section className="grid grid-cols-3 gap-3 mt-3 md:mt-0 md:flex md:gap-2">
-          <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:px-5 relative">
-            <span className="block font-headline font-extrabold text-lg text-primary">{String(inboxCount).padStart(2,'0')}</span>
-            <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Inbox</span>
+          {/* Stat Tiles — icon + number, matching Stitch comp */}
+          <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm relative">
+            <div className="bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
+              <span className="material-symbols-outlined text-error text-lg">inbox</span>
+            </div>
+            <div>
+              <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(inboxCount).padStart(2,'0')}</p>
+              <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Inbox</p>
+            </div>
             {inboxCount > 0 && <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error animate-pulse" />}
           </button>
-          <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:px-5">
-            <span className="block font-headline font-extrabold text-lg text-error">{String(overdueTasks.length).padStart(2,'0')}</span>
-            <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Overdue</span>
+          <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
+            <div className="bg-error-container/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+              <span className="material-symbols-outlined text-error text-lg">event_busy</span>
+            </div>
+            <div>
+              <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(overdueTasks.length).padStart(2,'0')}</p>
+              <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Overdue</p>
+            </div>
           </button>
-          <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:px-5">
-            <span className="block font-headline font-extrabold text-lg text-primary">{String(highPriorityTasks.length).padStart(2,'0')}</span>
-            <span className="text-[10px] font-label font-bold uppercase text-on-surface-variant tracking-wider">Priority</span>
+          <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
+            <div className="bg-primary/10 p-2 rounded-full group-hover:scale-110 transition-transform">
+              <span className="material-symbols-outlined text-primary text-lg">priority_high</span>
+            </div>
+            <div>
+              <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(highPriorityTasks.length).padStart(2,'0')}</p>
+              <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Priority</p>
+            </div>
           </button>
-        </section>
-
+        </div>
       </div>
 
       {/* ROW 4: Timeline + Tasks */}
