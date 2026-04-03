@@ -1,9 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
-
-function SkeletonBlock({ className = '' }) {
-  return <div className={`bg-gray-200 rounded-lg animate-pulse ${className}`} />;
-}
+import SkeletonBlock from '../components/ui/SkeletonBlock.jsx';
 
 export default function InboxPanel({ tasks, authToken, currentUser, onToggleTask, onEditTask, addToast, apiFetch }) {
   const [dismissed, setDismissed] = useState(new Set());
@@ -249,5 +246,3 @@ export default function InboxPanel({ tasks, authToken, currentUser, onToggleTask
     </div>
   );
 }
-
-export { SkeletonBlock };
