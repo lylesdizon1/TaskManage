@@ -4714,7 +4714,7 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
       {/* ROW 2: Aria Daily Brief */}
       <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low p-5 rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] relative overflow-hidden group border border-primary/5">
         <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none">
-          <span className="material-symbols-outlined text-[60px]">auto_awesome</span>
+          <span className="material-symbols-outlined text-[60px] overflow-hidden inline-block w-[60px] h-[60px]" aria-hidden="true">auto_awesome</span>
         </div>
         <div className="relative z-10 flex flex-col md:flex-row gap-4 items-start">
           <div className="flex-1 space-y-2">
