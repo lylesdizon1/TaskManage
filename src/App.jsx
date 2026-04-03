@@ -425,9 +425,15 @@ async function sendAlertEmail(emailSettings, to, subject, html) {
   return res.json();
 }
 
+function persistFiredAlerts(firedRef) {
+  try {
+    localStorage.setItem('dizon_fired_alerts', JSON.stringify([...firedRef.current]));
+  } catch (_) {}
+}
+
 /**
  * Evaluate all enabled rules and deliver alerts via /api/alerts/fire.
- * firedRef (Set) prevents duplicate sends within the same browser session.
+ * firedRef (Set) prevents duplicate sends across page reloads.
  */
 async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
   const { recipientEmail } = emailSettings;
@@ -447,15 +453,18 @@ async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
       tasksToSend = matching.filter((t) => !firedRef.current.has(`${rule.id}::${t.id}`));
       if (tasksToSend.length === 0) continue;
       tasksToSend.forEach((t) => firedRef.current.add(`${rule.id}::${t.id}`));
+      persistFiredAlerts(firedRef);
     } else if (scope === 'daily') {
       const key = `${rule.id}::${todayStr}`;
       if (firedRef.current.has(key)) continue;
       firedRef.current.add(key);
+      persistFiredAlerts(firedRef);
       tasksToSend = matching;
     } else {
       // session — once per browser load
       if (firedRef.current.has(rule.id)) continue;
       firedRef.current.add(rule.id);
+      persistFiredAlerts(firedRef);
       tasksToSend = matching;
     }
 
@@ -6639,7 +6648,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [entities, setEntities]                 = useState([]);
   const [financialTransactions, setFinancialTransactions] = useState([]);
   const [financialAccounts, setFinancialAccounts] = useState([]);
-  const firedAlertsRef                          = useRef(new Set());
+  const firedAlertsRef                          = useRef((() => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const saved = JSON.parse(localStorage.getItem('dizon_fired_alerts') || '[]');
+    const filtered = saved.filter(k => !k.match(/\d{4}-\d{2}-\d{2}/) || k.includes(todayStr));
+    return new Set(filtered);
+  })());
 
   // Quick Capture FAB state
   const [noteCategories, setNoteCategories]     = useState([]);
