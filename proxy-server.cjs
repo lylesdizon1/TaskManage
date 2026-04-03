@@ -983,6 +983,144 @@ app.post('/api/calendar/events', async (req, res) => {
   }
 });
 
+// ── Gmail OAuth + Email Intelligence config ──────────────────────────────────
+
+const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+
+function makeGmailOAuth2Client() {
+  const clientId     = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+  return new google.auth.OAuth2(clientId, clientSecret, `${getAppUrl()}/api/gmail/callback`);
+}
+
+const saveGmailTokens = async (userId, tokens) => {
+  if (ENCRYPTION_KEY) {
+    const encrypted = encryptTokens(tokens);
+    await db.setGmailTokensForUser(userId, { _enc: encrypted });
+  } else {
+    await db.setGmailTokensForUser(userId, tokens);
+  }
+};
+
+const loadGmailTokens = async (userId) => {
+  const stored = await db.getGmailTokensForUser(userId);
+  if (!stored) return null;
+  if (stored._enc) return decryptTokens(stored._enc);
+  return stored;
+};
+
+/**
+ * GET /api/gmail/auth-url?userId=...
+ * Returns the Google OAuth consent URL for Gmail readonly access.
+ */
+app.get('/api/gmail/auth-url', (req, res) => {
+  const oauth2 = makeGmailOAuth2Client();
+  if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)' });
+
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'userId query param required' });
+
+  const url = oauth2.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: GMAIL_SCOPES,
+    state: userId,
+  });
+  res.json({ url });
+});
+
+/**
+ * GET /api/gmail/callback?code=...&state=userId
+ * Google redirects here after consent. Exchanges code for tokens and stores them.
+ */
+app.get('/api/gmail/callback', async (req, res) => {
+  const oauth2 = makeGmailOAuth2Client();
+  if (!oauth2) return res.status(500).send('Google OAuth not configured');
+
+  const { code, state: userId } = req.query;
+  if (!code || !userId) return res.status(400).send('Missing code or state');
+
+  try {
+    const { tokens } = await oauth2.getToken(code);
+    await saveGmailTokens(userId, tokens);
+    console.log(`[gmail] Stored tokens for ${userId}`);
+    res.redirect('/?gmail=connected');
+  } catch (err) {
+    console.error('[gmail] Token exchange failed:', err.message);
+    res.status(500).send(`Gmail auth failed: ${err.message}`);
+  }
+});
+
+/**
+ * GET /api/gmail/status?userId=...
+ * Returns { connected: bool, email?: string }
+ */
+app.get('/api/gmail/status', async (req, res) => {
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  const tokens = await loadGmailTokens(userId);
+  if (!tokens) return res.json({ connected: false });
+
+  const oauth2 = makeGmailOAuth2Client();
+  if (!oauth2) return res.json({ connected: false });
+
+  oauth2.setCredentials(tokens);
+  oauth2.on('tokens', async (newTokens) => {
+    const existing = await loadGmailTokens(userId);
+    await saveGmailTokens(userId, { ...existing, ...newTokens });
+  });
+
+  try {
+    const gmail = google.gmail({ version: 'v1', auth: oauth2 });
+    const { data } = await gmail.users.getProfile({ userId: 'me' });
+    res.json({ connected: true, email: data.emailAddress });
+  } catch (err) {
+    console.error('[gmail] status check failed:', err.message);
+    await db.deleteGmailTokensForUser(userId);
+    res.json({ connected: false });
+  }
+});
+
+/**
+ * DELETE /api/gmail/disconnect?userId=...
+ * Removes stored Gmail tokens for the user.
+ */
+app.delete('/api/gmail/disconnect', async (req, res) => {
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  await db.deleteGmailTokensForUser(userId);
+  console.log(`[gmail] Disconnected ${userId}`);
+  res.json({ success: true });
+});
+
+/**
+ * GET /api/gmail/config?userId=...
+ * Returns the user's Email Intelligence config.
+ */
+app.get('/api/gmail/config', async (req, res) => {
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  const config = await db.getGmailConfigForUser(userId);
+  res.json(config || { vipSenders: [], triggerKeywords: [], commitmentDetection: true });
+});
+
+/**
+ * PUT /api/gmail/config
+ * Body: { userId, config: { vipSenders, triggerKeywords, commitmentDetection } }
+ */
+app.put('/api/gmail/config', async (req, res) => {
+  const { userId, config } = req.body;
+  if (!userId || !config) return res.status(400).json({ error: 'userId and config required' });
+
+  await db.setGmailConfigForUser(userId, config);
+  console.log(`[gmail] Saved config for ${userId}`);
+  res.json({ success: true });
+});
+
 // ── Task persistence ─────────────────────────────────────────────────────────
 
 app.get('/api/tasks', authenticateToken, async (req, res) => {

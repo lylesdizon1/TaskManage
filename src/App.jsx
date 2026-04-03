@@ -684,6 +684,14 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   const [personaSaving, setPersonaSaving] = useState(false);
   const [personaStatus, setPersonaStatus] = useState(null);
 
+  // ── Gmail / Email Intelligence state ──
+  const [gmailStatus, setGmailStatus] = useState({ connected: false, email: '' });
+  const [gmailConfig, setGmailConfig] = useState({ vipSenders: [], triggerKeywords: [], commitmentDetection: true });
+  const [gmailLoading, setGmailLoading] = useState(false);
+  const [newVip, setNewVip] = useState('');
+  const [newKeyword, setNewKeyword] = useState('');
+  const [configSaving, setConfigSaving] = useState(false);
+
   // ── Entity management state ──
   const [entityList, setEntityList] = useState([]);
   const [newEntityName, setNewEntityName] = useState('');
@@ -700,11 +708,59 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   const [editingUser, setEditingUser] = useState(null);
 
   useEffect(() => {
+    if (tab === 'gmail') loadGmailData();
     if (isAdmin && (tab === 'entities' || tab === 'users')) {
       if (tab === 'entities') loadEntities();
       if (tab === 'users') loadUsers();
     }
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadGmailData() {
+    try {
+      const [statusRes, configRes] = await Promise.all([
+        apiFetch(`/api/gmail/status?userId=${currentUser.id}`),
+        apiFetch(`/api/gmail/config?userId=${currentUser.id}`),
+      ]);
+      const statusData = await statusRes.json();
+      const configData = await configRes.json();
+      setGmailStatus(statusData);
+      setGmailConfig(configData);
+    } catch {}
+  }
+
+  async function handleGmailConnect() {
+    setGmailLoading(true);
+    try {
+      const res = await apiFetch(`/api/gmail/auth-url?userId=${currentUser.id}`);
+      const { url } = await res.json();
+      window.location.href = url;
+    } catch {
+      setGmailLoading(false);
+    }
+  }
+
+  async function handleGmailDisconnect() {
+    setGmailLoading(true);
+    try {
+      await apiFetch(`/api/gmail/disconnect?userId=${currentUser.id}`, { method: 'DELETE' });
+      setGmailStatus({ connected: false, email: '' });
+    } catch {} finally {
+      setGmailLoading(false);
+    }
+  }
+
+  async function handleSaveGmailConfig() {
+    setConfigSaving(true);
+    try {
+      await apiFetch('/api/gmail/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id, config: gmailConfig }),
+      });
+    } catch {} finally {
+      setConfigSaving(false);
+    }
+  }
 
   async function loadEntities() {
     try {
@@ -870,6 +926,7 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
             { key: 'email', label: 'Alerts' },
             { key: 'assistant', label: 'AI Assistant' },
             { key: 'password', label: 'Password' },
+            { key: 'gmail', label: 'Email Intelligence' },
             ...(isAdmin ? [
               { key: 'entities', label: 'Entities' },
               { key: 'users', label: 'Users' },
@@ -1153,6 +1210,149 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
                 className="w-full px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm disabled:opacity-50"
               >
                 {pwSaving ? 'Changing…' : 'Change Password'}
+              </button>
+            </div>
+          )}
+
+          {/* Email Intelligence tab */}
+          {tab === 'gmail' && (
+            <div className="space-y-5">
+              {/* Connection status */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Gmail Connection</h3>
+                <div className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${gmailStatus.connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+                    <span className="text-sm text-gray-600">
+                      {gmailStatus.connected ? `Connected to ${gmailStatus.email}` : 'Not connected'}
+                    </span>
+                  </div>
+                  {gmailStatus.connected ? (
+                    <button
+                      onClick={handleGmailDisconnect}
+                      disabled={gmailLoading}
+                      className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {gmailLoading ? 'Disconnecting...' : 'Disconnect'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleGmailConnect}
+                      disabled={gmailLoading}
+                      className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {gmailLoading ? 'Connecting...' : 'Connect Gmail'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* VIP Senders */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-1">VIP Senders</h3>
+                <p className="text-xs text-gray-400 mb-2">Emails or domains (e.g. boss@company.com, @important.com)</p>
+                <div className="flex gap-2 mb-2">
+                  <input
+                    type="text"
+                    value={newVip}
+                    onChange={(e) => setNewVip(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newVip.trim()) {
+                        setGmailConfig((c) => ({ ...c, vipSenders: [...c.vipSenders, newVip.trim()] }));
+                        setNewVip('');
+                      }
+                    }}
+                    placeholder="Add email or @domain"
+                    className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      if (newVip.trim()) {
+                        setGmailConfig((c) => ({ ...c, vipSenders: [...c.vipSenders, newVip.trim()] }));
+                        setNewVip('');
+                      }
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50"
+                  >Add</button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {gmailConfig.vipSenders.map((s, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      {s}
+                      <button
+                        onClick={() => setGmailConfig((c) => ({ ...c, vipSenders: c.vipSenders.filter((_, j) => j !== i) }))}
+                        className="text-indigo-400 hover:text-indigo-600 ml-0.5"
+                      >&times;</button>
+                    </span>
+                  ))}
+                  {gmailConfig.vipSenders.length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
+                </div>
+              </div>
+
+              {/* Trigger Keywords */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-1">Trigger Keywords</h3>
+                <p className="text-xs text-gray-400 mb-2">Flag emails containing these words (e.g. urgent, deadline, invoice)</p>
+                <div className="flex gap-2 mb-2">
+                  <input
+                    type="text"
+                    value={newKeyword}
+                    onChange={(e) => setNewKeyword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newKeyword.trim()) {
+                        setGmailConfig((c) => ({ ...c, triggerKeywords: [...c.triggerKeywords, newKeyword.trim()] }));
+                        setNewKeyword('');
+                      }
+                    }}
+                    placeholder="Add keyword"
+                    className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      if (newKeyword.trim()) {
+                        setGmailConfig((c) => ({ ...c, triggerKeywords: [...c.triggerKeywords, newKeyword.trim()] }));
+                        setNewKeyword('');
+                      }
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50"
+                  >Add</button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {gmailConfig.triggerKeywords.map((k, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                      {k}
+                      <button
+                        onClick={() => setGmailConfig((c) => ({ ...c, triggerKeywords: c.triggerKeywords.filter((_, j) => j !== i) }))}
+                        className="text-amber-400 hover:text-amber-600 ml-0.5"
+                      >&times;</button>
+                    </span>
+                  ))}
+                  {gmailConfig.triggerKeywords.length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
+                </div>
+              </div>
+
+              {/* Commitment Detection */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-1">Commitment Detection</h3>
+                <p className="text-xs text-gray-400 mb-2">AI detects promises and commitments in your emails</p>
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <div
+                    className={`relative w-9 h-5 rounded-full transition-colors ${gmailConfig.commitmentDetection ? 'bg-indigo-600' : 'bg-gray-300'}`}
+                    onClick={() => setGmailConfig((c) => ({ ...c, commitmentDetection: !c.commitmentDetection }))}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${gmailConfig.commitmentDetection ? 'translate-x-4' : ''}`} />
+                  </div>
+                  <span className="text-sm text-gray-600">{gmailConfig.commitmentDetection ? 'On' : 'Off'}</span>
+                </label>
+              </div>
+
+              {/* Save */}
+              <button
+                onClick={handleSaveGmailConfig}
+                disabled={configSaving}
+                className="w-full py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {configSaving ? 'Saving...' : 'Save Configuration'}
               </button>
             </div>
           )}

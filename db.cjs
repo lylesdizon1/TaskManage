@@ -84,6 +84,22 @@ async function initTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS gmail_tokens (
+      user_id    TEXT PRIMARY KEY,
+      tokens     JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS gmail_config (
+      user_id    TEXT PRIMARY KEY,
+      config     JSONB NOT NULL DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS notes (
       id          TEXT PRIMARY KEY,
       user_id     TEXT NOT NULL,
@@ -521,6 +537,46 @@ async function setGcalTokensForUser(userId, tokens) {
 
 async function deleteGcalTokensForUser(userId) {
   await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
+}
+
+// ── Gmail tokens & config ─────────────────────────────────────────────────────
+
+async function getGmailTokensForUser(userId) {
+  const { rows } = await pool.query(
+    'SELECT tokens FROM gmail_tokens WHERE user_id = $1',
+    [userId],
+  );
+  return rows.length ? rows[0].tokens : null;
+}
+
+async function setGmailTokensForUser(userId, tokens) {
+  await pool.query(
+    `INSERT INTO gmail_tokens (user_id, tokens, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET tokens = $2, updated_at = NOW()`,
+    [userId, JSON.stringify(tokens)],
+  );
+}
+
+async function deleteGmailTokensForUser(userId) {
+  await pool.query('DELETE FROM gmail_tokens WHERE user_id = $1', [userId]);
+}
+
+async function getGmailConfigForUser(userId) {
+  const { rows } = await pool.query(
+    'SELECT config FROM gmail_config WHERE user_id = $1',
+    [userId],
+  );
+  return rows.length ? rows[0].config : null;
+}
+
+async function setGmailConfigForUser(userId, config) {
+  await pool.query(
+    `INSERT INTO gmail_config (user_id, config, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET config = $2, updated_at = NOW()`,
+    [userId, JSON.stringify(config)],
+  );
 }
 
 // ── Notes (privacy-first: default private) ───────────────────────────────────
@@ -1281,4 +1337,9 @@ module.exports = {
   deleteTransaction,
   updateTransaction,
   getFinancialSummary,
+  getGmailTokensForUser,
+  setGmailTokensForUser,
+  deleteGmailTokensForUser,
+  getGmailConfigForUser,
+  setGmailConfigForUser,
 };
