@@ -1,5 +1,5 @@
 // Build AI system prompt (extracted from old ChatPanel for reuse)
-export default function buildSystemPrompt(tasks, entities, financialAccounts, financialTransactions, notes, calendarEvents) {
+export default function buildSystemPrompt(tasks, entities, notes, calendarEvents) {
   const today = new Date();
   const userTZ = 'America/Los_Angeles';
   const dateStr = today.toLocaleDateString('en-US', {
@@ -38,13 +38,6 @@ export default function buildSystemPrompt(tasks, entities, financialAccounts, fi
   }
   if (personals.length > 0) entityContext += `\nPersonal: ${personals.map((e) => e.name).join(', ')}`;
   if (sharedEnts.length > 0) entityContext += `\nShared (household): ${sharedEnts.map((e) => e.name).join(', ')}`;
-  const acctMap = {}; (financialAccounts || []).forEach((a) => { acctMap[a.id] = a.name || a.institution || 'Unknown'; });
-  let txContext = '';
-  if (financialTransactions && financialTransactions.length > 0) {
-    const recent = financialTransactions.slice(0, 200);
-    const txLines = recent.map((t) => { const n = acctMap[t.accountId] || 'Unknown'; const s = t.type === 'credit' ? '+' : '-'; return `${t.date} | ${n} | ${t.description || ''} | ${s}$${Number(t.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | ${t.category || 'Uncategorized'}`; });
-    txContext = `\n\nFinancial transactions (${financialTransactions.length} total, ${recent.length} shown):\nDate | Account | Description | Amount | Category\n${txLines.join('\n')}`;
-  }
   let notesContext = '';
   if (notes && notes.length > 0) {
     const recentNotes = notes
@@ -101,5 +94,5 @@ export default function buildSystemPrompt(tasks, entities, financialAccounts, fi
       return `- ${dayLabel}: ${time ? time + ' ' : ''}${e.summary || e.title || 'Untitled'}`;
     }).join('\n');
   }
-  return `You are a business productivity assistant. Today is ${dateStr}. Current time: ${timeStr} PST. The user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + txContext + notesContext;
+  return `You are a business productivity assistant. Today is ${dateStr}. Current time: ${timeStr} PST. The user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + notesContext;
 }
