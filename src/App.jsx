@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useToast } from './contexts/ToastContext';
 import { useAuthLogout } from './hooks/useAuthLogout';
 import { buildContext } from './lib/context-engine/buildContext';
 import { detectIntent } from './lib/context-engine/intentDetector';
 import { routePersona } from './lib/context-engine/personaRouter';
 import { usePersona } from './contexts/PersonaContext';
-import SettingsModal from './components/settings/SettingsModal';
+const SettingsModal = lazy(() => import('./components/settings/SettingsModal'));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API BASE (works in dev via Vite proxy and in prod when served from same origin)
@@ -85,12 +85,12 @@ import FilterBar from './components/tasks/FilterBar.jsx';
 import { ChatMessageThread, SlidingChatPanel, ChatTabPanel, UniversalPromptBar } from './components/chat/ChatComponents.jsx';
 import buildSystemPrompt from './utils/systemPrompt.js';
 import { GearIcon, XIcon, SendIcon, ChatIcon, SpinnerIcon, MailIcon, ChecklistIcon, LogoutIcon, CalendarIcon, NotesIcon, UploadIcon, SyncIcon, PencilIcon } from './components/icons/Icons.jsx';
-import CalendarPanel from './panels/CalendarPanel.jsx';
-import InboxPanel from './panels/InboxPanel.jsx';
-import NotesPanel, { PILLAR_CONFIG, PILLAR_KEYS, VIEW_TO_PILLAR } from './panels/NotesPanel.jsx';
-import AddTaskForm from './components/tasks/AddTaskForm.jsx';
-import TaskCard from './components/tasks/TaskCard.jsx';
-import DashboardPanel from './panels/DashboardPanel.jsx';
+const CalendarPanel = lazy(() => import('./panels/CalendarPanel.jsx'));
+const InboxPanel = lazy(() => import('./panels/InboxPanel.jsx'));
+const NotesPanel = lazy(() => import('./panels/NotesPanel.jsx'));
+const AddTaskForm = lazy(() => import('./components/tasks/AddTaskForm.jsx'));
+const TaskCard = lazy(() => import('./components/tasks/TaskCard.jsx'));
+const DashboardPanel = lazy(() => import('./panels/DashboardPanel.jsx'));
 import { CreateEventModal, QuickCaptureModal, QuickCaptureFAB } from './components/modals/QuickCaptureModal.jsx';
 
 // Render grouped entity <option> elements for <select> dropdowns
