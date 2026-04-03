@@ -177,6 +177,7 @@ const DEFAULT_ALERT_RULES = [
     enabled: true,
     condition: { type: 'overdue' },
     channels: { whatsapp: true, slack: true, sms: false, email: true },
+    remindIntervalHours: 24,
     recipientOverride: '',
     isCustom: false,
   },
@@ -187,6 +188,7 @@ const DEFAULT_ALERT_RULES = [
     enabled: true,
     condition: { type: 'due-in-hours', hours: 24 },
     channels: { whatsapp: true, slack: true, sms: false, email: true },
+    remindIntervalHours: 12,
     recipientOverride: '',
     isCustom: false,
   },
@@ -197,6 +199,7 @@ const DEFAULT_ALERT_RULES = [
     enabled: false,
     condition: { type: 'high-priority' },
     channels: { whatsapp: false, slack: true, sms: false, email: true },
+    remindIntervalHours: 24,
     recipientOverride: '',
     isCustom: false,
   },
@@ -450,9 +453,11 @@ async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
     let tasksToSend = [];
 
     if (scope === 'per-task') {
-      tasksToSend = matching.filter((t) => !firedRef.current.has(`${rule.id}::${t.id}`));
+      const intervalHours = rule.remindIntervalHours || 24;
+      const bucket = Math.floor(Date.now() / (intervalHours * 3_600_000));
+      tasksToSend = matching.filter((t) => !firedRef.current.has(`${rule.id}::${t.id}::${bucket}`));
       if (tasksToSend.length === 0) continue;
-      tasksToSend.forEach((t) => firedRef.current.add(`${rule.id}::${t.id}`));
+      tasksToSend.forEach((t) => firedRef.current.add(`${rule.id}::${t.id}::${bucket}`));
       persistFiredAlerts(firedRef);
     } else if (scope === 'daily') {
       const key = `${rule.id}::${todayStr}`;
@@ -1817,10 +1822,11 @@ const EMPTY_NEW_RULE = {
   name: '',
   condition: { type: 'overdue', hours: 24, tag: '', time: '08:00', minutesBefore: 15 },
   channels: { whatsapp: true, slack: true, sms: false, email: true },
+  remindIntervalHours: 24,
   recipientOverride: '',
 };
 
-function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange, onChannelChange, onConditionChange }) {
+function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange, onChannelChange, onConditionChange, onIntervalChange }) {
   const [expanded, setExpanded] = useState(false);
   const scope = getRuleScope(rule.condition.type);
   const scopeLabel = { 'per-task': 'per task', daily: 'daily', session: 'once/session' }[scope];
@@ -1929,6 +1935,28 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
             </div>
           </div>
 
+          {/* Re-notify interval — shown when rule has remindIntervalHours */}
+          {rule.remindIntervalHours !== undefined && (
+            <div className="mt-3">
+              <label className="text-xs font-medium text-gray-500">Remind again after</label>
+              <div className="flex gap-2 mt-1.5 flex-wrap">
+                {[1, 4, 12, 24, 48].map((h) => (
+                  <button
+                    key={h}
+                    onClick={() => onIntervalChange && onIntervalChange(h)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      rule.remindIntervalHours === h
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                    }`}
+                  >
+                    {h < 24 ? `${h}h` : `${h / 24}d`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Email recipient override — shown when email channel is on */}
           {channels.email && (
             <div>
@@ -2012,6 +2040,12 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
           ? { ...r, channels: { ...(r.channels || {}), [channel]: value } }
           : r
       )
+    );
+  }
+
+  function updateInterval(id, hours) {
+    onUpdateRules((prev) =>
+      prev.map((r) => r.id === id ? { ...r, remindIntervalHours: hours } : r)
     );
   }
 
@@ -2129,6 +2163,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
               onRecipientChange={(v) => updateRecipient(rule.id, v)}
               onChannelChange={(ch, val) => updateChannel(rule.id, ch, val)}
               onConditionChange={(cond) => updateCondition(rule.id, cond)}
+              onIntervalChange={(h) => updateInterval(rule.id, h)}
             />
           ))}
 
