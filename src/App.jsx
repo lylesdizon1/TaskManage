@@ -176,6 +176,7 @@ const DEFAULT_ALERT_RULES = [
     description: 'Alert when tasks are past their due date',
     enabled: true,
     condition: { type: 'overdue' },
+    channels: { whatsapp: true, slack: true, sms: false, email: true },
     recipientOverride: '',
     isCustom: false,
   },
@@ -185,6 +186,7 @@ const DEFAULT_ALERT_RULES = [
     description: 'Alert when tasks are due within 24 hours',
     enabled: true,
     condition: { type: 'due-in-hours', hours: 24 },
+    channels: { whatsapp: true, slack: true, sms: false, email: true },
     recipientOverride: '',
     isCustom: false,
   },
@@ -194,6 +196,7 @@ const DEFAULT_ALERT_RULES = [
     description: 'Alert when incomplete high-priority tasks exist',
     enabled: false,
     condition: { type: 'high-priority' },
+    channels: { whatsapp: false, slack: true, sms: false, email: true },
     recipientOverride: '',
     isCustom: false,
   },
@@ -203,6 +206,27 @@ const DEFAULT_ALERT_RULES = [
     description: 'Session summary of all active tasks on app load',
     enabled: false,
     condition: { type: 'daily-digest' },
+    channels: { whatsapp: false, slack: true, sms: false, email: true },
+    recipientOverride: '',
+    isCustom: false,
+  },
+  {
+    id: 'rule-morning-brief',
+    name: 'Morning Brief',
+    description: 'Scheduled morning summary at a set time',
+    enabled: false,
+    condition: { type: 'morning-brief', time: '08:00' },
+    channels: { whatsapp: true, slack: true, sms: false, email: false },
+    recipientOverride: '',
+    isCustom: false,
+  },
+  {
+    id: 'rule-critical-mail',
+    name: 'Critical Mail',
+    description: 'Alert when VIP sender or trigger keyword email arrives',
+    enabled: false,
+    condition: { type: 'critical-mail' },
+    channels: { whatsapp: true, slack: true, sms: false, email: true },
     recipientOverride: '',
     isCustom: false,
   },
@@ -210,12 +234,15 @@ const DEFAULT_ALERT_RULES = [
 
 // condition type → { label, hasTag, hasHours }
 const CONDITION_META = {
-  'overdue':        { label: 'Overdue tasks',             hasTag: false, hasHours: false },
-  'due-in-hours':   { label: 'Due within N hours',        hasTag: false, hasHours: true  },
-  'high-priority':  { label: 'High-priority tasks',       hasTag: false, hasHours: false },
-  'tag-match':      { label: 'All active tasks for tag',  hasTag: true,  hasHours: false },
-  'tag-overdue':    { label: 'Overdue tasks for tag',     hasTag: true,  hasHours: false },
-  'daily-digest':   { label: 'Daily summary (all tasks)', hasTag: false, hasHours: false },
+  'overdue':        { label: 'Overdue tasks',              hasTag: false, hasHours: false },
+  'due-in-hours':   { label: 'Due within N hours',         hasTag: false, hasHours: true  },
+  'high-priority':  { label: 'High-priority tasks',        hasTag: false, hasHours: false },
+  'tag-match':      { label: 'All active tasks for tag',   hasTag: true,  hasHours: false },
+  'tag-overdue':    { label: 'Overdue tasks for tag',      hasTag: true,  hasHours: false },
+  'daily-digest':   { label: 'Daily summary (all tasks)',  hasTag: false, hasHours: false },
+  'morning-brief':  { label: 'Morning brief (scheduled)',  hasTag: false, hasHours: false, hasTime: true },
+  'event-reminder': { label: 'Cal event reminder',         hasTag: false, hasHours: false, hasMinutes: true },
+  'critical-mail':  { label: 'Critical mail (VIP/keyword)',hasTag: false, hasHours: false },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,15 +273,21 @@ function conditionDescription(condition) {
     case 'tag-match':      return `All active "${condition.tag}" tasks`;
     case 'tag-overdue':    return `Overdue "${condition.tag}" tasks`;
     case 'daily-digest':   return 'All active tasks (session summary)';
+    case 'morning-brief':  return `Morning brief at ${condition.time || '08:00'}`;
+    case 'event-reminder': return `${condition.minutesBefore || 15} min before event`;
+    case 'critical-mail':  return 'VIP sender or trigger keyword match';
     default:               return 'Unknown condition';
   }
 }
 
 // Returns 'per-task' | 'daily' | 'session'
 function getRuleScope(type) {
-  if (type === 'daily-digest')  return 'session';
-  if (type === 'high-priority') return 'daily';
-  if (type === 'tag-match')     return 'daily';
+  if (type === 'daily-digest')   return 'session';
+  if (type === 'high-priority')  return 'daily';
+  if (type === 'tag-match')      return 'daily';
+  if (type === 'morning-brief')  return 'daily';
+  if (type === 'critical-mail')  return 'per-task';
+  if (type === 'event-reminder') return 'per-task';
   return 'per-task'; // overdue, due-in-hours, tag-overdue
 }
 
@@ -293,6 +326,22 @@ function evaluateRule(rule, tasks) {
     default:
       return [];
   }
+}
+
+/** Build a plain-text alert message for multi-channel delivery. */
+function buildPlainTextAlert(ruleName, tasks) {
+  const lines = [`[Dizon.ai] ${ruleName}\n`];
+  if (!tasks || tasks.length === 0) {
+    lines.push('- No matching tasks');
+  } else {
+    tasks.forEach((t) => {
+      const due = t.dueDate ? ` (due ${t.dueDate})` : '';
+      const pri = t.priority === 'high' ? ' [HIGH]' : '';
+      lines.push(`- ${t.title}${due}${pri}`);
+    });
+  }
+  lines.push(`\n${tasks?.length || 0} task(s) matched`);
+  return lines.join('\n');
 }
 
 /** Build a professional HTML alert email for the given tasks. */
@@ -377,13 +426,11 @@ async function sendAlertEmail(emailSettings, to, subject, html) {
 }
 
 /**
- * Evaluate all enabled rules and send emails for new matches.
+ * Evaluate all enabled rules and deliver alerts via /api/alerts/fire.
  * firedRef (Set) prevents duplicate sends within the same browser session.
  */
 async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
-  const { recipientEmail, resendConfigured } = emailSettings;
-  if (!resendConfigured || !recipientEmail) return;
-
+  const { recipientEmail } = emailSettings;
   const todayStr = new Date().toISOString().slice(0, 10);
 
   for (const rule of rules) {
@@ -413,14 +460,21 @@ async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast) {
     }
 
     const count   = tasksToSend.length;
-    const subject = `[Dizon.ai] ${rule.name} — ${count} task${count !== 1 ? 's' : ''}`;
-    const html    = buildEmailHtml(rule.name, conditionDescription(rule.condition), tasksToSend);
+    const message = buildPlainTextAlert(rule.name, tasksToSend);
+    const channels = rule.channels || { whatsapp: true, slack: true, sms: false, email: true };
 
     try {
-      await sendAlertEmail(emailSettings, to, subject, html);
+      const res = await apiFetch('/api/alerts/fire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, channels, recipientEmail: to }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const via = data.sent?.length ? ` via ${data.sent.join(', ')}` : '';
       addToast({
         type: 'success',
-        message: `Alert sent: "${rule.name}" (${count} task${count !== 1 ? 's' : ''})`,
+        message: `Alert sent: "${rule.name}" (${count} task${count !== 1 ? 's' : ''})${via}`,
       });
     } catch (err) {
       addToast({ type: 'error', message: `Alert failed: ${err.message}` });
@@ -1752,14 +1806,17 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
 
 const EMPTY_NEW_RULE = {
   name: '',
-  condition: { type: 'overdue', hours: 24, tag: '' },
+  condition: { type: 'overdue', hours: 24, tag: '', time: '08:00', minutesBefore: 15 },
+  channels: { whatsapp: true, slack: true, sms: false, email: true },
   recipientOverride: '',
 };
 
-function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange }) {
+function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange, onChannelChange, onConditionChange }) {
   const [expanded, setExpanded] = useState(false);
   const scope = getRuleScope(rule.condition.type);
   const scopeLabel = { 'per-task': 'per task', daily: 'daily', session: 'once/session' }[scope];
+  const channels = rule.channels || { whatsapp: true, slack: true, sms: false, email: true };
+  const condType = rule.condition.type;
 
   return (
     <div
@@ -1806,7 +1863,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
           <button
             onClick={() => setExpanded((v) => !v)}
             className="text-gray-300 hover:text-gray-500 transition-colors p-1"
-            title="Set per-rule recipient"
+            title="Configure channels & options"
           >
             <svg
               className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
@@ -1827,36 +1884,103 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
         </div>
       </div>
 
-      {/* Expanded: recipient override */}
+      {/* Expanded panel */}
       {expanded && (
-        <div className="px-4 pb-3 border-t border-gray-100">
-          <label className="block text-xs font-medium text-gray-500 mb-1.5 mt-2.5">
-            Recipient override{' '}
-            <span className="font-normal text-gray-400">
-              (blank = default: {defaultRecipient || 'not set'})
-            </span>
-          </label>
-          <input
-            type="email"
-            value={rule.recipientOverride}
-            onChange={(e) => onRecipientChange(e.target.value)}
-            placeholder={defaultRecipient || 'override@example.com'}
-            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
+        <div className="px-4 pb-3 border-t border-gray-100 space-y-3">
+          {/* Section A — Channel toggles */}
+          <div className="mt-2.5">
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">Channels</label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { key: 'whatsapp', label: 'WhatsApp', color: 'bg-green-500' },
+                { key: 'slack',    label: 'Slack',    color: 'bg-purple-500' },
+                { key: 'sms',      label: 'SMS',      color: 'bg-blue-500' },
+                { key: 'email',    label: 'Email',    color: 'bg-orange-500' },
+              ].map(({ key, label, color }) => {
+                const on = channels[key];
+                const disabled = key === 'sms';
+                return (
+                  <button
+                    key={key}
+                    disabled={disabled}
+                    title={disabled ? 'Coming soon' : `Toggle ${label}`}
+                    onClick={() => onChannelChange && onChannelChange(key, !on)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                      disabled
+                        ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
+                        : on
+                          ? `${color} text-white`
+                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Email recipient override — shown when email channel is on */}
+          {channels.email && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">
+                Recipient override{' '}
+                <span className="font-normal text-gray-400">
+                  (blank = default: {defaultRecipient || 'not set'})
+                </span>
+              </label>
+              <input
+                type="email"
+                value={rule.recipientOverride}
+                onChange={(e) => onRecipientChange(e.target.value)}
+                placeholder={defaultRecipient || 'override@example.com'}
+                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+          )}
+
+          {/* Section B — Condition config */}
+          {condType === 'morning-brief' && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500 w-16 flex-shrink-0">Time:</label>
+              <input
+                type="time"
+                value={rule.condition.time || '08:00'}
+                onChange={(e) => onConditionChange && onConditionChange({ ...rule.condition, time: e.target.value })}
+                className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+          )}
+          {condType === 'event-reminder' && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500 w-16 flex-shrink-0">Before:</label>
+              <select
+                value={rule.condition.minutesBefore || 15}
+                onChange={(e) => onConditionChange && onConditionChange({ ...rule.condition, minutesBefore: Number(e.target.value) })}
+                className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {[5, 10, 15, 30, 60].map((m) => (
+                  <option key={m} value={m}>{m} min</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose, entities }) {
+function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose, entities, envStatus }) {
   const [showAdd, setShowAdd]       = useState(false);
   const [newRule, setNewRule]       = useState(EMPTY_NEW_RULE);
   const [evaluating, setEvaluating] = useState(false);
   const [sending, setSending]       = useState(false);
+  const [testPicker, setTestPicker] = useState(null); // null | 'whatsapp' | 'slack' | 'email'
 
   const emailConfigured =
     emailSettings.resendConfigured && emailSettings.recipientEmail;
+  const env = envStatus || { slack: false, whatsapp: false, sms: false, email: false };
 
   function toggleRule(id) {
     onUpdateRules((prev) => prev.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)));
@@ -1872,6 +1996,24 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
     );
   }
 
+  function updateChannel(id, channel, value) {
+    onUpdateRules((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? { ...r, channels: { ...(r.channels || {}), [channel]: value } }
+          : r
+      )
+    );
+  }
+
+  function updateCondition(id, condition) {
+    onUpdateRules((prev) =>
+      prev.map((r) =>
+        r.id === id ? { ...r, condition, description: conditionDescription(condition) } : r
+      )
+    );
+  }
+
   function handleAddRule() {
     if (!newRule.name.trim()) return;
     onUpdateRules((prev) => [
@@ -1882,6 +2024,7 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
         description: conditionDescription(newRule.condition),
         enabled: true,
         condition: { ...newRule.condition },
+        channels: { ...newRule.channels },
         recipientOverride: newRule.recipientOverride.trim(),
         isCustom: true,
       },
@@ -1891,39 +2034,31 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
   }
 
   async function handleEvaluateNow() {
-    if (!emailConfigured) {
-      addToast({ type: 'error', message: 'Set RESEND_API_KEY and alert recipient in Settings first' });
-      return;
-    }
     setEvaluating(true);
     await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast);
     setEvaluating(false);
   }
 
-  async function handleSendTest() {
-    if (!emailConfigured) {
-      addToast({ type: 'error', message: 'Set RESEND_API_KEY and alert recipient in Settings first' });
-      return;
-    }
+  async function handleSendTest(channel) {
     setSending(true);
     try {
       const sampleTasks = tasks.filter((t) => !t.completed).slice(0, 3);
-      const html = buildEmailHtml(
-        'Test Email',
-        'This is a test from Dizon.ai',
-        sampleTasks.length ? sampleTasks : tasks.slice(0, 2),
-      );
-      await sendAlertEmail(
-        emailSettings,
-        emailSettings.recipientEmail,
-        '[Dizon.ai] Test Email',
-        html,
-      );
-      addToast({ type: 'success', message: 'Test email sent!' });
+      const message = buildPlainTextAlert('Test Alert', sampleTasks.length ? sampleTasks : tasks.slice(0, 2));
+      const channels = { whatsapp: channel === 'whatsapp', slack: channel === 'slack', sms: false, email: channel === 'email' };
+      const res = await apiFetch('/api/alerts/fire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, channels, recipientEmail: emailSettings.recipientEmail }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.sent?.length) addToast({ type: 'success', message: `Test sent via ${data.sent.join(', ')}` });
+      else addToast({ type: 'error', message: `Test failed: ${data.failed?.join(', ') || 'no channels'}` });
     } catch (err) {
       addToast({ type: 'error', message: `Test failed: ${err.message}` });
     } finally {
       setSending(false);
+      setTestPicker(null);
     }
   }
 
@@ -1957,20 +2092,20 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
           </div>
         </div>
 
-        {/* Email status */}
-        <div
-          className={`px-6 py-2.5 text-xs flex items-center gap-1.5 flex-shrink-0 ${
-            emailConfigured
-              ? 'bg-green-50 text-green-700 border-b border-green-100'
-              : 'bg-amber-50 text-amber-700 border-b border-amber-100'
-          }`}
-        >
-          <span>{emailConfigured ? '✓' : '⚠️'}</span>
-          <span>
-            {emailConfigured
-              ? `Alerts → ${emailSettings.recipientEmail} · Rules check every 60 s`
-              : 'Set RESEND_API_KEY env var and alert recipient in Settings to activate'}
-          </span>
+        {/* Channel status */}
+        <div className="px-6 py-2.5 text-xs flex items-center gap-2 flex-shrink-0 bg-gray-50 border-b border-gray-100 text-gray-600 flex-wrap">
+          {[
+            { key: 'whatsapp', label: 'WhatsApp' },
+            { key: 'slack',    label: 'Slack' },
+            { key: 'sms',      label: 'SMS' },
+            { key: 'email',    label: 'Email' },
+          ].map(({ key, label }) => (
+            <span key={key} className="flex items-center gap-1">
+              <span className={`inline-block w-2 h-2 rounded-full ${env[key] ? 'bg-green-500' : 'bg-gray-300'}`} />
+              {label}
+            </span>
+          ))}
+          <span className="text-gray-400 ml-auto">Rules fire every 60s</span>
         </div>
 
         {/* Scrollable rules list */}
@@ -1983,6 +2118,8 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
               onToggle={() => toggleRule(rule.id)}
               onDelete={rule.isCustom ? () => deleteRule(rule.id) : null}
               onRecipientChange={(v) => updateRecipient(rule.id, v)}
+              onChannelChange={(ch, val) => updateChannel(rule.id, ch, val)}
+              onConditionChange={(cond) => updateCondition(rule.id, cond)}
             />
           ))}
 
@@ -2090,21 +2227,59 @@ function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRe
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex gap-2 flex-shrink-0">
-          <button
-            onClick={handleSendTest}
-            disabled={sending}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors disabled:opacity-50"
-          >
-            <MailIcon className="w-4 h-4" />
-            {sending ? 'Sending…' : 'Send Test Email'}
-          </button>
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm"
-          >
-            Done
-          </button>
+        <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0 space-y-2">
+          {testPicker ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">Send test via:</span>
+              {[
+                { key: 'whatsapp', label: 'WhatsApp', ok: env.whatsapp },
+                { key: 'slack',    label: 'Slack',    ok: env.slack },
+                { key: 'email',    label: 'Email',    ok: env.email },
+              ].map(({ key, label, ok }) => (
+                <button
+                  key={key}
+                  disabled={!ok || sending}
+                  onClick={() => handleSendTest(key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    ok
+                      ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              <button
+                disabled={sending}
+                className="px-2 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-300 cursor-not-allowed"
+                title="Coming soon"
+              >
+                SMS
+              </button>
+              <button
+                onClick={() => setTestPicker(null)}
+                className="ml-auto text-xs text-gray-400 hover:text-gray-600"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setTestPicker(true)}
+                disabled={sending}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {sending ? 'Sending…' : 'Send Test →'}
+              </button>
+              <button
+                onClick={onClose}
+                className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm"
+              >
+                Done
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -7450,6 +7625,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           addToast={addToast}
           onClose={() => setShowAlerts(false)}
           entities={userEntities}
+          envStatus={{
+            slack:    !!envConfigured.channelSlack,
+            whatsapp: !!envConfigured.channelWhatsapp,
+            sms:      !!envConfigured.channelSms,
+            email:    !!envConfigured.channelEmail,
+          }}
         />
       )}
 

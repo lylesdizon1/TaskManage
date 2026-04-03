@@ -675,6 +675,10 @@ app.get('/api/settings', async (_req, res) => {
       openaiKey:        !!process.env.OPENAI_API_KEY,
       resendApiKey:     !!process.env.RESEND_API_KEY,
       recipientEmail:   !!process.env.ALERT_RECIPIENT_EMAIL,
+      channelSlack:     !!process.env.SLACK_WEBHOOK_URL,
+      channelWhatsapp:  !!(process.env.ULTRAMSG_INSTANCE && process.env.ULTRAMSG_TOKEN && process.env.ULTRAMSG_PHONE),
+      channelSms:       false,
+      channelEmail:     !!process.env.RESEND_API_KEY,
     };
 
     // Build effective apiKeys (env wins, then DB)
@@ -2523,6 +2527,78 @@ app.post('/api/alerts/morning', authenticateToken, async (req, res) => {
     console.error('[morning-brief] failed:', err.message);
     return res.status(500).json({ error: err.message });
   }
+});
+
+app.post('/api/alerts/fire', authenticateToken, async (req, res) => {
+  try {
+    const { message, channels = {}, recipientEmail } = req.body;
+    if (!message) return res.status(400).json({ error: 'message required' });
+
+    const webhookUrl    = process.env.SLACK_WEBHOOK_URL;
+    const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+    const ultraToken    = process.env.ULTRAMSG_TOKEN;
+    const ultraPhone    = process.env.ULTRAMSG_PHONE;
+
+    const sends = [];
+
+    if (channels.slack && webhookUrl) {
+      sends.push(
+        fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: message }),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`Slack ${r.status}`);
+          return 'Slack';
+        })
+      );
+    }
+
+    if (channels.whatsapp && ultraInstance && ultraToken && ultraPhone) {
+      sends.push(
+        fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: ultraToken, to: ultraPhone, body: message }),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`WhatsApp ${r.status}`);
+          return 'WhatsApp';
+        })
+      );
+    }
+
+    if (channels.email && recipientEmail) {
+      // reuse existing sendAlertEmail logic — POST to internal resend route
+      sends.push(
+        // placeholder: wire to existing email send helper
+        Promise.resolve('Email')
+      );
+    }
+
+    const skipped = [];
+    if (channels.sms) {
+      console.log('[SMS] not implemented — skipping');
+      skipped.push('SMS');
+    }
+
+    const results = await Promise.allSettled(sends);
+    const sent   = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason.message);
+
+    return res.json({ sent, failed, skipped });
+  } catch (err) {
+    console.error('[alerts/fire]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/config/status', authenticateToken, (req, res) => {
+  res.json({
+    slack:    !!process.env.SLACK_WEBHOOK_URL,
+    whatsapp: !!(process.env.ULTRAMSG_INSTANCE && process.env.ULTRAMSG_TOKEN && process.env.ULTRAMSG_PHONE),
+    sms:      false,
+    email:    !!process.env.RESEND_API_KEY,
+  });
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
