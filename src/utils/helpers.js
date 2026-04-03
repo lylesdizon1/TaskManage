@@ -35,3 +35,18 @@ export function getRuleScope(type) {
   if (type === 'event-reminder') return 'per-task';
   return 'per-task'; // overdue, due-in-hours, tag-overdue
 }
+
+// Build grouped entity list for dropdowns: Business (+ children) > Personal
+export function buildGroupedEntities(entities) {
+  const businesses = entities.filter((e) => e.type === 'business' || (!e.type && e.type !== 'personal' && e.type !== 'project'));
+  const projects = entities.filter((e) => e.type === 'project');
+  const personals = entities.filter((e) => e.type === 'personal');
+  const result = [];
+  businesses.forEach((b) => {
+    result.push({ ...b, _indent: 0, _group: 'business' });
+    projects.filter((p) => p.parentId === b.id).forEach((p) => result.push({ ...p, _indent: 1, _group: 'business' }));
+  });
+  projects.filter((p) => !p.parentId || !businesses.find((b) => b.id === p.parentId)).forEach((p) => result.push({ ...p, _indent: 0, _group: 'business' }));
+  personals.forEach((p) => result.push({ ...p, _indent: 0, _group: 'personal' }));
+  return result;
+}
