@@ -2899,45 +2899,48 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* Left sidebar — hidden on mobile when viewing a chat */}
-      <div className={`${showMobileChat ? 'hidden' : 'flex'} flex-col w-full md:flex md:w-64 md:flex-shrink-0 border-r border-gray-200 bg-white overflow-hidden`}>
+      <div className={`${showMobileChat ? 'hidden' : 'flex'} flex-col w-full md:flex md:w-64 md:flex-shrink-0 border-r border-outline-variant/20 bg-surface-container-low overflow-hidden`}>
         <div className="px-4 pt-4 pb-3 flex-shrink-0">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-900">{'\u{1F4AC}'} Conversations</span>
+            <span className="text-sm font-bold font-headline text-on-background">Conversations</span>
           </div>
-          <button onClick={onNewChat} className="w-full px-3 py-2 text-sm font-medium text-white rounded-lg transition-colors hover:opacity-90" style={{ backgroundColor: '#7C3AED' }}>
-            + New Chat
+          <button onClick={onNewChat} className="w-full px-3 py-2.5 text-[11px] font-bold text-on-primary bg-primary rounded-xl transition-colors hover:opacity-90 shadow-sm shadow-primary/20 flex items-center justify-center gap-1.5">
+            <span className="material-symbols-outlined text-sm">add</span>
+            New Chat
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-2 pb-3">
           {conversations.length === 0 && (
-            <p className="text-xs text-gray-400 px-2 py-4 text-center">No conversations yet</p>
+            <p className="text-[11px] text-on-surface-variant px-2 py-4 text-center">No conversations yet</p>
           )}
           {['Today', 'Yesterday', 'Earlier'].map((group) => {
             const items = grouped[group];
             if (items.length === 0) return null;
             return (
               <div key={group} className="mb-2">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-2 py-1">{group}</p>
+                <p className="text-[10px] font-bold text-on-surface-variant/50 uppercase tracking-widest px-2 py-1">{group}</p>
                 {items.map((conv) => (
                   <div
                     key={conv.id}
                     onClick={() => handleSelectConv(conv.id)}
-                    className={`group flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition-colors ${
-                      activeConvId === conv.id ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'
+                    className={`group flex items-center justify-between px-2.5 py-2 rounded-xl cursor-pointer transition-colors ${
+                      activeConvId === conv.id ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high text-on-background'
                     }`}
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium truncate">{conv.title || 'New conversation'}</p>
+                      <p className="text-[11px] font-bold truncate">{conv.title || 'New conversation'}</p>
                       <div className="flex items-center gap-1 mt-0.5">
-                        <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${conv.model === 'chatgpt' ? 'bg-green-50 text-green-600' : 'bg-indigo-50 text-indigo-600'}`}>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${conv.model === 'chatgpt' ? 'bg-green-50 text-green-600' : 'bg-primary/10 text-primary'}`}>
                           {conv.model === 'chatgpt' ? 'GPT' : 'Claude'}
                         </span>
                       </div>
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); onDeleteConv(conv.id); }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 text-xs px-1 transition-opacity"
-                    >{'\u{1F5D1}\u{FE0F}'}</button>
+                      className="opacity-0 group-hover:opacity-100 text-on-surface-variant hover:text-error text-xs px-1 transition-opacity"
+                    >
+                      <span className="material-symbols-outlined text-sm">delete</span>
+                    </button>
                   </div>
                 ))}
               </div>
@@ -2947,19 +2950,20 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
       </div>
 
       {/* Right panel — hidden on mobile until a conversation is selected */}
-      <div className={`${showMobileChat ? 'flex' : 'hidden'} flex-col flex-1 md:flex overflow-hidden bg-gray-50`}>
+      <div className={`${showMobileChat ? 'flex' : 'hidden'} flex-col flex-1 md:flex overflow-hidden bg-surface`}>
         {!activeConvId ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
-            <div className="text-4xl mb-3">{'\u{1F4AC}'}</div>
-            <p className="text-sm font-medium text-gray-500">Select a conversation or start a new one</p>
-            <button onClick={onNewChat} className="mt-4 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors hover:opacity-90" style={{ backgroundColor: '#7C3AED' }}>
-              + New Chat
+          <div className="flex-1 flex flex-col items-center justify-center text-on-surface-variant">
+            <span className="material-symbols-outlined text-4xl text-primary/30 mb-3">chat</span>
+            <p className="text-sm font-bold font-headline text-on-surface-variant/70">Select a conversation or start a new one</p>
+            <button onClick={onNewChat} className="mt-4 px-4 py-2.5 text-[11px] font-bold text-on-primary bg-primary rounded-xl transition-colors hover:opacity-90 shadow-sm shadow-primary/20 flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-sm">add</span>
+              New Chat
             </button>
           </div>
         ) : (
           <>
             {/* Conversation header */}
-            <div className="bg-white border-b border-gray-200 px-5 py-3 flex items-center justify-between flex-shrink-0">
+            <div className="bg-surface-container-lowest border-b border-outline-variant/20 px-5 py-3 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 {/* Mobile back button */}
                 <button
@@ -2974,19 +2978,19 @@ function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, ba
                     defaultValue={conversations.find((c) => c.id === activeConvId)?.title || ''}
                     onBlur={(e) => { onRenameConv(activeConvId, e.target.value); setEditingTitle(null); }}
                     onKeyDown={(e) => { if (e.key === 'Enter') { onRenameConv(activeConvId, e.target.value); setEditingTitle(null); } }}
-                    className="text-sm font-semibold text-gray-900 bg-gray-50 border border-gray-200 rounded px-2 py-1 flex-1"
+                    className="text-sm font-bold font-headline text-on-background bg-surface-container-low border border-outline-variant/30 rounded-xl px-3 py-1.5 flex-1 focus:outline-none focus:ring-1 focus:ring-primary/20"
                   />
                 ) : (
-                  <h3 onClick={() => setEditingTitle(activeConvId)} className="text-sm font-semibold text-gray-900 truncate cursor-pointer hover:text-indigo-600 transition-colors">
+                  <h3 onClick={() => setEditingTitle(activeConvId)} className="text-sm font-bold font-headline text-on-background truncate cursor-pointer hover:text-primary transition-colors">
                     {conversations.find((c) => c.id === activeConvId)?.title || 'New conversation'}
                   </h3>
                 )}
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${backend === 'claude' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700'}`}>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold flex-shrink-0 ${backend === 'claude' ? 'bg-primary/10 text-primary' : 'bg-green-50 text-green-600'}`}>
                   {backend === 'claude' ? 'Claude' : 'ChatGPT'}
                 </span>
               </div>
-              <button onClick={() => onDeleteConv(activeConvId)} className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium px-2 py-1">
-                {'\u{1F5D1}\u{FE0F}'} Delete
+              <button onClick={() => onDeleteConv(activeConvId)} className="text-on-surface-variant hover:text-error transition-colors p-1.5 rounded-lg hover:bg-error/5">
+                <span className="material-symbols-outlined text-lg">delete</span>
               </button>
             </div>
             {/* Messages */}
