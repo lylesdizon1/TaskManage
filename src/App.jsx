@@ -375,7 +375,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [currentUser, setCurrentUser]           = useState(initialUser);
   const [tasks, setTasks]                       = useState([]);
   const tasksLoadedRef                           = useRef(false);
-  const [activeView, setActiveView]             = useState('dashboard');
+  const [activeView, setActiveView]             = useState(() => {
+    return new URLSearchParams(window.location.search).get('view') || 'dashboard';
+  });
   const [activeTagFilters, setActiveTagFilters] = useState([]);
   const [statusFilter, setStatusFilter]         = useState('all');
   const [taskFilter, setTaskFilter]             = useState('');
@@ -427,6 +429,24 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // ── Calendar events for chat context ──
   const [chatCalendarEvents, setChatCalendarEvents] = useState([]);
+
+  // Sync activeView → browser URL
+  useEffect(() => {
+    const current = new URLSearchParams(window.location.search).get('view');
+    if (current !== activeView) {
+      window.history.pushState({ view: activeView }, '', `?view=${activeView}`);
+    }
+  }, [activeView]);
+
+  // Browser back/forward → update activeView
+  useEffect(() => {
+    const handlePop = (e) => {
+      const view = e.state?.view || 'dashboard';
+      setActiveView(view);
+    };
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
+  }, []);
 
   // Keep chatInput ref in sync for session-expired handler
   useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
