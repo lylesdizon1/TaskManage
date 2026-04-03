@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { buildGroupedEntities, uid } from '../../utils/helpers.js';
 import { getEntityStyle } from '../../constants/colors.js';
 
