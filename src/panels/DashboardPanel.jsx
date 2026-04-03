@@ -486,7 +486,35 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>
       </div>
 
-      {/* ROW 5: Task Performance */}
+      {/* ROW 5: Active Notes */}
+      <div className="space-y-4">
+        <div className="flex justify-between items-end px-1">
+          <h3 className="text-lg font-extrabold font-headline">Active Notes</h3>
+          <button onClick={() => onNavigate('notes')} className="text-primary font-bold text-[10px] hover:underline">See All Notes</button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {notes.filter((n) => n.type !== 'digest').slice(0,3).map((note, i) => {
+            const borders = ['border-[#4f4dcf]', 'border-tertiary', 'border-error'];
+            const hovers = ['group-hover:text-primary', 'group-hover:text-tertiary', 'group-hover:text-error'];
+            const timeAgo = note.updatedAt ? (() => { const diff = Date.now() - new Date(note.updatedAt).getTime(); const h = Math.floor(diff/3600000); if(h<1) return 'Just now'; if(h<24) return 'Modified '+h+'h ago'; if(h<48) return 'Modified Yesterday'; return 'Modified '+Math.floor(h/24)+'d ago'; })() : '';
+            return (
+              <button key={note.id} onClick={() => onNavigate('notes')} className={'bg-surface-container-lowest p-5 rounded-xl shadow-sm border-t-4 '+borders[i%3]+' group hover:scale-[1.01] transition-transform cursor-pointer border-x border-b border-x-surface-container-low border-b-surface-container-low text-left w-full'}>
+                <span className="text-[8px] font-bold uppercase text-slate-400 tracking-widest">{timeAgo}</span>
+                <h4 className={'text-sm font-bold mt-2 '+hovers[i%3]+' transition-colors'}>{note.title || 'Untitled'}</h4>
+                <p className="text-on-surface-variant text-[11px] mt-2.5 line-clamp-3 leading-relaxed">{(note.content||'').replace(/<[^>]+>/g,'').slice(0,120)}</p>
+              </button>
+            );
+          })}
+          {notes.filter((n) => n.type !== 'digest').length === 0 && (
+            <div className="col-span-3 bg-surface-container-lowest p-5 rounded-xl shadow-sm border border-surface-container-low text-center">
+              <p className="text-[11px] text-on-surface-variant">No notes yet</p>
+              <button onClick={onQuickNote} className="text-primary text-[10px] font-bold mt-2 hover:underline">Create your first note</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ROW 6: Task Performance */}
       <div className="space-y-4">
         <div className="flex justify-between items-end px-1">
           <h3 className="text-lg font-extrabold font-headline">Task Performance</h3>
@@ -556,34 +584,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             <span className="font-bold text-on-background">{assistantName}&apos;s read: </span>
             {(completedOnTime + completedEarly + completedLate + missedTasks) === 0 ? 'No completed tasks in the last 30 days yet. Complete tasks to start tracking performance.' : missedTasks > completedOnTime ? 'Missing more than completing on time. Focus on adding due dates to high-priority items.' : completedEarly > completedOnTime ? 'You tend to finish early — consider tightening your deadlines to build momentum.' : `On-time rate is ${onTimePct}% over the last 30 days.${onTimePct === 100 ? ' Perfect streak.' : ' Add due dates to tasks to improve tracking.'}`}
           </p>
-        </div>
-      </div>
-
-      {/* ROW 6: Active Notes */}
-      <div className="space-y-4">
-        <div className="flex justify-between items-end px-1">
-          <h3 className="text-lg font-extrabold font-headline">Active Notes</h3>
-          <button onClick={() => onNavigate('notes')} className="text-primary font-bold text-[10px] hover:underline">See All Notes</button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {notes.filter((n) => n.type !== 'digest').slice(0,3).map((note, i) => {
-            const borders = ['border-[#4f4dcf]', 'border-tertiary', 'border-error'];
-            const hovers = ['group-hover:text-primary', 'group-hover:text-tertiary', 'group-hover:text-error'];
-            const timeAgo = note.updatedAt ? (() => { const diff = Date.now() - new Date(note.updatedAt).getTime(); const h = Math.floor(diff/3600000); if(h<1) return 'Just now'; if(h<24) return 'Modified '+h+'h ago'; if(h<48) return 'Modified Yesterday'; return 'Modified '+Math.floor(h/24)+'d ago'; })() : '';
-            return (
-              <button key={note.id} onClick={() => onNavigate('notes')} className={'bg-surface-container-lowest p-5 rounded-xl shadow-sm border-t-4 '+borders[i%3]+' group hover:scale-[1.01] transition-transform cursor-pointer border-x border-b border-x-surface-container-low border-b-surface-container-low text-left w-full'}>
-                <span className="text-[8px] font-bold uppercase text-slate-400 tracking-widest">{timeAgo}</span>
-                <h4 className={'text-sm font-bold mt-2 '+hovers[i%3]+' transition-colors'}>{note.title || 'Untitled'}</h4>
-                <p className="text-on-surface-variant text-[11px] mt-2.5 line-clamp-3 leading-relaxed">{(note.content||'').replace(/<[^>]+>/g,'').slice(0,120)}</p>
-              </button>
-            );
-          })}
-          {notes.filter((n) => n.type !== 'digest').length === 0 && (
-            <div className="col-span-3 bg-surface-container-lowest p-5 rounded-xl shadow-sm border border-surface-container-low text-center">
-              <p className="text-[11px] text-on-surface-variant">No notes yet</p>
-              <button onClick={onQuickNote} className="text-primary text-[10px] font-bold mt-2 hover:underline">Create your first note</button>
-            </div>
-          )}
         </div>
       </div>
 
