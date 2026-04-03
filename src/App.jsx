@@ -691,6 +691,8 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
   const [newVip, setNewVip] = useState('');
   const [newKeyword, setNewKeyword] = useState('');
   const [configSaving, setConfigSaving] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const settingsToast = useToast();
 
   // ── Entity management state ──
   const [entityList, setEntityList] = useState([]);
@@ -759,6 +761,30 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
       });
     } catch {} finally {
       setConfigSaving(false);
+    }
+  }
+
+  async function handleGmailScan() {
+    setScanning(true);
+    try {
+      const res = await apiFetch('/api/gmail/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.newItems > 0) {
+          settingsToast.success(`Found ${data.newItems} new item${data.newItems !== 1 ? 's' : ''} in your Inbox`);
+        } else {
+          settingsToast.info('Inbox is up to date');
+        }
+      } else {
+        settingsToast.error(data.error || 'Scan failed');
+      }
+    } catch {
+      settingsToast.error('Scan failed');
+    } finally {
+      setScanning(false);
     }
   }
 
@@ -1346,14 +1372,31 @@ function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, e
                 </label>
               </div>
 
-              {/* Save */}
-              <button
-                onClick={handleSaveGmailConfig}
-                disabled={configSaving}
-                className="w-full py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {configSaving ? 'Saving...' : 'Save Configuration'}
-              </button>
+              {/* Save + Scan */}
+              <div className="space-y-2">
+                <button
+                  onClick={handleSaveGmailConfig}
+                  disabled={configSaving}
+                  className="w-full py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {configSaving ? 'Saving...' : 'Save Configuration'}
+                </button>
+                <button
+                  onClick={handleGmailScan}
+                  disabled={!gmailStatus.connected || scanning}
+                  className="w-full py-2 text-sm font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {scanning ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+                      Scanning...
+                    </>
+                  ) : 'Scan Now'}
+                </button>
+                {!gmailStatus.connected && (
+                  <p className="text-xs text-gray-400 text-center">Connect Gmail above to enable scanning</p>
+                )}
+              </div>
             </div>
           )}
 
@@ -4024,6 +4067,7 @@ function SkeletonBlock({ className = '' }) {
 function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
   const [dismissed, setDismissed] = useState(new Set());
   const [editingDue, setEditingDue] = useState(null);
+  const [dbItems, setDbItems] = useState([]);
   const toast = useToast();
 
   const today = new Date().toISOString().slice(0, 10);
@@ -4032,22 +4076,52 @@ function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
 
   const activeTasks = tasks.filter((t) => !t.completed);
 
+  // Fetch DB-backed inbox items (from gmail scan etc.)
+  useEffect(() => {
+    async function fetchDbItems() {
+      try {
+        const res = await apiFetch('/api/inbox/items', { headers: { Authorization: `Bearer ${authToken}` } });
+        if (res.ok) {
+          const data = await res.json();
+          setDbItems(data.filter((d) => !d.action_taken));
+        }
+      } catch {}
+    }
+    fetchDbItems();
+  }, [authToken]);
+
   const inboxItems = useMemo(() => {
     const items = [];
+    // Task-based items
     activeTasks.forEach((t) => {
       if (dismissed.has(t.id)) return;
       if (t.dueDate && t.dueDate < cutoff) {
         const days = Math.floor((new Date(today) - new Date(t.dueDate)) / 86400000);
-        items.push({ ...t, inboxType: 'MISSED', context: `${days} days overdue`, sort: 0 });
+        items.push({ ...t, inboxType: 'MISSED', context: `${days} days overdue`, sort: 0, source: 'task' });
       } else if (t.dueDate && t.dueDate < today) {
         const days = Math.floor((new Date(today) - new Date(t.dueDate)) / 86400000);
-        items.push({ ...t, inboxType: 'OVERDUE', context: `${days} day${days !== 1 ? 's' : ''} overdue`, sort: 1 });
+        items.push({ ...t, inboxType: 'OVERDUE', context: `${days} day${days !== 1 ? 's' : ''} overdue`, sort: 1, source: 'task' });
       } else if (t.priority === 'high' && !t.dueDate) {
-        items.push({ ...t, inboxType: 'HIGH PRIORITY', context: 'No due date set', sort: 2 });
+        items.push({ ...t, inboxType: 'HIGH PRIORITY', context: 'No due date set', sort: 2, source: 'task' });
       }
     });
+    // DB-backed items (gmail scan)
+    const sortMap = { VIP: 0, KEYWORD: 1, COMMITMENT: 2 };
+    dbItems.forEach((d) => {
+      if (dismissed.has(d.id)) return;
+      items.push({
+        id: d.id,
+        title: d.title,
+        inboxType: d.type,
+        context: d.summary,
+        sort: sortMap[d.type] ?? 3,
+        source: 'gmail',
+        gmailLink: d.gmail_link,
+        gmailThreadId: d.gmail_thread_id,
+      });
+    });
     return items.sort((a, b) => a.sort - b.sort);
-  }, [activeTasks, dismissed, today, cutoff]);
+  }, [activeTasks, dbItems, dismissed, today, cutoff]);
 
   function handleDismiss(id) {
     setDismissed((prev) => new Set(prev).add(id));
@@ -4064,11 +4138,17 @@ function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
     'MISSED': 'bg-error/10 text-error',
     'OVERDUE': 'bg-amber-100 text-amber-700',
     'HIGH PRIORITY': 'bg-primary/10 text-primary',
+    'VIP': 'bg-purple-100 text-purple-700',
+    'KEYWORD': 'bg-amber-100 text-amber-700',
+    'COMMITMENT': 'bg-blue-100 text-blue-700',
   };
   const iconMap = {
     'MISSED': 'event_busy',
     'OVERDUE': 'schedule',
     'HIGH PRIORITY': 'priority_high',
+    'VIP': 'star',
+    'KEYWORD': 'search',
+    'COMMITMENT': 'handshake',
   };
 
   return (
@@ -4092,18 +4172,18 @@ function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
             {inboxItems.map((item) => (
               <div key={item.id} className="bg-surface-container-lowest rounded-xl p-4 shadow-sm border border-outline-variant/30 flex items-start gap-4 group hover:shadow-md transition-shadow">
                 <div className="bg-surface-variant/50 p-2 rounded-full flex-shrink-0 mt-0.5">
-                  <span className="material-symbols-outlined text-lg text-on-surface-variant">{iconMap[item.inboxType]}</span>
+                  <span className="material-symbols-outlined text-lg text-on-surface-variant">{iconMap[item.inboxType] || 'mail'}</span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badgeStyle[item.inboxType]}`}>{item.inboxType}</span>
+                    <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badgeStyle[item.inboxType] || 'bg-gray-100 text-gray-600'}`}>{item.inboxType}</span>
                     {item.priority === 'high' && item.inboxType !== 'HIGH PRIORITY' && (
                       <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-error/10 text-error">HIGH</span>
                     )}
                   </div>
                   <h3 className="font-bold text-on-surface text-sm">{item.title}</h3>
                   <p className="text-xs text-outline mt-0.5">{item.context}{item.dueDate ? ` · Due ${item.dueDate}` : ''}</p>
-                  {editingDue === item.id && (
+                  {editingDue === item.id && item.source === 'task' && (
                     <div className="mt-2 flex items-center gap-2">
                       <input type="date" defaultValue={today} className="text-xs border border-outline-variant rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 outline-none" autoFocus
                         onKeyDown={(e) => { if (e.key === 'Enter') handleSetDue(item.id, e.target.value); if (e.key === 'Escape') setEditingDue(null); }}
@@ -4114,12 +4194,21 @@ function InboxPanel({ tasks, authToken, onToggleTask, onEditTask, addToast }) {
                   )}
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => onToggleTask(item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-primary text-on-primary hover:opacity-90 transition-opacity" title="Complete">
-                    <span className="material-symbols-outlined text-sm">check</span>
-                  </button>
-                  <button onClick={() => setEditingDue(editingDue === item.id ? null : item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors" title="Edit due date">
-                    <span className="material-symbols-outlined text-sm">edit_calendar</span>
-                  </button>
+                  {item.source === 'gmail' && item.gmailLink && (
+                    <a href={item.gmailLink} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 text-xs font-bold rounded-lg bg-primary text-on-primary hover:opacity-90 transition-opacity" title="View in Gmail">
+                      <span className="material-symbols-outlined text-sm">open_in_new</span>
+                    </a>
+                  )}
+                  {item.source === 'task' && (
+                    <>
+                      <button onClick={() => onToggleTask(item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-primary text-on-primary hover:opacity-90 transition-opacity" title="Complete">
+                        <span className="material-symbols-outlined text-sm">check</span>
+                      </button>
+                      <button onClick={() => setEditingDue(editingDue === item.id ? null : item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors" title="Edit due date">
+                        <span className="material-symbols-outlined text-sm">edit_calendar</span>
+                      </button>
+                    </>
+                  )}
                   <button onClick={() => handleDismiss(item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors" title="Dismiss">
                     <span className="material-symbols-outlined text-sm">close</span>
                   </button>

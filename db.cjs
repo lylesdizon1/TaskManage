@@ -100,6 +100,22 @@ async function initTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS inbox_items (
+      id               TEXT PRIMARY KEY,
+      user_id          TEXT NOT NULL,
+      type             TEXT NOT NULL,
+      title            TEXT NOT NULL DEFAULT '',
+      summary          TEXT DEFAULT '',
+      source           TEXT NOT NULL,
+      source_id        TEXT,
+      gmail_thread_id  TEXT,
+      gmail_link       TEXT,
+      action_taken     TEXT DEFAULT NULL,
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS notes (
       id          TEXT PRIMARY KEY,
       user_id     TEXT NOT NULL,
@@ -576,6 +592,39 @@ async function setGmailConfigForUser(userId, config) {
      VALUES ($1, $2, NOW())
      ON CONFLICT (user_id) DO UPDATE SET config = $2, updated_at = NOW()`,
     [userId, JSON.stringify(config)],
+  );
+}
+
+// ── Inbox items ───────────────────────────────────────────────────────────────
+
+async function getInboxItemsForUser(userId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM inbox_items WHERE user_id = $1 ORDER BY created_at DESC',
+    [userId],
+  );
+  return rows;
+}
+
+async function createInboxItem(item) {
+  await pool.query(
+    `INSERT INTO inbox_items (id, user_id, type, title, summary, source, source_id, gmail_thread_id, gmail_link, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+    [item.id, item.userId, item.type, item.title, item.summary, item.source, item.sourceId, item.gmailThreadId || null, item.gmailLink || null],
+  );
+}
+
+async function inboxItemExistsBySourceId(userId, sourceId) {
+  const { rows } = await pool.query(
+    'SELECT 1 FROM inbox_items WHERE user_id = $1 AND source_id = $2 LIMIT 1',
+    [userId, sourceId],
+  );
+  return rows.length > 0;
+}
+
+async function updateInboxItemAction(id, action) {
+  await pool.query(
+    'UPDATE inbox_items SET action_taken = $2 WHERE id = $1',
+    [id, action],
   );
 }
 
@@ -1342,4 +1391,8 @@ module.exports = {
   deleteGmailTokensForUser,
   getGmailConfigForUser,
   setGmailConfigForUser,
+  getInboxItemsForUser,
+  createInboxItem,
+  inboxItemExistsBySourceId,
+  updateInboxItemAction,
 };
