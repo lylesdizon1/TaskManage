@@ -4756,9 +4756,9 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
             <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">{briefSending ? 'hourglass_empty' : 'wb_twilight'}</span>
             <span className="text-[10px] font-bold uppercase">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
           </button>
-          {/* Stat Tiles — icon + number, matching Stitch comp */}
-          <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm relative">
-            <div className="bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
+          {/* Stat Tiles — centered text on mobile, icon+number on desktop (Stitch comp) */}
+          <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm relative">
+            <div className="hidden md:block bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
               <span className="material-symbols-outlined text-error text-lg">inbox</span>
             </div>
             <div>
@@ -4767,8 +4767,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
             </div>
             {inboxCount > 0 && <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error animate-pulse" />}
           </button>
-          <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
-            <div className="bg-error-container/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+          <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
+            <div className="hidden md:block bg-error-container/20 p-2 rounded-full group-hover:scale-110 transition-transform">
               <span className="material-symbols-outlined text-error text-lg">event_busy</span>
             </div>
             <div>
@@ -4776,8 +4776,8 @@ function DashboardPanel({ tasks, financialTransactions, currentUser, authToken, 
               <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Overdue</p>
             </div>
           </button>
-          <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl flex items-center gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
-            <div className="bg-primary/10 p-2 rounded-full group-hover:scale-110 transition-transform">
+          <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
+            <div className="hidden md:block bg-primary/10 p-2 rounded-full group-hover:scale-110 transition-transform">
               <span className="material-symbols-outlined text-primary text-lg">priority_high</span>
             </div>
             <div>
