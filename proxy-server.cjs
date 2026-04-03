@@ -2568,11 +2568,17 @@ app.post('/api/alerts/fire', authenticateToken, async (req, res) => {
     }
 
     if (channels.email && recipientEmail) {
-      // reuse existing sendAlertEmail logic — POST to internal resend route
-      sends.push(
-        // placeholder: wire to existing email send helper
-        Promise.resolve('Email')
-      );
+      const resend = getResendClient();
+      if (resend) {
+        sends.push(
+          resend.emails.send({
+            from: getFromEmail(),
+            to: recipientEmail,
+            subject: '[Dizon.ai] Alert',
+            text: message,
+          }).then(() => 'Email')
+        );
+      }
     }
 
     const skipped = [];
