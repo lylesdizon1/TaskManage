@@ -983,15 +983,27 @@ async function addConversationMessage(conversationId, userId, role, content, mod
  */
 async function getOrCreateCommandCenterConversation(userId, dateStr) {
   const title = `Command Center — ${dateStr}`;
-  // Try to find existing
+
+  // Always delete existing command center conversations for today and start fresh
   const existing = await pool.query(
-    `SELECT * FROM chat_conversations
-     WHERE user_id = $1 AND type = 'command_center' AND title = $2
-     LIMIT 1`,
+    `SELECT id FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND title = $2`,
     [userId, title]
   );
-  if (existing.rows.length > 0) return existing.rows[0];
-  // Create new
+
+  if (existing.rows.length > 0) {
+    const ids = existing.rows.map(r => r.id);
+    await pool.query(
+      `DELETE FROM chat_messages WHERE conversation_id = ANY($1)`,
+      [ids]
+    );
+    await pool.query(
+      `DELETE FROM chat_conversations WHERE id = ANY($1)`,
+      [ids]
+    );
+  }
+
+  // Always create fresh
   const result = await pool.query(
     `INSERT INTO chat_conversations (user_id, title, model, type, created_at, updated_at)
      VALUES ($1, $2, 'claude', 'command_center', NOW(), NOW())
