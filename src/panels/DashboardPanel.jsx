@@ -234,9 +234,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     return () => { cancelled = true; };
   }, [currentUser?.id, allDataReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Polling: check for updates every 60s
+  // Polling: check for updates every 60s — only after init is complete
   useEffect(() => {
-    if (!ccConvId) return;
+    if (!ccConvId || ccLoading || ccMessages.length === 0) return;
     const interval = setInterval(async () => {
       try {
         const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
@@ -259,7 +259,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       } catch {}
     }, 60000);
     return () => clearInterval(interval);
-  }, [ccConvId, authToken, apiFetch]);
+  }, [ccConvId, ccLoading, ccMessages.length, authToken, apiFetch]);
 
   // Send user message + stream Aria response
   const handleCcSend = useCallback(async () => {
@@ -432,62 +432,47 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   return (
     <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6 w-full" style={{ minHeight: 0 }}>
 
-      {/* ROW 1: Greeting + Quick Actions */}
-      <div className="flex items-center justify-between gap-6">
-        <div className="flex-shrink-0">
-          <h2 className="text-2xl font-extrabold tracking-tight text-on-background font-headline">{greeting}, {firstName}.</h2>
-          <p className="text-on-surface-variant text-[11px] font-medium">{dateStr}</p>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center px-3 py-2 gap-2 group shadow-sm border border-primary/10">
-            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">add_task</span>
-            <span className="text-[10px] font-bold uppercase">Add Task</span>
-          </button>
-          <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center px-3 py-2 gap-2 group shadow-sm border border-primary/10">
-            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">edit_note</span>
-            <span className="text-[10px] font-bold uppercase">Quick Note</span>
-          </button>
-        </div>
+      {/* ROW 1: Greeting */}
+      <div>
+        <h2 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '28px', fontWeight: 700 }} className="tracking-tight text-on-background">{greeting}, {firstName}.</h2>
+        <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#6b7280' }}>{dateStr}</p>
       </div>
 
       {/* ROW 2: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxWidth: '800px', margin: '0 auto', maxHeight: '420px' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ width: '80%', margin: '0 auto', maxHeight: '420px' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
-            <h3 className="text-sm font-bold font-headline text-primary">Command Center</h3>
+            <span className="material-symbols-outlined text-lg" style={{ color: '#4f4dcf' }}>auto_awesome</span>
+            <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: '#4f4dcf' }}>Command Center</h3>
           </div>
           <select
             value={backend}
             onChange={(e) => onBackendChange(e.target.value)}
-            className="bg-transparent border-none text-[10px] font-bold text-primary focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
+            className="bg-transparent border-none focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
+            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, color: '#4f4dcf' }}
           >
             <option value="claude">Claude</option>
             <option value="chatgpt">ChatGPT</option>
           </select>
         </div>
         {/* Messages */}
-        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '180px' }}>
+        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '180px', fontFamily: 'Manrope, sans-serif' }}>
           {ccLoading ? (
-            <div className="flex items-center gap-2 animate-pulse">
-              <span className="material-symbols-outlined text-primary text-sm">auto_awesome</span>
-              <p className="text-on-surface-variant" style={{ fontSize: '15px', lineHeight: '1.6' }}>Preparing your brief...</p>
+            <div className="flex flex-col items-center justify-center py-8 gap-3">
+              <span className="material-symbols-outlined text-2xl animate-spin" style={{ color: '#4f4dcf' }}>progress_activity</span>
+              <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>Aria is thinking...</p>
             </div>
           ) : ccMessages.length === 0 ? (
-            <p className="text-on-surface-variant" style={{ fontSize: '15px', lineHeight: '1.6' }}>No messages yet.</p>
+            <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>No messages yet.</p>
           ) : (
             ccMessages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div
-                  className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl ${
-                    msg.role === 'user'
-                      ? 'text-white rounded-br-md'
-                      : 'rounded-bl-md'
-                  }`}
+                  className={`max-w-[85%] ${msg.role === 'user' ? 'text-white' : ''}`}
                   style={msg.role === 'user'
-                    ? { backgroundColor: '#4f4dcf', fontSize: '15px', lineHeight: '1.6' }
-                    : { backgroundColor: '#f5f2fa', fontSize: '15px', lineHeight: '1.6' }
+                    ? { backgroundColor: '#4f4dcf', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+                    : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
                   }
                 >
                   {msg.content || <span className="animate-pulse">...</span>}
@@ -504,8 +489,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             onChange={(e) => setCcInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
             placeholder={`Ask ${assistantName} anything...`}
-            className="flex-1 bg-transparent border-none focus:ring-0 placeholder:text-slate-400 font-medium outline-none"
-            style={{ fontSize: '15px' }}
+            className="flex-1 bg-transparent border-none focus:ring-0 placeholder:text-slate-400 outline-none"
+            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px' }}
             disabled={ccSending}
           />
           <button
@@ -521,38 +506,32 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>}
       </div>
 
-      {/* ROW 3: Stat Tiles */}
-      <div className="space-y-3 md:space-y-0">
-        <div className="grid grid-cols-3 gap-3">
-          <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm relative">
-            <div className="hidden md:block bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
-              <span className="material-symbols-outlined text-error text-lg">inbox</span>
-            </div>
-            <div>
-              <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(inboxCount).padStart(2,'0')}</p>
-              <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Inbox</p>
-            </div>
-            {inboxCount > 0 && <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error animate-pulse" />}
-          </button>
-          <button onClick={() => onNavigate('daily', 'overdue')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
-            <div className="hidden md:block bg-error-container/20 p-2 rounded-full group-hover:scale-110 transition-transform">
-              <span className="material-symbols-outlined text-error text-lg">event_busy</span>
-            </div>
-            <div>
-              <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(overdueTasks.length).padStart(2,'0')}</p>
-              <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Overdue</p>
-            </div>
-          </button>
-          <button onClick={() => onNavigate('daily', 'high')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm">
-            <div className="hidden md:block bg-primary/10 p-2 rounded-full group-hover:scale-110 transition-transform">
-              <span className="material-symbols-outlined text-primary text-lg">priority_high</span>
-            </div>
-            <div>
-              <p className="text-lg font-extrabold text-on-background font-headline leading-none">{String(highPriorityTasks.length).padStart(2,'0')}</p>
-              <p className="text-[8px] text-on-surface-variant font-bold uppercase mt-0.5">Priority</p>
-            </div>
-          </button>
-        </div>
+      {/* ROW 3: Unified Action Bar */}
+      <div className="flex gap-3 w-full">
+        <button onClick={() => onNavigate('inbox')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all relative" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>inbox</span>
+          <span className="uppercase">Inbox</span>
+          <span className="font-bold">{String(inboxCount).padStart(2,'0')}</span>
+          {inboxCount > 0 && <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-error animate-pulse" />}
+        </button>
+        <button onClick={() => onNavigate('daily', 'overdue')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>event_busy</span>
+          <span className="uppercase">Overdue</span>
+          <span className="font-bold">{String(overdueTasks.length).padStart(2,'0')}</span>
+        </button>
+        <button onClick={() => onNavigate('daily', 'high')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>priority_high</span>
+          <span className="uppercase">Priority</span>
+          <span className="font-bold">{String(highPriorityTasks.length).padStart(2,'0')}</span>
+        </button>
+        <button onClick={onAddTask} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>add_task</span>
+          <span className="uppercase">Add Task</span>
+        </button>
+        <button onClick={onQuickNote} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>edit_note</span>
+          <span className="uppercase">Quick Note</span>
+        </button>
       </div>
 
       {/* ROW 4: Timeline + Tasks */}
