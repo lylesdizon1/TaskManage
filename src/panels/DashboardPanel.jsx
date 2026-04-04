@@ -169,15 +169,36 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
 
-  // Init: load or create command center session — strictly sequential
+  // Poll for command center updates — only appends, never starts interval itself
+  const pollUpdates = useCallback(async (convId) => {
+    try {
+      const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      lastCheckedRef.current = new Date().toISOString();
+      const { updates } = await res.json();
+      if (!updates || updates.length === 0) return;
+
+      for (const update of updates) {
+        setCcMessages((prev) => [...prev, { role: 'assistant', content: update.content, createdAt: new Date().toISOString() }]);
+        apiFetch(`/api/conversations/${convId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ role: 'assistant', content: update.content }),
+        }).catch(() => {});
+      }
+    } catch {}
+  }, [authToken, apiFetch]);
+
+  // Init: load or create command center session — single sequential init, no parallelism
   useEffect(() => {
     if (!currentUser?.id) return;
     let cancelled = false;
+    let pollInterval = null;
 
     async function initCommandCenter() {
+      setCcLoading(true);
       try {
-        setCcLoading(true);
-
         // Step 1: get or create today's session
         const sessionRes = await apiFetch('/api/dashboard/command-center/session', {
           headers: { Authorization: `Bearer ${authToken}` },
@@ -186,14 +207,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         if (cancelled) return;
         setCcConvId(conversation.id);
 
-        // Step 2: if messages exist, load them and stop
+        // Step 2: if messages exist, load and done
         if (messages && messages.length > 0) {
           setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })));
           setCcLoading(false);
+          // Start polling only after load complete
+          pollInterval = setInterval(() => pollUpdates(conversation.id), 60000);
           return;
         }
 
-        // Step 3: no messages — generate brief now
+        // Step 3: no messages — generate brief first
         const h = new Date().getHours();
         const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
         const aName = currentUser?.assistantName || 'Aria';
@@ -226,48 +249,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
           });
 
-          // Step 5: set in state
+          // Step 5: set state, mark loaded, start polling
           if (!cancelled) {
             setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString() }]);
           }
         }
+
+        if (!cancelled) {
+          setCcLoading(false);
+          pollInterval = setInterval(() => pollUpdates(conversation.id), 60000);
+        }
       } catch (err) {
         console.error('[CommandCenter] init failed:', err);
-      } finally {
         if (!cancelled) setCcLoading(false);
       }
     }
 
-    initCommandCenter();
-    return () => { cancelled = true; };
+    // Wait 1.5s for tasks/calendar data to load before generating brief
+    const initTimer = setTimeout(initCommandCenter, 1500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(initTimer);
+      if (pollInterval) clearInterval(pollInterval);
+    };
   }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Polling: check for updates every 60s — only after init is complete
-  useEffect(() => {
-    if (ccLoading || !ccConvId) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-        lastCheckedRef.current = new Date().toISOString();
-        const { updates } = await res.json();
-        if (!updates || updates.length === 0) return;
-
-        for (const update of updates) {
-          // Append as Aria message
-          setCcMessages((prev) => [...prev, { role: 'assistant', content: update.content, createdAt: new Date().toISOString() }]);
-          // Save to conversation
-          apiFetch(`/api/conversations/${ccConvId}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-            body: JSON.stringify({ role: 'assistant', content: update.content }),
-          }).catch(() => {});
-        }
-      } catch {}
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [ccLoading, ccConvId, authToken, apiFetch]);
 
   // Send user message + stream Aria response
   const handleCcSend = useCallback(async () => {
@@ -440,42 +446,56 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   return (
     <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6 w-full" style={{ minHeight: 0 }}>
 
-      {/* ROW 1: Greeting */}
-      <div>
-        <h2 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '28px', fontWeight: 700 }} className="tracking-tight text-on-background">{greeting}, {firstName}.</h2>
-        <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#6b7280' }}>{dateStr}</p>
+      {/* ROW 1: Greeting + Action Pills */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <div>
+          <h1 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '32px', fontWeight: 700, color: '#31323a', lineHeight: 1.1 }}>
+            {greeting}, {firstName}.
+          </h1>
+          <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
+            {dateStr}
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={onAddTask} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '0 16px', border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_task</span>
+            ADD TASK
+          </button>
+          <button onClick={onQuickNote} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '0 16px', border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>edit_note</span>
+            QUICK NOTE
+          </button>
+        </div>
       </div>
 
-      {/* ROW 2: Unified Action Bar */}
-      <div className="flex gap-3 w-full">
-        <button onClick={() => onNavigate('inbox')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all relative" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>inbox</span>
-          <span className="uppercase">Inbox</span>
-          <span className="font-bold">{String(inboxCount).padStart(2,'0')}</span>
-          {inboxCount > 0 && <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-error animate-pulse" />}
+      {/* ROW 2: Stat Pills */}
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+        <button onClick={() => onNavigate('inbox')} style={{ background: '#ffffff', border: '1px solid #f1f0f5', borderRadius: '16px', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flex: 1, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'pointer', position: 'relative' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#ef4444' }}>inbox</span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Manrope, sans-serif' }}>Inbox</span>
+          </div>
+          <span style={{ fontSize: '18px', fontWeight: 800, color: '#31323a', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>{String(inboxCount).padStart(2,'0')}</span>
+          {inboxCount > 0 && <div style={{ position: 'absolute', top: '8px', right: '8px', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', animation: 'pulse 2s infinite' }} />}
         </button>
-        <button onClick={() => onNavigate('daily', 'overdue')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>event_busy</span>
-          <span className="uppercase">Overdue</span>
-          <span className="font-bold">{String(overdueTasks.length).padStart(2,'0')}</span>
+        <button onClick={() => onNavigate('daily', 'overdue')} style={{ background: '#ffffff', border: '1px solid #f1f0f5', borderRadius: '16px', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flex: 1, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'pointer' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#ef4444' }}>event_busy</span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Manrope, sans-serif' }}>Overdue</span>
+          </div>
+          <span style={{ fontSize: '18px', fontWeight: 800, color: '#31323a', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>{String(overdueTasks.length).padStart(2,'0')}</span>
         </button>
-        <button onClick={() => onNavigate('daily', 'high')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>priority_high</span>
-          <span className="uppercase">Priority</span>
-          <span className="font-bold">{String(highPriorityTasks.length).padStart(2,'0')}</span>
-        </button>
-        <button onClick={onAddTask} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>add_task</span>
-          <span className="uppercase">Add Task</span>
-        </button>
-        <button onClick={onQuickNote} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>edit_note</span>
-          <span className="uppercase">Quick Note</span>
+        <button onClick={() => onNavigate('daily', 'high')} style={{ background: '#ffffff', border: '1px solid #f1f0f5', borderRadius: '16px', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flex: 1, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'pointer' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#4f4dcf' }}>priority_high</span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Manrope, sans-serif' }}>Priority</span>
+          </div>
+          <span style={{ fontSize: '18px', fontWeight: 800, color: '#31323a', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>{String(highPriorityTasks.length).padStart(2,'0')}</span>
         </button>
       </div>
 
       {/* ROW 3: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '420px' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '420px', width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
@@ -495,9 +515,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         {/* Messages */}
         <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '180px', fontFamily: 'Manrope, sans-serif' }}>
           {ccLoading ? (
-            <div className="flex flex-col items-center justify-center py-8 gap-3">
-              <span className="material-symbols-outlined text-2xl animate-spin" style={{ color: '#4f4dcf' }}>progress_activity</span>
-              <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>Aria is thinking...</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
+              <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
+              <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', color: '#6b7280' }}>Aria is thinking...</span>
             </div>
           ) : ccMessages.length === 0 ? (
             <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>No messages yet.</p>
