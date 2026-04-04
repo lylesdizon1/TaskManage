@@ -169,13 +169,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
 
-  // Init: load or create command center session
+  // Init: load or create command center session — strictly sequential
   useEffect(() => {
-    if (!currentUser?.id || !allDataReady) return;
+    if (!currentUser?.id) return;
     let cancelled = false;
 
-    (async () => {
+    async function initCommandCenter() {
       try {
+        setCcLoading(true);
+
+        // Step 1: get or create today's session
         const sessionRes = await apiFetch('/api/dashboard/command-center/session', {
           headers: { Authorization: `Bearer ${authToken}` },
         });
@@ -183,23 +186,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         if (cancelled) return;
         setCcConvId(conversation.id);
 
-        if (messages.length > 0) {
+        // Step 2: if messages exist, load them and stop
+        if (messages && messages.length > 0) {
           setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })));
           setCcLoading(false);
           return;
         }
 
-        // No messages yet — generate brief as first Aria message
+        // Step 3: no messages — generate brief now
         const h = new Date().getHours();
         const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
         const aName = currentUser?.assistantName || 'Aria';
-        const overdueStr = overdueTasks.length > 0 ? overdueTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
-        const dueTodayStr = todayTasks.length > 0 ? todayTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
-        const highTodayOnly = highPriorityTasks.filter((t) => !t.dueDate || t.dueDate <= today);
-        const highStr = highTodayOnly.length > 0 ? highTodayOnly.map((t) => t.title).slice(0, 5).join(', ') : 'None';
-        const eventsStr = calendarEvents.length > 0 ? calendarEvents.map((e) => e.title).slice(0, 5).join(', ') : 'None';
-        const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
-
         const briefRes = await apiFetch('/api/dashboard/aria-brief', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
@@ -209,34 +206,45 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             persona: 'executive_assistant',
             userName: firstName,
             timeOfDay: tod,
-            data: { overdue: overdueStr, highPriority: highStr, events: eventsStr, transactions: 'None', notesCount: notesThisWeek, entities: entStr },
+            data: {
+              overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
+              highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+              events: calendarEvents.map((e) => e.title).join(', ') || 'None',
+              notesCount: notes?.length || 0,
+              entities: (entities || []).map((e) => e.name).join(', ') || 'None',
+            },
           }),
         });
         const { brief } = await briefRes.json();
-        if (cancelled || !brief) { setCcLoading(false); return; }
+        if (cancelled) return;
 
-        // Save brief as assistant message
-        await apiFetch(`/api/conversations/${conversation.id}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ role: 'assistant', content: brief }),
-        });
-        if (!cancelled) {
-          setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString() }]);
+        // Step 4: save brief as message 1
+        if (brief) {
+          await apiFetch(`/api/conversations/${conversation.id}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
+          });
+
+          // Step 5: set in state
+          if (!cancelled) {
+            setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString() }]);
+          }
         }
       } catch (err) {
-        console.error('[command-center] init failed:', err.message);
+        console.error('[CommandCenter] init failed:', err);
       } finally {
         if (!cancelled) setCcLoading(false);
       }
-    })();
+    }
 
+    initCommandCenter();
     return () => { cancelled = true; };
-  }, [currentUser?.id, allDataReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polling: check for updates every 60s — only after init is complete
   useEffect(() => {
-    if (!ccConvId || ccLoading || ccMessages.length === 0) return;
+    if (ccLoading || !ccConvId) return;
     const interval = setInterval(async () => {
       try {
         const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
@@ -259,7 +267,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       } catch {}
     }, 60000);
     return () => clearInterval(interval);
-  }, [ccConvId, ccLoading, ccMessages.length, authToken, apiFetch]);
+  }, [ccLoading, ccConvId, authToken, apiFetch]);
 
   // Send user message + stream Aria response
   const handleCcSend = useCallback(async () => {
@@ -438,8 +446,36 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#6b7280' }}>{dateStr}</p>
       </div>
 
-      {/* ROW 2: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ width: '80%', margin: '0 auto', maxHeight: '420px' }}>
+      {/* ROW 2: Unified Action Bar */}
+      <div className="flex gap-3 w-full">
+        <button onClick={() => onNavigate('inbox')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all relative" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>inbox</span>
+          <span className="uppercase">Inbox</span>
+          <span className="font-bold">{String(inboxCount).padStart(2,'0')}</span>
+          {inboxCount > 0 && <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-error animate-pulse" />}
+        </button>
+        <button onClick={() => onNavigate('daily', 'overdue')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>event_busy</span>
+          <span className="uppercase">Overdue</span>
+          <span className="font-bold">{String(overdueTasks.length).padStart(2,'0')}</span>
+        </button>
+        <button onClick={() => onNavigate('daily', 'high')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>priority_high</span>
+          <span className="uppercase">Priority</span>
+          <span className="font-bold">{String(highPriorityTasks.length).padStart(2,'0')}</span>
+        </button>
+        <button onClick={onAddTask} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>add_task</span>
+          <span className="uppercase">Add Task</span>
+        </button>
+        <button onClick={onQuickNote} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
+          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>edit_note</span>
+          <span className="uppercase">Quick Note</span>
+        </button>
+      </div>
+
+      {/* ROW 3: Command Center */}
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '420px' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
@@ -504,34 +540,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             </span>
           </button>
         </div>}
-      </div>
-
-      {/* ROW 3: Unified Action Bar */}
-      <div className="flex gap-3 w-full">
-        <button onClick={() => onNavigate('inbox')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all relative" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>inbox</span>
-          <span className="uppercase">Inbox</span>
-          <span className="font-bold">{String(inboxCount).padStart(2,'0')}</span>
-          {inboxCount > 0 && <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-error animate-pulse" />}
-        </button>
-        <button onClick={() => onNavigate('daily', 'overdue')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#ef4444' }}>event_busy</span>
-          <span className="uppercase">Overdue</span>
-          <span className="font-bold">{String(overdueTasks.length).padStart(2,'0')}</span>
-        </button>
-        <button onClick={() => onNavigate('daily', 'high')} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>priority_high</span>
-          <span className="uppercase">Priority</span>
-          <span className="font-bold">{String(highPriorityTasks.length).padStart(2,'0')}</span>
-        </button>
-        <button onClick={onAddTask} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>add_task</span>
-          <span className="uppercase">Add Task</span>
-        </button>
-        <button onClick={onQuickNote} className="flex-1 flex items-center justify-center gap-2 rounded-xl border hover:opacity-80 transition-all" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, backgroundColor: '#f5f2fa', borderColor: '#e5e2ea', padding: '10px 12px' }}>
-          <span className="material-symbols-outlined text-base" style={{ color: '#4f4dcf' }}>edit_note</span>
-          <span className="uppercase">Quick Note</span>
-        </button>
       </div>
 
       {/* ROW 4: Timeline + Tasks */}
