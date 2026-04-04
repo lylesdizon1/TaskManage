@@ -446,30 +446,26 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   return (
     <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6 w-full" style={{ minHeight: 0 }}>
 
-      {/* ROW 1: Greeting + Action Pills */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <div>
-          <h1 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '32px', fontWeight: 700, color: '#31323a', lineHeight: 1.1 }}>
-            {greeting}, {firstName}.
-          </h1>
-          <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
-            {dateStr}
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={onAddTask} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '0 16px', border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
-            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_task</span>
-            ADD TASK
-          </button>
-          <button onClick={onQuickNote} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '0 16px', border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
-            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>edit_note</span>
-            QUICK NOTE
-          </button>
-        </div>
+      {/* ROW 1: Greeting */}
+      <div style={{ marginBottom: '16px' }}>
+        <h1 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '32px', fontWeight: 700, color: '#31323a', lineHeight: 1.1 }}>
+          {greeting}, {firstName}.
+        </h1>
+        <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
+          {dateStr}
+        </p>
       </div>
 
-      {/* ROW 2: Stat Pills */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+      {/* ROW 2: Pills — Add Task, Quick Note, Inbox, Overdue, Priority */}
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', width: '100%', marginBottom: '24px' }}>
+        <button onClick={onAddTask} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', flex: 1, border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_task</span>
+          ADD TASK
+        </button>
+        <button onClick={onQuickNote} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', flex: 1, border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>edit_note</span>
+          QUICK NOTE
+        </button>
         <button onClick={() => onNavigate('inbox')} style={{ background: '#ffffff', border: '1px solid #f1f0f5', borderRadius: '16px', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flex: 1, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'pointer', position: 'relative' }}>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#ef4444' }}>inbox</span>
