@@ -980,6 +980,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               apiKeys={apiKeys}
               notes={dashboardNotes}
               entities={userEntities}
+              chatCalendarEvents={chatCalendarEvents}
               onNavigate={(view, filter) => {
                 setActiveView(view);
                 if (window.innerWidth < 768) {

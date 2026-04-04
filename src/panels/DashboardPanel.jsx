@@ -4,7 +4,7 @@ import buildSystemPrompt from '../utils/systemPrompt';
 
 const API_BASE = '';
 
-export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, backend, onBackendChange, apiFetch, callClaudeChat }) {
+export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -298,7 +298,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // Build context: last 10 messages + full Aria system prompt with live data
     const recentMsgs = [...ccMessages.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
     const aName = currentUser?.assistantName || 'Aria';
-    const fullContext = buildSystemPrompt(tasks, entities, notes, calendarEvents);
+    const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents);
     const sysPrompt = `You are ${aName}, an executive assistant for ${firstName}. You are in the Command Center — a live dashboard chat. Be concise, warm, and action-oriented. Reference today's data when relevant. No bullet points unless asked. No sign-off.\n\n${fullContext}`;
 
     // Stream response
@@ -364,7 +364,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     } finally {
       setCcSending(false);
     }
-  }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch, tasks, entities, notes, calendarEvents]);
+  }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch, tasks, entities, notes, calendarEvents, chatCalendarEvents]);
 
   const fetchDigest = (force = false) => {
     const cacheKey = `digest_${today}`;
