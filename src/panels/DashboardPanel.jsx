@@ -170,8 +170,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
 
-  // Poll for command center updates — only appends, never starts interval itself
-  const pollUpdates = useCallback(async (convId) => {
+  // Poll for command center updates — Aria narrates updates via /api/chat/stream
+  const pollUpdatesRef = useRef(null);
+  pollUpdatesRef.current = async (convId) => {
     try {
       const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -180,16 +181,64 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const { updates } = await res.json();
       if (!updates || updates.length === 0) return;
 
-      for (const update of updates) {
-        setCcMessages((prev) => [...prev, { role: 'assistant', content: update.content, createdAt: new Date().toISOString() }]);
-        apiFetch(`/api/conversations/${convId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ role: 'assistant', content: update.content }),
-        }).catch(() => {});
+      // Build a natural prompt for Aria from the raw updates
+      const updateSummary = updates.map((u) => u.content).join('\n');
+      const ariaPrompt = `The following new events just occurred in the background. Narrate them to the user naturally and concisely in your voice as Aria — do not just repeat the raw text. Be brief, warm, and actionable:\n\n${updateSummary}`;
+
+      // Build full context system prompt
+      const aName = currentUser?.assistantName || 'Aria';
+      const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents);
+      const sysPrompt = `You are ${aName}, an executive assistant for ${firstName}. You are in the Command Center — a live dashboard chat. Be concise, warm, and action-oriented. Reference today's data when relevant. No bullet points unless asked. No sign-off.\n\n${fullContext}`;
+
+      // Stream Aria's narration
+      const streamRes = await apiFetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          apiKey: apiKeys?.claude || '',
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1024,
+          system: sysPrompt,
+          messages: [{ role: 'user', content: ariaPrompt }],
+        }),
+      });
+
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let ariaResponse = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6);
+          if (payload === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(payload);
+            if (parsed.delta) ariaResponse += parsed.delta;
+          } catch {}
+        }
       }
-    } catch {}
-  }, [authToken, apiFetch]);
+
+      if (!ariaResponse) return;
+
+      // Save and append as Aria message
+      await apiFetch(`/api/conversations/${convId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ role: 'assistant', content: ariaResponse, model: 'claude' }),
+      });
+
+      setCcMessages((prev) => [...prev, { role: 'assistant', content: ariaResponse, createdAt: new Date().toISOString() }]);
+    } catch (err) {
+      console.error('[CommandCenter] poll failed:', err);
+    }
+  };
 
   // Init: load or create command center session — single sequential init, no parallelism
   useEffect(() => {
@@ -213,7 +262,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })));
           setCcLoading(false);
           // Start polling only after load complete
-          pollInterval = setInterval(() => pollUpdates(conversation.id), 60000);
+          pollInterval = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
           return;
         }
 
@@ -258,7 +307,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
         if (!cancelled) {
           setCcLoading(false);
-          pollInterval = setInterval(() => pollUpdates(conversation.id), 60000);
+          pollInterval = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
         }
       } catch (err) {
         console.error('[CommandCenter] init failed:', err);
