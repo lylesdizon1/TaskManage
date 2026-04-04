@@ -240,90 +240,98 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     }
   };
 
-  // Init: load or create command center session — single sequential init, no parallelism
-  useEffect(() => {
-    if (!currentUser?.id) return;
-    let cancelled = false;
-    let pollInterval = null;
+  // Init: load or create command center session — extracted to ref for trigger flexibility
+  const ccInitRunningRef = useRef(false);
+  const ccPollIntervalRef = useRef(null);
 
-    async function initCommandCenter() {
-      setCcLoading(true);
-      try {
-        // Step 1: get or create today's session
-        const sessionRes = await apiFetch('/api/dashboard/command-center/session', {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-        const { conversation, messages } = await sessionRes.json();
-        if (cancelled) return;
-        setCcConvId(conversation.id);
+  const initCommandCenterRef = useRef(null);
+  initCommandCenterRef.current = async () => {
+    if (!currentUser?.id || ccInitRunningRef.current) return;
+    ccInitRunningRef.current = true;
+    setCcLoading(true);
+    try {
+      // Step 1: get or create today's session
+      const sessionRes = await apiFetch('/api/dashboard/command-center/session', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const { conversation, messages } = await sessionRes.json();
+      setCcConvId(conversation.id);
 
-        // Step 2: if messages exist, load and done
-        if (messages && messages.length > 0) {
-          setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })));
-          setCcLoading(false);
-          // Start polling only after load complete
-          pollInterval = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
-          return;
-        }
+      // Step 2: if messages exist, load and done
+      if (messages && messages.length > 0) {
+        setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })));
+        setCcLoading(false);
+        ccPollIntervalRef.current = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
+        return;
+      }
 
-        // Step 3: no messages — generate brief first
-        const h = new Date().getHours();
-        const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
-        const aName = currentUser?.assistantName || 'Aria';
-        const briefRes = await apiFetch('/api/dashboard/aria-brief', {
+      // Step 3: no messages — generate brief first
+      const h = new Date().getHours();
+      const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+      const aName = currentUser?.assistantName || 'Aria';
+      const briefRes = await apiFetch('/api/dashboard/aria-brief', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          apiKey: apiKeys?.claude || '',
+          assistantName: aName,
+          persona: 'executive_assistant',
+          userName: firstName,
+          timeOfDay: tod,
+          data: {
+            overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
+            highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+            events: calendarEvents.map((e) => e.title).join(', ') || 'None',
+            notesCount: notes?.length || 0,
+            entities: (entities || []).map((e) => e.name).join(', ') || 'None',
+          },
+        }),
+      });
+      const { brief } = await briefRes.json();
+
+      // Step 4: save brief as message 1
+      if (brief) {
+        await apiFetch(`/api/conversations/${conversation.id}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({
-            apiKey: apiKeys?.claude || '',
-            assistantName: aName,
-            persona: 'executive_assistant',
-            userName: firstName,
-            timeOfDay: tod,
-            data: {
-              overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
-              highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
-              events: calendarEvents.map((e) => e.title).join(', ') || 'None',
-              notesCount: notes?.length || 0,
-              entities: (entities || []).map((e) => e.name).join(', ') || 'None',
-            },
-          }),
+          body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
         });
-        const { brief } = await briefRes.json();
-        if (cancelled) return;
 
-        // Step 4: save brief as message 1
-        if (brief) {
-          await apiFetch(`/api/conversations/${conversation.id}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-            body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
-          });
-
-          // Step 5: set state, mark loaded, start polling
-          if (!cancelled) {
-            setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString() }]);
-          }
-        }
-
-        if (!cancelled) {
-          setCcLoading(false);
-          pollInterval = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
-        }
-      } catch (err) {
-        console.error('[CommandCenter] init failed:', err);
-        if (!cancelled) setCcLoading(false);
+        setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString() }]);
       }
+
+      setCcLoading(false);
+      ccPollIntervalRef.current = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
+    } catch (err) {
+      console.error('[CommandCenter] init failed:', err);
+      setCcLoading(false);
+      ccInitRunningRef.current = false;
     }
+  };
 
-    // Wait 1.5s for tasks/calendar data to load before generating brief
-    const initTimer = setTimeout(initCommandCenter, 1500);
+  // Trigger init when tasks are confirmed loaded (non-empty)
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    if (!tasks || tasks.length === 0) return;
+    if (ccConvId || ccInitRunningRef.current) return;
+    initCommandCenterRef.current();
+  }, [tasks, currentUser?.id, ccConvId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    return () => {
-      cancelled = true;
-      clearTimeout(initTimer);
-      if (pollInterval) clearInterval(pollInterval);
-    };
+  // Fallback: if user genuinely has zero tasks, fire after 5s regardless
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const fallback = setTimeout(() => {
+      if (!ccConvId && !ccInitRunningRef.current) initCommandCenterRef.current();
+    }, 5000);
+    return () => clearTimeout(fallback);
   }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (ccPollIntervalRef.current) clearInterval(ccPollIntervalRef.current);
+    };
+  }, []);
 
   // Send user message + stream Aria response
   const handleCcSend = useCallback(async () => {
