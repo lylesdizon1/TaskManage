@@ -323,6 +323,14 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireOwnership(record, req) {
+  const isOwner  = record.user_id === req.user.id;
+  const inEntity = record.entity_id &&
+                   (req.user.entityIds || []).includes(record.entity_id);
+  const isAdmin  = req.user.role === 'admin';
+  return isOwner || inEntity || isAdmin;
+}
+
 // ── Entity routes ────────────────────────────────────────────────────────────
 
 app.get('/api/entities', authenticateToken, async (req, res) => {
@@ -808,10 +816,11 @@ app.get('/api/gcal/status', async (req, res) => {
  * Body: { userId, title, description?, dueDate (YYYY-MM-DD) }
  * Creates a Google Calendar all-day event for the task.
  */
-app.post('/api/gcal/sync-task', async (req, res) => {
-  const { userId, title, description, dueDate, dueTime, timeZone } = req.body;
-  if (!userId || !title || !dueDate) {
-    return res.status(400).json({ error: 'userId, title, and dueDate are required' });
+app.post('/api/gcal/sync-task', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const { title, description, dueDate, dueTime, timeZone } = req.body;
+  if (!title || !dueDate) {
+    return res.status(400).json({ error: 'title and dueDate are required' });
   }
 
   const tokens = await loadGcalTokens(userId);
@@ -860,9 +869,8 @@ app.post('/api/gcal/sync-task', async (req, res) => {
  * Body: { userId }
  * Removes stored tokens for the user.
  */
-app.post('/api/gcal/disconnect', async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: 'userId required' });
+app.post('/api/gcal/disconnect', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
 
   await db.deleteGcalTokensForUser(userId);
   console.log(`[gcal] Disconnected ${userId}`);
@@ -873,10 +881,10 @@ app.post('/api/gcal/disconnect', async (req, res) => {
  * GET /api/gcal/events?userId=...
  * Returns today's calendar events from Google Calendar.
  */
-app.get('/api/gcal/events', async (req, res) => {
-  const { userId, timeZone, days } = req.query;
+app.get('/api/gcal/events', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const { timeZone, days } = req.query;
   const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 30);
-  if (!userId) return res.status(400).json({ error: 'userId required' });
 
   const tokens = await loadGcalTokens(userId);
   if (!tokens) return res.json([]);
@@ -945,9 +953,10 @@ app.get('/api/gcal/events', async (req, res) => {
  * POST /api/calendar/events
  * Create a new Google Calendar event.
  */
-app.post('/api/calendar/events', async (req, res) => {
-  const { userId, summary, description, start, end, allDay } = req.body;
-  if (!userId || !summary) return res.status(400).json({ error: 'userId and summary required' });
+app.post('/api/calendar/events', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const { summary, description, start, end, allDay } = req.body;
+  if (!summary) return res.status(400).json({ error: 'summary required' });
 
   const tokens = await loadGcalTokens(userId);
   if (!tokens) return res.status(401).json({ error: 'Google Calendar not connected' });
@@ -1367,8 +1376,10 @@ app.post('/api/tasks', authenticateToken, async (req, res) => {
     if (!Array.isArray(tasks)) {
       return res.status(400).json({ error: 'Body must be an array of tasks' });
     }
-    await db.replaceTasks(tasks, req.user.id);
-    return res.json({ success: true, count: tasks.length });
+    const results = await Promise.all(
+      tasks.map((task) => db.upsertTask({ ...task, userId: req.user.id }))
+    );
+    return res.json({ success: true, count: results.length });
   } catch (err) {
     console.error('[tasks] write failed:', err.message);
     return res.status(500).json({ error: err.message });
@@ -1569,6 +1580,11 @@ app.post('/api/financial/accounts', authenticateToken, async (req, res) => {
 
 app.put('/api/financial/accounts/:id', authenticateToken, async (req, res) => {
   try {
+    const record = await db.pool.query('SELECT * FROM financial_accounts WHERE id = $1', [req.params.id]).then(r => r.rows[0]);
+    if (!record) return res.status(404).json({ error: 'Account not found' });
+    if (!requireOwnership(record, req)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const updated = await db.updateFinancialAccount(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Account not found' });
     return res.json(updated);
@@ -1580,6 +1596,11 @@ app.put('/api/financial/accounts/:id', authenticateToken, async (req, res) => {
 
 app.delete('/api/financial/accounts/:id', authenticateToken, async (req, res) => {
   try {
+    const record = await db.pool.query('SELECT * FROM financial_accounts WHERE id = $1', [req.params.id]).then(r => r.rows[0]);
+    if (!record) return res.status(404).json({ error: 'Account not found' });
+    if (!requireOwnership(record, req)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     await db.deleteFinancialAccount(req.params.id);
     return res.json({ success: true });
   } catch (err) {
@@ -1627,6 +1648,9 @@ app.post('/api/financial/transactions', authenticateToken, async (req, res) => {
 
 app.put('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
   try {
+    const { rows } = await db.pool.query('SELECT * FROM financial_transactions WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Transaction not found' });
+    if (!requireOwnership(rows[0], req)) return res.status(403).json({ error: 'Access denied' });
     const updated = await db.updateTransaction(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Transaction not found' });
     return res.json(updated);
@@ -1638,6 +1662,9 @@ app.put('/api/financial/transactions/:id', authenticateToken, async (req, res) =
 
 app.delete('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
   try {
+    const { rows } = await db.pool.query('SELECT * FROM financial_transactions WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Transaction not found' });
+    if (!requireOwnership(rows[0], req)) return res.status(403).json({ error: 'Access denied' });
     await db.deleteTransaction(req.params.id);
     return res.json({ success: true });
   } catch (err) {
@@ -2050,6 +2077,11 @@ app.post('/api/notes', authenticateToken, async (req, res) => {
 
 app.put('/api/notes/:id', authenticateToken, async (req, res) => {
   try {
+    const note = await db.getNoteById(req.params.id, req.user.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    if (!requireOwnership(note, req)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const updated = await db.updateNote(req.params.id, req.user.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Note not found' });
     return res.json(updated);
@@ -2061,6 +2093,11 @@ app.put('/api/notes/:id', authenticateToken, async (req, res) => {
 
 app.delete('/api/notes/:id', authenticateToken, async (req, res) => {
   try {
+    const note = await db.getNoteById(req.params.id, req.user.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    if (!requireOwnership(note, req)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     await db.deleteNote(req.params.id, req.user.id);
     return res.json({ success: true });
   } catch (err) {
@@ -2073,6 +2110,9 @@ app.put('/api/notes/:id/pin', authenticateToken, async (req, res) => {
   try {
     const note = await db.getNoteById(req.params.id, req.user.id);
     if (!note) return res.status(404).json({ error: 'Note not found' });
+    if (!requireOwnership(note, req)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const updated = await db.updateNote(req.params.id, req.user.id, { pinned: !note.pinned });
     return res.json(updated);
   } catch (err) {

@@ -492,6 +492,44 @@ async function replaceTasks(tasks, userId) {
   }
 }
 
+async function upsertTask(t) {
+  const { rows } = await pool.query(
+    `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
+                        tags, visibility, completed, owner, created_by, google_event_id, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())
+     ON CONFLICT (id) DO UPDATE SET
+       title = EXCLUDED.title,
+       description = EXCLUDED.description,
+       priority = EXCLUDED.priority,
+       status = EXCLUDED.status,
+       due_date = EXCLUDED.due_date,
+       due_time = EXCLUDED.due_time,
+       tags = EXCLUDED.tags,
+       visibility = EXCLUDED.visibility,
+       completed = EXCLUDED.completed,
+       google_event_id = EXCLUDED.google_event_id,
+       updated_at = NOW()
+     RETURNING *`,
+    [
+      t.id,
+      t.title || '',
+      t.description || '',
+      t.priority || 'medium',
+      t.status || 'pending',
+      t.dueDate || '',
+      t.dueTime || null,
+      JSON.stringify(t.tags || []),
+      t.visibility || 'shared',
+      !!t.completed,
+      t.owner || '',
+      t.createdBy || t.owner || '',
+      t.googleEventId || null,
+      t.createdAt || new Date().toISOString(),
+    ],
+  );
+  return rows[0];
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 async function getSettings() {
@@ -1341,6 +1379,7 @@ module.exports = {
   getTasks,
   getTasksForUser,
   replaceTasks,
+  upsertTask,
   getSettings,
   saveSettings,
   getGcalTokens,
