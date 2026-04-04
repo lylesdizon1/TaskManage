@@ -4,7 +4,7 @@ import buildSystemPrompt from '../utils/systemPrompt';
 
 const API_BASE = '';
 
-export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents }) {
+export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -279,8 +279,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           userName: firstName,
           timeOfDay: tod,
           data: {
-            overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
-            highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+            overdue: initialBriefData?.overdue || overdueTasks.map((t) => t.title).join(', ') || 'None',
+            highPriority: initialBriefData?.highPriority || highPriorityTasks.map((t) => t.title).join(', ') || 'None',
             events: calendarEvents.map((e) => e.title).join(', ') || 'None',
             notesCount: notes?.length || 0,
             entities: (entities || []).map((e) => e.name).join(', ') || 'None',
@@ -309,13 +309,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     }
   };
 
-  // Trigger init when tasks are confirmed loaded (non-empty)
+  // Trigger init when initialBriefData arrives (computed in App.jsx right after tasks load)
   useEffect(() => {
     if (!currentUser?.id) return;
-    if (!tasks || tasks.length === 0) return;
+    if (!initialBriefData) return;
     if (ccConvId || ccInitRunningRef.current) return;
     initCommandCenterRef.current();
-  }, [tasks, currentUser?.id, ccConvId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialBriefData, currentUser?.id, ccConvId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fallback: if user genuinely has zero tasks, fire after 5s regardless
   useEffect(() => {

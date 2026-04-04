@@ -428,6 +428,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // ── Calendar events for chat context ──
   const [chatCalendarEvents, setChatCalendarEvents] = useState([]);
+  const [initialBriefData, setInitialBriefData]  = useState(null);
 
   // Sync activeView → browser URL
   useEffect(() => {
@@ -704,11 +705,14 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     apiFetch('/api/tasks', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setTasks(data);
-        } else {
-          setTasks(SAMPLE_TASKS);
-        }
+        const taskData = (Array.isArray(data) && data.length > 0) ? data : SAMPLE_TASKS;
+        setTasks(taskData);
+        // Compute brief data immediately from the raw task array
+        const todayISO = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+        setInitialBriefData({
+          overdue: taskData.filter(t => !t.completed && t.dueDate && t.dueDate < todayISO).map(t => t.title).join(', ') || 'None',
+          highPriority: taskData.filter(t => !t.completed && t.priority === 'high').map(t => t.title).join(', ') || 'None',
+        });
       })
       .catch(() => setTasks(SAMPLE_TASKS))
       .finally(() => { tasksLoadedRef.current = true; });
@@ -981,6 +985,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               notes={dashboardNotes}
               entities={userEntities}
               chatCalendarEvents={chatCalendarEvents}
+              initialBriefData={initialBriefData}
               onNavigate={(view, filter) => {
                 setActiveView(view);
                 if (window.innerWidth < 768) {
