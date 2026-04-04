@@ -432,38 +432,26 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   return (
     <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6 w-full" style={{ minHeight: 0 }}>
 
-      {/* ROW 1: Greeting + Search + Weather */}
+      {/* ROW 1: Greeting + Quick Actions */}
       <div className="flex items-center justify-between gap-6">
         <div className="flex-shrink-0">
           <h2 className="text-2xl font-extrabold tracking-tight text-on-background font-headline">{greeting}, {firstName}.</h2>
           <p className="text-on-surface-variant text-[11px] font-medium">{dateStr}</p>
         </div>
-        <div className="flex-1 flex justify-center">
-          <div className="flex items-center gap-3 bg-surface-container-lowest px-4 py-3 rounded-xl w-full shadow-sm border border-primary/10 transition-all hover:shadow-md focus-within:ring-2 focus-within:ring-primary/20">
-            <span className="material-symbols-outlined text-primary text-lg">search</span>
-            <input
-              className="bg-transparent border-none focus:ring-0 text-[11px] w-full placeholder:text-slate-400 font-medium outline-none"
-              placeholder="Ask Aria anything..."
-              onKeyDown={(e) => { if (e.key === 'Enter' && e.target.value.trim()) { onAIPrompt(e.target.value.trim()); e.target.value = ''; } }}
-            />
-            <select
-              value={backend}
-              onChange={(e) => onBackendChange(e.target.value)}
-              className="flex-shrink-0 bg-transparent border-none text-[10px] font-bold text-primary focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
-            >
-              <option value="claude">Claude</option>
-              <option value="chatgpt">ChatGPT</option>
-            </select>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-full border border-primary/5 flex-shrink-0">
-          <span className="material-symbols-outlined text-amber-500 text-lg">sunny</span>
-          <span className="text-[11px] font-bold text-on-surface">Danville</span>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center px-3 py-2 gap-2 group shadow-sm border border-primary/10">
+            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">add_task</span>
+            <span className="text-[10px] font-bold uppercase">Add Task</span>
+          </button>
+          <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center px-3 py-2 gap-2 group shadow-sm border border-primary/10">
+            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">edit_note</span>
+            <span className="text-[10px] font-bold uppercase">Quick Note</span>
+          </button>
         </div>
       </div>
 
       {/* ROW 2: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '420px' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxWidth: '800px', margin: '0 auto', maxHeight: '420px' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
@@ -484,22 +472,22 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           {ccLoading ? (
             <div className="flex items-center gap-2 animate-pulse">
               <span className="material-symbols-outlined text-primary text-sm">auto_awesome</span>
-              <p className="text-xs text-on-surface-variant">Preparing your brief...</p>
+              <p className="text-on-surface-variant" style={{ fontSize: '15px', lineHeight: '1.6' }}>Preparing your brief...</p>
             </div>
           ) : ccMessages.length === 0 ? (
-            <p className="text-xs text-on-surface-variant">No messages yet.</p>
+            <p className="text-on-surface-variant" style={{ fontSize: '15px', lineHeight: '1.6' }}>No messages yet.</p>
           ) : (
             ccMessages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div
-                  className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-xs leading-relaxed ${
+                  className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl ${
                     msg.role === 'user'
                       ? 'text-white rounded-br-md'
                       : 'rounded-bl-md'
                   }`}
                   style={msg.role === 'user'
-                    ? { backgroundColor: '#4f4dcf' }
-                    : { backgroundColor: '#f5f2fa' }
+                    ? { backgroundColor: '#4f4dcf', fontSize: '15px', lineHeight: '1.6' }
+                    : { backgroundColor: '#f5f2fa', fontSize: '15px', lineHeight: '1.6' }
                   }
                 >
                   {msg.content || <span className="animate-pulse">...</span>}
@@ -508,15 +496,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             ))
           )}
         </div>
-        {/* Input */}
-        <div className="px-4 py-3 border-t border-primary/5 flex items-center gap-2">
+        {/* Input — hidden until brief is loaded */}
+        {!ccLoading && <div className="px-4 py-3 border-t border-primary/5 flex items-center gap-2">
           <input
             type="text"
             value={ccInput}
             onChange={(e) => setCcInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
             placeholder={`Ask ${assistantName} anything...`}
-            className="flex-1 bg-transparent border-none focus:ring-0 text-xs placeholder:text-slate-400 font-medium outline-none"
+            className="flex-1 bg-transparent border-none focus:ring-0 placeholder:text-slate-400 font-medium outline-none"
+            style={{ fontSize: '15px' }}
             disabled={ccSending}
           />
           <button
@@ -529,23 +518,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               {ccSending ? 'hourglass_empty' : 'send'}
             </span>
           </button>
-        </div>
+        </div>}
       </div>
 
-      {/* ROW 3: Quick Actions + Stat Tiles — Stitch comp layout */}
-      {/* Mobile: two 3-col grids stacked. Desktop: single 6-col row matching comp */}
+      {/* ROW 3: Stat Tiles */}
       <div className="space-y-3 md:space-y-0">
-        <div className="grid grid-cols-3 md:grid-cols-5 gap-3" style={{ justifyContent: 'center' }}>
-          {/* Quick Action Buttons */}
-          <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
-            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">add_task</span>
-            <span className="text-[10px] font-bold uppercase">Add Task</span>
-          </button>
-          <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
-            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">edit_note</span>
-            <span className="text-[10px] font-bold uppercase">Quick Note</span>
-          </button>
-          {/* Stat Tiles — centered text on mobile, icon+number on desktop (Stitch comp) */}
+        <div className="grid grid-cols-3 gap-3">
           <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm relative">
             <div className="hidden md:block bg-error/10 p-2 rounded-full group-hover:scale-110 transition-transform">
               <span className="material-symbols-outlined text-error text-lg">inbox</span>
