@@ -7,6 +7,7 @@ Last updated: April 4, 2026
 - [x] Lazy loading (227kB bundle)
 - [x] Multi-user hardening (requireOwnership, upsertTask, GCal userId)
 - [x] CLAUDE.md + /docs structure
+- [x] Aria Command Center — live chat + polling on dashboard
 - [ ] WhatsApp two-way input — blocked on Aria's number
 - [ ] Morning brief Railway cron (8am)
 - [ ] Registration allowlist

@@ -41,6 +41,7 @@ Last commit: hardening: multi-user ownership checks + kill replaceTasks
 - Lazy loading (724kB → 227kB bundle)
 - Multi-user hardening (requireOwnership, kill replaceTasks, GCal userId fix)
 - CLAUDE.md + /docs structure
+- Aria Command Center — live chat + polling on dashboard
 
 ### In Progress
 - WhatsApp two-way input (Phase 1) — blocked on Aria's number
@@ -89,3 +90,4 @@ Full spec: /docs/design-system.md
 - 2026-04-04: GCal routes hardened — userId from req.user.id only
 - 2026-04-04: requireOwnership() added to notes + financial mutations
 - 2026-04-04: /docs structure created
+- 2026-04-04: Aria Command Center — live chat + polling

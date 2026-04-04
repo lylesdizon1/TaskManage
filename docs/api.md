@@ -77,6 +77,10 @@ GET          /api/financial/summary
 POST /api/dashboard/aria-brief
 POST /api/dashboard/timeline-summary
 
+## Command Center
+GET  /api/dashboard/command-center/session    — get or create today's CC conversation + messages
+GET  /api/dashboard/command-center/updates    — poll for new inbox items / overdue tasks since timestamp
+
 ## Settings
 GET/POST /api/settings
 

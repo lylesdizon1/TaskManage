@@ -975,6 +975,32 @@ async function addConversationMessage(conversationId, userId, role, content, mod
   return rows[0];
 }
 
+/**
+ * Gets or creates a command center conversation for a user for a given date.
+ * @param {string} userId
+ * @param {string} dateStr - YYYY-MM-DD
+ * @returns {Promise<object>} conversation row
+ */
+async function getOrCreateCommandCenterConversation(userId, dateStr) {
+  const title = `Command Center — ${dateStr}`;
+  // Try to find existing
+  const existing = await pool.query(
+    `SELECT * FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND title = $2
+     LIMIT 1`,
+    [userId, title]
+  );
+  if (existing.rows.length > 0) return existing.rows[0];
+  // Create new
+  const result = await pool.query(
+    `INSERT INTO chat_conversations (user_id, title, model, type, created_at, updated_at)
+     VALUES ($1, $2, 'claude', 'command_center', NOW(), NOW())
+     RETURNING *`,
+    [userId, title]
+  );
+  return result.rows[0];
+}
+
 // ── Single-task update ───────────────────────────────────────────────────────
 
 async function updateTask(id, fields) {
@@ -1153,6 +1179,9 @@ async function runMigrations() {
 
   // 8. Add conversation_id column to chat_messages (idempotent)
   await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS conversation_id INTEGER`).catch(() => {});
+
+  // 9. Add type column to chat_conversations (command_center, general, etc.)
+  await pool.query(`ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'general'`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -1411,6 +1440,7 @@ module.exports = {
   deleteConversation,
   getConversationMessages,
   addConversationMessage,
+  getOrCreateCommandCenterConversation,
   updateTask,
   getUserById,
   updateUserPassword,

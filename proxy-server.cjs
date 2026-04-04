@@ -2349,6 +2349,71 @@ app.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Command Center ───────────────────────────────────────────────────────────
+
+app.get('/api/dashboard/command-center/session', authenticateToken, async (req, res) => {
+  try {
+    const todayStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());
+
+    const conversation = await db.getOrCreateCommandCenterConversation(req.user.id, todayStr);
+    const messages = await db.getConversationMessages(conversation.id, req.user.id);
+    return res.json({ conversation, messages });
+  } catch (err) {
+    console.error('[command-center] session failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/dashboard/command-center/updates', authenticateToken, async (req, res) => {
+  try {
+    const since = req.query.since ? new Date(req.query.since) : new Date(Date.now() - 60000);
+    const userId = req.user.id;
+    const todayStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());
+
+    const updates = [];
+
+    // Check new inbox items
+    const inboxResult = await db.pool.query(
+      `SELECT * FROM inbox_items
+       WHERE user_id = $1 AND created_at > $2 AND action_taken IS NULL
+       ORDER BY created_at ASC`,
+      [userId, since]
+    );
+    for (const item of inboxResult.rows) {
+      updates.push({
+        type: 'inbox',
+        content: `📬 New ${item.type === 'VIP' ? 'VIP ' : ''}email from ${item.sender || 'unknown'}: ${item.title}${item.summary ? ` — ${item.summary}` : ''}`
+      });
+    }
+
+    // Check newly overdue tasks (due_date < today, completed = false, updated_at > since)
+    const overdueResult = await db.pool.query(
+      `SELECT * FROM tasks
+       WHERE created_by = $1 AND completed = false
+       AND due_date < $2 AND due_date IS NOT NULL AND due_date != ''
+       AND updated_at > $3`,
+      [userId, todayStr, since]
+    );
+    for (const task of overdueResult.rows) {
+      updates.push({
+        type: 'overdue',
+        content: `⚠️ Task now overdue: "${task.title}"${task.priority === 'high' ? ' — high priority' : ''}`
+      });
+    }
+
+    return res.json({ updates });
+  } catch (err) {
+    console.error('[command-center] updates failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Dashboard AI Brief (persona-aware) ────────────────────────────────────────
 
 app.post('/api/dashboard/aria-brief', authenticateToken, async (req, res) => {

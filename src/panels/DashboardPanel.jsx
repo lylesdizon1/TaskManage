@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useToast } from '../contexts/ToastContext';
 
 const API_BASE = '';
@@ -10,27 +10,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [calendarLoaded, setCalendarLoaded] = useState(false);
   const [timelineSummary, setTimelineSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
-  const [ariaBrief, setAriaBrief] = useState(null);
-  const [ariaBriefLoading, setAriaBriefLoading] = useState(true);
-  const [briefSending, setBriefSending] = useState(false);
   const toast = useToast();
-
-  async function sendMorningBrief() {
-    setBriefSending(true);
-    try {
-      const res = await apiFetch('/api/alerts/morning', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      });
-      const data = await res.json();
-      if (res.ok) toast.success(data.message || 'Morning brief sent!');
-      else toast.error(data.error || 'Failed to send morning brief');
-    } catch {
-      toast.error('Failed to send morning brief');
-    } finally {
-      setBriefSending(false);
-    }
-  }
 
   const _d = new Date();
   const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
@@ -171,43 +151,204 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       .finally(() => setSummaryLoading(false));
   }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Aria brief (persona-aware, once per day, cached)
+  // ── Command Center state ──────────────────────────────────────────────────
+  const [ccMessages, setCcMessages] = useState([]);
+  const [ccConvId, setCcConvId] = useState(null);
+  const [ccLoading, setCcLoading] = useState(true);
+  const [ccInput, setCcInput] = useState('');
+  const [ccSending, setCcSending] = useState(false);
+  const ccScrollRef = useRef(null);
+  const lastCheckedRef = useRef(new Date().toISOString());
+
+  // Auto-scroll to bottom
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (ccScrollRef.current) ccScrollRef.current.scrollTop = ccScrollRef.current.scrollHeight;
+    });
+  }, []);
+
+  useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
+
+  // Init: load or create command center session
   useEffect(() => {
-    const _h = new Date().getHours();
-    const _tod = _h < 12 ? 'morning' : _h < 17 ? 'afternoon' : 'evening';
-    const cacheKey = `aria_brief_${today}_${_tod}_${currentUser?.id || ''}`;
-    const cached = localStorage.getItem(cacheKey);
-    if (cached) { setAriaBrief(cached); setAriaBriefLoading(false); return; }
+    if (!currentUser?.id || !allDataReady) return;
+    let cancelled = false;
 
-    // Don't generate until all data sources have loaded
-    if (!allDataReady) return;
+    (async () => {
+      try {
+        const sessionRes = await apiFetch('/api/dashboard/command-center/session', {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        const { conversation, messages } = await sessionRes.json();
+        if (cancelled) return;
+        setCcConvId(conversation.id);
 
-    const hour2 = new Date().getHours();
-    const tod = hour2 < 12 ? 'morning' : hour2 < 17 ? 'afternoon' : 'evening';
-    const aName = currentUser?.assistantName || 'Aria';
-    const overdueStr = overdueTasks.length > 0 ? overdueTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
-    const dueTodayStr = todayTasks.length > 0 ? todayTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
-    const highTodayOnly = highPriorityTasks.filter((t) => !t.dueDate || t.dueDate <= today);
-    const highStr = highTodayOnly.length > 0 ? highTodayOnly.map((t) => t.title).slice(0, 5).join(', ') : 'None';
-    const eventsStr = calendarEvents.length > 0 ? calendarEvents.map((e) => e.title).slice(0, 5).join(', ') : 'None';
-    const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
-
-
-    const sysPrompt = `You are ${aName}, an Executive Assistant. Write a warm, professional ${tod} brief for ${firstName} in 2-3 sentences. Focus ONLY on what needs attention today: overdue tasks, tasks due today, high priority items, and calendar events. Do not mention finances, businesses, or anything not directly actionable today. If everything is clear, say so briefly. Write naturally. No bullet points. No sign-off.`;
-    const userMsg = `Write my ${tod} brief.\n\nTODAY'S DATA:\n- Calendar events today: ${eventsStr}\n- Overdue tasks: ${overdueStr}\n- Due today: ${dueTodayStr}\n- High priority: ${highStr}`;
-
-    callClaudeChat([{ role: 'user', content: userMsg }], sysPrompt, apiKeys?.claude || '', authToken)
-      .then((text) => {
-        if (text && text !== '(no response)') {
-          // Strip any trailing signature like "— Aria" or "- Aria" to avoid duplicate
-          const cleaned = text.replace(/\s*[—–-]\s*\w+\s*$/, '').trim();
-          setAriaBrief(cleaned);
-          localStorage.setItem(cacheKey, cleaned);
+        if (messages.length > 0) {
+          setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })));
+          setCcLoading(false);
+          return;
         }
-      })
-      .catch((err) => { console.error('[aria-brief] generation failed:', err.message); })
-      .finally(() => setAriaBriefLoading(false));
-  }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length, notesThisWeek]); // eslint-disable-line react-hooks/exhaustive-deps
+
+        // No messages yet — generate brief as first Aria message
+        const h = new Date().getHours();
+        const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+        const aName = currentUser?.assistantName || 'Aria';
+        const overdueStr = overdueTasks.length > 0 ? overdueTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
+        const dueTodayStr = todayTasks.length > 0 ? todayTasks.map((t) => t.title).slice(0, 5).join(', ') : 'None';
+        const highTodayOnly = highPriorityTasks.filter((t) => !t.dueDate || t.dueDate <= today);
+        const highStr = highTodayOnly.length > 0 ? highTodayOnly.map((t) => t.title).slice(0, 5).join(', ') : 'None';
+        const eventsStr = calendarEvents.length > 0 ? calendarEvents.map((e) => e.title).slice(0, 5).join(', ') : 'None';
+        const entStr = (entities || []).filter((e) => e.type === 'business').map((e) => e.name).join(', ') || 'None';
+
+        const briefRes = await apiFetch('/api/dashboard/aria-brief', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({
+            apiKey: apiKeys?.claude || '',
+            assistantName: aName,
+            persona: 'executive_assistant',
+            userName: firstName,
+            timeOfDay: tod,
+            data: { overdue: overdueStr, highPriority: highStr, events: eventsStr, transactions: 'None', notesCount: notesThisWeek, entities: entStr },
+          }),
+        });
+        const { brief } = await briefRes.json();
+        if (cancelled || !brief) { setCcLoading(false); return; }
+
+        // Save brief as assistant message
+        await apiFetch(`/api/conversations/${conversation.id}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ role: 'assistant', content: brief }),
+        });
+        if (!cancelled) {
+          setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString() }]);
+        }
+      } catch (err) {
+        console.error('[command-center] init failed:', err.message);
+      } finally {
+        if (!cancelled) setCcLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [currentUser?.id, allDataReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Polling: check for updates every 60s
+  useEffect(() => {
+    if (!ccConvId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        lastCheckedRef.current = new Date().toISOString();
+        const { updates } = await res.json();
+        if (!updates || updates.length === 0) return;
+
+        for (const update of updates) {
+          // Append as Aria message
+          setCcMessages((prev) => [...prev, { role: 'assistant', content: update.content, createdAt: new Date().toISOString() }]);
+          // Save to conversation
+          apiFetch(`/api/conversations/${ccConvId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ role: 'assistant', content: update.content }),
+          }).catch(() => {});
+        }
+      } catch {}
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [ccConvId, authToken, apiFetch]);
+
+  // Send user message + stream Aria response
+  const handleCcSend = useCallback(async () => {
+    const text = ccInput.trim();
+    if (!text || ccSending || !ccConvId) return;
+    setCcInput('');
+    setCcSending(true);
+
+    const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString() };
+    setCcMessages((prev) => [...prev, userMsg]);
+
+    // Save user message
+    try {
+      await apiFetch(`/api/conversations/${ccConvId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ role: 'user', content: text }),
+      });
+    } catch {}
+
+    // Build context: last 10 messages + system prompt
+    const recentMsgs = [...ccMessages.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
+    const aName = currentUser?.assistantName || 'Aria';
+    const sysPrompt = `You are ${aName}, an executive assistant for ${firstName}. You are in the Command Center — a live dashboard chat. Be concise, warm, and action-oriented. Reference today's data when relevant. No bullet points unless asked. No sign-off.`;
+
+    // Stream response
+    let fullResponse = '';
+    const placeholderIdx = ccMessages.length + 1;
+    setCcMessages((prev) => [...prev, { role: 'assistant', content: '', createdAt: new Date().toISOString() }]);
+
+    try {
+      const res = await apiFetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          apiKey: apiKeys?.claude || '',
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1024,
+          system: sysPrompt,
+          messages: recentMsgs,
+        }),
+      });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6);
+          if (payload === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(payload);
+            if (parsed.delta) {
+              fullResponse += parsed.delta;
+              setCcMessages((prev) => {
+                const updated = [...prev];
+                updated[updated.length - 1] = { ...updated[updated.length - 1], content: fullResponse };
+                return updated;
+              });
+            }
+          } catch {}
+        }
+      }
+
+      // Save assistant response
+      if (fullResponse) {
+        await apiFetch(`/api/conversations/${ccConvId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ role: 'assistant', content: fullResponse }),
+        });
+      }
+    } catch (err) {
+      setCcMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { ...updated[updated.length - 1], content: `Error: ${err.message}` };
+        return updated;
+      });
+    } finally {
+      setCcSending(false);
+    }
+  }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch]);
 
   const fetchDigest = (force = false) => {
     const cacheKey = `digest_${today}`;
@@ -321,42 +462,80 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>
       </div>
 
-      {/* ROW 2: Aria Daily Brief */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low p-5 rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] relative overflow-hidden group border border-primary/5">
-        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none">
-          <span className="material-symbols-outlined text-[60px] overflow-hidden inline-block w-[60px] h-[60px]" aria-hidden="true">auto_awesome</span>
-        </div>
-        <div className="relative z-10 flex flex-col md:flex-row gap-4 items-start">
-          <div className="flex-1 space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
-              <h3 className="text-base font-bold font-headline text-primary">{assistantName}&apos;s Daily Brief</h3>
-            </div>
-            {ariaBriefLoading ? (
-              <p className="text-on-surface-variant leading-relaxed text-xs max-w-4xl animate-pulse">Preparing your brief...</p>
-            ) : ariaBrief ? (
-              <p className="text-on-surface-variant leading-relaxed text-xs max-w-4xl">{ariaBrief}</p>
-            ) : (
-              <p className="text-on-surface-variant leading-relaxed text-xs max-w-4xl">No brief yet — check back in a moment.</p>
-            )}
-            <div className="flex gap-2">
-              {overdueTasks.length > 0 && (
-                <span className="bg-error/10 text-error px-2 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider">{overdueTasks.length} Overdue</span>
-              )}
-              {calendarEvents.length > 0 ? (
-                <span className="bg-surface-container-highest text-on-surface-variant px-2 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider">{calendarEvents.length} Events Today</span>
-              ) : (
-                <span className="bg-surface-container-highest text-on-surface-variant px-2 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider">Clear Morning</span>
-              )}
-            </div>
+      {/* ROW 2: Command Center */}
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '420px' }}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
+            <h3 className="text-sm font-bold font-headline text-primary">Command Center</h3>
           </div>
+          <select
+            value={backend}
+            onChange={(e) => onBackendChange(e.target.value)}
+            className="bg-transparent border-none text-[10px] font-bold text-primary focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
+          >
+            <option value="claude">Claude</option>
+            <option value="chatgpt">ChatGPT</option>
+          </select>
+        </div>
+        {/* Messages */}
+        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '180px' }}>
+          {ccLoading ? (
+            <div className="flex items-center gap-2 animate-pulse">
+              <span className="material-symbols-outlined text-primary text-sm">auto_awesome</span>
+              <p className="text-xs text-on-surface-variant">Preparing your brief...</p>
+            </div>
+          ) : ccMessages.length === 0 ? (
+            <p className="text-xs text-on-surface-variant">No messages yet.</p>
+          ) : (
+            ccMessages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-xs leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'text-white rounded-br-md'
+                      : 'rounded-bl-md'
+                  }`}
+                  style={msg.role === 'user'
+                    ? { backgroundColor: '#4f4dcf' }
+                    : { backgroundColor: '#f5f2fa' }
+                  }
+                >
+                  {msg.content || <span className="animate-pulse">...</span>}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        {/* Input */}
+        <div className="px-4 py-3 border-t border-primary/5 flex items-center gap-2">
+          <input
+            type="text"
+            value={ccInput}
+            onChange={(e) => setCcInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
+            placeholder={`Ask ${assistantName} anything...`}
+            className="flex-1 bg-transparent border-none focus:ring-0 text-xs placeholder:text-slate-400 font-medium outline-none"
+            disabled={ccSending}
+          />
+          <button
+            onClick={handleCcSend}
+            disabled={!ccInput.trim() || ccSending}
+            className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
+            style={{ backgroundColor: ccInput.trim() ? '#4f4dcf' : 'transparent' }}
+          >
+            <span className={`material-symbols-outlined text-base ${ccInput.trim() ? 'text-white' : 'text-slate-400'}`}>
+              {ccSending ? 'hourglass_empty' : 'send'}
+            </span>
+          </button>
         </div>
       </div>
 
       {/* ROW 3: Quick Actions + Stat Tiles — Stitch comp layout */}
       {/* Mobile: two 3-col grids stacked. Desktop: single 6-col row matching comp */}
       <div className="space-y-3 md:space-y-0">
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+        <div className="grid grid-cols-3 md:grid-cols-5 gap-3" style={{ justifyContent: 'center' }}>
           {/* Quick Action Buttons */}
           <button onClick={onAddTask} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
             <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">add_task</span>
@@ -365,10 +544,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           <button onClick={onQuickNote} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10">
             <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">edit_note</span>
             <span className="text-[10px] font-bold uppercase">Quick Note</span>
-          </button>
-          <button onClick={sendMorningBrief} disabled={briefSending} className="bg-primary/5 hover:bg-primary hover:text-on-primary transition-all rounded-xl flex items-center justify-center p-3 gap-2 group shadow-sm border border-primary/10 disabled:opacity-50">
-            <span className="material-symbols-outlined text-primary group-hover:text-on-primary transition-colors text-lg">{briefSending ? 'hourglass_empty' : 'wb_twilight'}</span>
-            <span className="text-[10px] font-bold uppercase">{briefSending ? 'Sending...' : 'Morning Brief'}</span>
           </button>
           {/* Stat Tiles — centered text on mobile, icon+number on desktop (Stitch comp) */}
           <button onClick={() => onNavigate('inbox')} className="bg-surface-container-lowest p-3 rounded-xl shadow-[0px_10px_20px_rgba(79,77,207,0.04)] text-center md:text-left md:flex md:items-center md:gap-3 hover:bg-surface-container-low transition-colors group shadow-sm relative">
