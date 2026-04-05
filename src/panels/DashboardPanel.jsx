@@ -4,7 +4,7 @@ import buildSystemPrompt from '../utils/systemPrompt';
 
 const API_BASE = '';
 
-export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData }) {
+export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -713,7 +713,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             const hovers = ['group-hover:text-primary', 'group-hover:text-tertiary', 'group-hover:text-error'];
             const timeAgo = note.updatedAt ? (() => { const diff = Date.now() - new Date(note.updatedAt).getTime(); const h = Math.floor(diff/3600000); if(h<1) return 'Just now'; if(h<24) return 'Modified '+h+'h ago'; if(h<48) return 'Modified Yesterday'; return 'Modified '+Math.floor(h/24)+'d ago'; })() : '';
             return (
-              <button key={note.id} onClick={() => onNavigate('notes')} className={'bg-surface-container-lowest p-5 rounded-xl shadow-sm border-t-4 '+borders[i%3]+' group hover:scale-[1.01] transition-transform cursor-pointer border-x border-b border-x-surface-container-low border-b-surface-container-low text-left w-full'}>
+              <button key={note.id} onClick={() => onOpenNote(note)} className={'bg-surface-container-lowest p-5 rounded-xl shadow-sm border-t-4 '+borders[i%3]+' group hover:scale-[1.01] transition-transform cursor-pointer border-x border-b border-x-surface-container-low border-b-surface-container-low text-left w-full'}>
                 <span className="text-[8px] font-bold uppercase text-slate-400 tracking-widest">{timeAgo}</span>
                 <h4 className={'text-sm font-bold mt-2 '+hovers[i%3]+' transition-colors'}>{note.title || 'Untitled'}</h4>
                 <p className="text-on-surface-variant text-[11px] mt-2.5 line-clamp-3 leading-relaxed">{(note.content||'').replace(/<[^>]+>/g,'').slice(0,120)}</p>

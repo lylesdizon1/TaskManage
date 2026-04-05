@@ -175,7 +175,7 @@ function relativeTime(dateStr) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
-export default function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNotesLoaded, quickCapturedNote, addToast, entities = [], apiFetch }) {
+export default function NotesPanel({ authToken, onEditorStateChange, onCategoriesLoaded, onNotesLoaded, quickCapturedNote, addToast, entities = [], apiFetch, onNoteOpenRef }) {
   const [notes, setNotes] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -399,6 +399,11 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
     setAiSuggestion(null);
     if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
   }
+
+  // Expose openNote to parent via ref callback
+  useEffect(() => {
+    if (onNoteOpenRef) onNoteOpenRef(openNote);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleEditorChange(field, value) {
     setEditorData((prev) => ({ ...prev, [field]: value }));

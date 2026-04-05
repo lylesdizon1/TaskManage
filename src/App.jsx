@@ -377,6 +377,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [noteCategories, setNoteCategories]     = useState([]);
   const [allNotes, setAllNotes]                 = useState([]);
   const [notesEditorOpen, setNotesEditorOpen]   = useState(false);
+  const openNoteRef                              = useRef(null);
   const [quickCapturedNote, setQuickCapturedNote] = useState(null);
 
   // Dashboard state
@@ -975,6 +976,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onQuickNote={() => { document.querySelector('[aria-label="Quick Capture"]')?.click(); }}
               onAddEvent={() => setShowCreateEvent(true)}
               onToggleTask={(id) => { toggleTask(id); }}
+              onOpenNote={(note) => { setActiveView('notes'); setTimeout(() => openNoteRef.current?.(note), 100); }}
               backend={chatBackend}
               onBackendChange={setChatBackend}
               apiFetch={apiFetch}
@@ -985,7 +987,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} addToast={addToast} apiFetch={apiFetch} />
           ) : activeView === 'notes' ? (
-            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} apiFetch={apiFetch} />
+            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} apiFetch={apiFetch} onNoteOpenRef={(fn) => { openNoteRef.current = fn; }} />
           ) : activeView === 'chat' ? (
             <div className="flex flex-col flex-1 overflow-hidden">
               <ChatTabPanel
@@ -1277,7 +1279,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           }`}
         >
           <Suspense fallback={<div className="flex-1 p-10"><SkeletonBlock className="h-64" /></div>}>
-            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} apiFetch={apiFetch} />
+            <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} apiFetch={apiFetch} onNoteOpenRef={(fn) => { openNoteRef.current = fn; }} />
           </Suspense>
         </section>
         </div>
