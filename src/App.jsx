@@ -782,7 +782,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const res = await apiFetch(`${API_BASE}/api/gcal/sync-task`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
           userId: currentUser.id,
           title: task.title,
