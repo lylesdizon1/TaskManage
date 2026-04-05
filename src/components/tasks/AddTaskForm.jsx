@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { buildGroupedEntities, uid } from '../../utils/helpers.js';
 import { getEntityStyle } from '../../constants/colors.js';
-import { XIcon } from '../icons/Icons.jsx';
+import { XIcon, SpinnerIcon } from '../icons/Icons.jsx';
 
 export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalConnected, forceOpen, onClose }) {
   const userEntityNames = entities.map((e) => e.name);
