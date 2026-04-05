@@ -897,7 +897,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       </aside>
 
       {/* ── Main (offset by sidebar) ── */}
-      <div className="flex-1 md:ml-52 flex flex-col min-h-screen overflow-hidden">
+      <div className="flex-1 md:ml-52 flex flex-col h-screen overflow-hidden">
 
         {/* ── Top bar ── */}
         <header className="hidden md:flex items-center justify-end px-8 h-12 bg-background/80 backdrop-blur-xl sticky top-0 z-40 border-b border-surface-container-low flex-shrink-0">
