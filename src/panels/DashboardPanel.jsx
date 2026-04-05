@@ -4,7 +4,7 @@ import buildSystemPrompt from '../utils/systemPrompt';
 
 const API_BASE = '';
 
-export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData }) {
+export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -672,7 +672,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 <>
                   {overdueTasks.slice(0,2).map((t) => (
                     <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
-                      <button className="mt-0.5 h-4 w-4 rounded-full border-2 border-error flex items-center justify-center flex-shrink-0" />
+                      <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-error flex items-center justify-center flex-shrink-0" />
                       <div className="flex-1 min-w-0">
                         <h5 className="text-xs font-bold leading-tight text-error truncate">{t.title}</h5>
                         <div className="flex gap-2 mt-1.5">
@@ -685,7 +685,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   ))}
                   {todayTasks.slice(0,4).map((t) => (
                     <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
-                      <button className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
+                      <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
                       <div className="flex-1 min-w-0">
                         <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
                         <div className="flex gap-2 mt-1.5">

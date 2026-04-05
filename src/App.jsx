@@ -974,6 +974,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onAddTask={() => setShowTaskModal(true)}
               onQuickNote={() => { document.querySelector('[aria-label="Quick Capture"]')?.click(); }}
               onAddEvent={() => setShowCreateEvent(true)}
+              onToggleTask={(id) => { toggleTask(id); }}
               backend={chatBackend}
               onBackendChange={setChatBackend}
               apiFetch={apiFetch}
