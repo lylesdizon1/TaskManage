@@ -2,8 +2,9 @@ import { useState, useRef, useCallback } from 'react';
 import { buildGroupedEntities, uid } from '../../utils/helpers.js';
 import { getEntityStyle } from '../../constants/colors.js';
 import { XIcon, SpinnerIcon } from '../icons/Icons.jsx';
+import { fetchSuggestedTags } from '../../utils/aiHelpers.js';
 
-export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalConnected, forceOpen, onClose }) {
+export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalConnected, forceOpen, onClose, apiFetch }) {
   const userEntityNames = entities.map((e) => e.name);
   const emptyForm = {
     title: '',
@@ -26,7 +27,7 @@ export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, a
     async (title, desc) => {
       if (!claudeKey || !title.trim()) return;
       setSuggesting(true);
-      const suggested = await fetchSuggestedTags(title, desc, claudeKey, userEntityNames, authToken);
+      const suggested = await fetchSuggestedTags(title, desc, claudeKey, userEntityNames, authToken, apiFetch);
       setSuggesting(false);
       if (suggested.length > 0) {
         setAiSuggested(suggested);
