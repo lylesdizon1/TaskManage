@@ -78,6 +78,15 @@ export default function AdminPanel({ authToken }) {
     fetchUsers();
   }
 
+  async function deleteUser(id, displayName) {
+    if (!window.confirm(`Delete ${displayName}? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users/${id}`, { method: 'DELETE', headers });
+      if (!res.ok) { const d = await res.json(); setError(d.error); return; }
+      fetchUsers();
+    } catch (err) { setError(err.message); }
+  }
+
   async function impersonateUser(userId) {
     try {
       const res = await fetch(`${API_BASE}/api/admin/impersonate/${userId}`, { method: 'POST', headers });
@@ -305,6 +314,9 @@ export default function AdminPanel({ authToken }) {
                         <button onClick={() => impersonateUser(u.id)} className="text-xs text-[#4f4dcf] hover:text-[#3f3dbf] font-medium">Impersonate</button>
                         {u.active && (
                           <button onClick={() => suspendUser(u.id)} className="text-xs text-red-600 hover:text-red-700 font-medium">Suspend</button>
+                        )}
+                        {u.role !== 'superadmin' && (
+                          <button onClick={() => deleteUser(u.id, u.displayName || u.username)} className="text-xs text-red-600 hover:text-red-700 font-medium">Delete</button>
                         )}
                       </td>
                     </tr>

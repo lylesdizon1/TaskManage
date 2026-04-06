@@ -75,10 +75,7 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       const id = `user-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
       await db.upsertUser({ id, username, displayName: displayName || username, passwordHash, email: email || '', role: role || 'member', entityIds: [] });
       if (orgId) {
-        await db.pool.query(
-          `INSERT INTO org_members (org_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-          [orgId, id, role || 'member', req.user.id]
-        );
+        await db.addOrgMember(orgId, id, role || 'member', req.user.id);
       }
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'create_user', targetType: 'user', targetId: id, metadata: { username, email, orgId } });
       return res.json({ id, username, displayName: displayName || username, email, role: role || 'member' });
@@ -127,12 +124,24 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     const { orgId, role } = req.body;
     if (!orgId) return res.status(400).json({ error: 'orgId required' });
     try {
+      await db.addOrgMember(orgId, req.params.id, role || 'member', req.user.id);
+      // Update role if they're already a member
       await db.pool.query(
-        `INSERT INTO org_members (org_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (org_id, user_id) DO UPDATE SET role = $3`,
-        [orgId, req.params.id, role || 'member', req.user.id]
+        `UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3`,
+        [role || 'member', orgId, req.params.id]
       );
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'assign_org', targetType: 'user', targetId: req.params.id, metadata: { orgId, role } });
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.delete('/api/admin/users/:id', async (req, res) => {
+    if (req.params.id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' });
+    try {
+      await db.deleteUser(req.params.id);
+      await db.logAdminAction({ superAdminUserId: req.user.id, action: 'delete_user', targetType: 'user', targetId: req.params.id });
       return res.json({ success: true });
     } catch (err) {
       return res.status(500).json({ error: err.message });
