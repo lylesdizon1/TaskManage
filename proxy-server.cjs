@@ -67,23 +67,13 @@ const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('he
 // ── Token encryption helpers ────────────────────────────────────────────────
 const { encrypt, decrypt, encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('./server/utils/crypto.cjs');
 
-// Wrappers that encrypt/decrypt tokens when storing/loading from DB
-// Tokens column is JSONB, so encrypted string is wrapped in { _enc: "..." }
-const saveGcalTokens = async (userId, tokens) => {
-  if (ENCRYPTION_KEY) {
-    const encrypted = encryptTokens(tokens);
-    await db.setGcalTokensForUser(userId, { _enc: encrypted });
-  } else {
-    await db.setGcalTokensForUser(userId, tokens);
-  }
-};
-
-const loadGcalTokens = async (userId) => {
-  const stored = await db.getGcalTokensForUser(userId);
-  if (!stored) return null;
-  if (stored._enc) return decryptTokens(stored._enc);
-  return stored; // legacy unencrypted tokens
-};
+// Google/GCal/Gmail utils (token load/save accept db as parameter)
+const { getAppUrl, makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, saveGmailTokens: _saveGmailTokens, loadGmailTokens: _loadGmailTokens } = require('./server/utils/google.cjs');
+// Bind db for convenience in this file
+const saveGcalTokens = (userId, tokens) => _saveGcalTokens(userId, tokens, db);
+const loadGcalTokens = (userId) => _loadGcalTokens(userId, db);
+const saveGmailTokens = (userId, tokens) => _saveGmailTokens(userId, tokens, db);
+const loadGmailTokens = (userId) => _loadGmailTokens(userId, db);
 
 // ── Rate limiters ───────────────────────────────────────────────────────────
 const authLimiter = rateLimit({
@@ -101,17 +91,6 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-
-function getAppUrl() {
-  return (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/+$/, '');
-}
-
-function makeOAuth2Client() {
-  const clientId     = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-  return new google.auth.OAuth2(clientId, clientSecret, `${getAppUrl()}/api/gcal/callback`);
-}
 
 const app  = express();
 app.set('trust proxy', 1); // Railway sits behind a proxy
@@ -963,28 +942,6 @@ app.post('/api/calendar/events', authenticateToken, async (req, res) => {
 
 const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
 
-function makeGmailOAuth2Client() {
-  const clientId     = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-  return new google.auth.OAuth2(clientId, clientSecret, `${getAppUrl()}/api/gmail/callback`);
-}
-
-const saveGmailTokens = async (userId, tokens) => {
-  if (ENCRYPTION_KEY) {
-    const encrypted = encryptTokens(tokens);
-    await db.setGmailTokensForUser(userId, { _enc: encrypted });
-  } else {
-    await db.setGmailTokensForUser(userId, tokens);
-  }
-};
-
-const loadGmailTokens = async (userId) => {
-  const stored = await db.getGmailTokensForUser(userId);
-  if (!stored) return null;
-  if (stored._enc) return decryptTokens(stored._enc);
-  return stored;
-};
 
 /**
  * GET /api/gmail/auth-url?userId=...
