@@ -1058,7 +1058,7 @@ async function getUserById(id) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
             email, role, entity_ids AS "entityIds", active,
-            persona, assistant_name AS "assistantName"
+            persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone"
      FROM users WHERE id = $1`,
     [id],
   );

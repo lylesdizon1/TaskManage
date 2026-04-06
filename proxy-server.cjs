@@ -262,15 +262,16 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
 /**
  * PUT /api/users/settings
- * Body: { persona?, assistantName? }
- * Updates the current user's persona and assistant name.
+ * Body: { persona?, assistantName?, whatsappPhone? }
+ * Updates the current user's persona, assistant name, and WhatsApp phone.
  */
 app.put('/api/users/settings', authenticateToken, async (req, res) => {
   try {
-    const { persona, assistantName } = req.body;
+    const { persona, assistantName, whatsappPhone } = req.body;
     const fields = {};
     if (persona !== undefined) fields.persona = persona;
     if (assistantName !== undefined) fields.assistantName = assistantName;
+    if (whatsappPhone !== undefined) fields.whatsappPhone = whatsappPhone;
     const updated = await db.updateUser(req.user.id, fields);
     if (!updated) return res.status(404).json({ error: 'User not found' });
     return res.json(updated);

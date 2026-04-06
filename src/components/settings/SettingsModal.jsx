@@ -304,6 +304,9 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   const [personaSaving, setPersonaSaving] = useState(false);
   const [personaStatus, setPersonaStatus] = useState(null);
 
+  // WhatsApp phone state
+  const [whatsappPhone, setWhatsappPhone] = useState(currentUser?.whatsappPhone || '');
+
   // ── Gmail / Email Intelligence state ──
   const [gmailStatus, setGmailStatus] = useState({ connected: false, email: '' });
   const [gmailConfig, setGmailConfig] = useState({ vipSenders: [], triggerKeywords: [], commitmentDetection: true });
@@ -744,6 +747,18 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
               </div>
               <PersonaSettings />
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">WhatsApp Phone Number</label>
+                <input
+                  type="tel"
+                  value={whatsappPhone}
+                  onChange={(e) => setWhatsappPhone(e.target.value)}
+                  placeholder="+1 555 123 4567"
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                />
+                <p className="text-xs text-gray-400 mt-1">Your WhatsApp number — enables two-way messaging with Aria.</p>
+              </div>
+
               {personaStatus && (
                 <div className={`text-xs px-3 py-2 rounded-lg font-medium ${
                   personaStatus.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
@@ -761,7 +776,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                     const res = await apiFetch('/api/users/settings', {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-                      body: JSON.stringify({ persona: personaType, assistantName: personaName.trim() || 'Aria' }),
+                      body: JSON.stringify({ persona: personaType, assistantName: personaName.trim() || 'Aria', whatsappPhone: whatsappPhone.trim() || null }),
                     });
                     const data = await res.json();
                     if (res.ok) {
