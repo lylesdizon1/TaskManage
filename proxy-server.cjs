@@ -74,22 +74,7 @@ const loadGcalTokens = (userId) => _loadGcalTokens(userId, db);
 const saveGmailTokens = (userId, tokens) => _saveGmailTokens(userId, tokens, db);
 const loadGmailTokens = (userId) => _loadGmailTokens(userId, db);
 
-// ── Rate limiters ───────────────────────────────────────────────────────────
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many attempts. Try again in 15 minutes.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 100,
-  message: { error: 'Too many requests.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const { authLimiter, apiLimiter } = require('./server/middleware/rateLimit.cjs');
 
 const app  = express();
 app.set('trust proxy', 1); // Railway sits behind a proxy
