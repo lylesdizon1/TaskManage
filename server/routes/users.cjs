@@ -22,11 +22,16 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
    */
   router.put('/api/users/settings', authenticateToken, async (req, res) => {
     try {
-      const { persona, assistantName, whatsappPhone } = req.body;
+      const { persona, assistantName, whatsappPhone, profileName, profileBusinesses, profileHousehold, profileLocation, profileNotes } = req.body;
       const fields = {};
       if (persona !== undefined) fields.persona = persona;
       if (assistantName !== undefined) fields.assistantName = assistantName;
       if (whatsappPhone !== undefined) fields.whatsappPhone = whatsappPhone;
+      if (profileName !== undefined) fields.profileName = profileName;
+      if (profileBusinesses !== undefined) fields.profileBusinesses = profileBusinesses;
+      if (profileHousehold !== undefined) fields.profileHousehold = profileHousehold;
+      if (profileLocation !== undefined) fields.profileLocation = profileLocation;
+      if (profileNotes !== undefined) fields.profileNotes = profileNotes;
       const updated = await db.updateUser(req.user.id, fields);
       if (!updated) return res.status(404).json({ error: 'User not found' });
       return res.json(updated);
