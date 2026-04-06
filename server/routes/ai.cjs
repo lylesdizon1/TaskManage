@@ -181,7 +181,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         ).join('; ') || 'none'
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
       }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'}`;
-      const fullSystem = (systemPrompt || '') + contextAppend;
+      const fullSystem = (systemPrompt || '') + `\nToday's date is ${todayStr}.` + contextAppend;
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');

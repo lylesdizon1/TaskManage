@@ -82,7 +82,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
       }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'}`;
 
-      const systemPrompt = `You are Aria, the AI core of Dizon.ai — a Life OS for ${user.displayName || 'Lyle'}. You have full context of their life below. Respond via WhatsApp — warm, direct, concise. Max 3 sentences. No bullet points unless creating a list they asked for. Sign off with — Aria only if it's a closing reply.${contextAppend}`;
+      const systemPrompt = `You are Aria, the AI core of Dizon.ai — a Life OS for ${user.displayName || 'Lyle'}. Today's date is ${todayStr}. You have full context of their life below. Respond via WhatsApp — warm, direct, concise. Max 3 sentences. No bullet points unless creating a list they asked for. Sign off with — Aria only if it's a closing reply.${contextAppend}`;
 
       // ── Call 1 — Sonnet with tools + full context (non-streaming) ───────
       const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
