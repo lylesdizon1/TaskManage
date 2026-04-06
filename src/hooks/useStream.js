@@ -14,7 +14,7 @@ export default function useStream() {
     setStreamedText('');
   }, []);
 
-  const streamChat = useCallback(async (messages, persona, contextSlices) => {
+  const streamChat = useCallback(async (messages, persona, contextSlices, onToolExecuted) => {
     resetStream();
 
     const token = localStorage.getItem('token');
@@ -31,13 +31,12 @@ export default function useStream() {
 
     const body = {
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
       messages,
     };
-    if (systemPrompt) body.system = systemPrompt;
+    if (systemPrompt) body.systemPrompt = systemPrompt;
 
     try {
-      const res = await fetch('/api/chat/stream', {
+      const res = await fetch('/api/chat/execute', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -77,7 +76,9 @@ export default function useStream() {
           try {
             const parsed = JSON.parse(payload);
             if (parsed.error) throw new Error(parsed.error);
-            if (parsed.delta) {
+            if (parsed.toolExecuted) {
+              onToolExecuted?.(parsed.toolExecuted, parsed.result);
+            } else if (parsed.delta) {
               accumulated += parsed.delta;
               setStreamedText(accumulated);
             }

@@ -191,14 +191,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const sysPrompt = `You are ${aName}, an executive assistant for ${firstName}. You are in the Command Center — a live dashboard chat. Be concise, warm, and action-oriented. Reference today's data when relevant. No bullet points unless asked. No sign-off.\n\n${fullContext}`;
 
       // Stream Aria's narration
-      const streamRes = await apiFetch('/api/chat/stream', {
+      const streamRes = await apiFetch('/api/chat/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
-          apiKey: apiKeys?.claude || '',
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          system: sysPrompt,
+          systemPrompt: sysPrompt,
           messages: [{ role: 'user', content: ariaPrompt }],
         }),
       });
@@ -220,6 +218,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           if (payload === '[DONE]') continue;
           try {
             const parsed = JSON.parse(payload);
+            if (parsed.toolExecuted) { console.log('[CC] tool executed:', parsed.toolExecuted, parsed.result); continue; }
             if (parsed.delta) ariaResponse += parsed.delta;
           } catch {}
         }
@@ -364,14 +363,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     setCcMessages((prev) => [...prev, { role: 'assistant', content: '', createdAt: new Date().toISOString() }]);
 
     try {
-      const res = await apiFetch('/api/chat/stream', {
+      const res = await apiFetch('/api/chat/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
-          apiKey: apiKeys?.claude || '',
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          system: sysPrompt,
+          systemPrompt: sysPrompt,
           messages: recentMsgs,
         }),
       });
@@ -392,6 +389,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           if (payload === '[DONE]') continue;
           try {
             const parsed = JSON.parse(payload);
+            if (parsed.toolExecuted) { console.log('[CC] tool executed:', parsed.toolExecuted, parsed.result); continue; }
             if (parsed.delta) {
               fullResponse += parsed.delta;
               setCcMessages((prev) => {
