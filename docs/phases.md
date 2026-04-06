@@ -8,7 +8,7 @@ Last updated: April 4, 2026
 - [x] Multi-user hardening (requireOwnership, upsertTask, GCal userId)
 - [x] CLAUDE.md + /docs structure
 - [x] Aria Command Center — live chat + polling on dashboard
-- [ ] WhatsApp two-way input — blocked on Aria's number
+- [x] WhatsApp two-way input (inbound webhook + settings UI)
 - [ ] Morning brief Railway cron (8am)
 - [ ] Registration allowlist
 - [ ] Inbox: Create Task from email item
