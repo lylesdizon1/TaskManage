@@ -181,7 +181,14 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         ).join('; ') || 'none'
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
       }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'}`;
-      const fullSystem = (systemPrompt || '') + `\nToday's date is ${todayStr}.` + contextAppend;
+      const profileParts = [];
+      if (user.profileName)       profileParts.push(`You are helping ${user.profileName}.`);
+      if (user.profileBusinesses) profileParts.push(`Businesses: ${user.profileBusinesses}.`);
+      if (user.profileHousehold)  profileParts.push(`Household context: ${user.profileHousehold}.`);
+      if (user.profileLocation)   profileParts.push(`Based in: ${user.profileLocation}.`);
+      if (user.profileNotes)      profileParts.push(`Additional context: ${user.profileNotes}.`);
+      const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
+      const fullSystem = profileContext + (systemPrompt || '') + `\nToday's date is ${todayStr}.` + contextAppend;
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');

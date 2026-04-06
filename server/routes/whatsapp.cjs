@@ -82,7 +82,15 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
       }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'}`;
 
-      const systemPrompt = `You are Aria, the AI core of Dizon.ai — a Life OS for ${user.displayName || 'Lyle'}. Today's date is ${todayStr}. You have full context of their life below. Respond via WhatsApp — warm, direct, concise. Max 3 sentences. No bullet points unless creating a list they asked for. Sign off with — Aria only if it's a closing reply.${contextAppend}`;
+      const profileParts = [];
+      if (user.profileName)       profileParts.push(`You are helping ${user.profileName}.`);
+      if (user.profileBusinesses) profileParts.push(`Businesses: ${user.profileBusinesses}.`);
+      if (user.profileHousehold)  profileParts.push(`Household context: ${user.profileHousehold}.`);
+      if (user.profileLocation)   profileParts.push(`Based in: ${user.profileLocation}.`);
+      if (user.profileNotes)      profileParts.push(`Additional context: ${user.profileNotes}.`);
+      const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
+
+      const systemPrompt = `${profileContext}You are Aria, the AI core of Dizon.ai — a Life OS for ${user.profileName || user.displayName || 'the user'}. Today's date is ${todayStr}. You have full context of their life below. Respond via WhatsApp — warm, direct, concise. Max 3 sentences. No bullet points unless creating a list they asked for. Sign off with — Aria only if it's a closing reply.${contextAppend}`;
 
       // ── Call 1 — Sonnet with tools + full context (non-streaming) ───────
       const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
