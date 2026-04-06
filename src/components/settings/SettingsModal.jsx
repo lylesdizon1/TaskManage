@@ -298,7 +298,32 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
 
   // Entity state
   const [newEntityName, setNewEntityName] = useState('');
-  const [entitySaving, setEntitySaving] = useState(false);
+  const [entityLoading, setEntityLoading] = useState(false);
+
+  async function handleCreateEntity() {
+    if (!newEntityName.trim()) return;
+    setEntityLoading(true);
+    try {
+      await apiFetch('/api/entities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ name: newEntityName.trim(), type: 'business' }),
+      });
+      setNewEntityName('');
+      onEntitiesChanged();
+    } finally {
+      setEntityLoading(false);
+    }
+  }
+
+  async function handleDeleteEntity(id) {
+    if (!window.confirm('Delete this entity? Tasks and notes tagged with it will lose this tag.')) return;
+    await apiFetch(`/api/entities/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    onEntitiesChanged();
+  }
 
   // Persona state
   const [personaName, setPersonaName] = useState(currentUser?.assistantName || 'Aria');
@@ -755,68 +780,49 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
 
           {/* Entities tab */}
           {tab === 'entities' && (
-            <div className="space-y-4">
-              <p className="text-xs text-gray-500">Manage your entities — businesses, projects, and personal tags used to organize tasks.</p>
-
-              <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                {(entities || []).length === 0 && (
-                  <p className="text-sm text-gray-400 text-center py-4">No entities yet. Create one below.</p>
-                )}
-                {(entities || []).map((ent) => (
-                  <div key={ent.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="w-3 h-3 rounded-full flex-shrink-0 bg-indigo-400" />
-                      <span className="text-sm font-medium text-gray-800 truncate">{ent.name}</span>
-                      {ent.type && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">{ent.type}</span>}
-                    </div>
-                    {ent.createdBy === currentUser?.id && (
-                      <button
-                        onClick={async () => {
-                          try {
-                            await apiFetch(`/api/entities/${ent.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
-                            onEntitiesChanged?.();
-                          } catch {}
-                        }}
-                        className="text-xs text-red-400 hover:text-red-600 font-medium flex-shrink-0"
-                      >Delete</button>
-                    )}
-                  </div>
-                ))}
+            <div className="space-y-5">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800 mb-1">Your Entities</h3>
+                <p className="text-xs text-gray-500">Entities are labels for your businesses, projects, and personal areas. Use them to tag tasks and notes.</p>
               </div>
-
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  if (!newEntityName.trim() || entitySaving) return;
-                  setEntitySaving(true);
-                  try {
-                    const res = await apiFetch('/api/entities', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-                      body: JSON.stringify({ name: newEntityName.trim() }),
-                    });
-                    if (res.ok) {
-                      setNewEntityName('');
-                      onEntitiesChanged?.();
-                    }
-                  } catch {}
-                  finally { setEntitySaving(false); }
-                }}
-                className="flex gap-2"
-              >
+              <div className="flex gap-2">
                 <input
                   type="text"
                   value={newEntityName}
                   onChange={(e) => setNewEntityName(e.target.value)}
-                  placeholder="New entity name"
-                  className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateEntity()}
+                  placeholder="Entity name (e.g. Rose Motorcars)"
+                  className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <button
-                  type="submit"
-                  disabled={!newEntityName.trim() || entitySaving}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-indigo-700 transition-colors"
-                >{entitySaving ? 'Adding...' : '+ Add'}</button>
-              </form>
+                  onClick={handleCreateEntity}
+                  disabled={entityLoading || !newEntityName.trim()}
+                  className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 hover:bg-indigo-700 transition"
+                >
+                  Add
+                </button>
+              </div>
+              <div className="space-y-2">
+                {entities.map((e) => (
+                  <div key={e.id} className="flex items-center justify-between px-3 py-2.5 bg-gray-50 rounded-lg border border-gray-100">
+                    <div>
+                      <span className="text-sm font-medium text-gray-800">{e.name}</span>
+                      {e.shared && <span className="ml-2 text-[10px] font-bold text-indigo-500 uppercase">Shared</span>}
+                    </div>
+                    {e.isOwner && (
+                      <button
+                        onClick={() => handleDeleteEntity(e.id)}
+                        className="text-xs text-red-500 hover:text-red-700 font-medium transition"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {entities.length === 0 && (
+                  <p className="text-sm text-gray-400 text-center py-4">No entities yet. Add one above.</p>
+                )}
+              </div>
             </div>
           )}
 
