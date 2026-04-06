@@ -11,9 +11,16 @@ export default function AdminPanel({ authToken }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Modal state
+  // Org modal state
   const [showCreateOrg, setShowCreateOrg] = useState(false);
   const [newOrg, setNewOrg] = useState({ name: '', type: 'household', adminEmail: '' });
+
+  // User create state
+  const [showCreateUser, setShowCreateUser] = useState(false);
+  const [newUser, setNewUser] = useState({ username: '', displayName: '', email: '', password: '', role: 'member', orgId: '' });
+
+  // Inline edit state
+  const [editingUser, setEditingUser] = useState(null); // { id, field: 'password'|'email'|'org', value: '' }
 
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
 
@@ -40,7 +47,7 @@ export default function AdminPanel({ authToken }) {
 
   useEffect(() => {
     if (tab === 'orgs') fetchOrgs();
-    else if (tab === 'users') fetchUsers();
+    else if (tab === 'users') { fetchUsers(); fetchOrgs(); }
     else if (tab === 'audit') fetchAuditLog(auditPage);
   }, [tab, auditPage]);
 
@@ -81,6 +88,49 @@ export default function AdminPanel({ authToken }) {
       localStorage.setItem('tm_user', JSON.stringify(data.user));
       window.location.reload();
     } catch {}
+  }
+
+  async function handleCreateUser(e) {
+    e.preventDefault();
+    if (!newUser.username.trim() || !newUser.password) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users`, {
+        method: 'POST', headers,
+        body: JSON.stringify(newUser),
+      });
+      if (!res.ok) { const d = await res.json(); setError(d.error); return; }
+      setShowCreateUser(false);
+      setNewUser({ username: '', displayName: '', email: '', password: '', role: 'member', orgId: '' });
+      fetchUsers();
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }
+
+  async function handleInlineAction() {
+    if (!editingUser) return;
+    const { id, field, value } = editingUser;
+    setLoading(true);
+    setError('');
+    try {
+      let url, body;
+      if (field === 'password') {
+        url = `${API_BASE}/api/admin/users/${id}/password`;
+        body = { password: value };
+      } else if (field === 'email') {
+        url = `${API_BASE}/api/admin/users/${id}/email`;
+        body = { email: value };
+      } else if (field === 'org') {
+        url = `${API_BASE}/api/admin/users/${id}/org`;
+        body = { orgId: value, role: 'member' };
+      }
+      const res = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(body) });
+      if (!res.ok) { const d = await res.json(); setError(d.error); return; }
+      setEditingUser(null);
+      fetchUsers();
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
   }
 
   const isImpersonating = !!localStorage.getItem('tm_impersonation_token');
@@ -191,7 +241,40 @@ export default function AdminPanel({ authToken }) {
       {/* Users Tab */}
       {tab === 'users' && (
         <div>
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Users</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Users</h2>
+            <button onClick={() => setShowCreateUser(true)} className="px-3 py-1.5 bg-[#4f4dcf] text-white text-sm rounded-lg hover:bg-[#3f3dbf] transition-colors flex items-center gap-1">
+              <span className="material-symbols-outlined text-base">add</span> Create User
+            </button>
+          </div>
+
+          {showCreateUser && (
+            <form onSubmit={handleCreateUser} className="mb-4 bg-[#fbf8fe] border border-gray-200 rounded-xl p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <input type="text" placeholder="Username *" value={newUser.username} onChange={(e) => setNewUser({ ...newUser, username: e.target.value })} required className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm" />
+                <input type="text" placeholder="Display name" value={newUser.displayName} onChange={(e) => setNewUser({ ...newUser, displayName: e.target.value })} className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <input type="email" placeholder="Email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm" />
+                <input type="password" placeholder="Password *" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} required className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm">
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+                <select value={newUser.orgId} onChange={(e) => setNewUser({ ...newUser, orgId: e.target.value })} className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm">
+                  <option value="">No org</option>
+                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" disabled={loading} className="px-4 py-2 bg-[#4f4dcf] text-white text-sm rounded-lg disabled:opacity-50">Create</button>
+                <button type="button" onClick={() => setShowCreateUser(false)} className="px-4 py-2 text-gray-600 text-sm">Cancel</button>
+              </div>
+            </form>
+          )}
+
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
               <thead><tr className="bg-gray-50 text-gray-500 text-xs uppercase">
@@ -204,23 +287,64 @@ export default function AdminPanel({ authToken }) {
               </tr></thead>
               <tbody>
                 {users.map((u) => (
-                  <tr key={u.id} className="border-t border-gray-100">
-                    <td className="px-4 py-3 font-medium text-gray-900">{u.displayName || u.username}</td>
-                    <td className="px-4 py-3 text-gray-600">{u.email || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{u.role}</td>
-                    <td className="px-4 py-3 text-gray-600">{u.orgName || '-'}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${u.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                        {u.active ? 'Active' : 'Suspended'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right space-x-2">
-                      <button onClick={() => impersonateUser(u.id)} className="text-xs text-[#4f4dcf] hover:text-[#3f3dbf] font-medium">Impersonate</button>
-                      {u.active && (
-                        <button onClick={() => suspendUser(u.id)} className="text-xs text-red-600 hover:text-red-700 font-medium">Suspend</button>
-                      )}
-                    </td>
-                  </tr>
+                  <>
+                    <tr key={u.id} className="border-t border-gray-100">
+                      <td className="px-4 py-3 font-medium text-gray-900">{u.displayName || u.username}</td>
+                      <td className="px-4 py-3 text-gray-600">{u.email || '-'}</td>
+                      <td className="px-4 py-3 text-gray-600">{u.role}</td>
+                      <td className="px-4 py-3 text-gray-600">{u.orgName || '-'}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${u.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {u.active ? 'Active' : 'Suspended'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right space-x-2">
+                        <button onClick={() => setEditingUser({ id: u.id, field: 'email', value: u.email || '' })} className="text-xs text-gray-500 hover:text-gray-700 font-medium">Email</button>
+                        <button onClick={() => setEditingUser({ id: u.id, field: 'password', value: '' })} className="text-xs text-gray-500 hover:text-gray-700 font-medium">Password</button>
+                        <button onClick={() => setEditingUser({ id: u.id, field: 'org', value: '' })} className="text-xs text-gray-500 hover:text-gray-700 font-medium">Org</button>
+                        <button onClick={() => impersonateUser(u.id)} className="text-xs text-[#4f4dcf] hover:text-[#3f3dbf] font-medium">Impersonate</button>
+                        {u.active && (
+                          <button onClick={() => suspendUser(u.id)} className="text-xs text-red-600 hover:text-red-700 font-medium">Suspend</button>
+                        )}
+                      </td>
+                    </tr>
+                    {editingUser?.id === u.id && (
+                      <tr key={`${u.id}-edit`} className="bg-gray-50">
+                        <td colSpan={6} className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-medium text-gray-500 uppercase w-16">
+                              {editingUser.field === 'password' ? 'New pw' : editingUser.field === 'email' ? 'Email' : 'Org'}
+                            </span>
+                            {editingUser.field === 'org' ? (
+                              <select
+                                value={editingUser.value}
+                                onChange={(e) => setEditingUser({ ...editingUser, value: e.target.value })}
+                                className="flex-1 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm"
+                              >
+                                <option value="">Select org...</option>
+                                {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                              </select>
+                            ) : (
+                              <input
+                                type={editingUser.field === 'password' ? 'password' : 'text'}
+                                value={editingUser.value}
+                                onChange={(e) => setEditingUser({ ...editingUser, value: e.target.value })}
+                                placeholder={editingUser.field === 'password' ? 'New password (min 4 chars)' : 'Email address'}
+                                className="flex-1 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm"
+                                autoFocus
+                              />
+                            )}
+                            <button
+                              onClick={handleInlineAction}
+                              disabled={!editingUser.value || loading}
+                              className="px-3 py-1.5 bg-[#4f4dcf] text-white text-xs rounded-lg disabled:opacity-50"
+                            >Save</button>
+                            <button onClick={() => setEditingUser(null)} className="px-3 py-1.5 text-gray-500 text-xs">Cancel</button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
                 {users.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No users</td></tr>}
               </tbody>
