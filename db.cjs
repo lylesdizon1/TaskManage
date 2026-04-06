@@ -32,6 +32,11 @@ async function initTables() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS persona VARCHAR(50) DEFAULT 'executive_assistant'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_name VARCHAR(50) DEFAULT 'Aria'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT DEFAULT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_name TEXT DEFAULT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_businesses TEXT DEFAULT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_household TEXT DEFAULT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_location TEXT DEFAULT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_notes TEXT DEFAULT NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entities (
@@ -252,6 +257,117 @@ async function initTables() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions (account_id, date DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id, date DESC);`);
 
+  // ── Org hierarchy tables ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS organizations (
+      id         TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      type       TEXT NOT NULL DEFAULT 'household',
+      active     BOOLEAN DEFAULT TRUE,
+      created_by TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_members (
+      org_id     TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role       TEXT NOT NULL DEFAULT 'member',
+      invited_by TEXT NOT NULL,
+      joined_at  TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (org_id, user_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_links (
+      id         TEXT PRIMARY KEY,
+      org_id     TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      label      TEXT NOT NULL,
+      url        TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invites (
+      id          TEXT PRIMARY KEY,
+      token       TEXT UNIQUE NOT NULL,
+      email       TEXT NOT NULL,
+      org_id      TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      role        TEXT NOT NULL DEFAULT 'member',
+      invited_by  TEXT NOT NULL,
+      expires_at  TIMESTAMPTZ NOT NULL,
+      accepted_at TIMESTAMPTZ DEFAULT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id),
+      type        TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'pending',
+      payload     JSONB DEFAULT '{}',
+      result      JSONB DEFAULT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ DEFAULT NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_approvals (
+      id           TEXT PRIMARY KEY,
+      agent_task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+      user_id      TEXT NOT NULL REFERENCES users(id),
+      action       TEXT NOT NULL,
+      description  TEXT DEFAULT '',
+      status       TEXT NOT NULL DEFAULT 'pending',
+      decided_at   TIMESTAMPTZ DEFAULT NULL,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_assignees (
+      task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      assigned_by TEXT NOT NULL,
+      assigned_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (task_id, user_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id                 SERIAL PRIMARY KEY,
+      super_admin_user_id TEXT NOT NULL,
+      action             TEXT NOT NULL,
+      target_type        TEXT,
+      target_id          TEXT,
+      metadata           JSONB DEFAULT '{}',
+      created_at         TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // ── Seed default org ──
+  const { rows: orgRows } = await pool.query('SELECT COUNT(*)::int AS count FROM organizations');
+  if (orgRows[0].count === 0) {
+    await pool.query(
+      `INSERT INTO organizations (id, name, type, created_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO NOTHING`,
+      ['org-dizon-household', 'Dizon Household', 'household', 'user-lyle']
+    );
+    await pool.query(
+      `INSERT INTO org_members (org_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (org_id, user_id) DO NOTHING`,
+      ['org-dizon-household', 'user-lyle', 'admin', 'user-lyle']
+    );
+    console.log('[seed] Created default org: Dizon Household');
+  }
+
   console.log('[db] Tables initialised');
 }
 
@@ -293,6 +409,11 @@ async function updateUser(id, fields) {
   if (fields.persona !== undefined) { sets.push(`persona = $${idx++}`); vals.push(fields.persona); }
   if (fields.assistantName !== undefined) { sets.push(`assistant_name = $${idx++}`); vals.push(fields.assistantName); }
   if (fields.whatsappPhone !== undefined) { sets.push(`whatsapp_phone = $${idx++}`); vals.push(fields.whatsappPhone || null); }
+  if (fields.profileName !== undefined) { sets.push(`profile_name = $${idx++}`); vals.push(fields.profileName); }
+  if (fields.profileBusinesses !== undefined) { sets.push(`profile_businesses = $${idx++}`); vals.push(fields.profileBusinesses); }
+  if (fields.profileHousehold !== undefined) { sets.push(`profile_household = $${idx++}`); vals.push(fields.profileHousehold); }
+  if (fields.profileLocation !== undefined) { sets.push(`profile_location = $${idx++}`); vals.push(fields.profileLocation); }
+  if (fields.profileNotes !== undefined) { sets.push(`profile_notes = $${idx++}`); vals.push(fields.profileNotes); }
 
   if (sets.length === 0) return null;
 
@@ -300,7 +421,10 @@ async function updateUser(id, fields) {
     `UPDATE users SET ${sets.join(', ')} WHERE id = $1
      RETURNING id, username, display_name AS "displayName", email, role,
                entity_ids AS "entityIds", active, created_at AS "createdAt",
-               persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone"`,
+               persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
+               profile_name AS "profileName", profile_businesses AS "profileBusinesses",
+               profile_household AS "profileHousehold", profile_location AS "profileLocation",
+               profile_notes AS "profileNotes"`,
     vals,
   );
   return rows[0] || null;
@@ -1058,7 +1182,10 @@ async function getUserById(id) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
             email, role, entity_ids AS "entityIds", active,
-            persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone"
+            persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
+            profile_name AS "profileName", profile_businesses AS "profileBusinesses",
+            profile_household AS "profileHousehold", profile_location AS "profileLocation",
+            profile_notes AS "profileNotes"
      FROM users WHERE id = $1`,
     [id],
   );
@@ -1069,7 +1196,10 @@ async function getUserByWhatsAppPhone(normalizedPhone) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName",
             email, role, entity_ids AS "entityIds", active,
-            persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone"
+            persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
+            profile_name AS "profileName", profile_businesses AS "profileBusinesses",
+            profile_household AS "profileHousehold", profile_location AS "profileLocation",
+            profile_notes AS "profileNotes"
      FROM users WHERE REGEXP_REPLACE(whatsapp_phone, '[^0-9]', '', 'g') = $1`,
     [normalizedPhone],
   );
@@ -1416,6 +1546,138 @@ async function getFinancialSummary(userId, role) {
   return { monthly: rows, balances: balanceRows, topCategories: categoryRows };
 }
 
+// ── Organizations ──────────────────────────────────────────────────────────
+
+async function getOrgForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT o.id, o.name, o.type, o.active, o.created_by AS "createdBy", o.created_at AS "createdAt",
+            om.role AS "memberRole"
+     FROM org_members om
+     JOIN organizations o ON o.id = om.org_id
+     WHERE om.user_id = $1
+     LIMIT 1`,
+    [userId],
+  );
+  return rows[0] || null;
+}
+
+async function getOrganizations() {
+  const { rows } = await pool.query(
+    `SELECT o.id, o.name, o.type, o.active, o.created_by AS "createdBy", o.created_at AS "createdAt",
+            COUNT(om.user_id)::int AS "memberCount"
+     FROM organizations o
+     LEFT JOIN org_members om ON om.org_id = o.id
+     GROUP BY o.id
+     ORDER BY o.created_at ASC`,
+  );
+  return rows;
+}
+
+async function createOrganization({ id, name, type, createdBy }) {
+  const { rows } = await pool.query(
+    `INSERT INTO organizations (id, name, type, created_by)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, name, type, active, created_by AS "createdBy", created_at AS "createdAt"`,
+    [id, name, type || 'household', createdBy],
+  );
+  return rows[0];
+}
+
+async function updateOrganization(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+  if (fields.active !== undefined) { sets.push(`active = $${idx++}`); vals.push(fields.active); }
+  if (fields.name !== undefined) { sets.push(`name = $${idx++}`); vals.push(fields.name); }
+  if (sets.length === 0) return null;
+  const { rows } = await pool.query(
+    `UPDATE organizations SET ${sets.join(', ')} WHERE id = $1
+     RETURNING id, name, type, active, created_by AS "createdBy", created_at AS "createdAt"`,
+    vals,
+  );
+  return rows[0] || null;
+}
+
+async function addOrgMember(orgId, userId, role, invitedBy) {
+  await pool.query(
+    `INSERT INTO org_members (org_id, user_id, role, invited_by)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (org_id, user_id) DO NOTHING`,
+    [orgId, userId, role, invitedBy],
+  );
+}
+
+// ── Invites ────────────────────────────────────────────────────────────────
+
+async function createInvite({ id, token, email, orgId, role, invitedBy, expiresAt }) {
+  const { rows } = await pool.query(
+    `INSERT INTO invites (id, token, email, org_id, role, invited_by, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, token, email, org_id AS "orgId", role, invited_by AS "invitedBy",
+               expires_at AS "expiresAt", accepted_at AS "acceptedAt", created_at AS "createdAt"`,
+    [id, token, email, orgId, role || 'member', invitedBy, expiresAt],
+  );
+  return rows[0];
+}
+
+async function getInviteByToken(token) {
+  const { rows } = await pool.query(
+    `SELECT i.id, i.token, i.email, i.org_id AS "orgId", i.role,
+            i.invited_by AS "invitedBy", i.expires_at AS "expiresAt",
+            i.accepted_at AS "acceptedAt", i.created_at AS "createdAt",
+            o.name AS "orgName"
+     FROM invites i
+     JOIN organizations o ON o.id = i.org_id
+     WHERE i.token = $1`,
+    [token],
+  );
+  return rows[0] || null;
+}
+
+async function acceptInvite(token, userId) {
+  await pool.query(
+    `UPDATE invites SET accepted_at = NOW() WHERE token = $1`,
+    [token],
+  );
+}
+
+// ── Audit log ──────────────────────────────────────────────────────────────
+
+async function logAdminAction({ superAdminUserId, action, targetType, targetId, metadata }) {
+  await pool.query(
+    `INSERT INTO admin_audit_log (super_admin_user_id, action, target_type, target_id, metadata)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [superAdminUserId, action, targetType || null, targetId || null, JSON.stringify(metadata || {})],
+  );
+}
+
+async function getAuditLog(limit = 20, offset = 0) {
+  const { rows } = await pool.query(
+    `SELECT id, super_admin_user_id AS "superAdminUserId", action,
+            target_type AS "targetType", target_id AS "targetId",
+            metadata, created_at AS "createdAt"
+     FROM admin_audit_log
+     ORDER BY created_at DESC
+     LIMIT $1 OFFSET $2`,
+    [limit, offset],
+  );
+  return rows;
+}
+
+// ── All users (with org info) ──────────────────────────────────────────────
+
+async function getAllUsersWithOrg() {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.username, u.display_name AS "displayName", u.email, u.role, u.active,
+            u.created_at AS "createdAt", o.name AS "orgName", o.id AS "orgId"
+     FROM users u
+     LEFT JOIN org_members om ON om.user_id = u.id
+     LEFT JOIN organizations o ON o.id = om.org_id
+     ORDER BY u.created_at ASC`,
+  );
+  return rows;
+}
+
 module.exports = {
   pool,
   initTables,
@@ -1491,4 +1753,15 @@ module.exports = {
   inboxItemExistsBySourceId,
   updateInboxItemAction,
   getUserByWhatsAppPhone,
+  getOrgForUser,
+  getOrganizations,
+  createOrganization,
+  updateOrganization,
+  addOrgMember,
+  createInvite,
+  getInviteByToken,
+  acceptInvite,
+  logAdminAction,
+  getAuditLog,
+  getAllUsersWithOrg,
 };
