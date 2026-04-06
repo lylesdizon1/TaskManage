@@ -91,6 +91,7 @@ const InboxPanel = lazy(() => import('./panels/InboxPanel.jsx'));
 const NotesPanel = lazy(() => import('./panels/NotesPanel.jsx'));
 const AddTaskForm = lazy(() => import('./components/tasks/AddTaskForm.jsx'));
 const DashboardPanel = lazy(() => import('./panels/DashboardPanel.jsx'));
+const AdminPanel = lazy(() => import('./panels/AdminPanel.jsx'));
 import { CreateEventModal, QuickCaptureModal, QuickCaptureFAB } from './components/modals/QuickCaptureModal.jsx';
 
 // Render grouped entity <option> elements for <select> dropdowns
@@ -868,6 +869,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             { key: 'calendar', label: 'Calendar', icon: 'calendar_today' },
             { key: 'notes', label: 'Notes', icon: 'sticky_note_2' },
             { key: 'chat', label: 'Aria', icon: 'chat' },
+            ...(currentUser?.role === 'superadmin' ? [{ key: 'admin', label: 'Admin', icon: 'admin_panel_settings' }] : []),
           ].map(({ key, label, icon }) => (
             <button
               key={key}
@@ -982,6 +984,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               apiFetch={apiFetch}
               callClaudeChat={callClaudeChat}
             />
+          ) : activeView === 'admin' && currentUser?.role === 'superadmin' ? (
+            <AdminPanel authToken={authToken} />
           ) : activeView === 'inbox' ? (
             <InboxPanel tasks={tasks} authToken={authToken} currentUser={currentUser} onToggleTask={(id) => { toggleTask(id); }} onEditTask={(id, fields) => { editTask(id, fields); }} addToast={addToast} apiFetch={apiFetch} />
           ) : activeView === 'calendar' ? (
