@@ -604,7 +604,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
           ))}
         </div>
 
-        <div className="px-6 py-5 flex-1 overflow-y-auto">
+        <div className="px-6 py-5 flex-1 min-h-0 overflow-y-auto">
           {/* API Keys tab */}
           {tab === 'keys' && (
             <div className="space-y-4">
@@ -766,60 +766,66 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                 <p className="text-xs text-gray-400 mt-1">Your WhatsApp number — enables two-way messaging with Aria.</p>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Your Name</label>
-                <input
-                  type="text"
-                  value={profileName}
-                  onChange={(e) => setProfileName(e.target.value)}
-                  placeholder="Lyle"
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-                />
-              </div>
+              <div className="border-t border-gray-100 pt-4 mt-2">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Your Profile</h3>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Businesses</label>
-                <input
-                  type="text"
-                  value={profileBusinesses}
-                  onChange={(e) => setProfileBusinesses(e.target.value)}
-                  placeholder="Careific, BuyFlip, Rose Motor Cars"
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-                />
-              </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Your Name</label>
+                    <input
+                      type="text"
+                      value={profileName}
+                      onChange={(e) => setProfileName(e.target.value)}
+                      placeholder="Lyle"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Family / Household</label>
-                <input
-                  type="text"
-                  value={profileHousehold}
-                  onChange={(e) => setProfileHousehold(e.target.value)}
-                  placeholder="Wife Liz, co-operator"
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-                />
-                <p className="text-xs text-gray-400 mt-1">For Aria&rsquo;s context only — not a system connection</p>
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Businesses</label>
+                    <input
+                      type="text"
+                      value={profileBusinesses}
+                      onChange={(e) => setProfileBusinesses(e.target.value)}
+                      placeholder="Careific, BuyFlip, Rose Motor Cars"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Location</label>
-                <input
-                  type="text"
-                  value={profileLocation}
-                  onChange={(e) => setProfileLocation(e.target.value)}
-                  placeholder="Alamo/Danville, CA"
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-                />
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Family / Household</label>
+                    <input
+                      type="text"
+                      value={profileHousehold}
+                      onChange={(e) => setProfileHousehold(e.target.value)}
+                      placeholder="Wife Liz, co-operator"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">For Aria&rsquo;s context only — not a system connection</p>
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Additional Context</label>
-                <textarea
-                  value={profileNotes}
-                  onChange={(e) => setProfileNotes(e.target.value)}
-                  placeholder="Anything else Aria should know about you"
-                  rows={3}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
-                />
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Location</label>
+                    <input
+                      type="text"
+                      value={profileLocation}
+                      onChange={(e) => setProfileLocation(e.target.value)}
+                      placeholder="Alamo/Danville, CA"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Additional Context</label>
+                    <textarea
+                      value={profileNotes}
+                      onChange={(e) => setProfileNotes(e.target.value)}
+                      placeholder="Anything else Aria should know about you"
+                      rows={3}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+                    />
+                  </div>
+                </div>
               </div>
 
               {personaStatus && (
