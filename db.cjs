@@ -31,6 +31,7 @@ async function initTables() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS persona VARCHAR(50) DEFAULT 'executive_assistant'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_name VARCHAR(50) DEFAULT 'Aria'`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT DEFAULT NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entities (
@@ -291,6 +292,7 @@ async function updateUser(id, fields) {
   if (fields.passwordHash !== undefined) { sets.push(`password_hash = $${idx++}`); vals.push(fields.passwordHash); }
   if (fields.persona !== undefined) { sets.push(`persona = $${idx++}`); vals.push(fields.persona); }
   if (fields.assistantName !== undefined) { sets.push(`assistant_name = $${idx++}`); vals.push(fields.assistantName); }
+  if (fields.whatsappPhone !== undefined) { sets.push(`whatsapp_phone = $${idx++}`); vals.push(fields.whatsappPhone || null); }
 
   if (sets.length === 0) return null;
 
@@ -298,7 +300,7 @@ async function updateUser(id, fields) {
     `UPDATE users SET ${sets.join(', ')} WHERE id = $1
      RETURNING id, username, display_name AS "displayName", email, role,
                entity_ids AS "entityIds", active, created_at AS "createdAt",
-               persona, assistant_name AS "assistantName"`,
+               persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone"`,
     vals,
   );
   return rows[0] || null;
@@ -1063,6 +1065,17 @@ async function getUserById(id) {
   return rows[0] || null;
 }
 
+async function getUserByWhatsAppPhone(normalizedPhone) {
+  const { rows } = await pool.query(
+    `SELECT id, username, display_name AS "displayName",
+            email, role, entity_ids AS "entityIds", active,
+            persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone"
+     FROM users WHERE REGEXP_REPLACE(whatsapp_phone, '[^0-9]', '', 'g') = $1`,
+    [normalizedPhone],
+  );
+  return rows[0] || null;
+}
+
 async function updateUserPassword(id, newHash) {
   await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [id, newHash]);
 }
@@ -1477,4 +1490,5 @@ module.exports = {
   createInboxItem,
   inboxItemExistsBySourceId,
   updateInboxItemAction,
+  getUserByWhatsAppPhone,
 };
