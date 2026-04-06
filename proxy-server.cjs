@@ -522,15 +522,7 @@ app.post('/api/openai', authenticateToken, async (req, res) => {
 
 // ── Email routes (Resend) ─────────────────────────────────────────────────────
 
-function getResendClient() {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return null;
-  return new Resend(apiKey);
-}
-
-function getFromEmail() {
-  return process.env.RESEND_FROM_EMAIL || 'Dizon.ai <onboarding@resend.dev>';
-}
+const { getResendClient, getFromEmail } = require('./server/utils/email.cjs');
 
 /**
  * POST /api/email/test
