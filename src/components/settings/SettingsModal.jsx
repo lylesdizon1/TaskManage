@@ -288,7 +288,7 @@ function EnvBadge() {
 }
 
 export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged, onUserUpdated, apiFetch, alertRules, onUpdateAlertRules, tasks, firedAlertsRef, envStatus, addToast: addToastProp, EntitySelectOptions }) {
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
   const [tab, setTab]               = useState('keys');
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
   const [draftEmail, setDraftEmail] = useState({ ...emailSettings });
