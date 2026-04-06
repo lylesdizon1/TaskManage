@@ -2712,6 +2712,111 @@ app.get('/api/config/status', authenticateToken, (req, res) => {
   });
 });
 
+// ── WhatsApp Inbound Webhook (public — no JWT) ──────────────────────────────
+
+app.post('/api/whatsapp/inbound', async (req, res) => {
+  try {
+    const data = req.body?.data;
+    if (!data) return res.json({ ok: true, skipped: 'no data' });
+
+    // Only handle text messages, skip media/status/etc
+    const msgBody = data.body;
+    const fromRaw = data.from;
+    if (!msgBody || !fromRaw) return res.json({ ok: true, skipped: 'non-text or missing sender' });
+
+    // Normalize phone: strip non-digits
+    const normalizedPhone = fromRaw.replace(/\D/g, '');
+    console.log(`[whatsapp/inbound] From: ${normalizedPhone}, Message: "${msgBody}"`);
+
+    // Look up user by WhatsApp phone
+    const user = await db.getUserByWhatsAppPhone(normalizedPhone);
+    if (!user) {
+      console.log(`[whatsapp/inbound] No user found for phone ${normalizedPhone}`);
+      return res.json({ ok: true, skipped: 'unknown sender' });
+    }
+
+    // Use Claude to parse intent
+    const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+    const parseResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      system: `You are Aria, a personal AI assistant. Parse the user's WhatsApp message into a structured intent.
+Respond with ONLY valid JSON, no markdown:
+{
+  "intent": "CREATE_TASK" | "CREATE_NOTE" | "QUESTION" | "OTHER",
+  "title": "short title for task or note",
+  "description": "optional longer description",
+  "priority": "low" | "medium" | "high",
+  "reply": "friendly confirmation message to send back"
+}
+Rules:
+- CREATE_TASK: user wants to add a todo, reminder, or action item
+- CREATE_NOTE: user wants to jot something down, save info, or braindump
+- QUESTION: user is asking a question (reply with a helpful answer)
+- OTHER: anything else
+- Always set a clear, concise title
+- Default priority to "medium" unless urgency is indicated`,
+      messages: [{ role: 'user', content: msgBody }],
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(parseResponse.content[0].text);
+    } catch {
+      console.error('[whatsapp/inbound] Failed to parse Claude response:', parseResponse.content[0].text);
+      parsed = { intent: 'OTHER', reply: 'Got your message! I couldn\'t quite understand that — try again?' };
+    }
+
+    const { intent, title, description, priority, reply } = parsed;
+    const uid = crypto.randomUUID();
+
+    if (intent === 'CREATE_TASK') {
+      await db.upsertTask({
+        id: uid,
+        title: title || msgBody.slice(0, 100),
+        description: description || '',
+        priority: priority || 'medium',
+        dueDate: '',
+        tags: [],
+        visibility: 'private',
+        completed: false,
+        owner: user.id,
+      });
+      console.log(`[whatsapp/inbound] Created task "${title}" for user ${user.id}`);
+    } else if (intent === 'CREATE_NOTE') {
+      await db.createNote({
+        id: uid,
+        userId: user.id,
+        title: title || 'WhatsApp Note',
+        content: description || msgBody,
+        visibility: 'private',
+        type: 'quick',
+      });
+      console.log(`[whatsapp/inbound] Created note "${title}" for user ${user.id}`);
+    }
+
+    // Reply via UltraMsg
+    const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+    const ultraToken = process.env.ULTRAMSG_TOKEN;
+    if (ultraInstance && ultraToken && reply) {
+      try {
+        await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: ultraToken, to: fromRaw, body: reply }),
+        });
+      } catch (replyErr) {
+        console.error('[whatsapp/inbound] Reply failed:', replyErr.message);
+      }
+    }
+
+    return res.json({ ok: true, intent, userId: user.id });
+  } catch (err) {
+    console.error('[whatsapp/inbound] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 async function start() {
