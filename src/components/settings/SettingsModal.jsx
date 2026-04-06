@@ -304,14 +304,15 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     if (!newEntityName.trim()) return;
     setEntityLoading(true);
     try {
-      await apiFetch('/api/entities', {
+      const res = await apiFetch('/api/entities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ name: newEntityName.trim(), type: 'business' }),
       });
+      const created = await res.json();
       setNewEntityName('');
-      onEntitiesChanged();
-      console.log('[entities] created, reloading...');
+      // Small delay before reload so DB write is fully committed
+      setTimeout(() => onEntitiesChanged(), 300);
     } finally {
       setEntityLoading(false);
     }
