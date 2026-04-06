@@ -2762,7 +2762,8 @@ Rules:
 
     let parsed;
     try {
-      parsed = JSON.parse(parseResponse.content[0].text);
+      const raw = parseResponse.content[0].text.replace(/```json\n?|```\n?/g, '').trim();
+      parsed = JSON.parse(raw);
     } catch {
       console.error('[whatsapp/inbound] Failed to parse Claude response:', parseResponse.content[0].text);
       parsed = { intent: 'OTHER', reply: 'Got your message! I couldn\'t quite understand that — try again?' };
