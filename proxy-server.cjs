@@ -95,80 +95,9 @@ app.use((req, _res, next) => {
 });
 
 
-// ── Auth routes ──────────────────────────────────────────────────────────────
-
-/**
- * POST /api/auth/login
- * Body: { username, password }
- * Returns: { token, user: { id, username, displayName } }
- */
-app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
-  }
-
-  try {
-    const users = await db.getUsers();
-    const user = users.find((u) => u.username === username);
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) {
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-
-    if (user.active === false) {
-      return res.status(401).json({ error: 'Account is deactivated' });
-    }
-
-    const token = jwt.sign(
-      {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        email: user.email || '',
-        role: user.role || 'member',
-        entityIds: user.entityIds || [],
-      },
-      JWT_SECRET,
-      { expiresIn: '30d' },
-    );
-
-    return res.json({
-      token,
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        email: user.email || '',
-        role: user.role || 'member',
-        entityIds: user.entityIds || [],
-      },
-    });
-  } catch (err) {
-    console.error('[auth] login failed:', err.message);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-/**
- * GET /api/auth/me
- * Returns the current user from the JWT.
- */
-app.get('/api/auth/me', authenticateToken, async (req, res) => {
-  // Return fresh user data from DB (not just JWT claims)
-  try {
-    const user = await db.getUserById(req.user.id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    const { passwordHash, ...safe } = user;
-    res.json({ user: safe });
-  } catch (err) {
-    res.json({ user: req.user });
-  }
-});
+// ── Auth routes (extracted to server/routes/auth.cjs) ────────────────────────
+const authRouter = require('./server/routes/auth.cjs')({ authenticateToken, JWT_SECRET, db });
+app.use('/', authRouter);
 
 /**
  * PUT /api/users/settings
@@ -190,41 +119,6 @@ app.put('/api/users/settings', authenticateToken, async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
-/**
- * POST /api/auth/refresh
- * Accepts a valid (non-expired) token, returns a fresh token with new 30d expiry.
- * Header: Authorization: Bearer <token>
- * Returns: { token, user: { id, username, displayName, ... } }
- */
-app.post('/api/auth/refresh', authenticateToken, async (req, res) => {
-  try {
-    const user = await db.getUserById(req.user.id);
-    if (!user || user.active === false) {
-      return res.status(403).json({ error: 'Account is deactivated or not found' });
-    }
-
-    const token = jwt.sign(
-      {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        email: user.email || '',
-        role: user.role || 'member',
-        entityIds: user.entityIds || [],
-      },
-      JWT_SECRET,
-      { expiresIn: '30d' },
-    );
-
-    const { passwordHash, ...safe } = user;
-    return res.json({ token, user: safe });
-  } catch (err) {
-    console.error('[auth] refresh failed:', err.message);
-    return res.status(500).json({ error: 'Token refresh failed' });
-  }
-});
-
 
 // ── Entity routes ────────────────────────────────────────────────────────────
 
@@ -1122,71 +1016,9 @@ app.patch('/api/inbox/items/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// ── Task persistence ─────────────────────────────────────────────────────────
-
-app.get('/api/tasks', authenticateToken, async (req, res) => {
-  try {
-    const tasks = await db.getTasksForUser(req.user.id, req.user.entityIds || []);
-    return res.json(tasks);
-  } catch (err) {
-    console.error('[tasks] read failed:', err.message);
-    return res.json([]);
-  }
-});
-
-app.post('/api/tasks', authenticateToken, async (req, res) => {
-  try {
-    const tasks = req.body;
-    if (!Array.isArray(tasks)) {
-      return res.status(400).json({ error: 'Body must be an array of tasks' });
-    }
-    const results = await Promise.all(
-      tasks.map((task) => db.upsertTask({ ...task, userId: req.user.id }))
-    );
-    return res.json({ success: true, count: results.length });
-  } catch (err) {
-    console.error('[tasks] write failed:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/tasks/:id', authenticateToken, async (req, res) => {
-  try {
-    const updated = await db.updateTask(req.params.id, req.body);
-    if (!updated) return res.status(404).json({ error: 'Task not found' });
-    return res.json(updated);
-  } catch (err) {
-    console.error('[tasks] update failed:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Change password ──────────────────────────────────────────────────────────
-
-app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
-  if (!currentPassword || !newPassword) {
-    return res.status(400).json({ error: 'Current password and new password are required' });
-  }
-  if (newPassword.length < 4) {
-    return res.status(400).json({ error: 'New password must be at least 4 characters' });
-  }
-
-  try {
-    const user = await db.getUserById(req.user.id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
-
-    const newHash = await bcrypt.hash(newPassword, 10);
-    await db.updateUserPassword(user.id, newHash);
-    return res.json({ success: true });
-  } catch (err) {
-    console.error('[auth] change-password failed:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
-});
+// ── Task persistence (extracted to server/routes/tasks.cjs) ───────────────────
+const tasksRouter = require('./server/routes/tasks.cjs')({ authenticateToken, db });
+app.use('/', tasksRouter);
 
 // Note: All /api/notes routes (GET/POST/PUT/DELETE) are defined in the notes section below
 
