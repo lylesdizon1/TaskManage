@@ -3,6 +3,7 @@
 const express = require('express');
 const crypto  = require('crypto');
 const jwt     = require('jsonwebtoken');
+const bcrypt  = require('bcryptjs');
 
 module.exports = function createAdminRouter({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }) {
   const router = express.Router();
@@ -66,12 +67,73 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  router.post('/api/admin/users', async (req, res) => {
+    const { username, displayName, email, password, role, orgId } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+    try {
+      const passwordHash = await bcrypt.hash(password, 10);
+      const id = `user-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+      await db.upsertUser({ id, username, displayName: displayName || username, passwordHash, email: email || '', role: role || 'member', entityIds: [] });
+      if (orgId) {
+        await db.pool.query(
+          `INSERT INTO org_members (org_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+          [orgId, id, role || 'member', req.user.id]
+        );
+      }
+      await db.logAdminAction({ superAdminUserId: req.user.id, action: 'create_user', targetType: 'user', targetId: id, metadata: { username, email, orgId } });
+      return res.json({ id, username, displayName: displayName || username, email, role: role || 'member' });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   router.put('/api/admin/users/:id/suspend', async (req, res) => {
     try {
       const updated = await db.updateUser(req.params.id, { active: false });
       if (!updated) return res.status(404).json({ error: 'User not found' });
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'suspend_user', targetType: 'user', targetId: req.params.id });
       return res.json(updated);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.put('/api/admin/users/:id/password', async (req, res) => {
+    const { password } = req.body;
+    if (!password || password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+    try {
+      const hash = await bcrypt.hash(password, 10);
+      await db.updateUserPassword(req.params.id, hash);
+      await db.logAdminAction({ superAdminUserId: req.user.id, action: 'reset_password', targetType: 'user', targetId: req.params.id });
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.put('/api/admin/users/:id/email', async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    try {
+      const updated = await db.updateUser(req.params.id, { email });
+      await db.logAdminAction({ superAdminUserId: req.user.id, action: 'update_email', targetType: 'user', targetId: req.params.id, metadata: { email } });
+      return res.json(updated);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.put('/api/admin/users/:id/org', async (req, res) => {
+    const { orgId, role } = req.body;
+    if (!orgId) return res.status(400).json({ error: 'orgId required' });
+    try {
+      await db.pool.query(
+        `INSERT INTO org_members (org_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (org_id, user_id) DO UPDATE SET role = $3`,
+        [orgId, req.params.id, role || 'member', req.user.id]
+      );
+      await db.logAdminAction({ superAdminUserId: req.user.id, action: 'assign_org', targetType: 'user', targetId: req.params.id, metadata: { orgId, role } });
+      return res.json({ success: true });
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
