@@ -1,5 +1,5 @@
 # CLAUDE.md — Dizon.ai Session Bootstrap
-Last updated: April 4, 2026
+Last updated: April 6, 2026
 Branch: dizon/v2-phase0
 Repo: lylesdizon1/TaskManage
 Production: taskmanage-production-b1bd.up.railway.app
@@ -16,7 +16,7 @@ surfaces. The app is the configuration and debug layer.
 
 ## Stack
 - Frontend: React/Vite (src/)
-- Backend: Express (proxy-server.cjs)
+- Backend: Express (proxy-server.cjs → slim entry, routes in server/routes/)
 - Database: PostgreSQL on Railway (db.cjs)
 - Auth: JWT (30d expiry, JWT_SECRET env var)
 - AI: Anthropic API (claude-sonnet-4-20250514 default)
@@ -26,14 +26,16 @@ surfaces. The app is the configuration and debug layer.
 ## Current Architecture
 See /docs/architecture.md for the full four-layer model.
 
-Frontend entry: src/App.jsx (~1,499 lines — routing + shell only)
-Backend entry: proxy-server.cjs (2,646 lines — monolith, extraction planned)
+Frontend entry: src/App.jsx (~1,450 lines — routing + shell only)
+Backend entry: proxy-server.cjs (86 lines — slim entry)
+Backend routes: server/routes/ (17 route files)
+Backend middleware: server/middleware/auth.cjs (authenticateToken, requireAdmin, requireSuperAdmin)
 DB helpers: db.cjs
 Design system: /docs/design-system.md
 
 ## Active Branch State
-Phase 0 — Feature freeze + hardening
-Last commit: hardening: multi-user ownership checks + kill replaceTasks
+Phase 1B complete — multi-user hardening + schema foundation + smoke test fixes
+Last commit: fix(entities): add 300ms delay before reload to avoid race condition on create
 
 ### Completed
 - Multi-channel alerts (WhatsApp/Slack/Email)
@@ -42,13 +44,25 @@ Last commit: hardening: multi-user ownership checks + kill replaceTasks
 - Multi-user hardening (requireOwnership, kill replaceTasks, GCal userId fix)
 - CLAUDE.md + /docs structure
 - Aria Command Center — live chat + polling on dashboard
+- Backend extraction (proxy-server.cjs → 86-line entry + server/routes/)
+- Phase 1B schema (orgs, org_members, invites, agent tables, audit log, profile columns)
+- Dynamic personas — profile context injected at runtime, no hardcoded user refs
+- Invite-only registration (token-based)
+- Super admin backend + UI (org/user CRUD, impersonation, audit log)
+- Admin panel: create user, suspend user, delete user, reset password, assign org
+- Entities: self-service for all users (create/delete own, backend scopes correctly)
+- Removed hardcoded seed task fallback (new users no longer see Lyle's tasks)
+- Leo (Biggie) onboarded on Rose Motorcars org
 
-### In Progress
-- WhatsApp two-way input (Phase 1) — blocked on Aria's number
+### Before Next Feature
+1. Fill in Lyle's profile fields → Settings → AI Assistant
+2. Delete Wife + Zacharius via Admin panel
+3. Smoke test Aria tool use + WhatsApp
 
 ### Next Up
-- Backend extraction (proxy-server.cjs → routes/ middleware/ utils/)
-- Phase 1 schema migration (agent_memory, agent_tasks, agent_approvals)
+- agent_memory table + logMemory() helper
+- integrations table (oauth_tokens, integration_config)
+- Per-user GCal OAuth
 
 ## Engineering Rules — Non-Negotiable
 1. Diagnose before touching anything
@@ -62,13 +76,16 @@ Last commit: hardening: multi-user ownership checks + kill replaceTasks
 9. Read the relevant /docs file before building anything new
 
 ## Key Files
-- proxy-server.cjs — all backend routes (extraction coming)
-- db.cjs — all database helpers
+- proxy-server.cjs — slim entry (86 lines), mounts all routers
+- server/routes/ — 17 route files (admin, ai, auth, dashboard, entities, etc.)
+- server/middleware/auth.cjs — JWT auth, requireAdmin, requireSuperAdmin
+- db.cjs — all database helpers + schema migrations
 - src/App.jsx — frontend shell and routing
 - src/utils/systemPrompt.js — Aria's system prompt + context engine
 - src/components/alerts/ — alerts system
-- src/panels/ — Dashboard, Notes, Calendar, Inbox
-- src/screens/LoginScreen.jsx
+- src/panels/ — Dashboard, Notes, Calendar, Inbox, AdminPanel
+- src/screens/LoginScreen.jsx — invite-only registration
+- src/components/settings/SettingsModal.jsx — settings tabs (API Keys, Alerts, Email, AI Assistant, Entities, Password, Email Intelligence)
 
 ## Environment Variables (Railway)
 CLAUDE_API_KEY, OPENAI_API_KEY, RESEND_API_KEY, RESEND_FROM_EMAIL,
@@ -91,3 +108,9 @@ Full spec: /docs/design-system.md
 - 2026-04-04: requireOwnership() added to notes + financial mutations
 - 2026-04-04: /docs structure created
 - 2026-04-04: Aria Command Center — live chat + polling
+- 2026-04-06: Backend extracted — proxy-server.cjs → 86 lines + server/routes/
+- 2026-04-06: Phase 1B complete — schema, personas, invite system, super admin
+- 2026-04-06: Seed task fallback removed — new users get clean slate
+- 2026-04-06: Entities opened to all users — requireAdmin gates removed
+- 2026-04-06: Legacy entityIds JWT filter removed — backend scopes correctly
+- 2026-04-06: Leo (Biggie) onboarded — Rose Motorcars org

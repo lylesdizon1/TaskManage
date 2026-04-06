@@ -37,6 +37,16 @@ Last updated: April 6, 2026
 - [x] Super admin backend (org/user management, impersonation, audit log)
 - [x] Super admin UI panel
 
+## Smoke Test Fixes (April 6)
+- [x] Admin panel: delete user route + confirm UI
+- [x] Remove hardcoded seed task fallback (SAMPLE_TASKS)
+- [x] Entities: remove requireAdmin — all users can self-serve
+- [x] Entities: superadmin sees all entities
+- [x] Entities: remove legacy entityIds JWT filter
+- [x] Entities: Settings tab restored for all users
+- [x] Entities: 300ms reload delay to avoid race condition
+- [x] Leo (Biggie) onboarded on Rose Motorcars org
+
 ## Phase 1 — Schema Migration (Remaining)
 - [x] agent_tasks table
 - [x] agent_approvals table
