@@ -311,6 +311,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
       });
       setNewEntityName('');
       onEntitiesChanged();
+      console.log('[entities] created, reloading...');
     } finally {
       setEntityLoading(false);
     }

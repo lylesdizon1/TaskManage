@@ -413,7 +413,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     apiFetch('/api/entities', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setEntities(data); })
-      .catch(() => {});
+      .catch((err) => console.error('[entities] reload failed:', err.message));
   }
 
   // ── Chat helpers ──
@@ -565,12 +565,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     });
   }
 
-  // Filter entities to only those the user is assigned to (non-admin sees only their entities)
   const userEntities = useMemo(() => {
-    if (currentUser?.role === 'admin') return entities;
-    const assigned = currentUser?.entityIds || [];
-    if (assigned.length === 0) return entities; // fallback: show all if not yet assigned
-    return entities.filter((e) => assigned.includes(e.name));
+    const isPrivileged = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+    if (isPrivileged) return entities;
+    return entities; // API already scopes to user's own + shared
   }, [entities, currentUser]);
 
   // Keep refs current so the 60 s interval always reads fresh values without
