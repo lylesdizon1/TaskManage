@@ -2736,49 +2736,92 @@ app.post('/api/whatsapp/inbound', async (req, res) => {
       return res.json({ ok: true, skipped: 'unknown sender' });
     }
 
-    // Use Claude to parse intent
+    // Load user context
+    const userEntities = user.entityIds || [];
+    const tasks = await db.getTasksForUser(user.id, userEntities);
+    const notes = await db.getNotesForUser(user.id);
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const activeTasks = tasks.filter(t => !t.completed);
+    const overdueTasks = activeTasks.filter(t => t.dueDate && t.dueDate < todayStr);
+    const todayTasks = activeTasks.filter(t => t.dueDate === todayStr);
+    const highPriority = activeTasks.filter(t => t.priority === 'high');
+
+    let calendarEvents = [];
+    try {
+      const tokens = await loadGcalTokens(user.id);
+      if (tokens) {
+        const oauth2 = makeOAuth2Client();
+        if (oauth2) {
+          oauth2.setCredentials(tokens);
+          const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+          const now = new Date();
+          const weekOut = new Date(now);
+          weekOut.setDate(weekOut.getDate() + 7);
+          const { data } = await calendar.events.list({
+            calendarId: 'primary',
+            timeMin: now.toISOString(),
+            timeMax: weekOut.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 20,
+          });
+          calendarEvents = (data.items || []).map(ev => ({
+            title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+            start: ev.start?.dateTime || ev.start?.date || '',
+          }));
+        }
+      }
+    } catch (calErr) {
+      console.error('[whatsapp/inbound] calendar fetch failed:', calErr.message);
+    }
+
+    // Call 1 — Haiku for intent classification only
     const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
-    const parseResponse = await anthropic.messages.create({
+    const classifyResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 300,
-      system: `You are Aria, a personal AI assistant. Parse the user's WhatsApp message into a structured intent.
-Respond with ONLY valid JSON, no markdown:
-{
-  "intent": "CREATE_TASK" | "CREATE_NOTE" | "QUESTION" | "OTHER",
-  "title": "short title for task or note",
-  "description": "optional longer description",
-  "priority": "low" | "medium" | "high",
-  "reply": "friendly confirmation message to send back"
-}
-Rules:
-- CREATE_TASK: user wants to add a todo, reminder, or action item
-- CREATE_NOTE: user wants to jot something down, save info, or braindump
-- QUESTION: user is asking a question (reply with a helpful answer)
-- OTHER: anything else
-- Always set a clear, concise title
-- Default priority to "medium" unless urgency is indicated`,
+      max_tokens: 150,
+      system: `Parse the user's message into a structured intent. Return ONLY valid JSON, no markdown fences:
+{"intent":"CREATE_TASK"|"CREATE_NOTE"|"QUESTION"|"OTHER","title":"short title","priority":"low"|"medium"|"high","dueDate":"YYYY-MM-DD or null"}`,
       messages: [{ role: 'user', content: msgBody }],
     });
 
-    let parsed;
+    let classification = { intent: 'OTHER', title: '', priority: 'medium', dueDate: null };
     try {
-      const raw = parseResponse.content[0].text.replace(/```json\n?|```\n?/g, '').trim();
-      parsed = JSON.parse(raw);
+      const raw = classifyResponse.content[0].text.replace(/```json\n?|```\n?/g, '').trim();
+      classification = JSON.parse(raw);
     } catch {
-      console.error('[whatsapp/inbound] Failed to parse Claude response:', parseResponse.content[0].text);
-      parsed = { intent: 'OTHER', reply: 'Got your message! I couldn\'t quite understand that — try again?' };
+      console.error('[whatsapp/inbound] Classification parse failed');
     }
 
-    const { intent, title, description, priority, reply } = parsed;
+    // Call 2 — Sonnet for actual reply with full context
+    const contextStr = [
+      `Active tasks (${activeTasks.length}): ${activeTasks.slice(0, 20).map(t => `${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''})`).join('; ') || 'none'}`,
+      `Overdue (${overdueTasks.length}): ${overdueTasks.map(t => t.title).join(', ') || 'none'}`,
+      `Today's tasks: ${todayTasks.map(t => t.title).join(', ') || 'none'}`,
+      `Calendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'}`,
+    ].join('\n');
+
+    const replyResponse = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      system: `You are Aria, the AI core of Dizon.ai — a Life OS for ${user.displayName || 'Lyle'}. You have full context of their life below. Respond via WhatsApp — warm, direct, concise. Max 3 sentences. No bullet points unless creating a list they asked for. Sign off with — Aria only if it's a closing reply.
+
+${contextStr}`,
+      messages: [{ role: 'user', content: msgBody }],
+    });
+
+    const reply = replyResponse.content[0].text;
+    const { intent, title, priority, dueDate } = classification;
     const uid = crypto.randomUUID();
 
     if (intent === 'CREATE_TASK') {
       await db.upsertTask({
         id: uid,
         title: title || msgBody.slice(0, 100),
-        description: description || '',
+        description: '',
         priority: priority || 'medium',
-        dueDate: '',
+        dueDate: dueDate || '',
         tags: [],
         visibility: 'private',
         completed: false,
@@ -2790,7 +2833,7 @@ Rules:
         id: uid,
         userId: user.id,
         title: title || 'WhatsApp Note',
-        content: description || msgBody,
+        content: msgBody,
         visibility: 'private',
         type: 'quick',
       });
