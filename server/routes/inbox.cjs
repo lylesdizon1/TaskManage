@@ -29,6 +29,9 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
     if (!action) return res.status(400).json({ error: 'action required' });
 
     try {
+      const items = await db.getInboxItemsForUser(req.user.id);
+      const item = items.find(i => i.id === req.params.id);
+      if (!item) return res.status(404).json({ error: 'Item not found or access denied' });
       await db.updateInboxItemAction(req.params.id, action);
       res.json({ success: true });
     } catch (err) {
