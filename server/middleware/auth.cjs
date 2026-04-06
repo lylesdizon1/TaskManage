@@ -28,11 +28,15 @@ function requireAdmin(req, res, next) {
 }
 
 function requireOwnership(record, req) {
-  const isOwner  = record.user_id === req.user.id;
-  const inEntity = record.entity_id &&
-                   (req.user.entityIds || []).includes(record.entity_id);
-  const isAdmin  = req.user.role === 'admin';
-  return isOwner || inEntity || isAdmin;
+  // Normalize field names — DB returns snake_case (SELECT *) or camelCase (aliased queries)
+  const ownerId   = record.userId   ?? record.user_id  ?? record.owner ?? record.createdBy ?? record.created_by;
+  const entityId  = record.entityId ?? record.entity_id;
+
+  const isOwner   = ownerId === req.user.id;
+  const inEntity  = entityId && (req.user.entityIds || []).includes(entityId);
+  const isPrivileged = req.user.role === 'admin' || req.user.role === 'superadmin';
+
+  return isOwner || inEntity || isPrivileged;
 }
 
 function requireSuperAdmin(req, res, next) {

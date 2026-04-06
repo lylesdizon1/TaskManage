@@ -329,7 +329,10 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.put('/api/financial/accounts/:id', authenticateToken, async (req, res) => {
     try {
-      const record = await db.pool.query('SELECT * FROM financial_accounts WHERE id = $1', [req.params.id]).then(r => r.rows[0]);
+      const record = await db.pool.query(
+        `SELECT id, user_id AS "userId", entity_id AS "entityId" FROM financial_accounts WHERE id = $1`,
+        [req.params.id]
+      ).then(r => r.rows[0]);
       if (!record) return res.status(404).json({ error: 'Account not found' });
       if (!requireOwnership(record, req)) {
         return res.status(403).json({ error: 'Access denied' });
@@ -345,7 +348,10 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.delete('/api/financial/accounts/:id', authenticateToken, async (req, res) => {
     try {
-      const record = await db.pool.query('SELECT * FROM financial_accounts WHERE id = $1', [req.params.id]).then(r => r.rows[0]);
+      const record = await db.pool.query(
+        `SELECT id, user_id AS "userId", entity_id AS "entityId" FROM financial_accounts WHERE id = $1`,
+        [req.params.id]
+      ).then(r => r.rows[0]);
       if (!record) return res.status(404).json({ error: 'Account not found' });
       if (!requireOwnership(record, req)) {
         return res.status(403).json({ error: 'Access denied' });
@@ -397,7 +403,10 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.put('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
     try {
-      const { rows } = await db.pool.query('SELECT * FROM financial_transactions WHERE id = $1', [req.params.id]);
+      const { rows } = await db.pool.query(
+        `SELECT id, user_id AS "userId", entity_id AS "entityId" FROM financial_transactions WHERE id = $1`,
+        [req.params.id]
+      );
       if (!rows.length) return res.status(404).json({ error: 'Transaction not found' });
       if (!requireOwnership(rows[0], req)) return res.status(403).json({ error: 'Access denied' });
       const updated = await db.updateTransaction(req.params.id, req.body);
@@ -411,7 +420,10 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.delete('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
     try {
-      const { rows } = await db.pool.query('SELECT * FROM financial_transactions WHERE id = $1', [req.params.id]);
+      const { rows } = await db.pool.query(
+        `SELECT id, user_id AS "userId", entity_id AS "entityId" FROM financial_transactions WHERE id = $1`,
+        [req.params.id]
+      );
       if (!rows.length) return res.status(404).json({ error: 'Transaction not found' });
       if (!requireOwnership(rows[0], req)) return res.status(403).json({ error: 'Access denied' });
       await db.deleteTransaction(req.params.id);
