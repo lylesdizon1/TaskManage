@@ -296,6 +296,10 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   const [pwStatus, setPwStatus]     = useState(null);
   const [pwSaving, setPwSaving]     = useState(false);
 
+  // Entity state
+  const [newEntityName, setNewEntityName] = useState('');
+  const [entitySaving, setEntitySaving] = useState(false);
+
   // Persona state
   const [personaName, setPersonaName] = useState(currentUser?.assistantName || 'Aria');
   const [personaType, setPersonaType] = useState(currentUser?.persona || 'executive_assistant');
@@ -459,6 +463,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
             { key: 'alerts', label: 'Alerts' },
             { key: 'email', label: 'Email' },
             { key: 'assistant', label: 'AI Assistant' },
+            { key: 'entities', label: 'Entities' },
             { key: 'password', label: 'Password' },
             { key: 'gmail', label: 'Email Intelligence' },
           ].map(({ key, label }) => (
@@ -745,6 +750,73 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
               >
                 {personaSaving ? 'Saving\u2026' : 'Save Assistant Settings'}
               </button>
+            </div>
+          )}
+
+          {/* Entities tab */}
+          {tab === 'entities' && (
+            <div className="space-y-4">
+              <p className="text-xs text-gray-500">Manage your entities — businesses, projects, and personal tags used to organize tasks.</p>
+
+              <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                {(entities || []).length === 0 && (
+                  <p className="text-sm text-gray-400 text-center py-4">No entities yet. Create one below.</p>
+                )}
+                {(entities || []).map((ent) => (
+                  <div key={ent.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-3 h-3 rounded-full flex-shrink-0 bg-indigo-400" />
+                      <span className="text-sm font-medium text-gray-800 truncate">{ent.name}</span>
+                      {ent.type && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">{ent.type}</span>}
+                    </div>
+                    {ent.createdBy === currentUser?.id && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await apiFetch(`/api/entities/${ent.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+                            onEntitiesChanged?.();
+                          } catch {}
+                        }}
+                        className="text-xs text-red-400 hover:text-red-600 font-medium flex-shrink-0"
+                      >Delete</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!newEntityName.trim() || entitySaving) return;
+                  setEntitySaving(true);
+                  try {
+                    const res = await apiFetch('/api/entities', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                      body: JSON.stringify({ name: newEntityName.trim() }),
+                    });
+                    if (res.ok) {
+                      setNewEntityName('');
+                      onEntitiesChanged?.();
+                    }
+                  } catch {}
+                  finally { setEntitySaving(false); }
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={newEntityName}
+                  onChange={(e) => setNewEntityName(e.target.value)}
+                  placeholder="New entity name"
+                  className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <button
+                  type="submit"
+                  disabled={!newEntityName.trim() || entitySaving}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-indigo-700 transition-colors"
+                >{entitySaving ? 'Adding...' : '+ Add'}</button>
+              </form>
             </div>
           )}
 
