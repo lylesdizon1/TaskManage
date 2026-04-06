@@ -149,5 +149,74 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
     }
   });
 
+  // ── Invite-only registration ────────────────────────────────────────────────
+
+  router.post('/api/auth/register', async (req, res) => {
+    const { token, username, password, displayName } = req.body;
+    if (!token) {
+      return res.status(403).json({ error: 'Registration is invite-only. Please use your invite link.' });
+    }
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    try {
+      const invite = await db.getInviteByToken(token);
+      if (!invite) {
+        return res.status(400).json({ error: 'Invite link is invalid or has expired.' });
+      }
+      if (new Date(invite.expiresAt) < new Date()) {
+        return res.status(400).json({ error: 'Invite link is invalid or has expired.' });
+      }
+      if (invite.acceptedAt) {
+        return res.status(400).json({ error: 'This invite has already been used.' });
+      }
+
+      const id = `user-${Date.now().toString(36)}`;
+      const passwordHash = await bcrypt.hash(password, 10);
+      await db.upsertUser({
+        id,
+        username,
+        displayName: displayName || username,
+        passwordHash,
+        email: invite.email,
+        role: invite.role,
+        entityIds: [],
+      });
+
+      // Add to org
+      await db.addOrgMember(invite.orgId, id, invite.role, invite.invitedBy);
+      await db.acceptInvite(token, id);
+
+      const jwtToken = jwt.sign(
+        { id, username, displayName: displayName || username, email: invite.email, role: invite.role, entityIds: [] },
+        JWT_SECRET,
+        { expiresIn: '30d' },
+      );
+
+      return res.json({
+        token: jwtToken,
+        user: { id, username, displayName: displayName || username, email: invite.email, role: invite.role, entityIds: [] },
+      });
+    } catch (err) {
+      console.error('[auth] register failed:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Public invite info ─────────────────────────────────────────────────────
+
+  router.get('/api/invites/:token', async (req, res) => {
+    try {
+      const invite = await db.getInviteByToken(req.params.token);
+      if (!invite || new Date(invite.expiresAt) < new Date() || invite.acceptedAt) {
+        return res.status(404).json({ error: 'Invite not found or expired' });
+      }
+      return res.json({ orgName: invite.orgName, role: invite.role, email: invite.email });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 };
