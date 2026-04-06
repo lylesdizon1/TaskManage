@@ -577,7 +577,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100 mx-6 overflow-x-auto">
+        <div className="flex flex-nowrap border-b border-gray-100 mx-6 overflow-x-auto">
           {[
             { key: 'keys',  label: 'API Keys' },
             { key: 'alerts', label: 'Alerts' },

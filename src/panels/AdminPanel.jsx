@@ -118,7 +118,7 @@ export default function AdminPanel({ authToken }) {
         <h1 className="text-xl font-bold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Super Admin</h1>
       </div>
 
-      <div className="flex gap-2 mb-6">
+      <div className="flex flex-nowrap gap-2 mb-6 overflow-x-auto">
         <button onClick={() => setTab('orgs')} className={tabClass('orgs')}>Organizations</button>
         <button onClick={() => setTab('users')} className={tabClass('users')}>Users</button>
         <button onClick={() => setTab('audit')} className={tabClass('audit')}>Audit Log</button>
