@@ -1,0 +1,205 @@
+'use strict';
+
+const express = require('express');
+const { getResendClient, getFromEmail } = require('../utils/email.cjs');
+
+module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
+  const router = express.Router();
+
+  router.post('/api/alerts/morning', authenticateToken, async (req, res) => {
+    try {
+      const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+      const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+      const ultraToken = process.env.ULTRAMSG_TOKEN;
+      const ultraPhone = process.env.ULTRAMSG_PHONE;
+      if (!webhookUrl && !ultraInstance) return res.status(500).json({ error: 'No messaging channels configured (SLACK_WEBHOOK_URL or ULTRAMSG_INSTANCE)' });
+
+      const user = await db.getUserById(req.user.id);
+      const userEntities = (user?.entityIds || []);
+      const tasks = await db.getTasksForUser(req.user.id, userEntities);
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const overdue = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < todayStr);
+      const todayTasks = tasks.filter((t) => !t.completed && t.dueDate === todayStr);
+      const highPriority = tasks.filter((t) => !t.completed && t.priority === 'high');
+
+      // Fetch calendar events for today
+      let calendarEvents = [];
+      try {
+        const tokens = await loadGcalTokens(req.user.id);
+        if (tokens) {
+          const oauth2 = makeOAuth2Client();
+          if (oauth2) {
+            oauth2.setCredentials(tokens);
+            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+            const now = new Date();
+            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const endOfDay = new Date(startOfDay);
+            endOfDay.setDate(endOfDay.getDate() + 1);
+            const { data } = await calendar.events.list({
+              calendarId: 'primary',
+              timeMin: startOfDay.toISOString(),
+              timeMax: endOfDay.toISOString(),
+              singleEvents: true,
+              orderBy: 'startTime',
+              maxResults: 20,
+            });
+            calendarEvents = (data.items || []).map((ev) => ({
+              title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+              start: ev.start?.dateTime || ev.start?.date || '',
+            }));
+          }
+        }
+      } catch (calErr) {
+        console.error('[morning-brief] calendar fetch failed:', calErr.message);
+      }
+
+      // Format date
+      const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+      // Build message
+      const lines = [`☀️ Good morning ${user?.displayName || 'Lyle'} — ${dateLabel}\n`];
+
+      lines.push(`📋 *OVERDUE (${overdue.length})*`);
+      if (overdue.length === 0) lines.push('- None! You\'re all caught up');
+      else overdue.forEach((t) => {
+        const daysOver = Math.floor((new Date(todayStr) - new Date(t.dueDate)) / 86400000);
+        lines.push(`- ${t.title} (${daysOver} day${daysOver !== 1 ? 's' : ''} overdue)`);
+      });
+
+      lines.push('');
+      lines.push(`📅 *TODAY (${todayTasks.length + calendarEvents.length})*`);
+      calendarEvents.forEach((ev) => {
+        const time = ev.start.includes('T') ? new Date(ev.start).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : 'All day';
+        lines.push(`- ${time} — ${ev.title}`);
+      });
+      todayTasks.forEach((t) => lines.push(`- Task: ${t.title}`));
+      if (todayTasks.length === 0 && calendarEvents.length === 0) lines.push('- Nothing scheduled');
+
+      lines.push('');
+      lines.push(`🔥 High priority: ${highPriority.length}`);
+
+      const text = lines.join('\n');
+
+      // Fire Slack + WhatsApp in parallel
+      const channels = [];
+
+      if (webhookUrl) {
+        channels.push(
+          fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          }).then(async (r) => {
+            if (!r.ok) throw new Error(`Slack ${r.status}: ${await r.text()}`);
+            return 'Slack';
+          })
+        );
+      }
+
+      if (ultraInstance && ultraToken && ultraPhone) {
+        channels.push(
+          fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ token: ultraToken, to: ultraPhone, body: text }),
+          }).then(async (r) => {
+            if (!r.ok) throw new Error(`WhatsApp ${r.status}: ${await r.text()}`);
+            return 'WhatsApp';
+          })
+        );
+      }
+
+      const results = await Promise.allSettled(channels);
+      const sent = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+      const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason.message);
+      failed.forEach((msg) => console.error('[morning-brief]', msg));
+
+      if (sent.length === 0) return res.status(502).json({ error: `All channels failed: ${failed.join('; ')}` });
+      return res.json({ success: true, message: `Morning brief sent to ${sent.join(', ')}${failed.length ? ` (failed: ${failed.join(', ')})` : ''}` });
+    } catch (err) {
+      console.error('[morning-brief] failed:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/alerts/fire', authenticateToken, async (req, res) => {
+    try {
+      const { message, channels = {}, recipientEmail } = req.body;
+      if (!message) return res.status(400).json({ error: 'message required' });
+
+      const webhookUrl    = process.env.SLACK_WEBHOOK_URL;
+      const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+      const ultraToken    = process.env.ULTRAMSG_TOKEN;
+      const ultraPhone    = process.env.ULTRAMSG_PHONE;
+
+      const sends = [];
+
+      if (channels.slack && webhookUrl) {
+        sends.push(
+          fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: message }),
+          }).then(async (r) => {
+            if (!r.ok) throw new Error(`Slack ${r.status}`);
+            return 'Slack';
+          })
+        );
+      }
+
+      if (channels.whatsapp && ultraInstance && ultraToken && ultraPhone) {
+        sends.push(
+          fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ token: ultraToken, to: ultraPhone, body: message }),
+          }).then(async (r) => {
+            if (!r.ok) throw new Error(`WhatsApp ${r.status}`);
+            return 'WhatsApp';
+          })
+        );
+      }
+
+      if (channels.email && recipientEmail) {
+        const resend = getResendClient();
+        if (resend) {
+          sends.push(
+            resend.emails.send({
+              from: getFromEmail(),
+              to: recipientEmail,
+              subject: '[Dizon.ai] Alert',
+              text: message,
+            }).then(() => 'Email')
+          );
+        }
+      }
+
+      const skipped = [];
+      if (channels.sms) {
+        console.log('[SMS] not implemented — skipping');
+        skipped.push('SMS');
+      }
+
+      const results = await Promise.allSettled(sends);
+      const sent   = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+      const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason.message);
+
+      return res.json({ sent, failed, skipped });
+    } catch (err) {
+      console.error('[alerts/fire]', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/api/config/status', authenticateToken, (req, res) => {
+    res.json({
+      slack:    !!process.env.SLACK_WEBHOOK_URL,
+      whatsapp: !!(process.env.ULTRAMSG_INSTANCE && process.env.ULTRAMSG_TOKEN && process.env.ULTRAMSG_PHONE),
+      sms:      false,
+      email:    !!process.env.RESEND_API_KEY,
+    });
+  });
+
+  return router;
+};
