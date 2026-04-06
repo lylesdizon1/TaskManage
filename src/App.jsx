@@ -187,56 +187,6 @@ import ToastContainer from './components/ui/ToastContainer.jsx';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS MODAL  (tabbed: API Keys | Email & Alerts)
-const SAMPLE_TASKS = [
-  {
-    id: uid(),
-    title: 'Review Q1 care management SaaS roadmap',
-    description: 'Check sprint backlog and confirm priorities with engineering team',
-    priority: 'high',
-    dueDate: '2026-03-05',
-    tags: ['Careific'],
-    completed: false,
-    visibility: 'shared',
-    owner: 'user-lyle',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: uid(),
-    title: 'Order supplies for Rose facility',
-    description: 'Medical consumables and kitchen supplies for March',
-    priority: 'medium',
-    dueDate: '2026-03-04',
-    tags: ['Rose', 'Care Home'],
-    completed: false,
-    visibility: 'shared',
-    owner: 'user-lyle',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: uid(),
-    title: 'Buyflip investor deck update',
-    description: 'Update slides with latest revenue figures',
-    priority: 'high',
-    dueDate: '2026-03-07',
-    tags: ['Buyflip'],
-    completed: false,
-    visibility: 'shared',
-    owner: 'user-lyle',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: uid(),
-    title: 'Gym session',
-    description: '',
-    priority: 'low',
-    dueDate: '',
-    tags: ['Personal'],
-    completed: true,
-    visibility: 'private',
-    owner: 'user-lyle',
-    createdAt: new Date().toISOString(),
-  },
-];
 
 export default function App() {
   // ── Auth state ──────────────────────────────────────────────────────────────
@@ -671,12 +621,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // ── Task persistence ──────────────────────────────────────────────────────
 
-  // Load tasks on mount; fall back to SAMPLE_TASKS if server has none
+  // Load tasks on mount
   useEffect(() => {
     apiFetch('/api/tasks', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
-        const taskData = (Array.isArray(data) && data.length > 0) ? data : SAMPLE_TASKS;
+        const taskData = Array.isArray(data) ? data : [];
         setTasks(taskData);
         // Compute brief data immediately from the raw task array
         const todayISO = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
@@ -685,7 +635,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           highPriority: taskData.filter(t => !t.completed && t.priority === 'high').map(t => t.title).join(', ') || 'None',
         });
       })
-      .catch(() => setTasks(SAMPLE_TASKS))
+      .catch(() => setTasks([]))
       .finally(() => { tasksLoadedRef.current = true; });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
