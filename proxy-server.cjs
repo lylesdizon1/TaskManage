@@ -15,7 +15,7 @@ const multer   = require('multer');
 const db       = require('./db.cjs');
 
 // ── Utils & middleware ───────────────────────────────────────────────────────
-const { JWT_SECRET, authenticateToken, requireAdmin, requireOwnership } = require('./server/middleware/auth.cjs');
+const { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership } = require('./server/middleware/auth.cjs');
 const { authLimiter, apiLimiter } = require('./server/middleware/rateLimit.cjs');
 const { makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, saveGmailTokens: _saveGmailTokens, loadGmailTokens: _loadGmailTokens } = require('./server/utils/google.cjs');
 
@@ -64,6 +64,7 @@ app.use('/', require('./server/routes/financial.cjs')({ authenticateToken, requi
 app.use('/', require('./server/routes/dashboard.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
+app.use('/', require('./server/routes/admin.cjs')({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }));
 
 // ── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', port: PORT, time: new Date().toISOString() }));

@@ -35,4 +35,11 @@ function requireOwnership(record, req) {
   return isOwner || inEntity || isAdmin;
 }
 
-module.exports = { JWT_SECRET, authenticateToken, requireAdmin, requireOwnership };
+function requireSuperAdmin(req, res, next) {
+  if (req.user?.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+  next();
+}
+
+module.exports = { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership };
