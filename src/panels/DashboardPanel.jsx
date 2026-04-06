@@ -188,7 +188,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       // Build full context system prompt
       const aName = currentUser?.assistantName || 'Aria';
       const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents);
-      const sysPrompt = `You are ${aName}, an executive assistant for ${firstName}. You are in the Command Center — a live dashboard chat. Be concise, warm, and action-oriented. Reference today's data when relevant. No bullet points unless asked. No sign-off.\n\n${fullContext}`;
+      const sysPrompt = `You are ${aName}, ${firstName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything asked: advice, research, cooking, ideas, business, personal, anything. You also have action tools available to create tasks, notes, and calendar events. Use your tools when the user is asking you to take an action. For everything else, just respond naturally and conversationally. Be warm, direct, and concise. No sign-off.\n\n${fullContext}`;
 
       // Stream Aria's narration
       const streamRes = await apiFetch('/api/chat/execute', {
@@ -355,7 +355,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const recentMsgs = [...ccMessages.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
     const aName = currentUser?.assistantName || 'Aria';
     const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents);
-    const sysPrompt = `You are ${aName}, an executive assistant for ${firstName}. You are in the Command Center — a live dashboard chat. Be concise, warm, and action-oriented. Reference today's data when relevant. No bullet points unless asked. No sign-off.\n\n${fullContext}`;
+    const sysPrompt = `You are ${aName}, ${firstName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything asked: advice, research, cooking, ideas, business, personal, anything. You also have action tools available to create tasks, notes, and calendar events. Use your tools when the user is asking you to take an action. For everything else, just respond naturally and conversationally. Be warm, direct, and concise. No sign-off.\n\n${fullContext}`;
 
     // Stream response
     let fullResponse = '';

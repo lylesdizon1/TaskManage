@@ -199,7 +199,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       const anthropic = new Anthropic({ apiKey });
       const response = await anthropic.messages.create({
         model,
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: fullSystem,
         tools: ARIA_TOOLS,
         messages,
@@ -231,7 +231,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
 
         const finalResponse = await anthropic.messages.create({
           model,
-          max_tokens: 1024,
+          max_tokens: 4096,
           system: fullSystem,
           tools: ARIA_TOOLS,
           messages: toolResultMessages,

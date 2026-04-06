@@ -90,7 +90,9 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       if (user.profileNotes)      profileParts.push(`Additional context: ${user.profileNotes}.`);
       const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
 
-      const systemPrompt = `${profileContext}You are Aria, the AI core of Dizon.ai — a Life OS for ${user.profileName || user.displayName || 'the user'}. Today's date is ${todayStr}. You have full context of their life below. Respond via WhatsApp — warm, direct, concise. Max 3 sentences. No bullet points unless creating a list they asked for. Sign off with — Aria only if it's a closing reply.${contextAppend}`;
+      const assistantName = user.assistantName || 'Aria';
+      const userName = user.profileName || user.displayName || 'the user';
+      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today's date is ${todayStr}. Respond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${contextAppend}`;
 
       // ── Call 1 — Sonnet with tools + full context (non-streaming) ───────
       const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
