@@ -1276,7 +1276,7 @@ async function runMigrations() {
   const lyle = await getUserById('user-lyle');
   if (lyle) {
     const needsUpdate =
-      lyle.role !== 'admin' ||
+      (lyle.role !== 'admin' && lyle.role !== 'superadmin') ||
       !Array.isArray(lyle.entityIds) ||
       lyle.entityIds.length !== allEntityNames.length ||
       !allEntityNames.every((n) => lyle.entityIds.includes(n));
@@ -1285,6 +1285,12 @@ async function runMigrations() {
       await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames });
       console.log('[db] Migration: set user-lyle as admin with all entities');
     }
+  }
+
+  // 3b. Promote lyle to superadmin (idempotent)
+  if (lyle && lyle.role !== 'superadmin') {
+    await updateUser('user-lyle', { role: 'superadmin' });
+    console.log('[db] Migration: promoted user-lyle to superadmin');
   }
 
   // 4. Ensure all existing users who have empty entity_ids get all entities assigned
