@@ -899,8 +899,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           </div>
         </header>
 
-        {/* Mobile prompt bar */}
-        <div className="md:hidden flex-shrink-0">
+        {/* Mobile prompt bar — hidden on dashboard where Command Center has its own input */}
+        {mobileView !== 'tasks' && <div className="md:hidden flex-shrink-0">
           <UniversalPromptBar
             input={chatInput}
             onInputChange={setChatInput}
@@ -911,7 +911,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             activeTab={mobileView}
             personaPill={lastAutoPersona ? { emoji: lastAutoPersona.emoji, name: lastAutoPersona.defaultName } : null}
           />
-        </div>
+        </div>}
 
         {/* ── Content ── */}
         <div className="flex flex-row flex-1 overflow-hidden pb-20 md:pb-0" style={{ minHeight: 0 }}>
@@ -1222,24 +1222,34 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
 
 
-        {/* ── Chat panel (mobile only — full screen when mobileView is 'chat') ── */}
-        <section
-          className={`flex-col overflow-hidden w-full md:hidden ${
-            mobileView === 'chat' ? 'flex' : 'hidden'
-          }`}
-        >
-          <ChatTabPanel
-            conversations={conversations}
-            activeConvId={activeConvId}
-            activeMessages={chatMessages}
-            loading={chatLoading}
-            backend={chatBackend}
-            onSelectConv={selectConversation}
-            onNewChat={createNewChat}
-            onDeleteConv={deleteConversation}
-            onRenameConv={renameConversation}
-          />
-        </section>
+        {/* ── Chat panel (mobile: fixed full-screen overlay; desktop: hidden here) ── */}
+        {mobileView === 'chat' && (
+          <section
+            className="md:hidden flex flex-col overflow-hidden"
+            style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 50, backgroundColor: '#fff' }}
+          >
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-surface-container-low flex-shrink-0">
+              <button
+                onClick={() => setMobileView('tasks')}
+                className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-container-low transition-colors"
+              >
+                <span className="material-symbols-outlined text-lg text-on-surface-variant">arrow_back</span>
+              </button>
+              <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: '#4f4dcf' }}>Aria</h3>
+            </div>
+            <ChatTabPanel
+              conversations={conversations}
+              activeConvId={activeConvId}
+              activeMessages={chatMessages}
+              loading={chatLoading}
+              backend={chatBackend}
+              onSelectConv={selectConversation}
+              onNewChat={createNewChat}
+              onDeleteConv={deleteConversation}
+              onRenameConv={renameConversation}
+            />
+          </section>
+        )}
 
         {/* ── Calendar panel (mobile only — on desktop it's in the task section tabs) ── */}
         <section
