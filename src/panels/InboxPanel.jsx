@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import SkeletonBlock from '../components/ui/SkeletonBlock.jsx';
+import { getTodayLocal } from '../utils/helpers.js';
 
 export default function InboxPanel({ tasks, authToken, currentUser, onToggleTask, onEditTask, addToast, apiFetch }) {
   const [dismissed, setDismissed] = useState(new Set());
@@ -9,7 +10,7 @@ export default function InboxPanel({ tasks, authToken, currentUser, onToggleTask
   const [openMenuId, setOpenMenuId] = useState(null);
   const toast = useToast();
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getTodayLocal();
   const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
   const cutoff = sevenDaysAgo.toISOString().slice(0, 10);
 

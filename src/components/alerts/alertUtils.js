@@ -1,4 +1,4 @@
-import { escapeHtml, getRuleScope } from '../../utils/helpers.js';
+import { escapeHtml, getRuleScope, getTodayLocal } from '../../utils/helpers.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ALERT RULES CONSTANTS
@@ -92,7 +92,7 @@ export const EMPTY_NEW_RULE = {
 
 export function evaluateRule(rule, tasks) {
   const now      = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = getTodayLocal();
   const active   = tasks.filter((t) => !t.completed);
 
   switch (rule.condition.type) {
@@ -103,6 +103,7 @@ export function evaluateRule(rule, tasks) {
       const windowMs = (rule.condition.hours || 24) * 3_600_000;
       return active.filter((t) => {
         if (!t.dueDate) return false;
+        if (t.dueDate < todayStr) return false; // already overdue — skip
         const dueMs = new Date(t.dueDate + 'T23:59:59').getTime();
         return dueMs > now.getTime() && dueMs - now.getTime() <= windowMs;
       });
@@ -146,7 +147,7 @@ export function buildPlainTextAlert(ruleName, tasks) {
 /** Build a professional HTML alert email for the given tasks. */
 export function buildEmailHtml(ruleName, ruleDesc, tasks) {
   const h        = escapeHtml;
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayLocal();
   const pColor   = { high: '#dc2626', medium: '#d97706', low: '#16a34a' };
   const pBg      = { high: '#fef2f2', medium: '#fffbeb', low: '#f0fdf4' };
 
@@ -236,7 +237,7 @@ export function persistFiredAlerts(firedRef) {
  */
 export async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast, apiFetch) {
   const { recipientEmail } = emailSettings;
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayLocal();
 
   for (const rule of rules) {
     if (!rule.enabled) continue;

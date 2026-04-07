@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import buildSystemPrompt from '../utils/systemPrompt';
+import { getTodayLocal } from '../utils/helpers.js';
 
 const API_BASE = '';
 
@@ -61,7 +62,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       .then((data) => {
         if (!Array.isArray(data)) return;
         // Client-side safety filter: only keep events that overlap with today in user's local timezone
-        const todayLocal = new Date().toISOString().slice(0, 10);
+        const todayLocal = getTodayLocal();
         const filtered = data.filter((ev) => {
           if (ev.allDay) {
             // All-day events use date strings (YYYY-MM-DD)

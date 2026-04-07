@@ -1,3 +1,10 @@
+export function getTodayLocal(tz = 'America/Los_Angeles') {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
+}
+
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }

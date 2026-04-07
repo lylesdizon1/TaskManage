@@ -111,7 +111,7 @@ function EntitySelectOptions({ entities }) {
   return items;
 }
 
-import { uid, escapeHtml, conditionDescription, getRuleScope } from './utils/helpers.js';
+import { uid, escapeHtml, conditionDescription, getRuleScope, getTodayLocal } from './utils/helpers.js';
 import {
   DEFAULT_ALERT_RULES,
   CONDITION_META,
@@ -318,7 +318,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'notes'
   const [entities, setEntities]                 = useState([]);
   const firedAlertsRef                          = useRef((() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = getTodayLocal();
     const saved = JSON.parse(localStorage.getItem('dizon_fired_alerts') || '[]');
     const filtered = saved.filter(k => !k.match(/\d{4}-\d{2}-\d{2}/) || k.includes(todayStr));
     return new Set(filtered);
@@ -974,11 +974,11 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <div className="px-8 pt-6 pb-4">
               <h1 className="text-2xl font-extrabold font-headline text-on-background tracking-tight">Tasks</h1>
               <p className="text-on-surface-variant text-[11px] font-medium mt-0.5">
-                {visibleTasks.filter((t) => !t.completed && t.dueDate && t.dueDate < new Date().toISOString().slice(0,10)).length} overdue
+                {visibleTasks.filter((t) => !t.completed && t.dueDate && t.dueDate < getTodayLocal()).length} overdue
                 {' · '}
-                {visibleTasks.filter((t) => !t.completed && t.dueDate === new Date().toISOString().slice(0,10)).length} due today
+                {visibleTasks.filter((t) => !t.completed && t.dueDate === getTodayLocal()).length} due today
                 {' · '}
-                {visibleTasks.filter((t) => !t.completed && (!t.dueDate || t.dueDate > new Date().toISOString().slice(0,10))).length} upcoming
+                {visibleTasks.filter((t) => !t.completed && (!t.dueDate || t.dueDate > getTodayLocal())).length} upcoming
               </p>
             </div>
 
@@ -1019,7 +1019,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
             {/* Task sections */}
             {(() => {
-              const todayStr = new Date().toISOString().slice(0,10);
+              const todayStr = getTodayLocal();
               const base = (activeTagFilters.length > 0
                 ? visibleTasks.filter((t) => t.tags?.some((tag) => activeTagFilters.includes(tag)))
                 : visibleTasks
