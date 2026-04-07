@@ -436,62 +436,75 @@ export default function AdminPanel({ authToken }) {
               </select>
             </div>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
-                  <th className="px-4 py-3 text-left">User</th>
-                  <th className="px-4 py-3 text-left">When</th>
-                  <th className="px-4 py-3 text-left">Tool</th>
-                  <th className="px-4 py-3 text-left">Memory</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {memories.map((m) => (
-                  <tr key={m.id} className="border-t border-gray-100 hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-700 font-medium whitespace-nowrap">{m.displayName || m.username}</td>
-                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
-                      {new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}{' '}
-                      {new Date(m.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                    </td>
-                    <td className="px-4 py-3">
-                      {m.tool && (
-                        <span className="inline-block px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-50 text-indigo-600 uppercase tracking-wide">
-                          {m.tool.replace('_', ' ')}
-                        </span>
+          {(() => {
+            const perPage = 20;
+            const total = memories.length;
+            const totalPages = Math.max(1, Math.ceil(total / perPage));
+            const safePage = Math.min(memoryPage, totalPages);
+            const startIdx = (safePage - 1) * perPage;
+            const endIdx = Math.min(startIdx + perPage, total);
+            const pageRows = memories.slice(startIdx, endIdx);
+            return (
+              <>
+                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 z-10">
+                      <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
+                        <th className="px-4 py-3 text-left">User</th>
+                        <th className="px-4 py-3 text-left">When</th>
+                        <th className="px-4 py-3 text-left">Tool</th>
+                        <th className="px-4 py-3 text-left">Memory</th>
+                        <th className="px-4 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pageRows.map((m) => (
+                        <tr key={m.id} className="border-t border-gray-100 hover:bg-gray-50">
+                          <td className="px-4 py-3 text-gray-700 font-medium whitespace-nowrap">{m.displayName || m.username}</td>
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
+                            {new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}{' '}
+                            {new Date(m.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                          </td>
+                          <td className="px-4 py-3">
+                            {m.tool && (
+                              <span className="inline-block px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-50 text-indigo-600 uppercase tracking-wide">
+                                {m.tool.replace('_', ' ')}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-gray-800">{m.content}</td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              onClick={() => deleteMemory(m.id)}
+                              className="text-xs text-red-500 hover:text-red-700 font-medium"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {memories.length === 0 && (
+                        <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No memories yet — tool use will populate this</td></tr>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-800">{m.content}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => deleteMemory(m.id)}
-                        className="text-xs text-red-500 hover:text-red-700 font-medium"
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {memories.length === 0 && (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No memories yet — tool use will populate this</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div className="flex justify-between items-center pt-2">
-            <button
-              onClick={() => { const p = Math.max(1, memoryPage - 1); setMemoryPage(p); fetchMemories(p, memoryUserFilter); }}
-              disabled={memoryPage === 1}
-              className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
-            >&larr; Prev</button>
-            <span className="text-xs text-gray-400">Page {memoryPage}</span>
-            <button
-              onClick={() => { const p = memoryPage + 1; setMemoryPage(p); fetchMemories(p, memoryUserFilter); }}
-              disabled={memories.length < 30}
-              className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
-            >Next &rarr;</button>
-          </div>
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex justify-between items-center pt-2">
+                  <button
+                    onClick={() => setMemoryPage(Math.max(1, safePage - 1))}
+                    disabled={safePage === 1}
+                    className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
+                  >&larr; Prev</button>
+                  <span className="text-xs text-gray-400">Showing {total === 0 ? 0 : startIdx + 1}–{endIdx} of {total} entries</span>
+                  <button
+                    onClick={() => setMemoryPage(Math.min(totalPages, safePage + 1))}
+                    disabled={safePage >= totalPages}
+                    className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
+                  >Next &rarr;</button>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
     </div>
