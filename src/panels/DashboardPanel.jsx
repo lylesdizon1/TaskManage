@@ -41,6 +41,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const highNoDue = useMemo(() => activeTasks.filter((t) => t.priority === 'high' && !t.dueDate), [activeTasks]);
   const inboxCount = overdueTasks.length + highNoDue.length;
 
+  // Upcoming tasks (due after today, within 14 days)
+  const upcomingTasks = useMemo(() => {
+    const _d14 = new Date();
+    _d14.setDate(_d14.getDate() + 14);
+    const maxDate = `${_d14.getFullYear()}-${String(_d14.getMonth()+1).padStart(2,'0')}-${String(_d14.getDate()).padStart(2,'0')}`;
+    return activeTasks
+      .filter((t) => t.dueDate && t.dueDate > today && t.dueDate <= maxDate)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+      .slice(0, 7);
+  }, [activeTasks, today]);
+
+  // Floating tasks (no due date, not completed)
+  const floatingTasks = useMemo(() => activeTasks.filter((t) => !t.dueDate).slice(0, 7), [activeTasks]);
+
   // Notes: this week count + latest note
   const notesThisWeek = useMemo(() => {
     const weekAgo = new Date();
@@ -570,32 +584,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>edit_note</span>
           QUICK NOTE
         </button>
-        <button onClick={() => onNavigate('inbox')} style={{ background: '#ffffff', border: '1px solid #f1f0f5', borderRadius: '16px', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flex: 1, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'pointer', position: 'relative' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#ef4444' }}>inbox</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Manrope, sans-serif' }}>Inbox</span>
-          </div>
-          <span style={{ fontSize: '18px', fontWeight: 800, color: '#31323a', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>{String(inboxCount).padStart(2,'0')}</span>
-          {inboxCount > 0 && <div style={{ position: 'absolute', top: '8px', right: '8px', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', animation: 'pulse 2s infinite' }} />}
-        </button>
-        <button onClick={() => onNavigate('daily', 'overdue')} style={{ background: '#ffffff', border: '1px solid #f1f0f5', borderRadius: '16px', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flex: 1, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'pointer' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#ef4444' }}>event_busy</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Manrope, sans-serif' }}>Overdue</span>
-          </div>
-          <span style={{ fontSize: '18px', fontWeight: 800, color: '#31323a', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>{String(overdueTasks.length).padStart(2,'0')}</span>
-        </button>
-        <button onClick={() => onNavigate('daily', 'high')} style={{ background: '#ffffff', border: '1px solid #f1f0f5', borderRadius: '16px', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flex: 1, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'pointer' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#4f4dcf' }}>priority_high</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Manrope, sans-serif' }}>Priority</span>
-          </div>
-          <span style={{ fontSize: '18px', fontWeight: 800, color: '#31323a', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>{String(highPriorityTasks.length).padStart(2,'0')}</span>
+        <button onClick={onAddEvent} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', flex: 1, border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>event</span>
+          ADD EVENT
         </button>
       </div>
 
       {/* ROW 3: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '420px', width: '100%' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '560px', width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
@@ -662,8 +658,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>}
       </div>
 
-      {/* ROW 4: Timeline + Tasks */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+      {/* ROW 4: Timeline + Tasks + Upcoming */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         <div className="space-y-4">
           <div className="flex justify-between items-end px-1">
             <h3 className="text-lg font-extrabold font-headline">Today&apos;s Timeline</h3>
@@ -739,6 +735,50 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                       </div>
                     </div>
                   ))}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="space-y-4">
+          <div className="flex justify-between items-end px-1">
+            <h3 className="text-lg font-extrabold font-headline">Upcoming Tasks</h3>
+            <button onClick={() => onNavigate('daily')} className="text-primary font-bold text-[10px] hover:underline">View All</button>
+          </div>
+          <div className="bg-surface-container-lowest rounded-xl shadow-sm overflow-hidden border border-surface-container-low">
+            <div className="divide-y divide-surface-container-low">
+              {upcomingTasks.length === 0 && floatingTasks.length === 0 ? (
+                <div className="p-3"><h5 className="text-xs font-bold text-on-surface-variant">Nothing upcoming</h5></div>
+              ) : (
+                <>
+                  {upcomingTasks.map((t) => (
+                    <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
+                      <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
+                        <div className="flex gap-2 mt-1.5">
+                          <span className="flex items-center gap-1 text-[8px] font-bold text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded-full">
+                            {(() => { const [y, m, d] = t.dueDate.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {floatingTasks.length > 0 && (
+                    <>
+                      <div className="px-3 pt-2 pb-1">
+                        <span className="text-[8px] font-bold text-on-surface-variant uppercase tracking-widest">No date</span>
+                      </div>
+                      {floatingTasks.map((t) => (
+                        <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
+                          <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </>
               )}
             </div>
