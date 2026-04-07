@@ -18,6 +18,16 @@ export default function buildSystemPrompt(tasks, entities, notes, calendarEvents
   // Compute todayISO in PST so date boundaries are correct
   const pstParts = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(today);
   const todayISO = pstParts;
+  // Build explicit weekday→date map so the model never has to compute relative dates
+  const weekMap = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + i);
+    const dayAbbr = new Intl.DateTimeFormat('en-US', { timeZone: userTZ, weekday: 'short' }).format(d);
+    const monthDay = new Intl.DateTimeFormat('en-US', { timeZone: userTZ, month: 'short', day: 'numeric' }).format(d);
+    weekMap.push(`${dayAbbr}=${monthDay}`);
+  }
+  const weekMapStr = `This week: ${weekMap.join(', ')}.`;
   const activeTasks = tasks.filter((t) => !t.completed);
   const taskSummary = activeTasks.map((t) => ({ title: t.title, priority: t.priority, tags: t.tags, dueDate: t.dueDate || null, dueTime: t.dueTime || null }));
   const todayTasks = activeTasks.filter((t) => t.dueDate && t.dueDate.startsWith(todayISO));
@@ -94,5 +104,5 @@ export default function buildSystemPrompt(tasks, entities, notes, calendarEvents
       return `- ${dayLabel}: ${time ? time + ' ' : ''}${e.summary || e.title || 'Untitled'}`;
     }).join('\n');
   }
-  return `You are a business productivity assistant. Today is ${dateStr}. Current time: ${timeStr} PST. The user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + notesContext;
+  return `You are a business productivity assistant. Today is ${dateStr}. Current time: ${timeStr} PST.\n${weekMapStr}\nThe user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + notesContext;
 }

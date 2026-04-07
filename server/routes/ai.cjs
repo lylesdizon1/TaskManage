@@ -202,9 +202,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       if (user.profileLocation)   profileParts.push(`Based in: ${user.profileLocation}.`);
       if (user.profileNotes)      profileParts.push(`Additional context: ${user.profileNotes}.`);
       const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
-      const fullSystem = profileContext + (systemPrompt || '') + `\nToday is ${todayStr}. The user's timezone is ${tz}.` + contextAppend;
-
-      console.log('[chat/execute] systemPrompt:', fullSystem);
+      const fullSystem = profileContext + (systemPrompt || '') + contextAppend;
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');

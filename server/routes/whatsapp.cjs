@@ -76,9 +76,19 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       let recentMemories = [];
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
-      const tz = 'America/Los_Angeles';
+      const tz = user.timezone || user.profileTimezone || 'America/Los_Angeles';
       const todayStr = getTodayLocal(tz);
       const todayDate = todayStr.split(', ')[1];
+      // Build explicit weekday→date map so the model never has to compute relative dates
+      const weekMapParts = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() + i);
+        const dayAbbr = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(d);
+        const monthDay = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'short', day: 'numeric' }).format(d);
+        weekMapParts.push(`${dayAbbr}=${monthDay}`);
+      }
+      const weekMapStr = `This week: ${weekMapParts.join(', ')}.`;
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>
@@ -104,7 +114,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       const assistantName = user.assistantName || 'Aria';
       const userName = user.profileName || user.displayName || 'the user';
-      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. The user's timezone is ${tz}. Respond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${contextAppend}`;
+      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. The user's timezone is ${tz}.\n${weekMapStr}\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${contextAppend}`;
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
