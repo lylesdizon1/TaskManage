@@ -673,6 +673,29 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       .catch(() => {});
   }, [currentUser?.id]);
 
+  // Auto-scan email inbox on mount + every 15 minutes
+  const emailScanInProgressRef = useRef(false);
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    async function scanInbox() {
+      if (emailScanInProgressRef.current) return;
+      emailScanInProgressRef.current = true;
+      try {
+        await apiFetch('/api/gmail/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        });
+      } catch (err) {
+        console.error('[email-scan] failed:', err.message);
+      } finally {
+        emailScanInProgressRef.current = false;
+      }
+    }
+    scanInbox();
+    const scanInterval = setInterval(scanInbox, 15 * 60 * 1000);
+    return () => clearInterval(scanInterval);
+  }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-save tasks whenever they change (skip initial hydration)
   useEffect(() => {
     if (!tasksLoadedRef.current) return;
