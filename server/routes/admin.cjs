@@ -213,7 +213,7 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
   router.get('/api/admin/memory', async (req, res) => {
     try {
       const page = parseInt(req.query.page) || 1;
-      const limit = 30;
+      const limit = 100;
       const offset = (page - 1) * limit;
       const userId = req.query.userId || null;
       const memories = await db.getAllMemories({ limit, offset, userId });
