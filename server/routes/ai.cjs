@@ -187,7 +187,6 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
           `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
         ).join('; ') || 'none'
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
-      }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
       }\nRecent Aria actions (last 10): ${
         recentMemories.length
           ? recentMemories.slice(0, 10).map(m =>
