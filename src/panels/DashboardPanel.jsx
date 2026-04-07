@@ -207,6 +207,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const decoder = new TextDecoder();
       let buffer = '';
       let ariaResponse = '';
+      let currentEvent = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -214,23 +215,36 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6);
-          if (payload === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(payload);
-            if (parsed.toolExecuted) {
-              if (['create_task', 'complete_task', 'update_task'].includes(parsed.toolExecuted)) {
-                onReloadTasks?.();
+        for (const rawLine of lines) {
+          const eventMatch = rawLine.match(/^event: (.+)/);
+          const dataMatch  = rawLine.match(/^data: (.+)/);
+
+          if (eventMatch) {
+            currentEvent = eventMatch[1].trim();
+          }
+
+          if (dataMatch && currentEvent) {
+            try {
+              const parsed = JSON.parse(dataMatch[1]);
+
+              if (currentEvent === 'text') {
+                ariaResponse = parsed.content || '';
+              } else if (currentEvent === 'tools_executed') {
+                const tools = parsed.tools || [];
+                if (tools.some(t => ['create_task', 'complete_task', 'update_task', 'delete_task'].includes(t))) {
+                  onReloadTasks?.();
+                }
+                if (tools.some(t => ['create_note', 'update_note', 'delete_note'].includes(t))) {
+                  onReloadNotes?.();
+                }
+              } else if (currentEvent === 'error') {
+                console.error('[SSE] error:', parsed.message);
               }
-              if (parsed.toolExecuted === 'create_note') {
-                onReloadNotes?.();
-              }
-              continue;
+            } catch (e) {
+              // malformed data line, skip
             }
-            if (parsed.delta) ariaResponse += parsed.delta;
-          } catch {}
+            currentEvent = null;
+          }
         }
       }
 
@@ -387,6 +401,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let currentEvent = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -394,30 +409,43 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6);
-          if (payload === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(payload);
-            if (parsed.toolExecuted) {
-              if (['create_task', 'complete_task', 'update_task'].includes(parsed.toolExecuted)) {
-                onReloadTasks?.();
+        for (const rawLine of lines) {
+          const eventMatch = rawLine.match(/^event: (.+)/);
+          const dataMatch  = rawLine.match(/^data: (.+)/);
+
+          if (eventMatch) {
+            currentEvent = eventMatch[1].trim();
+          }
+
+          if (dataMatch && currentEvent) {
+            try {
+              const parsed = JSON.parse(dataMatch[1]);
+
+              if (currentEvent === 'text') {
+                fullResponse = parsed.content || '';
+                setCcMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { ...updated[updated.length - 1], content: fullResponse };
+                  return updated;
+                });
+              } else if (currentEvent === 'tools_executed') {
+                const tools = parsed.tools || [];
+                if (tools.some(t => ['create_task', 'complete_task', 'update_task', 'delete_task'].includes(t))) {
+                  onReloadTasks?.();
+                }
+                if (tools.some(t => ['create_note', 'update_note', 'delete_note'].includes(t))) {
+                  onReloadNotes?.();
+                }
+              } else if (currentEvent === 'done') {
+                // finalize — stream complete
+              } else if (currentEvent === 'error') {
+                console.error('[SSE] error:', parsed.message);
               }
-              if (parsed.toolExecuted === 'create_note') {
-                onReloadNotes?.();
-              }
-              continue;
+            } catch (e) {
+              // malformed data line, skip
             }
-            if (parsed.delta) {
-              fullResponse += parsed.delta;
-              setCcMessages((prev) => {
-                const updated = [...prev];
-                updated[updated.length - 1] = { ...updated[updated.length - 1], content: fullResponse };
-                return updated;
-              });
-            }
-          } catch {}
+            currentEvent = null;
+          }
         }
       }
 

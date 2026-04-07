@@ -4,6 +4,7 @@ const express   = require('express');
 const crypto    = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
+const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 
 /**
  * WhatsApp inbound webhook route
@@ -104,58 +105,20 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const userName = user.profileName || user.displayName || 'the user';
       const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today's date is ${todayStr}. Respond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${contextAppend}`;
 
-      // ── Call 1 — Sonnet with tools + full context (non-streaming) ───────
-      const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
-      const messages = [{ role: 'user', content: msgBody }];
+      // ── Agentic loop — multi-turn tool execution ─────────────────────
+      const boundExecuteTool = (toolName, toolInput, uid) =>
+        executeTool(toolName, toolInput, uid, entityIds, db);
 
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
+      const { text } = await runAgenticLoop({
+        messages: [{ role: 'user', content: msgBody }],
         system: systemPrompt,
         tools: ARIA_TOOLS,
-        messages,
+        userId,
+        executeTool: boundExecuteTool,
+        // no onProgress — WhatsApp is fire-and-reply
       });
 
-      let reply;
-
-      if (response.stop_reason === 'tool_use') {
-        // Execute each tool block
-        const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-        const toolResults = [];
-
-        for (const block of toolUseBlocks) {
-          const result = await executeTool(block.name, block.input, userId, entityIds, db);
-          toolResults.push(result);
-          console.log(`[whatsapp/inbound] Tool ${block.name}: ${JSON.stringify(result)}`);
-        }
-
-        // Call 2 — Sonnet with tool results for confirmation text
-        const followUpMessages = [
-          ...messages,
-          { role: 'assistant', content: response.content },
-          {
-            role: 'user',
-            content: toolUseBlocks.map((block, i) => ({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: JSON.stringify(toolResults[i]),
-            })),
-          },
-        ];
-
-        const finalResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 300,
-          system: systemPrompt,
-          tools: ARIA_TOOLS,
-          messages: followUpMessages,
-        });
-
-        reply = finalResponse.content.find(b => b.type === 'text')?.text || '';
-      } else {
-        // No tool use — use text directly
-        reply = response.content.find(b => b.type === 'text')?.text || '';
-      }
+      const reply = text;
 
       // ── Reply via UltraMsg ──────────────────────────────────────────────
       const ultraInstance = process.env.ULTRAMSG_INSTANCE;

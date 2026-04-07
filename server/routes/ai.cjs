@@ -4,6 +4,7 @@ const express   = require('express');
 const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
+const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 
 /**
  * Creates the AI proxy router.
@@ -207,56 +208,39 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
 
-      const anthropic = new Anthropic({ apiKey });
-      const response = await anthropic.messages.create({
-        model,
-        max_tokens: 4096,
+      const send = (event, data) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      const boundExecuteTool = (toolName, toolInput, uid) =>
+        executeTool(toolName, toolInput, uid, entityIds, db);
+
+      const onProgress = ({ type, tool, input, result, error }) => {
+        if (type === 'tool_start')    send('tool_start',    { tool, input });
+        if (type === 'tool_complete') send('tool_complete', { tool, result });
+        if (type === 'tool_error')    send('tool_error',    { tool, error });
+      };
+
+      const { text, toolSummaries, maxIterationsReached } = await runAgenticLoop({
+        messages,
         system: fullSystem,
         tools: ARIA_TOOLS,
-        messages,
+        userId,
+        executeTool: boundExecuteTool,
+        onProgress,
       });
 
-      if (response.stop_reason === 'tool_use') {
-        const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-        const toolResults = [];
+      send('text', { content: text });
 
-        for (const block of toolUseBlocks) {
-          const result = await executeTool(block.name, block.input, userId, entityIds, db);
-          toolResults.push(result);
-          res.write(`data: ${JSON.stringify({ toolExecuted: block.name, result })}\n\n`);
-        }
-
-        // Second call with tool results
-        const toolResultMessages = [
-          ...messages,
-          { role: 'assistant', content: response.content },
-          {
-            role: 'user',
-            content: toolUseBlocks.map((block, i) => ({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: JSON.stringify(toolResults[i]),
-            })),
-          },
-        ];
-
-        const finalResponse = await anthropic.messages.create({
-          model,
-          max_tokens: 4096,
-          system: fullSystem,
-          tools: ARIA_TOOLS,
-          messages: toolResultMessages,
-        });
-
-        const finalText = finalResponse.content.find(b => b.type === 'text')?.text || '';
-        res.write(`data: ${JSON.stringify({ delta: finalText })}\n\n`);
-      } else {
-        // No tool use — just text
-        const text = response.content.find(b => b.type === 'text')?.text || '';
-        res.write(`data: ${JSON.stringify({ delta: text })}\n\n`);
+      if (toolSummaries.length > 0) {
+        send('tools_executed', { tools: toolSummaries.map(s => s.tool), summaries: toolSummaries });
       }
 
-      res.write('data: [DONE]\n\n');
+      if (maxIterationsReached) {
+        send('warning', { message: 'Step limit reached' });
+      }
+
+      send('done', {});
       res.end();
     } catch (err) {
       console.error('[chat/execute] Error:', err.message);
