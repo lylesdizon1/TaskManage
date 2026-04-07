@@ -11,10 +11,11 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const webhookUrl = process.env.SLACK_WEBHOOK_URL;
       const ultraInstance = process.env.ULTRAMSG_INSTANCE;
       const ultraToken = process.env.ULTRAMSG_TOKEN;
-      const ultraPhone = process.env.ULTRAMSG_PHONE;
       if (!webhookUrl && !ultraInstance) return res.status(500).json({ error: 'No messaging channels configured (SLACK_WEBHOOK_URL or ULTRAMSG_INSTANCE)' });
 
       const user = await db.getUserById(req.user.id);
+      const ultraPhone = user?.whatsappPhone ||
+        (req.user.role === 'superadmin' ? process.env.ULTRAMSG_PHONE : null);
       const userEntities = (user?.entityIds || []);
       const tasks = await db.getTasksForUser(req.user.id, userEntities);
 
@@ -134,7 +135,10 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const webhookUrl    = process.env.SLACK_WEBHOOK_URL;
       const ultraInstance = process.env.ULTRAMSG_INSTANCE;
       const ultraToken    = process.env.ULTRAMSG_TOKEN;
-      const ultraPhone    = process.env.ULTRAMSG_PHONE;
+
+      const user = await db.getUserById(req.user.id);
+      const ultraPhone = user?.whatsappPhone ||
+        (req.user.role === 'superadmin' ? process.env.ULTRAMSG_PHONE : null);
 
       const sends = [];
 
