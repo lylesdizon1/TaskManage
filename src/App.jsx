@@ -551,9 +551,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     }
     setChatLoading(false);
     await loadConversations(); // refresh titles
-    // Open sliding panel on desktop if not on chat tab
+    // Open response surface
     if (window.innerWidth >= 768 && activeView !== 'chat') {
       setChatPanelOpen(true);
+    } else if (window.innerWidth < 768 && mobileView !== 'chat') {
+      setMobileView('chat');
+      setMobileChatOpen(true);
     }
   }
 
