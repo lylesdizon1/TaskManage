@@ -1726,6 +1726,7 @@ async function getRecentMemories(userId, limit = 20) {
     `SELECT id, type, content, tool, metadata, created_at AS "createdAt"
      FROM agent_memory
      WHERE user_id = $1
+       AND tool IN ('create_task', 'complete_task', 'update_task', 'create_event')
      ORDER BY created_at DESC
      LIMIT $2`,
     [userId, limit]
