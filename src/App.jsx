@@ -637,6 +637,20 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       .finally(() => { tasksLoadedRef.current = true; });
   }
 
+  // Load notes — extracted so it can be called on demand after tool use
+  function reloadNotes() {
+    apiFetch('/api/notes', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          const filtered = data.filter((n) => n.type !== 'digest');
+          setDashboardNotes(filtered);
+          setAllNotes(filtered);
+        }
+      })
+      .catch(() => {});
+  }
+
   // Load tasks on mount
   useEffect(() => {
     reloadTasks();
@@ -939,6 +953,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               apiFetch={apiFetch}
               callClaudeChat={callClaudeChat}
               onReloadTasks={reloadTasks}
+              onReloadNotes={reloadNotes}
             />
           ) : activeView === 'admin' && currentUser?.role === 'superadmin' ? (
             <AdminPanel authToken={authToken} />

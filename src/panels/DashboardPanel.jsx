@@ -5,7 +5,7 @@ import { getTodayLocal } from '../utils/helpers.js';
 
 const API_BASE = '';
 
-export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks }) {
+export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks, onReloadNotes }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -221,8 +221,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           try {
             const parsed = JSON.parse(payload);
             if (parsed.toolExecuted) {
-              if (parsed.toolExecuted === 'create_task' || parsed.toolExecuted === 'complete_task' || parsed.toolExecuted === 'update_task') {
+              if (['create_task', 'complete_task', 'update_task'].includes(parsed.toolExecuted)) {
                 onReloadTasks?.();
+              }
+              if (parsed.toolExecuted === 'create_note') {
+                onReloadNotes?.();
               }
               continue;
             }
@@ -398,8 +401,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           try {
             const parsed = JSON.parse(payload);
             if (parsed.toolExecuted) {
-              if (parsed.toolExecuted === 'create_task' || parsed.toolExecuted === 'complete_task' || parsed.toolExecuted === 'update_task') {
+              if (['create_task', 'complete_task', 'update_task'].includes(parsed.toolExecuted)) {
                 onReloadTasks?.();
+              }
+              if (parsed.toolExecuted === 'create_note') {
+                onReloadNotes?.();
               }
               continue;
             }
