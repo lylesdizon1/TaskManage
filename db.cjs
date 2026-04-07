@@ -368,6 +368,22 @@ async function initTables() {
       ON agent_memory(user_id, created_at DESC);
   `);
 
+  // ── fired_alerts table (server-side alert deduplication) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fired_alerts (
+      id          SERIAL PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      alert_key   TEXT NOT NULL,
+      fired_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS fired_alerts_user_key
+      ON fired_alerts(user_id, alert_key);
+  `);
+  // Cleanup: remove entries older than 7 days
+  await pool.query(`DELETE FROM fired_alerts WHERE fired_at < NOW() - INTERVAL '7 days'`);
+
   // ── Seed default org ──
   const { rows: orgRows } = await pool.query('SELECT COUNT(*)::int AS count FROM organizations');
   if (orgRows[0].count === 0) {
@@ -1738,6 +1754,24 @@ async function deleteMemory(id) {
   await pool.query('DELETE FROM agent_memory WHERE id = $1', [id]);
 }
 
+async function checkFiredAlerts(userId, keys) {
+  if (!keys || keys.length === 0) return [];
+  const { rows } = await pool.query(
+    `SELECT alert_key FROM fired_alerts
+     WHERE user_id = $1 AND alert_key = ANY($2) AND fired_at >= NOW() - INTERVAL '24 hours'`,
+    [userId, keys]
+  );
+  return rows.map(r => r.alert_key);
+}
+
+async function markFiredAlert(userId, key) {
+  await pool.query(
+    `INSERT INTO fired_alerts (user_id, alert_key) VALUES ($1, $2)
+     ON CONFLICT (user_id, alert_key) DO NOTHING`,
+    [userId, key]
+  );
+}
+
 module.exports = {
   pool,
   initTables,
@@ -1828,4 +1862,6 @@ module.exports = {
   getRecentMemories,
   getAllMemories,
   deleteMemory,
+  checkFiredAlerts,
+  markFiredAlert,
 };

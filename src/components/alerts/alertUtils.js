@@ -232,52 +232,94 @@ export function persistFiredAlerts(firedRef) {
 }
 
 /**
+ * Build alert key for a rule+task+date combination.
+ * Uses local date (YYYY-MM-DD) instead of UTC epoch bucket.
+ */
+function buildAlertKey(rule, task, todayStr) {
+  const scope = getRuleScope(rule.condition.type);
+  if (scope === 'per-task') return `${rule.id}::${task.id}::${todayStr}`;
+  if (scope === 'daily') return `${rule.id}::${todayStr}`;
+  return rule.id; // session
+}
+
+/**
  * Evaluate all enabled rules and deliver alerts via /api/alerts/fire.
- * firedRef (Set) prevents duplicate sends across page reloads.
+ * Server-side dedup via fired_alerts table is source of truth.
+ * localStorage firedRef is a fast client-side cache to avoid unnecessary API calls.
  */
 export async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast, apiFetch) {
   const { recipientEmail } = emailSettings;
   const todayStr = getTodayLocal();
 
+  // Phase 1: collect all candidate keys across all rules
+  const candidates = [];
   for (const rule of rules) {
     if (!rule.enabled) continue;
-
     const matching = evaluateRule(rule, tasks);
     if (matching.length === 0) continue;
-
-    const to    = rule.recipientOverride || recipientEmail;
     const scope = getRuleScope(rule.condition.type);
-    let tasksToSend = [];
-
     if (scope === 'per-task') {
-      const intervalHours = rule.remindIntervalHours || 24;
-      const bucket = Math.floor(Date.now() / (intervalHours * 3_600_000));
-      tasksToSend = matching.filter((t) => !firedRef.current.has(`${rule.id}::${t.id}::${bucket}`));
-      if (tasksToSend.length === 0) continue;
-      tasksToSend.forEach((t) => firedRef.current.add(`${rule.id}::${t.id}::${bucket}`));
-      persistFiredAlerts(firedRef);
-    } else if (scope === 'daily') {
-      const key = `${rule.id}::${todayStr}`;
-      if (firedRef.current.has(key)) continue;
-      firedRef.current.add(key);
-      persistFiredAlerts(firedRef);
-      tasksToSend = matching;
+      for (const t of matching) {
+        const key = buildAlertKey(rule, t, todayStr);
+        if (!firedRef.current.has(key)) candidates.push({ rule, task: t, key, scope });
+      }
     } else {
-      // session — once per browser load
-      if (firedRef.current.has(rule.id)) continue;
-      firedRef.current.add(rule.id);
-      persistFiredAlerts(firedRef);
-      tasksToSend = matching;
+      const key = buildAlertKey(rule, null, todayStr);
+      if (!firedRef.current.has(key)) candidates.push({ rule, task: null, key, scope });
     }
+  }
 
-    const count   = tasksToSend.length;
+  if (candidates.length === 0) return;
+
+  // Phase 2: check server for already-fired keys
+  const allKeys = candidates.map(c => c.key);
+  let serverFired = new Set();
+  try {
+    const checkRes = await apiFetch('/api/alerts/check-fired', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: allKeys }),
+    });
+    if (checkRes.ok) {
+      const { fired } = await checkRes.json();
+      serverFired = new Set(fired);
+      // Sync server state back to client cache
+      fired.forEach(k => firedRef.current.add(k));
+      persistFiredAlerts(firedRef);
+    }
+  } catch (err) {
+    console.error('[alerts] check-fired failed:', err.message);
+  }
+
+  // Phase 3: filter out already-fired, group by rule
+  const unfired = candidates.filter(c => !serverFired.has(c.key));
+  if (unfired.length === 0) return;
+
+  // Group by rule for batched firing
+  const byRule = new Map();
+  for (const c of unfired) {
+    if (!byRule.has(c.rule.id)) byRule.set(c.rule.id, { rule: c.rule, tasks: [], keys: [] });
+    const entry = byRule.get(c.rule.id);
+    entry.keys.push(c.key);
+    if (c.scope === 'per-task') entry.tasks.push(c.task);
+    else {
+      // For daily/session scope, get all matching tasks
+      const matching = evaluateRule(c.rule, tasks);
+      entry.tasks = matching;
+    }
+  }
+
+  // Phase 4: fire alerts and mark as fired on server
+  for (const [, { rule, tasks: tasksToSend, keys }] of byRule) {
+    const to = rule.recipientOverride || recipientEmail;
+    const count = tasksToSend.length;
     const message = buildPlainTextAlert(rule.name, tasksToSend);
     const channels = rule.channels || { whatsapp: true, slack: true, sms: false, email: true };
 
     try {
       const res = await apiFetch('/api/alerts/fire', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('tm_token')}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, channels, recipientEmail: to }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -287,6 +329,21 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
         type: 'success',
         message: `Alert sent: "${rule.name}" (${count} task${count !== 1 ? 's' : ''})${via}`,
       });
+
+      // Mark all keys as fired — server + client
+      for (const key of keys) {
+        firedRef.current.add(key);
+        try {
+          await apiFetch('/api/alerts/mark-fired', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key }),
+          });
+        } catch (markErr) {
+          console.error('[alerts] mark-fired failed:', markErr.message);
+        }
+      }
+      persistFiredAlerts(firedRef);
     } catch (err) {
       addToast({ type: 'error', message: `Alert failed: ${err.message}` });
     }

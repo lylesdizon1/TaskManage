@@ -199,6 +199,32 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     }
   });
 
+  // ── Server-side alert deduplication ──────────────────────────────────────
+
+  router.post('/api/alerts/check-fired', authenticateToken, async (req, res) => {
+    try {
+      const { keys } = req.body;
+      if (!Array.isArray(keys)) return res.status(400).json({ error: 'keys must be an array' });
+      const fired = await db.checkFiredAlerts(req.user.id, keys);
+      return res.json({ fired });
+    } catch (err) {
+      console.error('[alerts/check-fired]', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/alerts/mark-fired', authenticateToken, async (req, res) => {
+    try {
+      const { key } = req.body;
+      if (!key) return res.status(400).json({ error: 'key required' });
+      await db.markFiredAlert(req.user.id, key);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('[alerts/mark-fired]', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   router.get('/api/config/status', authenticateToken, (req, res) => {
     res.json({
       slack:    !!process.env.SLACK_WEBHOOK_URL,
