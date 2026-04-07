@@ -521,6 +521,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       });
     } catch {}
 
+    // Auto-name conversation from first user message
+    if (updatedMessages.filter((m) => m.role === 'user').length === 1) {
+      const autoTitle = text.length > 50 ? text.slice(0, 50).trim() + '...' : text.trim();
+      renameConversation(convId, autoTitle);
+    }
+
     // Build system prompt and call AI
     const sysPrompt = buildContext({ message: text, tasks, entities: userEntities, notes: allNotes, calendarEvents: chatCalendarEvents, personaSystemPrompt: effectivePersona.systemPrompt, autoPersonaEmoji: effectivePersona.emoji, autoPersonaName: effectivePersona.defaultName });
     try {
@@ -924,7 +930,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         </header>
 
         {/* Contextual Aria input bar — hidden on dashboard where Command Center has its own input */}
-        {((window.innerWidth < 768 && mobileView !== 'tasks') || (window.innerWidth >= 768 && activeView !== 'dashboard')) && (
+        {((window.innerWidth < 768 && mobileView !== 'tasks' && mobileView !== 'chat') || (window.innerWidth >= 768 && activeView !== 'dashboard' && activeView !== 'chat')) && (
           <div className="flex-shrink-0">
             <UniversalPromptBar
               input={chatInput}

@@ -21,7 +21,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // Clear stale date-keyed caches on mount
   useEffect(() => {
     Object.keys(localStorage).forEach((key) => {
-      if ((key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) && !key.includes(today)) {
+      if ((key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_') || key.startsWith('cc_messages_')) && !key.includes(today)) {
         localStorage.removeItem(key);
       }
     });
@@ -168,7 +168,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Command Center state ──────────────────────────────────────────────────
-  const [ccMessages, setCcMessages] = useState([]);
+  const ccStorageKey = `cc_messages_${getTodayLocal()}`;
+  const [ccMessages, setCcMessages] = useState(() => {
+    try {
+      const cached = localStorage.getItem(ccStorageKey);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return [];
+  });
   const [ccConvId, setCcConvId] = useState(null);
   const [ccLoading, setCcLoading] = useState(true);
   const [ccInput, setCcInput] = useState('');
@@ -184,6 +191,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, []);
 
   useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
+
+  // Persist CC messages to localStorage on every change
+  useEffect(() => {
+    if (ccMessages.length > 0) {
+      try { localStorage.setItem(ccStorageKey, JSON.stringify(ccMessages)); } catch {}
+    }
+  }, [ccMessages, ccStorageKey]);
 
   // Poll for command center updates — Aria narrates updates via /api/chat/stream
   const pollUpdatesRef = useRef(null);
@@ -388,6 +402,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         body: JSON.stringify({ role: 'user', content: text }),
       });
     } catch {}
+
+    // Auto-name CC conversation from first user message
+    const userMsgCount = ccMessages.filter((m) => m.role === 'user').length;
+    if (userMsgCount === 0) {
+      const autoTitle = text.length > 50 ? text.slice(0, 50).trim() + '...' : text.trim();
+      try {
+        await apiFetch(`/api/conversations/${ccConvId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ title: autoTitle }),
+        });
+      } catch {}
+    }
 
     // Build context: last 10 messages + full Aria system prompt with live data
     const recentMsgs = [...ccMessages.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
