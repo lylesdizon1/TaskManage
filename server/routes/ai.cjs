@@ -143,7 +143,9 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
     try {
       // Load user context
       const user = await db.getUserById(userId);
-      const tasks = await db.getTasksForUser(userId, entityIds);
+      // Only load user's OWN tasks for AI context — never include shared/entity tasks
+      // to prevent cross-user data leak (superadmin entityIds = all entities)
+      const tasks = await db.getTasksForUser(userId, []);
       const notes = await db.getPrivateNotesForAI(userId);
 
       let calendarEvents = [];

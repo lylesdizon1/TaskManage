@@ -41,7 +41,9 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // ── Load full context (same pattern as /api/chat/execute) ───────────
       const userId = user.id;
       const entityIds = user.entityIds || [];
-      const tasks = await db.getTasksForUser(userId, entityIds);
+      // Only load user's OWN tasks for AI context — never include shared/entity tasks
+      // to prevent cross-user data leak (superadmin entityIds = all entities)
+      const tasks = await db.getTasksForUser(userId, []);
       const notes = await db.getPrivateNotesForAI(userId);
 
       let calendarEvents = [];

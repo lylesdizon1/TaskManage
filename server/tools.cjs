@@ -107,7 +107,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
       }
 
       case 'complete_task': {
-        const tasks = await db.getTasksForUser(userId, entityIds || []);
+        // Only search user's own tasks — prevent cross-user mutation via shared entities
+        const tasks = await db.getTasksForUser(userId, []);
         let task = null;
         if (toolInput.task_id) {
           task = tasks.find(t => t.id === toolInput.task_id);
@@ -129,7 +130,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
       }
 
       case 'update_task': {
-        const tasks = await db.getTasksForUser(userId, entityIds || []);
+        // Only search user's own tasks — prevent cross-user mutation via shared entities
+        const tasks = await db.getTasksForUser(userId, []);
         const task = tasks.find(t => t.id === toolInput.task_id);
         if (!task) return { success: false, error: 'Task not found or access denied' };
         const fields = {};
