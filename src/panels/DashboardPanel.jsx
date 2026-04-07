@@ -71,7 +71,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   useEffect(() => {
     if (!currentUser?.id) return;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}`)
+    apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
       .then((r) => r.json())
       .then((data) => {
         if (!Array.isArray(data)) return;

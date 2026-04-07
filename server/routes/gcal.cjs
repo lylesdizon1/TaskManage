@@ -51,12 +51,11 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
   });
 
   /**
-   * GET /api/gcal/status?userId=...
+   * GET /api/gcal/status
    * Returns { connected: bool, email?: string }
    */
-  router.get('/api/gcal/status', async (req, res) => {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'userId required' });
+  router.get('/api/gcal/status', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
 
     const tokens = await loadGcalTokens(userId);
     if (!tokens) return res.json({ connected: false });

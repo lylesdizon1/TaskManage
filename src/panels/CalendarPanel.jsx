@@ -3,7 +3,7 @@ import { SpinnerIcon, CalendarIcon } from '../components/icons/Icons.jsx';
 
 const API_BASE = '';
 
-export default function CalendarPanel({ currentUser, addToast, apiFetch }) {
+export default function CalendarPanel({ currentUser, authToken, addToast, apiFetch }) {
   const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null });
   const [loading, setLoading]       = useState(true);
 
@@ -22,7 +22,9 @@ export default function CalendarPanel({ currentUser, addToast, apiFetch }) {
   async function checkStatus() {
     setLoading(true);
     try {
-      const res = await apiFetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`);
+      const res = await apiFetch(`${API_BASE}/api/gcal/status`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       const data = await res.json();
       setGcalStatus(data);
     } catch {
@@ -50,8 +52,7 @@ export default function CalendarPanel({ currentUser, addToast, apiFetch }) {
     try {
       await apiFetch(`${API_BASE}/api/gcal/disconnect`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       });
       setGcalStatus({ connected: false, email: null });
       addToast({ type: 'success', message: 'Google Calendar disconnected' });

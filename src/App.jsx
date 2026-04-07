@@ -676,7 +676,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   useEffect(() => {
     if (!currentUser?.id) return;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}&days=7`)
+    apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}&days=7`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setChatCalendarEvents(data);
@@ -747,7 +749,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // ── Google Calendar status check ──────────────────────────────────────────
   useEffect(() => {
-    apiFetch(`${API_BASE}/api/gcal/status?userId=${currentUser.id}`)
+    apiFetch(`${API_BASE}/api/gcal/status`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
       .then((r) => r.json())
       .then((data) => setGcalConnected(data.connected))
       .catch(() => {});
@@ -787,7 +791,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       handleSyncToCalendar(taskData).then(() => {
         // Refresh calendar events so new event appears immediately
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-        apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}&days=7`)
+        apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}&days=7`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        })
           .then((r) => r.json())
           .then((data) => { if (Array.isArray(data)) setChatCalendarEvents(data); })
           .catch(() => {});
@@ -1001,7 +1007,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'inbox' ? (
             <InboxPanel tasks={tasks} authToken={authToken} currentUser={currentUser} onToggleTask={(id) => { toggleTask(id); }} onEditTask={(id, fields) => { editTask(id, fields); }} addToast={addToast} apiFetch={apiFetch} />
           ) : activeView === 'calendar' ? (
-            <CalendarPanel currentUser={currentUser} addToast={addToast} apiFetch={apiFetch} />
+            <CalendarPanel currentUser={currentUser} authToken={authToken} addToast={addToast} apiFetch={apiFetch} />
           ) : activeView === 'notes' ? (
             <NotesPanel authToken={authToken} onEditorStateChange={setNotesEditorOpen} onCategoriesLoaded={setNoteCategories} onNotesLoaded={setAllNotes} quickCapturedNote={quickCapturedNote} addToast={addToast} entities={userEntities} apiFetch={apiFetch} onNoteOpenRef={(fn) => { openNoteRef.current = fn; }} />
           ) : activeView === 'chat' ? (
@@ -1300,7 +1306,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           }`}
         >
           <Suspense fallback={<div className="flex-1 p-10"><SkeletonBlock className="h-64" /></div>}>
-            <CalendarPanel currentUser={currentUser} addToast={addToast} apiFetch={apiFetch} />
+            <CalendarPanel currentUser={currentUser} authToken={authToken} addToast={addToast} apiFetch={apiFetch} />
           </Suspense>
         </section>
 
@@ -1352,7 +1358,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           onCreated={() => {
             // Refresh calendar events
             const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-            apiFetch(`${API_BASE}/api/gcal/events?userId=${currentUser.id}&timeZone=${encodeURIComponent(tz)}&days=7`)
+            apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}&days=7`, {
+              headers: { Authorization: `Bearer ${authToken}` },
+            })
               .then((r) => r.json())
               .then((data) => { if (Array.isArray(data)) setChatCalendarEvents(data); })
               .catch(() => {});
