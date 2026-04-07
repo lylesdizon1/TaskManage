@@ -180,8 +180,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [ccLoading, setCcLoading] = useState(true);
   const [ccInput, setCcInput] = useState('');
   const [ccSending, setCcSending] = useState(false);
+  const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
   const lastCheckedRef = useRef(new Date().toISOString());
+  const ccAutoRefreshedRef = useRef(false);
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -285,7 +287,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         body: JSON.stringify({ role: 'assistant', content: ariaResponse, model: 'claude' }),
       });
 
-      setCcMessages((prev) => [...prev, { role: 'assistant', content: ariaResponse, createdAt: new Date().toISOString() }]);
+      setCcMessages((prev) => [...prev, { role: 'assistant', content: ariaResponse, createdAt: new Date().toISOString(), ts: Date.now() }]);
     } catch (err) {
       console.error('[CommandCenter] poll failed:', err);
     }
@@ -349,7 +351,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
         });
 
-        setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString() }]);
+        setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString(), ts: Date.now() }]);
       }
 
       setCcLoading(false);
@@ -385,6 +387,79 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     };
   }, []);
 
+  // ── Fresh update logic ──────────────────────────────────────────────────────
+  const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+
+  function getLastMessageTimestamp(msgs) {
+    if (!msgs || msgs.length === 0) return 0;
+    const last = msgs[msgs.length - 1];
+    if (last.ts) return last.ts;
+    if (last.createdAt) return new Date(last.createdAt).getTime();
+    return Date.now() - REFRESH_INTERVAL_MS - 60_000; // default: stale
+  }
+
+  const needsRefresh = !ccLoading && !ccRefreshing && !ccSending && ccMessages.length > 0
+    && (Date.now() - getLastMessageTimestamp(ccMessages)) > REFRESH_INTERVAL_MS;
+
+  const handleFreshUpdate = useCallback(async () => {
+    if (!ccConvId || ccRefreshing) return;
+    setCcRefreshing(true);
+    try {
+      const h = new Date().getHours();
+      const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+      const aName = currentUser?.assistantName || 'Aria';
+      const briefRes = await apiFetch('/api/dashboard/aria-brief', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          apiKey: apiKeys?.claude || '',
+          assistantName: aName,
+          persona: 'executive_assistant',
+          userName: firstName,
+          timeOfDay: tod,
+          data: {
+            overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
+            highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+            todayTasks: todayTasks.map((t) => t.title).join(', ') || 'None',
+            events: calendarEvents.map((e) => e.title).join(', ') || 'None',
+            notesCount: notes?.length || 0,
+            entities: (entities || []).map((e) => e.name).join(', ') || 'None',
+          },
+        }),
+      });
+      const { brief } = await briefRes.json();
+      if (brief) {
+        const now = new Date().toISOString();
+        await apiFetch(`/api/conversations/${ccConvId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
+        });
+        setCcMessages((prev) => [...prev, { role: 'assistant', content: brief, createdAt: now, ts: Date.now() }]);
+      }
+    } catch (err) {
+      console.error('[CommandCenter] fresh update failed:', err);
+    } finally {
+      setCcRefreshing(false);
+    }
+  }, [ccConvId, ccRefreshing, currentUser, firstName, apiKeys, authToken, apiFetch, overdueTasks, highPriorityTasks, todayTasks, calendarEvents, notes, entities]);
+
+  // Auto-refresh on visibility change (returning to tab after 15min)
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState !== 'visible') return;
+      if (!ccConvId || ccLoading || ccRefreshing || ccSending) return;
+      if (ccMessages.length === 0) return;
+      const elapsed = Date.now() - getLastMessageTimestamp(ccMessages);
+      if (elapsed > REFRESH_INTERVAL_MS && !ccAutoRefreshedRef.current) {
+        ccAutoRefreshedRef.current = true;
+        handleFreshUpdate().finally(() => { ccAutoRefreshedRef.current = false; });
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [ccConvId, ccLoading, ccRefreshing, ccSending, ccMessages, handleFreshUpdate]);
+
   // Send user message + stream Aria response
   const handleCcSend = useCallback(async () => {
     const text = ccInput.trim();
@@ -392,7 +467,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     setCcInput('');
     setCcSending(true);
 
-    const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString() };
+    const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString(), ts: Date.now() };
     setCcMessages((prev) => [...prev, userMsg]);
 
     // Save user message
@@ -426,7 +501,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // Stream response
     let fullResponse = '';
     const placeholderIdx = ccMessages.length + 1;
-    setCcMessages((prev) => [...prev, { role: 'assistant', content: '', createdAt: new Date().toISOString() }]);
+    setCcMessages((prev) => [...prev, { role: 'assistant', content: '', createdAt: new Date().toISOString(), ts: Date.now() }]);
 
     try {
       const res = await apiFetch('/api/chat/execute', {
@@ -630,19 +705,39 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           ) : ccMessages.length === 0 ? (
             <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>No messages yet.</p>
           ) : (
-            ccMessages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[85%] ${msg.role === 'user' ? 'text-white' : ''}`}
-                  style={msg.role === 'user'
-                    ? { backgroundColor: '#4f4dcf', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
-                    : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
-                  }
-                >
-                  {msg.content || <span className="animate-pulse">...</span>}
+            <>
+              {ccMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`max-w-[85%] ${msg.role === 'user' ? 'text-white' : ''}`}
+                    style={msg.role === 'user'
+                      ? { backgroundColor: '#4f4dcf', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+                      : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+                    }
+                  >
+                    {msg.content || <span className="animate-pulse">...</span>}
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+              {ccRefreshing && (
+                <div className="flex justify-start">
+                  <div style={{ backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }}>
+                    <span className="animate-pulse">Updating...</span>
+                  </div>
+                </div>
+              )}
+              {needsRefresh && !ccRefreshing && (
+                <div className="flex justify-start pt-1">
+                  <button
+                    onClick={handleFreshUpdate}
+                    style={{ fontFamily: 'Manrope, sans-serif', fontSize: '12px', fontWeight: 600, color: '#4f4dcf', background: 'none', border: '1px solid rgba(79,77,207,0.2)', borderRadius: '16px', padding: '4px 12px', cursor: 'pointer' }}
+                    className="hover:bg-primary/5 transition-colors"
+                  >
+                    ✦ Get update
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
         {/* Input — hidden until brief is loaded */}
