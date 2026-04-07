@@ -398,23 +398,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     return Date.now() - REFRESH_INTERVAL_MS - 60_000; // default: stale
   }
 
-  const lastMsgTs = getLastMessageTimestamp(ccMessages);
-  const needsRefresh = !ccLoading && !ccRefreshing && !ccSending && ccMessages.length > 0
-    && (Date.now() - lastMsgTs) > REFRESH_INTERVAL_MS;
-
-  // Debug: log timestamp delta for get-update button diagnosis
-  if (ccMessages.length > 0) {
-    const last = ccMessages[ccMessages.length - 1];
-    console.log('[CC refresh debug]', {
-      lastMsgTs,
-      now: Date.now(),
-      deltaMin: Math.round((Date.now() - lastMsgTs) / 60000),
-      needsRefresh,
-      ccLoading,
-      hasTsField: !!last.ts,
-      createdAt: last.createdAt,
-    });
-  }
+  const needsRefresh = useMemo(() => {
+    if (ccLoading || ccRefreshing || ccSending || ccMessages.length === 0) return false;
+    const lastTs = getLastMessageTimestamp(ccMessages);
+    return (Date.now() - lastTs) > REFRESH_INTERVAL_MS;
+  }, [ccMessages, ccLoading, ccRefreshing, ccSending]);
 
   const handleFreshUpdate = useCallback(async () => {
     if (!ccConvId || ccRefreshing) return;
