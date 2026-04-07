@@ -1448,18 +1448,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         </div>
       )}
 
-      {/* ── Quick Capture FAB ── */}
-      <QuickCaptureFAB
-        authToken={authToken}
-        categories={noteCategories}
-        activeView={window.innerWidth >= 768 ? activeView : mobileView}
-        hideFAB={(activeView === 'notes' || mobileView === 'notes') && notesEditorOpen}
-        addToast={addToast}
-        onNoteSaved={(saved) => setQuickCapturedNote(saved)}
-        chatPanelOpen={chatPanelOpen}
-        onToggleChat={toggleChatPanel}
-        apiFetch={apiFetch}
-      />
+      {/* Quick Capture FAB removed — actions live in Command Center */}
 
       {/* ── Toast notifications handled by ToastProvider in main.jsx ── */}
     </div>

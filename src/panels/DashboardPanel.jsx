@@ -574,24 +574,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </p>
       </div>
 
-      {/* ROW 2: Pills — Add Task, Quick Note, Inbox, Overdue, Priority */}
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', width: '100%', marginBottom: '24px' }}>
-        <button onClick={onAddTask} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', flex: 1, border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
-          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_task</span>
-          ADD TASK
-        </button>
-        <button onClick={onQuickNote} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', flex: 1, border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
-          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>edit_note</span>
-          QUICK NOTE
-        </button>
-        <button onClick={onAddEvent} style={{ background: '#eff0fe', color: '#4f4dcf', borderRadius: '16px', fontWeight: 700, fontSize: '12px', letterSpacing: '0.05em', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', flex: 1, border: 'none', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', fontFamily: 'Manrope, sans-serif', textTransform: 'uppercase' }}>
-          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>event</span>
-          ADD EVENT
-        </button>
-      </div>
-
-      {/* ROW 3: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '560px', width: '100%' }}>
+      {/* ROW 2: Command Center */}
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '660px', width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
