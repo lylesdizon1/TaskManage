@@ -899,19 +899,21 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           </div>
         </header>
 
-        {/* Mobile prompt bar — hidden on dashboard where Command Center has its own input */}
-        {mobileView !== 'tasks' && <div className="md:hidden flex-shrink-0">
-          <UniversalPromptBar
-            input={chatInput}
-            onInputChange={setChatInput}
-            backend={chatBackend}
-            onBackendChange={setChatBackend}
-            onSend={handleChatSend}
-            loading={chatLoading}
-            activeTab={mobileView}
-            personaPill={lastAutoPersona ? { emoji: lastAutoPersona.emoji, name: lastAutoPersona.defaultName } : null}
-          />
-        </div>}
+        {/* Contextual Aria input bar — hidden on dashboard where Command Center has its own input */}
+        {((window.innerWidth < 768 && mobileView !== 'tasks') || (window.innerWidth >= 768 && activeView !== 'dashboard')) && (
+          <div className="flex-shrink-0">
+            <UniversalPromptBar
+              input={chatInput}
+              onInputChange={setChatInput}
+              backend={chatBackend}
+              onBackendChange={setChatBackend}
+              onSend={handleChatSend}
+              loading={chatLoading}
+              activeTab={window.innerWidth < 768 ? mobileView : activeView}
+              personaPill={lastAutoPersona ? { emoji: lastAutoPersona.emoji, name: lastAutoPersona.defaultName } : null}
+            />
+          </div>
+        )}
 
         {/* ── Content ── */}
         <div className="flex flex-row flex-1 overflow-hidden pb-20 md:pb-0" style={{ minHeight: 0 }}>

@@ -241,12 +241,14 @@ export function UniversalPromptBar({ input, onInputChange, backend, onBackendCha
   const placeholders = {
     dashboard: 'What do you want to focus on today?',
     daily: 'Ask about your tasks...',
+    inbox: 'Ask about your inbox...',
     calendar: 'Ask about your schedule...',
     financials: 'Ask about your finances...',
     notes: 'Ask about your notes...',
-    chat: 'Ask anything...',
+    chat: 'Ask Aria anything...',
+    admin: 'Ask about your data...',
   };
-  const placeholder = placeholders[activeTab] || 'Ask anything...';
+  const placeholder = placeholders[activeTab] || 'Ask Aria anything...';
 
   return (
     <div className="z-40 bg-surface border-b border-surface-container-low flex-shrink-0">
