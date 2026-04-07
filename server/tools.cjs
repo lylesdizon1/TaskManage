@@ -2,6 +2,9 @@
 
 'use strict';
 
+const { google } = require('googleapis');
+const { loadGcalTokens, makeOAuth2Client } = require('./utils/google.cjs');
+
 const ARIA_TOOLS = [
   {
     name: 'create_task',
@@ -44,6 +47,22 @@ const ARIA_TOOLS = [
         notes:    { type: 'string', description: 'New description. Optional.' },
       },
       required: ['task_id'],
+    },
+  },
+  {
+    name: 'create_event',
+    description: 'Create a calendar event in the user\'s Google Calendar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Event title' },
+        start_datetime: { type: 'string', description: 'Start date/time in ISO 8601 format (e.g. 2025-04-08T14:00:00)' },
+        end_datetime: { type: 'string', description: 'End date/time in ISO 8601 format. If not provided, default to 1 hour after start.' },
+        description: { type: 'string', description: 'Optional event description or notes' },
+        location: { type: 'string', description: 'Optional location or address' },
+        attendees: { type: 'array', items: { type: 'string' }, description: 'Optional list of attendee email addresses' },
+      },
+      required: ['title', 'start_datetime'],
     },
   },
   {
@@ -130,6 +149,59 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
           });
         } catch (e) { console.error('[memory] log failed:', e.message); }
         return { success: true, task_id: toolInput.task_id };
+      }
+
+      case 'create_event': {
+        const { title, start_datetime, end_datetime, description: eventDesc, location, attendees } = toolInput;
+
+        // Load + decrypt GCal tokens (same pattern as ai.cjs context loading)
+        const tokens = await loadGcalTokens(userId, db);
+        if (!tokens) {
+          return { success: false, error: 'Google Calendar not connected. Please connect it in Settings.' };
+        }
+
+        const oauth2 = makeOAuth2Client();
+        if (!oauth2) {
+          return { success: false, error: 'Google OAuth not configured on server.' };
+        }
+        oauth2.setCredentials(tokens);
+        const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+
+        const startDt = start_datetime.includes('T') ? start_datetime : `${start_datetime}T00:00:00`;
+        const endDt = end_datetime
+          ? (end_datetime.includes('T') ? end_datetime : `${end_datetime}T00:00:00`)
+          : new Date(new Date(startDt).getTime() + 60 * 60 * 1000).toISOString().slice(0, 19);
+
+        const eventBody = {
+          summary: title,
+          start: { dateTime: startDt, timeZone: 'America/Los_Angeles' },
+          end:   { dateTime: endDt,   timeZone: 'America/Los_Angeles' },
+          ...(eventDesc && { description: eventDesc }),
+          ...(location  && { location }),
+          ...(attendees?.length && { attendees: attendees.map(email => ({ email })) }),
+        };
+
+        const { data: created } = await calendar.events.insert({
+          calendarId: 'primary',
+          requestBody: eventBody,
+        });
+
+        try {
+          await db.logMemory({
+            userId, tool: 'create_event',
+            content: `Created calendar event: "${title}" at ${startDt}`,
+            metadata: { event_id: created.id, title, start: startDt, end: endDt },
+          });
+        } catch (e) { console.error('[memory] log failed:', e.message); }
+
+        return {
+          success: true,
+          event_id: created.id,
+          title: created.summary,
+          start: created.start.dateTime,
+          end: created.end.dateTime,
+          link: created.htmlLink,
+        };
       }
 
       case 'create_note': {
