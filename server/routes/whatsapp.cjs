@@ -2,6 +2,7 @@
 
 const express   = require('express');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
+const { getTodayWithDay } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 
 /**
@@ -76,7 +77,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
       const tz = 'America/Los_Angeles';
-      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      const { date: todayStr, dayName } = getTodayWithDay(tz);
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>
@@ -102,7 +103,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       const assistantName = user.assistantName || 'Aria';
       const userName = user.profileName || user.displayName || 'the user';
-      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today's date is ${todayStr}. Respond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${contextAppend}`;
+      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${dayName}, ${todayStr}. The user's timezone is ${tz}. Respond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${contextAppend}`;
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
