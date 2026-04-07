@@ -247,7 +247,7 @@ function buildAlertKey(rule, task, todayStr) {
  * Server-side dedup via fired_alerts table is source of truth.
  * localStorage firedRef is a fast client-side cache to avoid unnecessary API calls.
  */
-export async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast, apiFetch) {
+export async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast, apiFetch, authToken) {
   const { recipientEmail } = emailSettings;
   const todayStr = getTodayLocal();
 
@@ -277,7 +277,7 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
   try {
     const checkRes = await apiFetch('/api/alerts/check-fired', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({ keys: allKeys }),
     });
     if (checkRes.ok) {
@@ -319,7 +319,7 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
     try {
       const res = await apiFetch('/api/alerts/fire', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ message, channels, recipientEmail: to }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -336,7 +336,7 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
         try {
           await apiFetch('/api/alerts/mark-fired', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
             body: JSON.stringify({ key }),
           });
         } catch (markErr) {

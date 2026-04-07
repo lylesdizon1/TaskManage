@@ -733,12 +733,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   useEffect(() => {
     runAlertRules(
       tasksRef.current, alertRulesRef.current,
-      emailSettingsRef.current, firedAlertsRef, addToast, apiFetch,
+      emailSettingsRef.current, firedAlertsRef, addToast, apiFetch, authToken,
     );
     const id = setInterval(() => {
       runAlertRules(
         tasksRef.current, alertRulesRef.current,
-        emailSettingsRef.current, firedAlertsRef, addToast, apiFetch,
+        emailSettingsRef.current, firedAlertsRef, addToast, apiFetch, authToken,
       );
     }, 60_000);
     return () => clearInterval(id);
