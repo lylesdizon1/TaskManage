@@ -1868,24 +1868,30 @@ function getTimezoneOffset(tz) {
 }
 
 async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz = 'America/Los_Angeles') {
+  console.log('[schedule] scheduleTaskAlerts called:', { userId, taskId, dueDate, dueTime, priority, tz });
   // Load cadence config for this user + priority
   const { rows: configs } = await pool.query(
     `SELECT offsets, channels FROM alert_cadence_config
      WHERE user_id = $1 AND priority = $2 AND enabled = TRUE`,
     [userId, priority || 'medium']
   );
-  if (!configs.length) return;
+  if (!configs.length) {
+    console.log('[schedule] no cadence config for', userId, priority);
+    return;
+  }
 
   const cfg = configs[0];
-  const offsets = cfg.offsets || [];
+  const cadenceOffsets = cfg.offsets || [];
   const channels = cfg.channels || ['whatsapp'];
 
   // Build due datetime with explicit timezone offset
-  const offset = getTimezoneOffset(tz);
+  const tzOffset = getTimezoneOffset(tz);
+  console.log('[schedule] tzOffset:', tzOffset);
   const dueStr = dueTime
-    ? `${dueDate}T${dueTime}:00${offset}`
-    : `${dueDate}T09:00:00${offset}`;
+    ? `${dueDate}T${dueTime}:00${tzOffset}`
+    : `${dueDate}T09:00:00${tzOffset}`;
   const dueDt = new Date(dueStr);
+  console.log('[schedule] dueDt:', dueStr, '→', dueDt.toISOString());
   if (isNaN(dueDt.getTime())) return;
 
   // Delete existing unfired alerts for this task
@@ -1895,36 +1901,41 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
   );
 
   const now = new Date();
+  console.log('[schedule] now:', now.toISOString());
 
-  for (const offset of offsets) {
+  let insertedCount = 0;
+  for (const cadenceOffset of cadenceOffsets) {
     let fireAt;
-    if (offset.minutes_before !== undefined) {
-      fireAt = new Date(dueDt.getTime() - offset.minutes_before * 60000);
-    } else if (offset.day_of_week !== undefined && offset.hour !== undefined) {
+    if (cadenceOffset.minutes_before !== undefined) {
+      fireAt = new Date(dueDt.getTime() - cadenceOffset.minutes_before * 60000);
+    } else if (cadenceOffset.day_of_week !== undefined && cadenceOffset.hour !== undefined) {
       // Next occurrence of day_of_week at given hour
       const target = new Date(now);
       const currentDay = target.getDay();
-      let daysAhead = offset.day_of_week - currentDay;
+      let daysAhead = cadenceOffset.day_of_week - currentDay;
       if (daysAhead <= 0) daysAhead += 7;
       target.setDate(target.getDate() + daysAhead);
-      target.setHours(offset.hour, 0, 0, 0);
+      target.setHours(cadenceOffset.hour, 0, 0, 0);
       fireAt = target;
     } else {
       continue;
     }
 
+    console.log('[schedule] offset', cadenceOffset.minutes_before, 'fireAt:', fireAt.toISOString(), 'skipped:', fireAt <= now);
     // Skip past fire times
     if (fireAt <= now) continue;
 
-    const message = `Hey — "${taskTitle}" is ${offset.minutes_before === 0 ? 'due now' : 'coming up'}.\n\nJust keeping you on track.`;
-    const alertKey = `sched::${taskId}::${offset.minutes_before ?? `dow${offset.day_of_week}h${offset.hour}`}`;
+    const message = `Hey — "${taskTitle}" is ${cadenceOffset.minutes_before === 0 ? 'due now' : 'coming up'}.\n\nJust keeping you on track.`;
+    const alertKey = `sched::${taskId}::${cadenceOffset.minutes_before ?? `dow${cadenceOffset.day_of_week}h${cadenceOffset.hour}`}`;
 
     await pool.query(
       `INSERT INTO scheduled_alerts (user_id, task_id, alert_key, message, channels, fire_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [userId, taskId, alertKey, message, JSON.stringify(channels), fireAt.toISOString()]
     );
+    insertedCount++;
   }
+  console.log('[schedule] inserted', insertedCount, 'scheduled alerts');
 }
 
 async function getUnfiredAlerts() {
