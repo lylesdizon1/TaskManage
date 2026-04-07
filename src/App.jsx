@@ -209,11 +209,16 @@ export default function App() {
   }
 
   function handleLogout() {
+    // Clear all user-specific state before unmounting
     setCurrentUser(null);
     setAuthToken(null);
     setSessionExpired(false);
+    // Clear localStorage
     localStorage.removeItem('tm_token');
     localStorage.removeItem('tm_user');
+    localStorage.removeItem('tm_chat_draft');
+    // Force full page reload to guarantee clean state
+    window.location.href = '/';
   }
 
   // Listen for session-expired events from apiFetch
