@@ -646,6 +646,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         setInitialBriefData({
           overdue: taskData.filter(t => !t.completed && t.dueDate && t.dueDate < todayISO).map(t => t.title).join(', ') || 'None',
           highPriority: taskData.filter(t => !t.completed && t.priority === 'high').map(t => t.title).join(', ') || 'None',
+          todayTasks: taskData.filter(t => !t.completed && t.dueDate === todayISO).map(t => t.title).join(', ') || 'None',
         });
       })
       .catch(() => setTasks([]))

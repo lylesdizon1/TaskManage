@@ -332,6 +332,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           data: {
             overdue: initialBriefData?.overdue || overdueTasks.map((t) => t.title).join(', ') || 'None',
             highPriority: initialBriefData?.highPriority || highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+            todayTasks: initialBriefData?.todayTasks || todayTasks.map((t) => t.title).join(', ') || 'None',
             events: calendarEvents.map((e) => e.title).join(', ') || 'None',
             notesCount: notes?.length || 0,
             entities: (entities || []).map((e) => e.name).join(', ') || 'None',

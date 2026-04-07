@@ -90,9 +90,9 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
       const tone = personaTones[persona] || personaTones.executive_assistant;
       const name = assistantName || 'Aria';
 
-      const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-3 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. Sign off with just your name: — ${name}`;
+      const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-3 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. Only reference tasks, calendar events, and notes that are explicitly listed in the context below. Do not infer or reference activities from memory, business context, or profile information when summarizing the day. Sign off with just your name: — ${name}`;
 
-      const dataStr = `Overdue tasks: ${data.overdue || 'None'}\nHigh priority tasks: ${data.highPriority || 'None'}\nToday's calendar events: ${data.events || 'None'}\nNotes this week: ${data.notesCount || 0}\nBusinesses: ${data.entities || 'None'}`;
+      const dataStr = `Overdue tasks: ${data.overdue || 'None'}\nHigh priority tasks: ${data.highPriority || 'None'}\nTasks due today: ${data.todayTasks || 'None'}\nToday's calendar events: ${data.events || 'None'}\nNotes this week: ${data.notesCount || 0}\nBusinesses: ${data.entities || 'None'}`;
 
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',
