@@ -4,7 +4,7 @@ const express   = require('express');
 const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
-const { getTodayWithDay } = require('../utils/date.cjs');
+const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 
 /**
@@ -179,7 +179,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
       const tz = timeZone || 'America/Los_Angeles';
-      const { date: todayStr, dayName } = getTodayWithDay(tz);
+      const todayStr = getTodayLocal(tz);
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>
@@ -201,7 +201,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       if (user.profileLocation)   profileParts.push(`Based in: ${user.profileLocation}.`);
       if (user.profileNotes)      profileParts.push(`Additional context: ${user.profileNotes}.`);
       const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
-      const fullSystem = profileContext + (systemPrompt || '') + `\nToday is ${dayName}, ${todayStr}. The user's timezone is ${tz}.` + contextAppend;
+      const fullSystem = profileContext + (systemPrompt || '') + `\nToday is ${todayStr}. The user's timezone is ${tz}.` + contextAppend;
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');
