@@ -575,7 +575,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       </div>
 
       {/* ROW 2: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '990px', width: '100%' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '1485px', width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
@@ -593,7 +593,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           </select>
         </div>
         {/* Messages */}
-        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '270px', fontFamily: 'Manrope, sans-serif' }}>
+        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '405px', fontFamily: 'Manrope, sans-serif' }}>
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
               <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
@@ -625,8 +625,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             onChange={(e) => setCcInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
             placeholder={`Ask ${assistantName} anything...`}
-            className="flex-1 bg-transparent border-none focus:ring-0 placeholder:text-slate-400 outline-none"
-            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px' }}
+            className="flex-1 bg-transparent focus:ring-0 placeholder:text-[#555] outline-none"
+            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', border: '1px solid #4f4dcf', borderRadius: '8px', padding: '8px 12px' }}
             disabled={ccSending}
           />
           <button
