@@ -132,7 +132,7 @@ function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAle
 
   async function handleEvaluateNow() {
     setEvaluating(true);
-    await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast, apiFetch, authToken);
+    await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast, apiFetch, authToken, currentUser);
     setEvaluating(false);
   }
 

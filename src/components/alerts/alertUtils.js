@@ -128,11 +128,51 @@ export function evaluateRule(rule, tasks) {
   }
 }
 
-/** Build a plain-text alert message for multi-channel delivery. */
-export function buildPlainTextAlert(ruleName, tasks) {
-  const lines = [`[Dizon.ai] ${ruleName}\n`];
+/** Build a conversational Aria-voice alert for a single task. */
+export function buildConversationalAlert(firstName, ruleType, task) {
+  const name = firstName || 'there';
+  const title = task.title;
+
+  switch (ruleType) {
+    case 'overdue': {
+      const daysOver = task.dueDate
+        ? Math.floor((new Date(getTodayLocal()) - new Date(task.dueDate)) / 86400000)
+        : 0;
+      const daysNote = daysOver > 1 ? ` (${daysOver} days now)` : '';
+      return `Hey ${name} — the "${title}" task is overdue${daysNote}.\n\nWorth a quick look when you get a chance.`;
+    }
+    case 'due-in-hours':
+      return `Hey ${name} — "${title}" is due soon.\n\nGood time to get ahead of it.`;
+    case 'high-priority':
+      return `Hey ${name} — "${title}" is high priority and still open.\n\nThis one's important — worth prioritizing.`;
+    case 'tag-match':
+      return `Hey ${name} — "${title}" is active and flagged.\n\nJust flagging this for you.`;
+    case 'tag-overdue':
+      return `Hey ${name} — "${title}" is overdue.\n\nThis one slipped — worth a quick look.`;
+    case 'daily-digest':
+      return null; // handled separately
+    default:
+      return `Hey ${name} — "${title}" needs your attention.\n\nJust keeping you in the loop.`;
+  }
+}
+
+/** Build a conversational daily digest message. */
+export function buildDigestAlert(firstName, tasks) {
+  const name = firstName || 'there';
   if (!tasks || tasks.length === 0) {
-    lines.push('- No matching tasks');
+    return `Hey ${name} — you're all clear today. No active tasks.\n\nEnjoy the breathing room.`;
+  }
+  const count = tasks.length;
+  const topTasks = tasks.slice(0, 5).map((t) => `• ${t.title}`).join('\n');
+  const more = count > 5 ? `\n...and ${count - 5} more` : '';
+  return `Hey ${name} — you've got ${count} active task${count !== 1 ? 's' : ''} today:\n\n${topTasks}${more}\n\nLet's have a great day.`;
+}
+
+/** Legacy wrapper — kept for any remaining callers. */
+export function buildPlainTextAlert(ruleName, tasks) {
+  const lines = [`${ruleName}\n`];
+  if (!tasks || tasks.length === 0) {
+    lines.push('No matching tasks');
   } else {
     tasks.forEach((t) => {
       const due = t.dueDate ? ` (due ${t.dueDate})` : '';
@@ -140,7 +180,6 @@ export function buildPlainTextAlert(ruleName, tasks) {
       lines.push(`- ${t.title}${due}${pri}`);
     });
   }
-  lines.push(`\n${tasks?.length || 0} task(s) matched`);
   return lines.join('\n');
 }
 
@@ -247,9 +286,10 @@ function buildAlertKey(rule, task, todayStr) {
  * Server-side dedup via fired_alerts table is source of truth.
  * localStorage firedRef is a fast client-side cache to avoid unnecessary API calls.
  */
-export async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast, apiFetch, authToken) {
+export async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast, apiFetch, authToken, currentUser) {
   const { recipientEmail } = emailSettings;
   const todayStr = getTodayLocal();
+  const firstName = currentUser?.displayName?.split(' ')[0] || currentUser?.username || '';
 
   // Phase 1: collect all candidate keys across all rules
   const candidates = [];
@@ -283,7 +323,6 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
     if (checkRes.ok) {
       const { fired } = await checkRes.json();
       serverFired = new Set(fired);
-      // Sync server state back to client cache
       fired.forEach(k => firedRef.current.add(k));
       persistFiredAlerts(firedRef);
     }
@@ -291,30 +330,25 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
     console.error('[alerts] check-fired failed:', err.message);
   }
 
-  // Phase 3: filter out already-fired, group by rule
+  // Phase 3: filter out already-fired
   const unfired = candidates.filter(c => !serverFired.has(c.key));
   if (unfired.length === 0) return;
 
-  // Group by rule for batched firing
-  const byRule = new Map();
-  for (const c of unfired) {
-    if (!byRule.has(c.rule.id)) byRule.set(c.rule.id, { rule: c.rule, tasks: [], keys: [] });
-    const entry = byRule.get(c.rule.id);
-    entry.keys.push(c.key);
-    if (c.scope === 'per-task') entry.tasks.push(c.task);
-    else {
-      // For daily/session scope, get all matching tasks
-      const matching = evaluateRule(c.rule, tasks);
-      entry.tasks = matching;
-    }
-  }
-
-  // Phase 4: fire alerts and mark as fired on server
-  for (const [, { rule, tasks: tasksToSend, keys }] of byRule) {
+  // Phase 4: fire alerts — one message per task (conversational Aria voice)
+  for (const { rule, task, key, scope } of unfired) {
     const to = rule.recipientOverride || recipientEmail;
-    const count = tasksToSend.length;
-    const message = buildPlainTextAlert(rule.name, tasksToSend);
     const channels = rule.channels || { whatsapp: true, slack: true, sms: false, email: true };
+    const ruleType = rule.condition.type;
+
+    let message;
+    if (scope === 'per-task') {
+      message = buildConversationalAlert(firstName, ruleType, task);
+    } else {
+      // daily-digest or other daily/session scope
+      const matching = evaluateRule(rule, tasks);
+      message = buildDigestAlert(firstName, matching);
+    }
+    if (!message) continue;
 
     try {
       const res = await apiFetch('/api/alerts/fire', {
@@ -325,23 +359,22 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const via = data.sent?.length ? ` via ${data.sent.join(', ')}` : '';
+      const label = task ? `"${task.title}"` : `"${rule.name}"`;
       addToast({
         type: 'success',
-        message: `Alert sent: "${rule.name}" (${count} task${count !== 1 ? 's' : ''})${via}`,
+        message: `Alert sent: ${label}${via}`,
       });
 
-      // Mark all keys as fired — server + client
-      for (const key of keys) {
-        firedRef.current.add(key);
-        try {
-          await apiFetch('/api/alerts/mark-fired', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-            body: JSON.stringify({ key }),
-          });
-        } catch (markErr) {
-          console.error('[alerts] mark-fired failed:', markErr.message);
-        }
+      // Mark as fired — server + client
+      firedRef.current.add(key);
+      try {
+        await apiFetch('/api/alerts/mark-fired', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ key }),
+        });
+      } catch (markErr) {
+        console.error('[alerts] mark-fired failed:', markErr.message);
       }
       persistFiredAlerts(firedRef);
     } catch (err) {

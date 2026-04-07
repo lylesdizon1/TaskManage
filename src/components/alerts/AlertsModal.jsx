@@ -185,7 +185,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
   );
 }
 
-export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose, entities, envStatus, apiFetch, authToken, EntitySelectOptions }) {
+export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose, entities, envStatus, apiFetch, authToken, currentUser, EntitySelectOptions }) {
   const [showAdd, setShowAdd]       = useState(false);
   const [newRule, setNewRule]       = useState(EMPTY_NEW_RULE);
   const [evaluating, setEvaluating] = useState(false);
@@ -255,7 +255,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedA
 
   async function handleEvaluateNow() {
     setEvaluating(true);
-    await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast, apiFetch, authToken);
+    await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast, apiFetch, authToken, currentUser);
     setEvaluating(false);
   }
 
