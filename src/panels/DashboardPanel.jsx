@@ -5,7 +5,7 @@ import { getTodayLocal } from '../utils/helpers.js';
 
 const API_BASE = '';
 
-export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData }) {
+export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -220,7 +220,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           if (payload === '[DONE]') continue;
           try {
             const parsed = JSON.parse(payload);
-            if (parsed.toolExecuted) { console.log('[CC] tool executed:', parsed.toolExecuted, parsed.result); continue; }
+            if (parsed.toolExecuted) {
+              if (parsed.toolExecuted === 'create_task' || parsed.toolExecuted === 'complete_task' || parsed.toolExecuted === 'update_task') {
+                onReloadTasks?.();
+              }
+              continue;
+            }
             if (parsed.delta) ariaResponse += parsed.delta;
           } catch {}
         }
@@ -392,7 +397,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           if (payload === '[DONE]') continue;
           try {
             const parsed = JSON.parse(payload);
-            if (parsed.toolExecuted) { console.log('[CC] tool executed:', parsed.toolExecuted, parsed.result); continue; }
+            if (parsed.toolExecuted) {
+              if (parsed.toolExecuted === 'create_task' || parsed.toolExecuted === 'complete_task' || parsed.toolExecuted === 'update_task') {
+                onReloadTasks?.();
+              }
+              continue;
+            }
             if (parsed.delta) {
               fullResponse += parsed.delta;
               setCcMessages((prev) => {

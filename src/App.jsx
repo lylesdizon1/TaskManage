@@ -619,8 +619,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // ── Task persistence ──────────────────────────────────────────────────────
 
-  // Load tasks on mount
-  useEffect(() => {
+  // Load tasks — extracted so it can be called on demand after tool use / task add
+  function reloadTasks() {
     apiFetch('/api/tasks', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
@@ -635,6 +635,11 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       })
       .catch(() => setTasks([]))
       .finally(() => { tasksLoadedRef.current = true; });
+  }
+
+  // Load tasks on mount
+  useEffect(() => {
+    reloadTasks();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch Google Calendar events for chat context
@@ -722,6 +727,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   function addTask(task) {
     const { syncToCalendar, ...taskData } = task;
     setTasks((prev) => [taskData, ...prev]);
+    // Reload from DB after short delay to ensure server write is complete
+    setTimeout(() => reloadTasks(), 300);
     // Optionally sync to Google Calendar
     if (syncToCalendar && taskData.dueDate && gcalConnected) {
       handleSyncToCalendar(taskData).then(() => {
@@ -931,6 +938,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onBackendChange={setChatBackend}
               apiFetch={apiFetch}
               callClaudeChat={callClaudeChat}
+              onReloadTasks={reloadTasks}
             />
           ) : activeView === 'admin' && currentUser?.role === 'superadmin' ? (
             <AdminPanel authToken={authToken} />
