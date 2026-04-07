@@ -78,7 +78,14 @@ export default function buildSystemPrompt(tasks, entities, notes, calendarEvents
       const [y, m, d] = (ev.start?.date || ev.start || '').split('-').map(Number);
       return new Date(y, m - 1, d);
     }
-    return new Date(ev.start?.dateTime || ev.start);
+    const dt = ev.start?.dateTime || ev.start;
+    if (typeof dt === 'string' && !dt.includes('Z') && !/[+-]\d{2}:\d{2}$/.test(dt) && dt.includes('T')) {
+      const [datePart, timePart] = dt.split('T');
+      const [y, m, d] = datePart.split('-').map(Number);
+      const [h, min, s] = timePart.split(':').map(Number);
+      return new Date(y, m - 1, d, h, min, s || 0);
+    }
+    return new Date(dt);
   }
   const weekOut = new Date(today);
   weekOut.setDate(weekOut.getDate() + 7);

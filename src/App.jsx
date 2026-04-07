@@ -1079,7 +1079,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   )}
                   {t.dueDate && t.dueDate !== todayStr && !isOverdue && (
                     <span className="text-[9px] text-on-surface-variant font-bold flex-shrink-0">
-                      {new Date(t.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {(() => { const [y, m, d] = t.dueDate.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })()}
                     </span>
                   )}
                   <span className="material-symbols-outlined text-on-surface-variant/30 group-hover:text-on-surface-variant text-base transition-colors flex-shrink-0">chevron_right</span>
