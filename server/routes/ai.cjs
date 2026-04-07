@@ -180,10 +180,11 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
 
       const tz = timeZone || 'America/Los_Angeles';
       const todayStr = getTodayLocal(tz);
+      const todayDate = todayStr.split(', ')[1];
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>
-          `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayStr ? ', OVERDUE' : ''})`
+          `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
         ).join('; ') || 'none'
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
       }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
