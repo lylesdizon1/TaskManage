@@ -312,7 +312,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
       // Step 2: if messages exist, load and done
       if (messages && messages.length > 0) {
-        setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })));
+        setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt, ts: m.createdAt ? new Date(m.createdAt).getTime() : Date.now() })));
         setCcLoading(false);
         ccPollIntervalRef.current = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
         return;
@@ -398,8 +398,23 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     return Date.now() - REFRESH_INTERVAL_MS - 60_000; // default: stale
   }
 
+  const lastMsgTs = getLastMessageTimestamp(ccMessages);
   const needsRefresh = !ccLoading && !ccRefreshing && !ccSending && ccMessages.length > 0
-    && (Date.now() - getLastMessageTimestamp(ccMessages)) > REFRESH_INTERVAL_MS;
+    && (Date.now() - lastMsgTs) > REFRESH_INTERVAL_MS;
+
+  // Debug: log timestamp delta for get-update button diagnosis
+  if (ccMessages.length > 0) {
+    const last = ccMessages[ccMessages.length - 1];
+    console.log('[CC refresh debug]', {
+      lastMsgTs,
+      now: Date.now(),
+      deltaMin: Math.round((Date.now() - lastMsgTs) / 60000),
+      needsRefresh,
+      ccLoading,
+      hasTsField: !!last.ts,
+      createdAt: last.createdAt,
+    });
+  }
 
   const handleFreshUpdate = useCallback(async () => {
     if (!ccConvId || ccRefreshing) return;
