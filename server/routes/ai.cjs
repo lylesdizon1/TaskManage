@@ -228,6 +228,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         userId,
         executeTool: boundExecuteTool,
         onProgress,
+        model,
       });
 
       send('text', { content: text });
@@ -244,7 +245,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       res.end();
     } catch (err) {
       console.error('[chat/execute] Error:', err.message);
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
       res.end();
     }
   });

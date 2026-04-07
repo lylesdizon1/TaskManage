@@ -5,7 +5,7 @@ const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 const MAX_ITERATIONS = 5;
 
-async function runAgenticLoop({ messages, system, tools, userId, executeTool, onProgress }) {
+async function runAgenticLoop({ messages, system, tools, userId, executeTool, onProgress, model }) {
   let currentMessages = [...messages];
   const toolSummaries = [];
   let iterations = 0;
@@ -14,7 +14,7 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
     iterations++;
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: model || 'claude-sonnet-4-20250514',
       max_tokens: 4096,
       system,
       tools: tools ?? [],

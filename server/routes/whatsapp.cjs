@@ -1,8 +1,6 @@
 'use strict';
 
 const express   = require('express');
-const crypto    = require('crypto');
-const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 
@@ -30,7 +28,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       // Normalize phone: strip non-digits
       const normalizedPhone = fromRaw.replace(/\D/g, '');
-      console.log(`[whatsapp/inbound] From: ${normalizedPhone}, Message: "${msgBody}"`);
+      console.log(`[whatsapp] Message from ${normalizedPhone}: "${msgBody.slice(0, 50)}${msgBody.length > 50 ? '...' : ''}"`);
 
       // Look up user by WhatsApp phone
       const user = await db.getUserByWhatsAppPhone(normalizedPhone);
@@ -77,7 +75,8 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       let recentMemories = [];
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const tz = user.profileTimezone || 'America/Los_Angeles';
+      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>

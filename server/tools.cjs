@@ -1,5 +1,3 @@
-// NOTE: When Phase 1 backend extraction runs, proxy-server.cjs moves into server/ — update require path to ./tools.cjs at that point.
-
 'use strict';
 
 const { google } = require('googleapis');
@@ -168,9 +166,17 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
         const calendar = google.calendar({ version: 'v3', auth: oauth2 });
 
         const startDt = start_datetime.includes('T') ? start_datetime : `${start_datetime}T00:00:00`;
+        const parsedStart = new Date(startDt);
+        if (isNaN(parsedStart.getTime())) {
+          return { success: false, error: `Invalid start_datetime: "${start_datetime}". Use ISO 8601 format (e.g. 2025-04-08T14:00:00).` };
+        }
         const endDt = end_datetime
           ? (end_datetime.includes('T') ? end_datetime : `${end_datetime}T00:00:00`)
-          : new Date(new Date(startDt).getTime() + 60 * 60 * 1000).toISOString().slice(0, 19);
+          : (() => {
+              const d = new Date(startDt);
+              d.setHours(d.getHours() + 1);
+              return d.toISOString().slice(0, 19);
+            })();
 
         const eventBody = {
           summary: title,
@@ -198,8 +204,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
           success: true,
           event_id: created.id,
           title: created.summary,
-          start: created.start.dateTime,
-          end: created.end.dateTime,
+          start: created.start?.dateTime || created.start?.date,
+          end: created.end?.dateTime || created.end?.date,
           link: created.htmlLink,
         };
       }
