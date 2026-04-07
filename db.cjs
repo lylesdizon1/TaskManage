@@ -1309,14 +1309,8 @@ async function runMigrations() {
     console.log('[db] Migration: promoted user-lyle to superadmin');
   }
 
-  // 4. Ensure all existing users who have empty entity_ids get all entities assigned
-  const allUsers = await getUsers();
-  for (const u of allUsers) {
-    if (!Array.isArray(u.entityIds) || u.entityIds.length === 0) {
-      await updateUser(u.id, { entityIds: allEntityNames });
-      console.log(`[db] Migration: assigned all entities to ${u.username}`);
-    }
-  }
+  // 4. Legacy: only assign all entities to Lyle (superadmin)
+  // New users start with empty entityIds and own only their created entities
 
   // 5. Add new columns to notes table (idempotent)
   const noteCols = [
