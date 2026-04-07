@@ -170,13 +170,26 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
         if (isNaN(parsedStart.getTime())) {
           return { success: false, error: `Invalid start_datetime: "${start_datetime}". Use ISO 8601 format (e.g. 2025-04-08T14:00:00).` };
         }
-        const endDt = end_datetime
-          ? (end_datetime.includes('T') ? end_datetime : `${end_datetime}T00:00:00`)
-          : (() => {
-              const d = new Date(startDt);
-              d.setHours(d.getHours() + 1);
-              return d.toISOString().slice(0, 19);
-            })();
+
+        const pad = (n) => String(n).padStart(2, '0');
+        const formatLocal = (d) =>
+          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+        let endDt;
+        if (end_datetime) {
+          endDt = end_datetime.includes('T') ? end_datetime : `${end_datetime}T00:00:00`;
+          const parsedEnd = new Date(endDt);
+          if (isNaN(parsedEnd.getTime())) {
+            return { success: false, error: `Invalid end_datetime: "${end_datetime}". Use ISO 8601 format (e.g. 2025-04-08T15:00:00).` };
+          }
+          if (parsedEnd <= parsedStart) {
+            return { success: false, error: 'end_datetime must be after start_datetime.' };
+          }
+        } else {
+          const d = new Date(parsedStart.getTime());
+          d.setHours(d.getHours() + 1);
+          endDt = formatLocal(d);
+        }
 
         const eventBody = {
           summary: title,

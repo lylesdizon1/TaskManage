@@ -75,7 +75,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       let recentMemories = [];
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
-      const tz = user.profileTimezone || 'America/Los_Angeles';
+      const tz = 'America/Los_Angeles';
       const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
