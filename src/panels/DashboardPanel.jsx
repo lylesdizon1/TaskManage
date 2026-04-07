@@ -575,7 +575,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       </div>
 
       {/* ROW 2: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '660px', width: '100%' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '990px', width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
           <div className="flex items-center gap-2">
@@ -593,7 +593,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           </select>
         </div>
         {/* Messages */}
-        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '180px', fontFamily: 'Manrope, sans-serif' }}>
+        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '270px', fontFamily: 'Manrope, sans-serif' }}>
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
               <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
