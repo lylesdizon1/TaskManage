@@ -18,7 +18,10 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const userEntities = (user?.entityIds || []);
       const tasks = await db.getTasksForUser(req.user.id, userEntities);
 
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(new Date());
       const overdue = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < todayStr);
       const todayTasks = tasks.filter((t) => !t.completed && t.dueDate === todayStr);
       const highPriority = tasks.filter((t) => !t.completed && t.priority === 'high');
