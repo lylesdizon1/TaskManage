@@ -12,4 +12,16 @@ function getFromEmail() {
   return process.env.RESEND_FROM_EMAIL || 'Dizon.ai <onboarding@resend.dev>';
 }
 
-module.exports = { getResendClient, getFromEmail };
+async function sendEmail({ to, subject, text, html }) {
+  const resend = getResendClient();
+  if (!resend) throw new Error('Resend not configured');
+  return resend.emails.send({
+    from: getFromEmail(),
+    to,
+    subject,
+    text,
+    html,
+  });
+}
+
+module.exports = { getResendClient, getFromEmail, sendEmail };

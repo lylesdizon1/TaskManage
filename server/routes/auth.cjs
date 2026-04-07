@@ -184,6 +184,9 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
         entityIds: [],
       });
 
+      // Seed default alert cadence config
+      try { await db.seedDefaultCadenceConfig(id); } catch (e) { console.error('[register] cadence seed failed:', e.message); }
+
       // Add to org
       await db.addOrgMember(invite.orgId, id, invite.role, invite.invitedBy);
       await db.acceptInvite(token, id);

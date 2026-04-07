@@ -368,6 +368,40 @@ async function initTables() {
       ON agent_memory(user_id, created_at DESC);
   `);
 
+  // ── scheduled_alerts table (server-side cron-fired reminders) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scheduled_alerts (
+      id          SERIAL PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      task_id     TEXT,
+      alert_key   TEXT,
+      message     TEXT NOT NULL,
+      channels    JSONB NOT NULL DEFAULT '[]',
+      fire_at     TIMESTAMPTZ NOT NULL,
+      fired       BOOLEAN DEFAULT FALSE,
+      fired_at    TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS scheduled_alerts_fire_at
+      ON scheduled_alerts(fire_at) WHERE fired = FALSE;
+  `);
+
+  // ── alert_cadence_config table (per-user priority-based alert timing) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS alert_cadence_config (
+      id          SERIAL PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      priority    TEXT NOT NULL CHECK (priority IN ('high', 'medium', 'low', 'floating')),
+      offsets     JSONB NOT NULL DEFAULT '[]',
+      channels    JSONB NOT NULL DEFAULT '["whatsapp"]',
+      enabled     BOOLEAN DEFAULT TRUE,
+      updated_at  TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, priority)
+    );
+  `);
+
   // ── fired_alerts table (server-side alert deduplication) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fired_alerts (
@@ -1755,6 +1789,142 @@ async function deleteMemory(id) {
   await pool.query('DELETE FROM agent_memory WHERE id = $1', [id]);
 }
 
+// ── Alert Cadence Config ──────────────────────────────────────────────────
+
+const DEFAULT_CADENCE_CONFIGS = [
+  {
+    priority: 'high',
+    offsets: [
+      { minutes_before: 1440, label: '24 hours before' },
+      { minutes_before: 120, label: '2 hours before' },
+      { minutes_before: 0, label: 'At due time' },
+    ],
+    channels: ['whatsapp', 'email'],
+  },
+  {
+    priority: 'medium',
+    offsets: [{ minutes_before: 1440, label: '24 hours before' }],
+    channels: ['whatsapp'],
+  },
+  {
+    priority: 'low',
+    offsets: [{ minutes_before: 0, label: 'At due time' }],
+    channels: ['whatsapp'],
+  },
+  {
+    priority: 'floating',
+    offsets: [{ day_of_week: 0, hour: 8, label: 'Sunday 8am digest' }],
+    channels: ['email'],
+  },
+];
+
+async function seedDefaultCadenceConfig(userId) {
+  for (const cfg of DEFAULT_CADENCE_CONFIGS) {
+    await pool.query(
+      `INSERT INTO alert_cadence_config (user_id, priority, offsets, channels)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, priority) DO NOTHING`,
+      [userId, cfg.priority, JSON.stringify(cfg.offsets), JSON.stringify(cfg.channels)]
+    );
+  }
+}
+
+async function getCadenceConfigForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, priority, offsets, channels, enabled, updated_at AS "updatedAt"
+     FROM alert_cadence_config WHERE user_id = $1 ORDER BY priority`,
+    [userId]
+  );
+  return rows;
+}
+
+async function upsertCadenceConfig(userId, priority, offsets, channels, enabled) {
+  await pool.query(
+    `INSERT INTO alert_cadence_config (user_id, priority, offsets, channels, enabled, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (user_id, priority) DO UPDATE SET
+       offsets = $3, channels = $4, enabled = $5, updated_at = NOW()`,
+    [userId, priority, JSON.stringify(offsets), JSON.stringify(channels), enabled]
+  );
+}
+
+async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority) {
+  // Load cadence config for this user + priority
+  const { rows: configs } = await pool.query(
+    `SELECT offsets, channels FROM alert_cadence_config
+     WHERE user_id = $1 AND priority = $2 AND enabled = TRUE`,
+    [userId, priority || 'medium']
+  );
+  if (!configs.length) return;
+
+  const cfg = configs[0];
+  const offsets = cfg.offsets || [];
+  const channels = cfg.channels || ['whatsapp'];
+
+  // Build due datetime
+  const dueStr = dueTime ? `${dueDate}T${dueTime}:00` : `${dueDate}T09:00:00`;
+  const dueDt = new Date(dueStr);
+  if (isNaN(dueDt.getTime())) return;
+
+  // Delete existing unfired alerts for this task
+  await pool.query(
+    `DELETE FROM scheduled_alerts WHERE task_id = $1 AND user_id = $2 AND fired = FALSE`,
+    [taskId, userId]
+  );
+
+  const now = new Date();
+
+  for (const offset of offsets) {
+    let fireAt;
+    if (offset.minutes_before !== undefined) {
+      fireAt = new Date(dueDt.getTime() - offset.minutes_before * 60000);
+    } else if (offset.day_of_week !== undefined && offset.hour !== undefined) {
+      // Next occurrence of day_of_week at given hour
+      const target = new Date(now);
+      const currentDay = target.getDay();
+      let daysAhead = offset.day_of_week - currentDay;
+      if (daysAhead <= 0) daysAhead += 7;
+      target.setDate(target.getDate() + daysAhead);
+      target.setHours(offset.hour, 0, 0, 0);
+      fireAt = target;
+    } else {
+      continue;
+    }
+
+    // Skip past fire times
+    if (fireAt <= now) continue;
+
+    const message = `Hey — "${taskTitle}" is ${offset.minutes_before === 0 ? 'due now' : 'coming up'}.\n\nJust keeping you on track.`;
+    const alertKey = `sched::${taskId}::${offset.minutes_before ?? `dow${offset.day_of_week}h${offset.hour}`}`;
+
+    await pool.query(
+      `INSERT INTO scheduled_alerts (user_id, task_id, alert_key, message, channels, fire_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, taskId, alertKey, message, JSON.stringify(channels), fireAt.toISOString()]
+    );
+  }
+}
+
+async function getUnfiredAlerts() {
+  const { rows } = await pool.query(
+    `SELECT sa.id, sa.user_id, sa.task_id, sa.alert_key, sa.message, sa.channels, sa.fire_at,
+            u.whatsapp_phone AS "whatsappPhone", u.email
+     FROM scheduled_alerts sa
+     JOIN users u ON u.id = sa.user_id
+     WHERE sa.fired = FALSE AND sa.fire_at <= NOW()
+     ORDER BY sa.fire_at ASC
+     LIMIT 50`
+  );
+  return rows;
+}
+
+async function markScheduledAlertFired(alertId) {
+  await pool.query(
+    `UPDATE scheduled_alerts SET fired = TRUE, fired_at = NOW() WHERE id = $1`,
+    [alertId]
+  );
+}
+
 async function checkFiredAlerts(userId, keys) {
   if (!keys || keys.length === 0) return [];
   const { rows } = await pool.query(
@@ -1865,4 +2035,11 @@ module.exports = {
   deleteMemory,
   checkFiredAlerts,
   markFiredAlert,
+  seedDefaultCadenceConfig,
+  getCadenceConfigForUser,
+  upsertCadenceConfig,
+  scheduleTaskAlerts,
+  getUnfiredAlerts,
+  markScheduledAlertFired,
+  DEFAULT_CADENCE_CONFIGS,
 };

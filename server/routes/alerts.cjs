@@ -225,6 +225,42 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     }
   });
 
+  // ── Cadence config endpoints ────────────────────────────────────────────
+
+  router.get('/api/alerts/cadence', authenticateToken, async (req, res) => {
+    try {
+      let configs = await db.getCadenceConfigForUser(req.user.id);
+      if (!configs.length) {
+        // Seed defaults on first access
+        await db.seedDefaultCadenceConfig(req.user.id);
+        configs = await db.getCadenceConfigForUser(req.user.id);
+      }
+      return res.json(configs);
+    } catch (err) {
+      console.error('[alerts/cadence] GET failed:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.put('/api/alerts/cadence/:priority', authenticateToken, async (req, res) => {
+    try {
+      const { priority } = req.params;
+      if (!['high', 'medium', 'low', 'floating'].includes(priority)) {
+        return res.status(400).json({ error: 'priority must be one of: high, medium, low, floating' });
+      }
+      const { offsets, channels, enabled } = req.body;
+      if (!Array.isArray(offsets)) return res.status(400).json({ error: 'offsets must be an array' });
+      if (!Array.isArray(channels)) return res.status(400).json({ error: 'channels must be an array' });
+
+      await db.upsertCadenceConfig(req.user.id, priority, offsets, channels, enabled !== false);
+      const configs = await db.getCadenceConfigForUser(req.user.id);
+      return res.json(configs);
+    } catch (err) {
+      console.error('[alerts/cadence] PUT failed:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   router.get('/api/config/status', authenticateToken, (req, res) => {
     res.json({
       slack:    !!process.env.SLACK_WEBHOOK_URL,

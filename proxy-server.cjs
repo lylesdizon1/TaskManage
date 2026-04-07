@@ -85,3 +85,62 @@ async function start() {
 }
 
 start().catch((err) => { console.error('[startup] Fatal:', err.message); process.exit(1); });
+
+// ── Server-side alert cron — runs every minute ──────────────────────────────
+const cron = require('node-cron');
+const { getResendClient: _getResendClient, getFromEmail: _getFromEmail } = require('./server/utils/email.cjs');
+
+cron.schedule('* * * * *', async () => {
+  try {
+    const alerts = await db.getUnfiredAlerts();
+    if (!alerts.length) return;
+
+    for (const alert of alerts) {
+      try {
+        const channels = alert.channels || [];
+        const sent = [];
+        const failed = [];
+
+        if (channels.includes('whatsapp') && alert.whatsappPhone) {
+          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+          const ultraToken = process.env.ULTRAMSG_TOKEN;
+          if (ultraInstance && ultraToken) {
+            try {
+              const waRes = await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ token: ultraToken, to: alert.whatsappPhone, body: alert.message }),
+              });
+              if (waRes.ok) sent.push('WhatsApp');
+              else failed.push('WhatsApp');
+            } catch { failed.push('WhatsApp'); }
+          }
+        }
+
+        if (channels.includes('email') && alert.email) {
+          const resend = _getResendClient();
+          if (resend) {
+            try {
+              await resend.emails.send({
+                from: _getFromEmail(),
+                to: alert.email,
+                subject: 'Reminder from Aria',
+                text: alert.message,
+              });
+              sent.push('Email');
+            } catch { failed.push('Email'); }
+          }
+        }
+
+        await db.markScheduledAlertFired(alert.id);
+        if (sent.length) console.log(`[cron] Fired alert ${alert.id} for ${alert.user_id}: ${sent.join(', ')}`);
+        if (failed.length) console.error(`[cron] Alert ${alert.id} partial failure: ${failed.join(', ')}`);
+      } catch (err) {
+        console.error(`[cron] Failed to fire alert ${alert.id}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('[cron] Scheduler error:', err.message);
+  }
+});
+console.log('[cron] Alert scheduler started');

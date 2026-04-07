@@ -103,6 +103,12 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
             metadata: { task_id: id, title: toolInput.title, priority: toolInput.priority, due_date: toolInput.due_date },
           });
         } catch (e) { console.error('[memory] log failed:', e.message); }
+        // Schedule alerts if task has a due date
+        if (toolInput.due_date) {
+          try {
+            await db.scheduleTaskAlerts(userId, id, toolInput.title, toolInput.due_date, toolInput.due_time || null, toolInput.priority || 'medium');
+          } catch (e) { console.error('[schedule] alert scheduling failed:', e.message); }
+        }
         return { success: true, task_id: id, title: toolInput.title };
       }
 
@@ -148,6 +154,17 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
             metadata: { task_id: toolInput.task_id, changes: fields },
           });
         } catch (e) { console.error('[memory] log failed:', e.message); }
+        // Reschedule alerts if due_date or priority changed
+        if (fields.dueDate !== undefined || fields.priority !== undefined) {
+          try {
+            const updatedDueDate = fields.dueDate ?? task.dueDate;
+            const updatedDueTime = fields.dueTime ?? task.dueTime ?? null;
+            const updatedPriority = fields.priority ?? task.priority;
+            if (updatedDueDate) {
+              await db.scheduleTaskAlerts(userId, toolInput.task_id, fields.title || task.title, updatedDueDate, updatedDueTime, updatedPriority);
+            }
+          } catch (e) { console.error('[schedule] alert rescheduling failed:', e.message); }
+        }
         return { success: true, task_id: toolInput.task_id };
       }
 
