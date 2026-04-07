@@ -204,6 +204,8 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
       const fullSystem = profileContext + (systemPrompt || '') + `\nToday is ${todayStr}. The user's timezone is ${tz}.` + contextAppend;
 
+      console.log('[chat/execute] systemPrompt:', fullSystem);
+
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
