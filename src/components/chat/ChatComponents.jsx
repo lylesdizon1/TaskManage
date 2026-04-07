@@ -103,9 +103,31 @@ function chatDateGroup(dateStr) {
   return 'Earlier';
 }
 
-export function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, backend, onSelectConv, onNewChat, onDeleteConv, onRenameConv }) {
+export function ChatTabPanel({ conversations, activeConvId, activeMessages, loading, backend, onSelectConv, onNewChat, onDeleteConv, onRenameConv, mobileChatOpen, onMobileChatOpen, onMobileChatClose }) {
   const [editingTitle, setEditingTitle] = useState(null);
-  const [showMobileChat, setShowMobileChat] = useState(false);
+
+  // Internal state for desktop (md:) responsive — mobile uses controlled props
+  const [desktopShowChat, setDesktopShowChat] = useState(false);
+
+  // Mobile uses controlled props when available, falls back to internal state
+  const showMobileChat = mobileChatOpen !== undefined ? mobileChatOpen : desktopShowChat;
+
+  const handleSelectConv = (id) => {
+    onSelectConv(id);
+    if (onMobileChatOpen) onMobileChatOpen();
+    else setDesktopShowChat(true);
+  };
+
+  const handleNewChat = async () => {
+    await onNewChat();
+    if (onMobileChatOpen) onMobileChatOpen();
+    else setDesktopShowChat(true);
+  };
+
+  const handleMobileBack = () => {
+    if (onMobileChatClose) onMobileChatClose();
+    else setDesktopShowChat(false);
+  };
 
   // Group conversations by date
   const grouped = useMemo(() => {
@@ -117,12 +139,6 @@ export function ChatTabPanel({ conversations, activeConvId, activeMessages, load
     return groups;
   }, [conversations]);
 
-  // When a conversation is selected, show chat panel on mobile
-  const handleSelectConv = (id) => {
-    onSelectConv(id);
-    setShowMobileChat(true);
-  };
-
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* Left sidebar — hidden on mobile when viewing a chat */}
@@ -131,7 +147,7 @@ export function ChatTabPanel({ conversations, activeConvId, activeMessages, load
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-bold font-headline text-on-background">Conversations</span>
           </div>
-          <button onClick={onNewChat} className="w-full px-3 py-2.5 text-[11px] font-bold text-on-primary bg-primary rounded-xl transition-colors hover:opacity-90 shadow-sm shadow-primary/20 flex items-center justify-center gap-1.5">
+          <button onClick={handleNewChat} className="w-full px-3 py-2.5 text-[11px] font-bold text-on-primary bg-primary rounded-xl transition-colors hover:opacity-90 shadow-sm shadow-primary/20 flex items-center justify-center gap-1.5">
             <span className="material-symbols-outlined text-sm">add</span>
             New Chat
           </button>
@@ -149,7 +165,10 @@ export function ChatTabPanel({ conversations, activeConvId, activeMessages, load
                 {items.map((conv) => (
                   <div
                     key={conv.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleSelectConv(conv.id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSelectConv(conv.id); }}
                     className={`group flex items-center justify-between px-2.5 py-2 rounded-xl cursor-pointer transition-colors ${
                       activeConvId === conv.id ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high text-on-background'
                     }`}
@@ -182,7 +201,7 @@ export function ChatTabPanel({ conversations, activeConvId, activeMessages, load
           <div className="flex-1 flex flex-col items-center justify-center text-on-surface-variant">
             <span className="material-symbols-outlined text-4xl text-primary/30 mb-3">chat</span>
             <p className="text-sm font-bold font-headline text-on-surface-variant/70">Select a conversation or start a new one</p>
-            <button onClick={onNewChat} className="mt-4 px-4 py-2.5 text-[11px] font-bold text-on-primary bg-primary rounded-xl transition-colors hover:opacity-90 shadow-sm shadow-primary/20 flex items-center gap-1.5">
+            <button onClick={handleNewChat} className="mt-4 px-4 py-2.5 text-[11px] font-bold text-on-primary bg-primary rounded-xl transition-colors hover:opacity-90 shadow-sm shadow-primary/20 flex items-center gap-1.5">
               <span className="material-symbols-outlined text-sm">add</span>
               New Chat
             </button>
@@ -195,7 +214,7 @@ export function ChatTabPanel({ conversations, activeConvId, activeMessages, load
                 {/* Mobile back button */}
                 <button
                   className="md:hidden flex items-center gap-1 text-primary font-bold text-sm mr-2 flex-shrink-0"
-                  onClick={() => setShowMobileChat(false)}
+                  onClick={handleMobileBack}
                 >
                   <span className="material-symbols-outlined text-lg">arrow_back</span>
                 </button>

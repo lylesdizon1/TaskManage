@@ -321,6 +321,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [gcalConnected, setGcalConnected]       = useState(false);
   const [envConfigured, setEnvConfigured]       = useState({});
   const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'notes'
+  const [mobileChatOpen, setMobileChatOpen]    = useState(false); // list vs chat view inside mobile Aria
   const [entities, setEntities]                 = useState([]);
   const firedAlertsRef                          = useRef((() => {
     const todayStr = getTodayLocal();
@@ -1253,15 +1254,18 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             className="md:hidden flex flex-col overflow-hidden"
             style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 50, backgroundColor: '#fff' }}
           >
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-surface-container-low flex-shrink-0">
-              <button
-                onClick={() => setMobileView('tasks')}
-                className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-container-low transition-colors"
-              >
-                <span className="material-symbols-outlined text-lg text-on-surface-variant">arrow_back</span>
-              </button>
-              <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: '#4f4dcf' }}>Aria</h3>
-            </div>
+            {/* Header — only shows on list view; chat view has its own header with back */}
+            {!mobileChatOpen && (
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-surface-container-low flex-shrink-0">
+                <button
+                  onClick={() => setMobileView('tasks')}
+                  className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-container-low transition-colors"
+                >
+                  <span className="material-symbols-outlined text-lg text-on-surface-variant">arrow_back</span>
+                </button>
+                <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: '#4f4dcf' }}>Aria</h3>
+              </div>
+            )}
             <ChatTabPanel
               conversations={conversations}
               activeConvId={activeConvId}
@@ -1272,6 +1276,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               onNewChat={createNewChat}
               onDeleteConv={deleteConversation}
               onRenameConv={renameConversation}
+              mobileChatOpen={mobileChatOpen}
+              onMobileChatOpen={() => setMobileChatOpen(true)}
+              onMobileChatClose={() => setMobileChatOpen(false)}
             />
           </section>
         )}
@@ -1313,6 +1320,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             key={key}
             onClick={() => {
               setMobileView(key);
+              if (key !== 'chat') setMobileChatOpen(false);
               if (key === 'tasks') setActiveView('dashboard');
               else if (key === 'daily') setActiveView('daily');
             }}
