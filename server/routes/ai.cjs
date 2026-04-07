@@ -135,7 +135,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
     const apiKey = process.env.CLAUDE_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
 
-    const { messages, systemPrompt, model: reqModel } = req.body;
+    const { messages, systemPrompt, model: reqModel, timeZone } = req.body;
     const model = reqModel || 'claude-sonnet-4-20250514';
 
     try {
@@ -176,7 +176,8 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       let recentMemories = [];
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const tz = timeZone || 'America/Los_Angeles';
+      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>

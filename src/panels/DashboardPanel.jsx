@@ -198,6 +198,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           model: 'claude-sonnet-4-20250514',
           systemPrompt: sysPrompt,
           messages: [{ role: 'user', content: ariaPrompt }],
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles',
         }),
       });
 
@@ -370,6 +371,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           model: 'claude-sonnet-4-20250514',
           systemPrompt: sysPrompt,
           messages: recentMsgs,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles',
         }),
       });
 
