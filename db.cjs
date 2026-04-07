@@ -352,6 +352,22 @@ async function initTables() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type        TEXT NOT NULL DEFAULT 'action',
+      content     TEXT NOT NULL,
+      tool        TEXT DEFAULT NULL,
+      metadata    JSONB DEFAULT '{}',
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_user_created
+      ON agent_memory(user_id, created_at DESC);
+  `);
+
   // ── Seed default org ──
   const { rows: orgRows } = await pool.query('SELECT COUNT(*)::int AS count FROM organizations');
   if (orgRows[0].count === 0) {
@@ -1684,6 +1700,50 @@ async function getAllUsersWithOrg() {
   return rows;
 }
 
+// ── Agent Memory ──────────────────────────────────────────────────────────
+
+async function logMemory({ userId, type = 'action', content, tool = null, metadata = {} }) {
+  const id = `mem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  await pool.query(
+    `INSERT INTO agent_memory (id, user_id, type, content, tool, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, userId, type, content, tool, JSON.stringify(metadata)]
+  );
+}
+
+async function getRecentMemories(userId, limit = 20) {
+  const { rows } = await pool.query(
+    `SELECT id, type, content, tool, metadata, created_at AS "createdAt"
+     FROM agent_memory
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [userId, limit]
+  );
+  return rows;
+}
+
+async function getAllMemories({ limit = 30, offset = 0, userId = null }) {
+  const where = userId ? `WHERE m.user_id = $3` : '';
+  const params = userId ? [limit, offset, userId] : [limit, offset];
+  const { rows } = await pool.query(
+    `SELECT m.id, m.user_id AS "userId", m.type, m.content, m.tool,
+            m.metadata, m.created_at AS "createdAt",
+            u.display_name AS "displayName", u.username
+     FROM agent_memory m
+     JOIN users u ON u.id = m.user_id
+     ${where}
+     ORDER BY m.created_at DESC
+     LIMIT $1 OFFSET $2`,
+    params
+  );
+  return rows;
+}
+
+async function deleteMemory(id) {
+  await pool.query('DELETE FROM agent_memory WHERE id = $1', [id]);
+}
+
 module.exports = {
   pool,
   initTables,
@@ -1770,4 +1830,8 @@ module.exports = {
   logAdminAction,
   getAuditLog,
   getAllUsersWithOrg,
+  logMemory,
+  getRecentMemories,
+  getAllMemories,
+  deleteMemory,
 };

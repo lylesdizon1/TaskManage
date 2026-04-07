@@ -208,5 +208,35 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  // ── Agent Memory ─────────────────────────────────────────────────────────
+
+  router.get('/api/admin/memory', async (req, res) => {
+    try {
+      const page = parseInt(req.query.page) || 1;
+      const limit = 30;
+      const offset = (page - 1) * limit;
+      const userId = req.query.userId || null;
+      const memories = await db.getAllMemories({ limit, offset, userId });
+      return res.json(memories);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.delete('/api/admin/memory/:id', async (req, res) => {
+    try {
+      await db.deleteMemory(req.params.id);
+      await db.logAdminAction({
+        superAdminUserId: req.user.id,
+        action: 'delete_memory',
+        targetType: 'memory',
+        targetId: req.params.id,
+      });
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 };

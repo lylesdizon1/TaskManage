@@ -8,6 +8,9 @@ export default function AdminPanel({ authToken }) {
   const [users, setUsers] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
   const [auditPage, setAuditPage] = useState(1);
+  const [memories, setMemories] = useState([]);
+  const [memoryUserFilter, setMemoryUserFilter] = useState('');
+  const [memoryPage, setMemoryPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -45,10 +48,20 @@ export default function AdminPanel({ authToken }) {
     } catch {}
   }, [authToken]);
 
+  const fetchMemories = useCallback(async (page = 1, userId = '') => {
+    try {
+      const params = new URLSearchParams({ page });
+      if (userId) params.set('userId', userId);
+      const res = await fetch(`${API_BASE}/api/admin/memory?${params}`, { headers });
+      if (res.ok) setMemories(await res.json());
+    } catch {}
+  }, [authToken]);
+
   useEffect(() => {
     if (tab === 'orgs') fetchOrgs();
     else if (tab === 'users') { fetchUsers(); fetchOrgs(); }
     else if (tab === 'audit') fetchAuditLog(auditPage);
+    else if (tab === 'memory') { fetchUsers(); fetchMemories(memoryPage, memoryUserFilter); }
   }, [tab, auditPage]);
 
   async function handleCreateOrg(e) {
@@ -85,6 +98,12 @@ export default function AdminPanel({ authToken }) {
       if (!res.ok) { const d = await res.json(); setError(d.error); return; }
       fetchUsers();
     } catch (err) { setError(err.message); }
+  }
+
+  async function deleteMemory(id) {
+    if (!window.confirm('Delete this memory entry?')) return;
+    await fetch(`${API_BASE}/api/admin/memory/${id}`, { method: 'DELETE', headers });
+    fetchMemories(memoryPage, memoryUserFilter);
   }
 
   async function impersonateUser(userId) {
@@ -181,6 +200,7 @@ export default function AdminPanel({ authToken }) {
         <button onClick={() => setTab('orgs')} className={tabClass('orgs')}>Organizations</button>
         <button onClick={() => setTab('users')} className={tabClass('users')}>Users</button>
         <button onClick={() => setTab('audit')} className={tabClass('audit')}>Audit Log</button>
+        <button onClick={() => setTab('memory')} className={tabClass('memory')}>Memory</button>
       </div>
 
       {error && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg">{error}</div>}
@@ -394,6 +414,83 @@ export default function AdminPanel({ authToken }) {
             <button onClick={() => setAuditPage((p) => Math.max(1, p - 1))} disabled={auditPage <= 1} className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 rounded-lg disabled:opacity-50">Prev</button>
             <span className="px-3 py-1.5 text-sm text-gray-500">Page {auditPage}</span>
             <button onClick={() => { if (auditLog.length === 20) setAuditPage((p) => p + 1); }} disabled={auditLog.length < 20} className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 rounded-lg disabled:opacity-50">Next</button>
+          </div>
+        </div>
+      )}
+
+      {/* Memory Tab */}
+      {tab === 'memory' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Agent Memory</h3>
+            <div className="flex items-center gap-2">
+              <select
+                value={memoryUserFilter}
+                onChange={(e) => { setMemoryUserFilter(e.target.value); setMemoryPage(1); fetchMemories(1, e.target.value); }}
+                className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-white"
+              >
+                <option value="">All users</option>
+                {users.map(u => (
+                  <option key={u.id} value={u.id}>{u.displayName || u.username}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
+                  <th className="px-4 py-3 text-left">User</th>
+                  <th className="px-4 py-3 text-left">When</th>
+                  <th className="px-4 py-3 text-left">Tool</th>
+                  <th className="px-4 py-3 text-left">Memory</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {memories.map((m) => (
+                  <tr key={m.id} className="border-t border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-700 font-medium whitespace-nowrap">{m.displayName || m.username}</td>
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
+                      {new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}{' '}
+                      {new Date(m.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                    </td>
+                    <td className="px-4 py-3">
+                      {m.tool && (
+                        <span className="inline-block px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-50 text-indigo-600 uppercase tracking-wide">
+                          {m.tool.replace('_', ' ')}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-gray-800">{m.content}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => deleteMemory(m.id)}
+                        className="text-xs text-red-500 hover:text-red-700 font-medium"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {memories.length === 0 && (
+                  <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No memories yet — tool use will populate this</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-between items-center pt-2">
+            <button
+              onClick={() => { const p = Math.max(1, memoryPage - 1); setMemoryPage(p); fetchMemories(p, memoryUserFilter); }}
+              disabled={memoryPage === 1}
+              className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
+            >&larr; Prev</button>
+            <span className="text-xs text-gray-400">Page {memoryPage}</span>
+            <button
+              onClick={() => { const p = memoryPage + 1; setMemoryPage(p); fetchMemories(p, memoryUserFilter); }}
+              disabled={memories.length < 30}
+              className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
+            >Next &rarr;</button>
           </div>
         </div>
       )}

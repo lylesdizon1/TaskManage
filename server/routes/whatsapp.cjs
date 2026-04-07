@@ -73,6 +73,9 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         console.error('[whatsapp/inbound] calendar fetch failed:', calErr.message);
       }
 
+      let recentMemories = [];
+      try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
+
       const todayStr = new Date().toISOString().slice(0, 10);
       const activeTasks = tasks.filter(t => !t.completed);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
@@ -80,7 +83,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayStr ? ', OVERDUE' : ''})`
         ).join('; ') || 'none'
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
-      }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'}`;
+      }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
+      }\nRecent Aria actions (last 10): ${
+        recentMemories.length
+          ? recentMemories.slice(0, 10).map(m =>
+              `[${new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}] ${m.content}`
+            ).join('; ')
+          : 'none yet'
+      }`;
 
       const profileParts = [];
       if (user.profileName)       profileParts.push(`You are helping ${user.profileName}.`);

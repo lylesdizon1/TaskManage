@@ -79,6 +79,13 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
           owner: userId,
           createdBy: userId,
         });
+        try {
+          await db.logMemory({
+            userId, tool: 'create_task',
+            content: `Created task: "${toolInput.title}"${toolInput.due_date ? ` due ${toolInput.due_date}` : ''}${toolInput.priority && toolInput.priority !== 'medium' ? `, ${toolInput.priority} priority` : ''}`,
+            metadata: { task_id: id, title: toolInput.title, priority: toolInput.priority, due_date: toolInput.due_date },
+          });
+        } catch (e) { console.error('[memory] log failed:', e.message); }
         return { success: true, task_id: id, title: toolInput.title };
       }
 
@@ -94,6 +101,13 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
         }
         if (!task) return { success: false, error: 'Task not found or access denied' };
         await db.updateTask(task.id, { completed: true, completedAt: new Date().toISOString() });
+        try {
+          await db.logMemory({
+            userId, tool: 'complete_task',
+            content: `Completed task: "${task.title}"`,
+            metadata: { task_id: task.id },
+          });
+        } catch (e) { console.error('[memory] log failed:', e.message); }
         return { success: true, task_id: task.id, title: task.title };
       }
 
@@ -108,6 +122,13 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
         if (toolInput.due_time !== undefined) fields.dueTime = toolInput.due_time;
         if (toolInput.notes !== undefined) fields.description = toolInput.notes;
         await db.updateTask(toolInput.task_id, fields);
+        try {
+          await db.logMemory({
+            userId, tool: 'update_task',
+            content: `Updated task: "${task.title}" — changed: ${Object.keys(fields).join(', ')}`,
+            metadata: { task_id: toolInput.task_id, changes: fields },
+          });
+        } catch (e) { console.error('[memory] log failed:', e.message); }
         return { success: true, task_id: toolInput.task_id };
       }
 
@@ -126,6 +147,13 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
           tags: [],
           entityId: null,
         });
+        try {
+          await db.logMemory({
+            userId, tool: 'create_note',
+            content: `Created note: "${toolInput.title}"${toolInput.pillar ? ` [${toolInput.pillar}]` : ''}`,
+            metadata: { note_id: id, title: toolInput.title, pillar: toolInput.pillar },
+          });
+        } catch (e) { console.error('[memory] log failed:', e.message); }
         return { success: true, note_id: id, title: toolInput.title };
       }
 
