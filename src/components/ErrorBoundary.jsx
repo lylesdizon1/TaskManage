@@ -12,6 +12,22 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     console.error("[ErrorBoundary] Caught error:", error, info);
+
+    const isChunkError =
+      error?.message?.includes('Failed to fetch dynamically imported module') ||
+      error?.message?.includes('Loading chunk') ||
+      error?.name === 'ChunkLoadError';
+
+    if (isChunkError) {
+      const alreadyReloaded = sessionStorage.getItem('chunk_reload_attempted');
+      if (!alreadyReloaded) {
+        sessionStorage.setItem('chunk_reload_attempted', '1');
+        window.location.reload();
+        return;
+      }
+      // Already tried once — clear flag and fall through to error UI
+      sessionStorage.removeItem('chunk_reload_attempted');
+    }
   }
 
   render() {
