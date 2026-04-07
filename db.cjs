@@ -1848,7 +1848,26 @@ async function upsertCadenceConfig(userId, priority, offsets, channels, enabled)
   );
 }
 
-async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority) {
+/**
+ * Get the current UTC offset string (e.g. "-07:00") for a given IANA timezone.
+ * Handles DST transitions automatically.
+ */
+function getTimezoneOffset(tz) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    timeZoneName: 'shortOffset',
+  });
+  const parts = formatter.formatToParts(new Date());
+  const offsetPart = parts.find(p => p.type === 'timeZoneName')?.value || 'GMT-7';
+  const match = offsetPart.match(/GMT([+-]?\d+)(?::(\d+))?/);
+  if (!match) return '-07:00';
+  const hours = parseInt(match[1]);
+  const mins = parseInt(match[2] || '0');
+  const sign = hours >= 0 ? '+' : '-';
+  return `${sign}${String(Math.abs(hours)).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz = 'America/Los_Angeles') {
   // Load cadence config for this user + priority
   const { rows: configs } = await pool.query(
     `SELECT offsets, channels FROM alert_cadence_config
@@ -1861,8 +1880,11 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
   const offsets = cfg.offsets || [];
   const channels = cfg.channels || ['whatsapp'];
 
-  // Build due datetime
-  const dueStr = dueTime ? `${dueDate}T${dueTime}:00` : `${dueDate}T09:00:00`;
+  // Build due datetime with explicit timezone offset
+  const offset = getTimezoneOffset(tz);
+  const dueStr = dueTime
+    ? `${dueDate}T${dueTime}:00${offset}`
+    : `${dueDate}T09:00:00${offset}`;
   const dueDt = new Date(dueStr);
   if (isNaN(dueDt.getTime())) return;
 
