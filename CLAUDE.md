@@ -1,5 +1,5 @@
 # CLAUDE.md — Dizon.ai Session Bootstrap
-Last updated: April 6, 2026
+Last updated: April 8, 2026
 Branch: dizon/v2-phase0
 Repo: lylesdizon1/TaskManage
 Production: taskmanage-production-b1bd.up.railway.app
@@ -20,22 +20,23 @@ surfaces. The app is the configuration and debug layer.
 - Database: PostgreSQL on Railway (db.cjs)
 - Auth: JWT (30d expiry, JWT_SECRET env var)
 - AI: Anthropic API (claude-sonnet-4-20250514 default)
-- Alerts: UltraMsg (WhatsApp), Resend (email), Slack webhook
+- Alerts: Server-side scheduler (sole alert path), DND enforced in SQL. Channels: UltraMsg (WhatsApp), Resend (email), Slack webhook
 - Deploy: Railway (auto-deploy on push to dizon/v2-phase0)
 
 ## Current Architecture
 See /docs/architecture.md for the full four-layer model.
 
-Frontend entry: src/App.jsx (~1,450 lines — routing + shell only)
+Frontend entry: src/App.jsx (~1,370 lines — routing + shell only)
 Backend entry: proxy-server.cjs (86 lines — slim entry)
-Backend routes: server/routes/ (17 route files)
+Backend routes: server/routes/ (18 route files)
 Backend middleware: server/middleware/auth.cjs (authenticateToken, requireAdmin, requireSuperAdmin)
 DB helpers: db.cjs
 Design system: /docs/design-system.md
 
 ## Active Branch State
-Phase 1B complete — multi-user hardening + schema foundation + smoke test fixes
-Last commit: fix(entities): add 300ms delay before reload to avoid race condition on create
+Phase 5 complete — JSDoc documentation pass + security audit + bug fixes
+Last commit: fix: add auth header to settings fetch; remove AI-Tags debug logs
+All JSDoc documentation complete for server/ and src/lib/ — see individual file headers for system overview
 
 ### Completed
 - Multi-channel alerts (WhatsApp/Slack/Email)
@@ -53,16 +54,20 @@ Last commit: fix(entities): add 300ms delay before reload to avoid race conditio
 - Entities: self-service for all users (create/delete own, backend scopes correctly)
 - Removed hardcoded seed task fallback (new users no longer see Lyle's tasks)
 - Leo (Biggie) onboarded on Rose Motorcars org
-
-### Before Next Feature
-1. Fill in Lyle's profile fields → Settings → AI Assistant
-2. Delete Wife + Zacharius via Admin panel
-3. Smoke test Aria tool use + WhatsApp
+- Server-side alert scheduler (sole alert path, client-side rules deprecated)
+- DND enforcement in SQL with AT TIME ZONE
+- Alert cadence configuration (per-priority intervals)
+- agent_memory table + logMemory() helper
+- JSDoc documentation pass (all server/routes/, src/lib/, src/utils/)
+- Security audit Phase 2 + Phase 3 (all criticals + mediums closed)
+- Entity dedup migration + case-insensitive UNIQUE index
+- AI tag suggestion pipeline fix (auth header, case-insensitive matching)
+- Settings fetch auth fix (was silently 401ing)
 
 ### Next Up
-- agent_memory table + logMemory() helper
 - integrations table (oauth_tokens, integration_config)
 - Per-user GCal OAuth
+- Feature arc: task completion notes, entity tagging, image processing
 
 ## Engineering Rules — Non-Negotiable
 1. Diagnose before touching anything
@@ -74,15 +79,15 @@ Last commit: fix(entities): add 300ms delay before reload to avoid race conditio
 7. Never accept userId from client — always use req.user.id from JWT
 8. requireOwnership() on every mutation — see /docs/architecture.md
 9. Read the relevant /docs file before building anything new
+10. Timezone always flows from req.user.timezone — never hardcode America/Los_Angeles in app logic
 
 ## Key Files
 - proxy-server.cjs — slim entry (86 lines), mounts all routers
-- server/routes/ — 17 route files (admin, ai, auth, dashboard, entities, etc.)
+- server/routes/ — 18 route files (admin, ai, alerts, auth, chat, dashboard, email, entities, financial, gcal, gmail, inbox, notes, preferences, settings, tasks, users, whatsapp)
 - server/middleware/auth.cjs — JWT auth, requireAdmin, requireSuperAdmin
 - db.cjs — all database helpers + schema migrations
 - src/App.jsx — frontend shell and routing
 - src/utils/systemPrompt.js — Aria's system prompt + context engine
-- src/components/alerts/ — alerts system
 - src/panels/ — Dashboard, Notes, Calendar, Inbox, AdminPanel
 - src/screens/LoginScreen.jsx — invite-only registration
 - src/components/settings/SettingsModal.jsx — settings tabs (API Keys, Alerts, Email, AI Assistant, Entities, Password, Email Intelligence)
@@ -114,3 +119,8 @@ Full spec: /docs/design-system.md
 - 2026-04-06: Entities opened to all users — requireAdmin gates removed
 - 2026-04-06: Legacy entityIds JWT filter removed — backend scopes correctly
 - 2026-04-06: Leo (Biggie) onboarded — Rose Motorcars org
+- 2026-04-07: Server-side alert scheduler — sole alert path, client-side rules fully deprecated
+- 2026-04-07: DND enforcement moved to SQL (AT TIME ZONE on user_preferences)
+- 2026-04-08: JSDoc documentation pass complete (server/ + src/lib/)
+- 2026-04-08: Security audit Phases 2+3 closed (all criticals + mediums)
+- 2026-04-08: Settings fetch auth fix — was silently 401ing, broke AI tag suggestions
