@@ -8,15 +8,14 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
   const router = express.Router();
 
   /**
-   * GET /api/gcal/auth-url?userId=...
-   * Returns the Google OAuth consent URL. userId is the app user ID (e.g. "user-lyle").
+   * GET /api/gcal/auth-url
+   * Returns the Google OAuth consent URL.
    */
-  router.get('/api/gcal/auth-url', (req, res) => {
+  router.get('/api/gcal/auth-url', authenticateToken, (req, res) => {
     const oauth2 = makeOAuth2Client();
     if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)' });
 
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'userId query param required' });
+    const userId = req.user.id;
 
     const url = oauth2.generateAuthUrl({
       access_type: 'offline',

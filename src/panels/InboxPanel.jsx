@@ -98,15 +98,15 @@ export default function InboxPanel({ tasks, authToken, currentUser, onToggleTask
     if (!value) return;
     try {
       // Load current config, add exclusion, save
-      const cfgRes = await apiFetch(`/api/gmail/config?userId=${currentUser.id}`);
+      const cfgRes = await apiFetch('/api/gmail/config', { headers: { Authorization: `Bearer ${authToken}` } });
       const cfg = await cfgRes.json();
       const excluded = cfg.excludedSenders || [];
       if (!excluded.some((e) => e.toLowerCase() === value)) {
         excluded.push(value);
         await apiFetch('/api/gmail/config', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: currentUser.id, config: { ...cfg, excludedSenders: excluded } }),
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ config: { ...cfg, excludedSenders: excluded } }),
         });
       }
       // Dismiss the item too

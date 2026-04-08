@@ -591,8 +591,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   async function loadGmailData() {
     try {
       const [statusRes, configRes] = await Promise.all([
-        apiFetch(`/api/gmail/status?userId=${currentUser.id}`),
-        apiFetch(`/api/gmail/config?userId=${currentUser.id}`),
+        apiFetch('/api/gmail/status', { headers: { Authorization: `Bearer ${authToken}` } }),
+        apiFetch('/api/gmail/config', { headers: { Authorization: `Bearer ${authToken}` } }),
       ]);
       const statusData = await statusRes.json();
       const configData = await configRes.json();
@@ -604,7 +604,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   async function handleGmailConnect() {
     setGmailLoading(true);
     try {
-      const res = await apiFetch(`/api/gmail/auth-url?userId=${currentUser.id}`);
+      const res = await apiFetch('/api/gmail/auth-url', { headers: { Authorization: `Bearer ${authToken}` } });
       const { url } = await res.json();
       window.location.href = url;
     } catch {
@@ -615,7 +615,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   async function handleGmailDisconnect() {
     setGmailLoading(true);
     try {
-      await apiFetch(`/api/gmail/disconnect?userId=${currentUser.id}`, { method: 'DELETE' });
+      await apiFetch('/api/gmail/disconnect', { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
       setGmailStatus({ connected: false, email: '' });
     } catch {} finally {
       setGmailLoading(false);
@@ -627,8 +627,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     try {
       await apiFetch('/api/gmail/config', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id, config: gmailConfig }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ config: gmailConfig }),
       });
     } catch {} finally {
       setConfigSaving(false);

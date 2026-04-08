@@ -9,15 +9,14 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
   const router = express.Router();
 
   /**
-   * GET /api/gmail/auth-url?userId=...
+   * GET /api/gmail/auth-url
    * Returns the Google OAuth consent URL for Gmail readonly access.
    */
-  router.get('/api/gmail/auth-url', (req, res) => {
+  router.get('/api/gmail/auth-url', authenticateToken, (req, res) => {
     const oauth2 = makeGmailOAuth2Client();
     if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)' });
 
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'userId query param required' });
+    const userId = req.user.id;
 
     const url = oauth2.generateAuthUrl({
       access_type: 'offline',
@@ -51,12 +50,11 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
   });
 
   /**
-   * GET /api/gmail/status?userId=...
+   * GET /api/gmail/status
    * Returns { connected: bool, email?: string }
    */
-  router.get('/api/gmail/status', async (req, res) => {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'userId required' });
+  router.get('/api/gmail/status', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
 
     const tokens = await loadGmailTokens(userId);
     if (!tokens) return res.json({ connected: false });
@@ -82,12 +80,11 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
   });
 
   /**
-   * DELETE /api/gmail/disconnect?userId=...
+   * DELETE /api/gmail/disconnect
    * Removes stored Gmail tokens for the user.
    */
-  router.delete('/api/gmail/disconnect', async (req, res) => {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'userId required' });
+  router.delete('/api/gmail/disconnect', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
 
     await db.deleteGmailTokensForUser(userId);
     console.log(`[gmail] Disconnected ${userId}`);
@@ -95,12 +92,11 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
   });
 
   /**
-   * GET /api/gmail/config?userId=...
+   * GET /api/gmail/config
    * Returns the user's Email Intelligence config.
    */
-  router.get('/api/gmail/config', async (req, res) => {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'userId required' });
+  router.get('/api/gmail/config', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
 
     const config = await db.getGmailConfigForUser(userId);
     res.json(config || { vipSenders: [], triggerKeywords: [], commitmentDetection: true, excludedSenders: [], autoExcludeNoreply: true });
@@ -108,11 +104,12 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
 
   /**
    * PUT /api/gmail/config
-   * Body: { userId, config: { vipSenders, triggerKeywords, commitmentDetection } }
+   * Body: { config: { vipSenders, triggerKeywords, commitmentDetection } }
    */
-  router.put('/api/gmail/config', async (req, res) => {
-    const { userId, config } = req.body;
-    if (!userId || !config) return res.status(400).json({ error: 'userId and config required' });
+  router.put('/api/gmail/config', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const { config } = req.body;
+    if (!config) return res.status(400).json({ error: 'config required' });
 
     await db.setGmailConfigForUser(userId, config);
     console.log(`[gmail] Saved config for ${userId}`);

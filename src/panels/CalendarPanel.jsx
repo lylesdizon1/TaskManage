@@ -36,7 +36,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
 
   async function handleConnect() {
     try {
-      const res = await apiFetch(`${API_BASE}/api/gcal/auth-url?userId=${currentUser.id}`);
+      const res = await apiFetch(`${API_BASE}/api/gcal/auth-url`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
       if (data.error) {
         addToast({ type: 'error', message: data.error });
