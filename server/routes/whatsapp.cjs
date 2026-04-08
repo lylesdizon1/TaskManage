@@ -104,6 +104,8 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
    */
   router.post('/api/whatsapp/inbound', async (req, res) => {
     try {
+      console.log('RAW WHATSAPP PAYLOAD:', JSON.stringify(req.body, null, 2));
+
       const data = req.body?.data;
       if (!data) return res.json({ ok: true, skipped: 'no data' });
 
