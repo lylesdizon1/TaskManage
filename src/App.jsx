@@ -1228,65 +1228,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                     </section>
                   )}
 
-                  {/* COMPLETED TODAY */}
-                  {completedToday.length > 0 && (
-                    <section className="opacity-60 grayscale-[0.5]">
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="material-symbols-outlined text-emerald-500 text-base">task_alt</span>
-                        <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-slate-400">Completed Today</h2>
-                        <div className="h-px flex-1 bg-surface-container-high" />
-                        <button
-                          onClick={() => {
-                            if (!historyExpanded) {
-                              setHistoryExpanded(true);
-                              setHistoryEntity('');
-                              setHistoryDateRange('all');
-                              setHistorySearch('');
-                              fetchCompletedHistory('', 'all', '');
-                            } else {
-                              setHistoryExpanded(false);
-                            }
-                          }}
-                          className="text-[9px] font-bold text-on-surface-variant hover:text-primary transition-colors"
-                        >{historyExpanded ? 'Show less' : 'Show all'}</button>
-                      </div>
-                      <div className="space-y-2">
-                        {completedToday.map((t) => (
-                          <div key={t.id}>
-                            <div onClick={() => setEditingTask(t)} className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl cursor-pointer hover:bg-surface-container-low transition-colors group">
-                              <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
-                                <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
-                              </div>
-                              <p className="text-xs font-medium text-on-surface-variant line-through flex-1 truncate">{t.title}</p>
-                              <span className="text-[9px] text-on-surface-variant font-medium flex-shrink-0">
-                                {t.completedAt ? new Date(t.completedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Today'}
-                              </span>
-                              <span className="material-symbols-outlined text-on-surface-variant/30 group-hover:text-on-surface-variant text-base transition-colors flex-shrink-0">chevron_right</span>
-                            </div>
-                            {t.completionNote && completionNoteTaskId !== t.id && (
-                              <p className="text-[10px] text-on-surface-variant/70 ml-10 mt-1 italic">{t.completionNote}</p>
-                            )}
-                            {completionNoteTaskId === t.id && (
-                              <div className="ml-10 mt-1.5">
-                                <input
-                                  type="text"
-                                  autoFocus
-                                  value={completionNoteDraft}
-                                  onChange={(e) => setCompletionNoteDraft(e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') saveCompletionNote(t.id); if (e.key === 'Escape') setCompletionNoteTaskId(null); }}
-                                  onBlur={() => setCompletionNoteTaskId(null)}
-                                  placeholder="How'd it go? (optional — Enter to save, Esc to skip)"
-                                  className="w-full text-xs bg-surface-container-lowest border border-surface-variant rounded-lg px-3 py-1.5 text-on-background placeholder-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-                                />
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* COMPLETED HISTORY — inline expansion */}
+                  {/* COMPLETED HISTORY — inline expansion (above Completed Today) */}
                   {historyExpanded && (
                     <section className="opacity-70">
                       <div className="flex items-center gap-3 mb-3">
@@ -1370,6 +1312,64 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                           ))}
                         </div>
                       )}
+                    </section>
+                  )}
+
+                  {/* COMPLETED TODAY */}
+                  {completedToday.length > 0 && (
+                    <section className="opacity-60 grayscale-[0.5]">
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="material-symbols-outlined text-emerald-500 text-base">task_alt</span>
+                        <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-slate-400">Completed Today</h2>
+                        <div className="h-px flex-1 bg-surface-container-high" />
+                        <button
+                          onClick={() => {
+                            if (!historyExpanded) {
+                              setHistoryExpanded(true);
+                              setHistoryEntity('');
+                              setHistoryDateRange('all');
+                              setHistorySearch('');
+                              fetchCompletedHistory('', 'all', '');
+                            } else {
+                              setHistoryExpanded(false);
+                            }
+                          }}
+                          className="text-[9px] font-bold text-on-surface-variant hover:text-primary transition-colors"
+                        >{historyExpanded ? 'Show less' : 'Show all'}</button>
+                      </div>
+                      <div className="space-y-2">
+                        {completedToday.map((t) => (
+                          <div key={t.id}>
+                            <div onClick={() => setEditingTask(t)} className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl cursor-pointer hover:bg-surface-container-low transition-colors group">
+                              <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
+                                <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
+                              </div>
+                              <p className="text-xs font-medium text-on-surface-variant line-through flex-1 truncate">{t.title}</p>
+                              <span className="text-[9px] text-on-surface-variant font-medium flex-shrink-0">
+                                {t.completedAt ? new Date(t.completedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Today'}
+                              </span>
+                              <span className="material-symbols-outlined text-on-surface-variant/30 group-hover:text-on-surface-variant text-base transition-colors flex-shrink-0">chevron_right</span>
+                            </div>
+                            {t.completionNote && completionNoteTaskId !== t.id && (
+                              <p className="text-[10px] text-on-surface-variant/70 ml-10 mt-1 italic">{t.completionNote}</p>
+                            )}
+                            {completionNoteTaskId === t.id && (
+                              <div className="ml-10 mt-1.5">
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={completionNoteDraft}
+                                  onChange={(e) => setCompletionNoteDraft(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') saveCompletionNote(t.id); if (e.key === 'Escape') setCompletionNoteTaskId(null); }}
+                                  onBlur={() => setCompletionNoteTaskId(null)}
+                                  placeholder="How'd it go? (optional — Enter to save, Esc to skip)"
+                                  className="w-full text-xs bg-surface-container-lowest border border-surface-variant rounded-lg px-3 py-1.5 text-on-background placeholder-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </section>
                   )}
 
