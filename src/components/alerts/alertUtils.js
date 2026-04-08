@@ -183,7 +183,14 @@ export function buildPlainTextAlert(ruleName, tasks) {
   return lines.join('\n');
 }
 
-/** Build a professional HTML alert email for the given tasks. */
+/**
+ * Build a professional HTML alert email for the given tasks.
+ *
+ * SECURITY-SENSITIVE: All dynamic values MUST be escaped via escapeHtml (h())
+ * before insertion into the HTML string. Style attribute values MUST use
+ * allowlisted lookups with safe fallbacks — never interpolate user input
+ * directly into style/attribute contexts.
+ */
 export function buildEmailHtml(ruleName, ruleDesc, tasks, tz) {
   const h        = escapeHtml;
   const todayStr = getTodayLocal(tz);
@@ -193,7 +200,7 @@ export function buildEmailHtml(ruleName, ruleDesc, tasks, tz) {
   const rows = tasks
     .map((t) => {
       const overdue  = t.dueDate && t.dueDate < todayStr;
-      const tagPills = t.tags
+      const tagPills = (t.tags || [])
         .map(
           (tag) =>
             `<span style="display:inline-block;margin:1px 2px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:500;background:#eef2ff;color:#4338ca;border:1px solid #e0e7ff;">${h(tag)}</span>`,
@@ -206,7 +213,7 @@ export function buildEmailHtml(ruleName, ruleDesc, tasks, tz) {
             ${t.description ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">${h(t.description)}</div>` : ''}
           </td>
           <td style="padding:10px 14px;border-bottom:1px solid #f3f4f6;text-align:center;white-space:nowrap;vertical-align:top;">
-            <span style="padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:${pBg[t.priority]};color:${pColor[t.priority]};">${h(t.priority)}</span>
+            <span style="padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:${pBg[t.priority] || '#f3f4f6'};color:${pColor[t.priority] || '#6b7280'};">${h(t.priority)}</span>
           </td>
           <td style="padding:10px 14px;border-bottom:1px solid #f3f4f6;text-align:center;white-space:nowrap;vertical-align:top;font-size:12px;color:${overdue ? '#dc2626' : '#6b7280'};">
             ${t.dueDate ? `${overdue ? '&#9888; ' : ''}${h(t.dueDate)}` : '&mdash;'}
