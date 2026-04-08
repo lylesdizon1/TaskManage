@@ -78,7 +78,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       let recentMemories = [];
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
-      const tz = user.timezone || user.profileTimezone || 'America/Los_Angeles';
+      const tz = user.timezone;
       const todayStr = getTodayLocal(tz);
       const todayDate = todayStr.split(', ')[1];
       // Build explicit weekday→date map so the model never has to compute relative dates
@@ -121,7 +121,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
-        executeTool(toolName, toolInput, uid, entityIds, db);
+        executeTool(toolName, toolInput, uid, entityIds, db, tz);
 
       const { text } = await runAgenticLoop({
         messages: [{ role: 'user', content: msgBody }],

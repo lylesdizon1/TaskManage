@@ -111,7 +111,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
       if (dueTime) {
         // Timed event: use dateTime
-        const tz = timeZone || 'America/Los_Angeles';
+        const tz = timeZone || req.user.timezone;
         requestBody.start = { dateTime: `${dueDate}T${dueTime}:00`, timeZone: tz };
         // Default 1-hour duration
         const [h, m] = dueTime.split(':').map(Number);

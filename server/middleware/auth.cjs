@@ -6,7 +6,11 @@ const crypto = require('crypto');
 // JWT secret: prefer env var, fall back to random (tokens won't survive restart)
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
-function authenticateToken(req, res, next) {
+// db reference — set via setDb() from proxy-server at startup
+let _db = null;
+function setDb(db) { _db = db; }
+
+async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -14,6 +18,18 @@ function authenticateToken(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     req.user = payload;
+
+    // Enrich with fresh DB context (timezone, role) — non-blocking on failure
+    if (_db) {
+      try {
+        const ctx = await _db.getUserAuthContext(payload.id);
+        if (ctx) {
+          req.user.timezone = ctx.timezone || 'America/Los_Angeles';
+          req.user.role = ctx.role || req.user.role;
+        }
+      } catch {}
+    }
+
     next();
   } catch {
     return res.status(403).json({ error: 'Invalid or expired token' });
@@ -46,4 +62,4 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
-module.exports = { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership };
+module.exports = { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership, setDb };

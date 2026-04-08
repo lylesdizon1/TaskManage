@@ -78,7 +78,7 @@ const ARIA_TOOLS = [
   },
 ];
 
-async function executeTool(toolName, toolInput, userId, entityIds, db) {
+async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
   try {
     switch (toolName) {
       case 'create_task': {
@@ -106,7 +106,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
         // Schedule alerts if task has a due date
         if (toolInput.due_date) {
           try {
-            await db.scheduleTaskAlerts(userId, id, toolInput.title, toolInput.due_date, toolInput.due_time || null, toolInput.priority || 'medium');
+            await db.scheduleTaskAlerts(userId, id, toolInput.title, toolInput.due_date, toolInput.due_time || null, toolInput.priority || 'medium', tz);
           } catch (e) { console.error('[schedule] alert scheduling failed:', e.message); }
         }
         return { success: true, task_id: id, title: toolInput.title, due_date: toolInput.due_date || null, due_time: toolInput.due_time || null, priority: toolInput.priority || 'medium' };
@@ -161,7 +161,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
             const updatedDueTime = fields.dueTime ?? task.dueTime ?? null;
             const updatedPriority = fields.priority ?? task.priority;
             if (updatedDueDate) {
-              await db.scheduleTaskAlerts(userId, toolInput.task_id, fields.title || task.title, updatedDueDate, updatedDueTime, updatedPriority);
+              await db.scheduleTaskAlerts(userId, toolInput.task_id, fields.title || task.title, updatedDueDate, updatedDueTime, updatedPriority, tz);
             }
           } catch (e) { console.error('[schedule] alert rescheduling failed:', e.message); }
         }
@@ -212,8 +212,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
 
         const eventBody = {
           summary: title,
-          start: { dateTime: startDt, timeZone: 'America/Los_Angeles' },
-          end:   { dateTime: endDt,   timeZone: 'America/Los_Angeles' },
+          start: { dateTime: startDt, timeZone: tz || 'America/Los_Angeles' },
+          end:   { dateTime: endDt,   timeZone: tz || 'America/Los_Angeles' },
           ...(eventDesc && { description: eventDesc }),
           ...(location  && { location }),
           ...(attendees?.length && { attendees: attendees.map(email => ({ email })) }),

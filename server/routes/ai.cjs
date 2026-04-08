@@ -180,7 +180,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       let recentMemories = [];
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
-      const tz = timeZone || 'America/Los_Angeles';
+      const tz = timeZone || req.user.timezone;
       const todayStr = getTodayLocal(tz);
       const todayDate = todayStr.split(', ')[1];
       const currentTime = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date());
@@ -217,7 +217,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       };
 
       const boundExecuteTool = (toolName, toolInput, uid) =>
-        executeTool(toolName, toolInput, uid, entityIds, db);
+        executeTool(toolName, toolInput, uid, entityIds, db, tz);
 
       const onProgress = ({ type, tool, input, result, error }) => {
         if (type === 'tool_start')    send('tool_start',    { tool, input });

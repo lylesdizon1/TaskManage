@@ -1891,9 +1891,10 @@ function getTimezoneOffset(tz) {
   return `${sign}${String(Math.abs(hours)).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }
 
-async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz = 'America/Los_Angeles') {
-  // Load user for personalized messages
+async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz) {
+  // Load user for personalized messages and timezone fallback
   const user = await getUserById(userId);
+  if (!tz) tz = user?.timezone || 'America/Los_Angeles';
   const firstName = (user?.profileName || user?.displayName || '').split(' ')[0] || 'there';
 
   // Load cadence config for this user + priority
@@ -1974,11 +1975,7 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
 }
 
 async function getUnfiredAlerts() {
-  // Get current local time in user's timezone for DND check
-  const nowLocal = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date());
-
+  // Per-user DND check: compute each user's local time via AT TIME ZONE
   const { rows } = await pool.query(
     `SELECT sa.id, sa.user_id, sa.task_id, sa.alert_key, sa.message, sa.channels, sa.fire_at,
             u.whatsapp_phone AS "whatsappPhone", u.email
@@ -1991,13 +1988,14 @@ async function getUnfiredAlerts() {
        AND NOT (
          CASE
            WHEN COALESCE(up.dnd_start, '22:00') > COALESCE(up.dnd_end, '07:00')
-             THEN $1::time >= COALESCE(up.dnd_start, '22:00') OR $1::time < COALESCE(up.dnd_end, '07:00')
-           ELSE $1::time >= COALESCE(up.dnd_start, '22:00') AND $1::time < COALESCE(up.dnd_end, '07:00')
+             THEN (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time >= COALESCE(up.dnd_start, '22:00')::time
+                OR (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time < COALESCE(up.dnd_end, '07:00')::time
+           ELSE (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time >= COALESCE(up.dnd_start, '22:00')::time
+            AND (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time < COALESCE(up.dnd_end, '07:00')::time
          END
        )
      ORDER BY sa.fire_at ASC
-     LIMIT 50`,
-    [nowLocal]
+     LIMIT 50`
   );
   return rows;
 }

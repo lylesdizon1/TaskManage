@@ -15,7 +15,8 @@ const multer   = require('multer');
 const db       = require('./db.cjs');
 
 // ── Utils & middleware ───────────────────────────────────────────────────────
-const { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership } = require('./server/middleware/auth.cjs');
+const { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership, setDb } = require('./server/middleware/auth.cjs');
+setDb(db);
 const { authLimiter, apiLimiter } = require('./server/middleware/rateLimit.cjs');
 const { makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, saveGmailTokens: _saveGmailTokens, loadGmailTokens: _loadGmailTokens } = require('./server/utils/google.cjs');
 

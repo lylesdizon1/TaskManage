@@ -19,8 +19,9 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const userEntities = (user?.entityIds || []);
       const tasks = await db.getTasksForUser(req.user.id, userEntities);
 
+      const tz = user?.timezone || req.user.timezone;
       const todayStr = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'America/Los_Angeles',
+        timeZone: tz,
         year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
       const overdue = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < todayStr);
@@ -59,7 +60,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       }
 
       // Format date
-      const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: tz });
 
       // Build message
       const lines = [`☀️ Good morning ${user?.displayName || 'Lyle'} — ${dateLabel}\n`];

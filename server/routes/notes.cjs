@@ -48,13 +48,13 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
 
   router.post('/api/notes/daily-digest', authenticateToken, async (req, res) => {
     try {
-      const todayPST = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-      const today = todayPST;
+      const tz = req.user.timezone;
+      const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const forceRegen = req.body.force === true;
 
       // Check if digest already exists for today (skip if force regenerate)
       const notes = await db.getNotesForUser(req.user.id);
-      const existing = notes.find((n) => n.type === 'digest' && n.createdAt && new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(n.createdAt)) === today);
+      const existing = notes.find((n) => n.type === 'digest' && n.createdAt && new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(n.createdAt)) === today);
       if (existing && !forceRegen) return res.json(existing);
       if (existing && forceRegen) await db.deleteNote(existing.id, req.user.id);
 

@@ -10,15 +10,16 @@ async function backfill() {
   const users = await db.getUsers();
   console.log(`[backfill] Found ${users.length} users`);
 
-  const today = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Los_Angeles',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date());
-
   let totalScheduled = 0;
   let totalSkipped = 0;
 
   for (const user of users) {
+    const userTz = user.timezone || 'America/Los_Angeles';
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: userTz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+
     // Seed cadence config if missing
     try { await db.seedDefaultCadenceConfig(user.id); } catch {}
 
@@ -39,6 +40,7 @@ async function backfill() {
           task.dueDate,
           task.dueTime || null,
           task.priority || 'medium',
+          userTz,
         );
         totalScheduled++;
         console.log(`  ✓ ${task.title} (due ${task.dueDate}${task.dueTime ? ' ' + task.dueTime : ''}, ${task.priority})`);

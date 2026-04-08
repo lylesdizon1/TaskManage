@@ -11,7 +11,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
   router.get('/api/dashboard/command-center/session', authenticateToken, async (req, res) => {
     try {
       const todayStr = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'America/Los_Angeles',
+        timeZone: req.user.timezone,
         year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
 
@@ -29,7 +29,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
       const since = req.query.since ? new Date(req.query.since) : new Date(Date.now() - 60000);
       const userId = req.user.id;
       const todayStr = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'America/Los_Angeles',
+        timeZone: req.user.timezone,
         year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
 
@@ -83,7 +83,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
 
       // Fetch fresh tasks from DB — never trust client-sent task data
       const todayStr = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'America/Los_Angeles',
+        timeZone: req.user.timezone,
         year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(new Date());
       const tasks = await db.getTasksForUser(userId, []);
