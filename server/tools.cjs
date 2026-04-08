@@ -1,8 +1,28 @@
 'use strict';
 
+/**
+ * server/tools.cjs — Aria tool definitions and execution engine.
+ *
+ * Defines the tools that Aria (the AI assistant) can invoke during
+ * chat conversations: create_task, complete_task, update_task,
+ * create_event, and create_note. Each tool follows a consistent
+ * pattern: validate → mutate DB → log to agent memory → return result.
+ *
+ * ARIA_TOOLS is the schema array passed to the Anthropic API's tool_use
+ * feature. executeTool() is the server-side handler that runs when
+ * the model selects a tool.
+ *
+ * @note Tool execution is always scoped to the authenticated user via
+ * the userId parameter — never trust tool input for user identity.
+ *
+ * @note Memory logging (db.logMemory) is best-effort with swallowed
+ * errors. A failed memory write should never block the primary action.
+ */
+
 const { google } = require('googleapis');
 const { loadGcalTokens, makeOAuth2Client } = require('./utils/google.cjs');
 
+/** @type {Array<Object>} Anthropic tool_use schema definitions for Aria. */
 const ARIA_TOOLS = [
   {
     name: 'create_task',
@@ -78,6 +98,24 @@ const ARIA_TOOLS = [
   },
 ];
 
+/**
+ * Execute an Aria tool and return a structured result.
+ *
+ * Called from the AI chat route when the model emits a tool_use block.
+ * Each tool case handles its own DB mutation, memory logging, and
+ * alert scheduling.
+ *
+ * @param {string} toolName - One of the ARIA_TOOLS names.
+ * @param {Object} toolInput - Tool parameters from the model.
+ * @param {string} userId - Authenticated user ID (from JWT, never from input).
+ * @param {string[]} entityIds - User's entity memberships for scoping.
+ * @param {Object} db - Database helper module.
+ * @param {string} tz - User's IANA timezone for date logic and calendar events.
+ * @returns {Promise<Object>} Result with { success: boolean, ...fields } or { success: false, error: string }.
+ *
+ * @note toolInput is model-generated and must always be validated
+ * defensively — never trust it for user identity or ownership.
+ */
 async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
   try {
     switch (toolName) {
