@@ -1868,6 +1868,10 @@ function getTimezoneOffset(tz) {
 }
 
 async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz = 'America/Los_Angeles') {
+  // Load user for personalized messages
+  const user = await getUserById(userId);
+  const firstName = (user?.profileName || user?.displayName || '').split(' ')[0] || 'there';
+
   // Load cadence config for this user + priority
   const { rows: configs } = await pool.query(
     `SELECT offsets, channels FROM alert_cadence_config
@@ -1916,7 +1920,25 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
     // Skip past fire times
     if (fireAt <= now) continue;
 
-    const message = `Hey — "${taskTitle}" is ${cadenceOffset.minutes_before === 0 ? 'due now' : 'coming up'}.\n\nJust keeping you on track.`;
+    // Format due time as 12-hour (e.g. "4:48pm")
+    let timeStr;
+    if (dueTime) {
+      const [h, m] = dueTime.split(':').map(Number);
+      const ampm = h >= 12 ? 'pm' : 'am';
+      const h12 = h % 12 || 12;
+      timeStr = `${h12}:${String(m).padStart(2, '0')}${ampm}`;
+    }
+
+    const closingLines = {
+      high: "This one's time-sensitive — don't let it slip.",
+      medium: 'Good time to get ahead of it.',
+      low: 'When you get a chance.',
+      floating: 'No hard deadline, but worth a look today.',
+    };
+    const closing = closingLines[priority] || closingLines.medium;
+    const message = timeStr
+      ? `Hey ${firstName} — you've got "${taskTitle}" due at ${timeStr}.\n\n${closing}`
+      : `Hey ${firstName} — you've got "${taskTitle}" due today.\n\n${closing}`;
     const alertKey = `sched::${taskId}::${cadenceOffset.minutes_before ?? `dow${cadenceOffset.day_of_week}h${cadenceOffset.hour}`}`;
 
     await pool.query(
