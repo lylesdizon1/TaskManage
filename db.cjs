@@ -108,6 +108,7 @@ async function initTables() {
   await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_time VARCHAR(5) DEFAULT NULL`);
   await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS google_event_id VARCHAR(255) DEFAULT NULL`);
   await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ DEFAULT NULL`);
+  await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completion_note TEXT`);
   await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS entity_id TEXT REFERENCES entities(id) ON DELETE SET NULL`);
 
   await pool.query(`
@@ -778,7 +779,7 @@ async function getTaskById(taskId, userId) {
   const { rows } = await pool.query(
     `SELECT id, title, description, priority, status, due_date AS "dueDate",
             due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-            google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"
+            google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM tasks
      WHERE id = $1 AND owner = $2
      LIMIT 1`,
@@ -813,7 +814,7 @@ async function getTasksForUser(userId, userEntityIds) {
     const { rows } = await pool.query(
       `SELECT id, title, description, priority, status, due_date AS "dueDate",
               due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-              google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"
+              google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM tasks
        WHERE owner = $1
        ORDER BY created_at DESC`,
@@ -827,7 +828,7 @@ async function getTasksForUser(userId, userEntityIds) {
   const { rows } = await pool.query(
     `SELECT id, title, description, priority, status, due_date AS "dueDate",
             due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-            google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"
+            google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM tasks
      WHERE owner = $1
         OR (visibility = 'shared' AND tags ?| $2)
@@ -1931,11 +1932,12 @@ async function updateTask(id, fields) {
          completed       = COALESCE($9, completed),
          google_event_id = COALESCE($10, google_event_id),
          completed_at    = CASE WHEN $11::text = '__null__' THEN NULL WHEN $11::text IS NOT NULL THEN $11::timestamptz ELSE completed_at END,
+         completion_note = COALESCE($12, completion_note),
          updated_at      = NOW()
      WHERE id = $1
      RETURNING id, title, description, priority, status, due_date AS "dueDate",
                due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-               google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"`,
+               google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"`,
     [
       id,
       fields.title ?? null,
@@ -1948,6 +1950,7 @@ async function updateTask(id, fields) {
       fields.completed !== undefined ? fields.completed : null,
       fields.googleEventId ?? null,
       fields.completedAt !== undefined ? (fields.completedAt === null ? '__null__' : fields.completedAt) : null,
+      fields.completionNote ?? null,
     ],
   );
   return rows[0] || null;
