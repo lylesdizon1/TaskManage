@@ -134,7 +134,7 @@ cron.schedule('* * * * *', async () => {
         }
 
         await db.markScheduledAlertFired(alert.id);
-        if (sent.length) console.log(`[cron] Fired alert ${alert.id} for ${alert.user_id}: ${sent.join(', ')}`);
+        if (sent.length) console.log(`[cron] Fired alert ${alert.id}: ${sent.join(', ')}`);
         if (failed.length) console.error(`[cron] Alert ${alert.id} partial failure: ${failed.join(', ')}`);
       } catch (err) {
         console.error(`[cron] Failed to fire alert ${alert.id}:`, err.message);
