@@ -681,7 +681,17 @@ async function seedEntitiesIfEmpty() {
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
 
-
+/**
+ * Fetch a single task by ID, scoped to the owning user.
+ * Added as M3 audit fix to eliminate N+1 lookups — routes that operate
+ * on a single task should use this instead of loading all tasks via
+ * getTasksForUser() and filtering in JS.
+ *
+ * @param {string} taskId - Task ID.
+ * @param {string} userId - Owner's user ID (authorization scope).
+ * @returns {Promise<Object|null>} Task record or null if not found / not owned.
+ * @throws {Error} If the database query fails.
+ */
 async function getTaskById(taskId, userId) {
   const { rows } = await pool.query(
     `SELECT id, title, description, priority, status, due_date AS "dueDate",
@@ -695,8 +705,28 @@ async function getTaskById(taskId, userId) {
   return rows[0] || null;
 }
 
+/**
+ * Return all tasks visible to a user, respecting entity-based sharing.
+ *
+ * Two code paths:
+ *   1. No entity memberships → simple `WHERE owner = $1` (user's own tasks only).
+ *   2. Has entities → own tasks PLUS shared tasks tagged with any of the
+ *      user's entities (via PostgreSQL `?|` JSONB array overlap operator).
+ *
+ * @note The M14 audit fix simplified path 1 — previously had a dead
+ * visibility clause caused by operator precedence.
+ *
+ * @note Shared tasks are visible through entity overlap, but mutation
+ * routes must still enforce ownership/authorization separately —
+ * visibility does not imply mutation rights.
+ *
+ * @param {string} userId - User ID.
+ * @param {string[]} userEntityIds - Entity name strings from req.user.entityIds.
+ * @returns {Promise<Array<Object>>} Tasks ordered by created_at DESC.
+ * @throws {Error} If the database query fails.
+ */
 async function getTasksForUser(userId, userEntityIds) {
-  // If no entity filter, fall back to simple owner/visibility check
+  // If no entity filter, fall back to simple owner check
   if (!userEntityIds || userEntityIds.length === 0) {
     const { rows } = await pool.query(
       `SELECT id, title, description, priority, status, due_date AS "dueDate",
@@ -726,8 +756,17 @@ async function getTasksForUser(userId, userEntityIds) {
 }
 
 /**
- * Replace ALL tasks in the database with the provided array.
- * This mirrors the original "overwrite tasks.json" behaviour.
+ * Replace ALL tasks for a user with the provided array.
+ * Legacy function from the original "overwrite tasks.json" behaviour.
+ *
+ * @note This is a destructive operation — it DELETEs all existing tasks
+ * for the user before re-inserting. Wrapped in a transaction so partial
+ * failures roll back cleanly. Prefer upsertTask() for single-record
+ * mutations; this exists only for bulk sync compatibility.
+ *
+ * @param {Array<Object>} tasks - Full replacement task array.
+ * @param {string} userId - Owner user ID.
+ * @throws {Error} If the transaction fails (rolls back automatically).
  */
 async function replaceTasks(tasks, userId) {
   const client = await pool.connect();
@@ -771,6 +810,22 @@ async function replaceTasks(tasks, userId) {
   }
 }
 
+/**
+ * Insert a task or update it if the ID already exists.
+ * Primary write path for task creation — used by Aria's create_task tool
+ * and the POST /api/tasks bulk endpoint.
+ *
+ * On conflict, all mutable fields are overwritten with EXCLUDED values.
+ * The owner and created_by fields are NOT updated on conflict — ownership
+ * is immutable after creation.
+ *
+ * @note This function writes the task record only. Alert scheduling
+ * is handled by the caller (create_task and update_task tools).
+ *
+ * @param {Object} t - Task object with at minimum { id, title, owner }.
+ * @returns {Promise<Object>} The inserted or updated task record.
+ * @throws {Error} If the database query fails.
+ */
 async function upsertTask(t) {
   const { rows } = await pool.query(
     `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
@@ -1291,6 +1346,26 @@ async function getOrCreateCommandCenterConversation(userId, dateStr) {
 
 // ── Single-task update ───────────────────────────────────────────────────────
 
+/**
+ * Partially update a task by ID using COALESCE to preserve unset fields.
+ *
+ * Unlike updateUser() which builds dynamic SQL, this uses a fixed-column
+ * COALESCE pattern — every column is included in every UPDATE, but null
+ * params leave the existing value unchanged.
+ *
+ * @note completedAt uses a special '__null__' sentinel value to distinguish
+ * "set to NULL" from "leave unchanged". This is because SQL COALESCE
+ * cannot differentiate between a null parameter meaning "no change" and
+ * a null parameter meaning "clear this field". The sentinel is only used
+ * internally by complete_task / uncomplete flows.
+ *
+ * @param {string} id - Task ID.
+ * @param {Object} fields - Partial task fields to update. Supported keys:
+ *   title, description, priority, dueDate, dueTime, tags, visibility,
+ *   completed, googleEventId, completedAt.
+ * @returns {Promise<Object|null>} Updated task record or null.
+ * @throws {Error} If the database query fails.
+ */
 async function updateTask(id, fields) {
   const { rows } = await pool.query(
     `UPDATE tasks
@@ -2024,6 +2099,36 @@ function getTimezoneOffset(tz) {
   return `${sign}${String(Math.abs(hours)).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }
 
+/**
+ * Schedule alert notifications for a task based on the user's cadence config.
+ *
+ * Deletes any existing unfired alerts for the task (idempotent on re-schedule),
+ * then creates new scheduled_alerts rows for each cadence offset that falls
+ * in the future. Called by create_task and update_task when due_date or
+ * priority changes.
+ *
+ * Two cadence offset types are supported:
+ *   - minutes_before: fire N minutes before the due datetime.
+ *   - day_of_week + hour: fire at a specific weekly time (e.g. Monday 9am digest).
+ *
+ * @note The fallback chain (tz param → user profile → Pacific) exists
+ * for migration safety and defensive scheduling paths. Callers should
+ * always pass an explicit timezone whenever available.
+ *
+ * @note Alert messages are personalised with the user's first name and
+ * a priority-appropriate closing line. The message is pre-rendered at
+ * scheduling time — not at fire time — so name changes after scheduling
+ * won't affect already-scheduled alerts.
+ *
+ * @param {string} userId - User ID.
+ * @param {string} taskId - Task ID.
+ * @param {string} taskTitle - Task title for the alert message.
+ * @param {string} dueDate - Due date in YYYY-MM-DD format.
+ * @param {string|null} dueTime - Due time in HH:MM 24hr format, or null (defaults to 09:00).
+ * @param {string} priority - 'low', 'medium', or 'high'.
+ * @param {string} [tz] - IANA timezone. Falls back to user profile, then Pacific.
+ * @throws {Error} If the database queries fail.
+ */
 async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz) {
   // Load user for personalized messages and timezone fallback
   const user = await getUserById(userId);
@@ -2107,6 +2212,23 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
   }
 }
 
+/**
+ * Return scheduled alerts that are due to fire now, filtered by DND.
+ *
+ * Joins scheduled_alerts → users → tasks → user_preferences to compute
+ * per-user Do Not Disturb windows using the user's timezone. Excludes
+ * alerts for completed tasks (prevents firing after task completion).
+ *
+ * @note The DND check uses AT TIME ZONE with each user's timezone so
+ * a single query correctly handles users across multiple timezones.
+ * The CASE handles wraparound DND windows (e.g. 22:00–07:00).
+ *
+ * @note Limited to 50 rows per invocation to bound cron job execution
+ * time. The cron runs every minute, so a backlog drains over time.
+ *
+ * @returns {Promise<Array<Object>>} Unfired alerts with user contact info.
+ * @throws {Error} If the database query fails.
+ */
 async function getUnfiredAlerts() {
   // Per-user DND check: compute each user's local time via AT TIME ZONE
   const { rows } = await pool.query(
@@ -2133,6 +2255,13 @@ async function getUnfiredAlerts() {
   return rows;
 }
 
+/**
+ * Mark an alert as fired so it is not returned by getUnfiredAlerts() again.
+ * Called by the cron scheduler after successful delivery.
+ *
+ * @param {number} alertId - Scheduled alert row ID.
+ * @returns {Promise<void>}
+ */
 async function markScheduledAlertFired(alertId) {
   await pool.query(
     `UPDATE scheduled_alerts SET fired = TRUE, fired_at = NOW() WHERE id = $1`,
