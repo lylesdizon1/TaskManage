@@ -1105,16 +1105,20 @@ async function clearChatHistory(userId) {
 async function getConversations(userId) {
   const { rows } = await pool.query(
     `SELECT c.id, c.title, c.model, c.created_at AS "createdAt", c.updated_at AS "updatedAt",
-            (SELECT content FROM chat_messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS "lastMessage"
+            lm.content AS "lastMessage"
      FROM chat_conversations c
+     LEFT JOIN LATERAL (
+       SELECT LEFT(m.content, 100) AS content
+       FROM chat_messages m
+       WHERE m.conversation_id = c.id
+       ORDER BY m.created_at DESC
+       LIMIT 1
+     ) lm ON true
      WHERE c.user_id = $1
      ORDER BY c.updated_at DESC`,
     [userId],
   );
-  return rows.map((r) => ({
-    ...r,
-    lastMessage: r.lastMessage ? r.lastMessage.slice(0, 60) : null,
-  }));
+  return rows;
 }
 
 async function getConversation(id, userId) {
