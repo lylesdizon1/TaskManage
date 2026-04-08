@@ -1,5 +1,36 @@
 'use strict';
 
+/**
+ * db.cjs — PostgreSQL data access layer for Dizon.ai.
+ *
+ * db.cjs is the single database abstraction layer for all Dizon.ai data.
+ * All DB access goes through this module — routes and tools never call
+ * pool.query() directly (except a small number of legacy paths flagged
+ * in the audit).
+ *
+ * Responsibilities:
+ *   - Schema creation and migrations (initTables, runMigrations)
+ *   - CRUD helpers for users, tasks, notes, entities, conversations,
+ *     settings, alerts, inbox, and agent memory
+ *   - Seed data for first-run bootstrapping
+ *
+ * Dependencies:
+ *   - pg (PostgreSQL client via Pool)
+ *   - DATABASE_URL env var for connection string
+ *
+ * Boundaries:
+ *   - This module owns the SQL layer only. Business logic belongs in
+ *     route handlers and tools.cjs.
+ *   - Column aliasing (snake_case → camelCase) is performed here so
+ *     callers receive JS-friendly property names — this is intentional
+ *     and consistent across all queries.
+ *
+ * @note This file is large (~2100 lines) because it houses every DB
+ * helper in one place. Future refactors may split by domain (users.cjs,
+ * tasks.cjs, etc.), but for now co-location keeps the migration and
+ * schema logic coherent.
+ */
+
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -444,6 +475,14 @@ async function initTables() {
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
+/**
+ * Return all users ordered by creation date.
+ * Used by the admin panel for user management. Includes passwordHash
+ * because admin password-reset needs it — never expose this via API
+ * without stripping the hash first.
+ *
+ * @returns {Promise<Array<Object>>} All user records with camelCase keys.
+ */
 async function getUsers() {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
@@ -453,6 +492,22 @@ async function getUsers() {
   return rows;
 }
 
+/**
+ * Insert a new user or update an existing one by ID.
+ * Used during registration and admin user creation. On conflict,
+ * COALESCE preserves existing values for email/role/entityIds when
+ * the caller passes null — this prevents accidental field erasure
+ * during upserts that only intend to update a subset of fields.
+ *
+ * @param {Object} user
+ * @param {string} user.id - Unique user ID (e.g. "user-abc123").
+ * @param {string} user.username - Login username (unique).
+ * @param {string} user.displayName - Display name.
+ * @param {string} user.passwordHash - bcrypt hash.
+ * @param {string} [user.email]
+ * @param {string} [user.role='member']
+ * @param {string[]} [user.entityIds=[]]
+ */
 async function upsertUser({ id, username, displayName, passwordHash, email, role, entityIds }) {
   await pool.query(
     `INSERT INTO users (id, username, display_name, password_hash, email, role, entity_ids)
@@ -466,6 +521,22 @@ async function upsertUser({ id, username, displayName, passwordHash, email, role
   );
 }
 
+/**
+ * Partially update a user record. Only fields present in the `fields`
+ * object are SET — omitted fields are left unchanged.
+ *
+ * Builds a dynamic UPDATE query with parameterised placeholders to
+ * avoid SQL injection. Returns the full updated user record via
+ * RETURNING, or null if no fields were provided.
+ *
+ * @param {string} id - User ID to update.
+ * @param {Object} fields - Partial user object. Supported keys:
+ *   displayName, email, role, entityIds, active, passwordHash,
+ *   persona, assistantName, whatsappPhone, profileName,
+ *   profileBusinesses, profileHousehold, profileLocation,
+ *   profileNotes, timezone.
+ * @returns {Promise<Object|null>} Updated user record or null.
+ */
 async function updateUser(id, fields) {
   const sets = [];
   const vals = [id];
@@ -502,6 +573,12 @@ async function updateUser(id, fields) {
   return rows[0] || null;
 }
 
+/**
+ * Hard-delete a user by ID. Prefer setting active=false (soft delete)
+ * in most cases — hard delete is used by the admin panel's delete action.
+ *
+ * @param {string} id - User ID to delete.
+ */
 async function deleteUser(id) {
   await pool.query('DELETE FROM users WHERE id = $1', [id]);
 }
@@ -1249,8 +1326,30 @@ async function updateTask(id, fields) {
   return rows[0] || null;
 }
 
-// ── Password update ──────────────────────────────────────────────────────────
+// ── User lookups and auth helpers ─────────────────────────────────────────────
 
+/**
+ * Return the minimal user context needed by authenticateToken middleware.
+ *
+ * This is called on every authenticated request to refresh role, timezone,
+ * and entityIds from the DB — ensuring authorization decisions use current
+ * state rather than stale JWT claims (see C7 audit fix).
+ *
+ * @note Intentionally lightweight — only selects 4 columns. Do not add
+ * profile fields here; use getUserById() when full profile is needed.
+ *
+ * @note This function is part of the authentication critical path.
+ * If this query fails or returns stale data, authorization
+ * decisions may be incorrect.
+ *
+ * @note entityIds are returned as an array of strings and are used
+ * for authorization checks across routes and tools. Always treat
+ * them as source-of-truth for entity membership (see C7 audit fix).
+ *
+ * @param {string} id - User ID from JWT payload.
+ * @returns {Promise<Object|null>} { id, timezone, role, entityIds } or null.
+ * @throws {Error} If the database query fails.
+ */
 async function getUserAuthContext(id) {
   const { rows } = await pool.query(
     `SELECT id, timezone, role, entity_ids AS "entityIds" FROM users WHERE id = $1`,
@@ -1259,6 +1358,17 @@ async function getUserAuthContext(id) {
   return rows[0] || null;
 }
 
+/**
+ * Fetch a full user record by ID. Returns all profile fields, credentials,
+ * and settings. Used by /api/auth/me, /api/auth/refresh, and admin routes.
+ *
+ * @note Includes passwordHash — callers that expose this via API must
+ * strip it before sending the response.
+ *
+ * @param {string} id - User ID.
+ * @returns {Promise<Object|null>} Full user record or null.
+ * @throws {Error} If the database query fails.
+ */
 async function getUserById(id) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
@@ -1273,6 +1383,17 @@ async function getUserById(id) {
   return rows[0] || null;
 }
 
+/**
+ * Look up a user by their normalised WhatsApp phone number.
+ * Used by the WhatsApp webhook to identify inbound message senders.
+ *
+ * The query strips non-digit characters from the stored whatsapp_phone
+ * column via REGEXP_REPLACE so matching works regardless of how the
+ * number was originally saved (with or without +, dashes, spaces).
+ *
+ * @param {string} normalizedPhone - Digits-only phone number (e.g. "14155551234").
+ * @returns {Promise<Object|null>} User record or null.
+ */
 async function getUserByWhatsAppPhone(normalizedPhone) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName",
@@ -1287,6 +1408,13 @@ async function getUserByWhatsAppPhone(normalizedPhone) {
   return rows[0] || null;
 }
 
+/**
+ * Update a user's password hash. Used by the change-password and
+ * admin reset-password flows.
+ *
+ * @param {string} id - User ID.
+ * @param {string} newHash - New bcrypt hash to store.
+ */
 async function updateUserPassword(id, newHash) {
   await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [id, newHash]);
 }
