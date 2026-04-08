@@ -1,13 +1,77 @@
 'use strict';
 
+/**
+ * server/routes/dashboard.cjs — Dashboard data aggregation and AI brief endpoints.
+ *
+ * Provides the backend for the dashboard panel: Command Center session
+ * management, live update polling, Aria's daily brief generation, and
+ * timeline summary.
+ *
+ * Responsibility:
+ *   - Command Center session lifecycle (get-or-create daily conversation,
+ *     fetch messages, poll for new inbox/overdue updates)
+ *   - Generate Aria's daily brief via a one-shot Claude API call
+ *   - Generate timeline summary via a one-shot Claude API call
+ *
+ * Inputs:
+ *   - GET /api/dashboard/command-center/session — load today's conversation
+ *   - GET /api/dashboard/command-center/updates — poll for new events since timestamp
+ *   - POST /api/dashboard/aria-brief — generate persona-aware daily brief
+ *   - POST /api/dashboard/timeline-summary — generate one-sentence day summary
+ *
+ * Dependencies:
+ *   - db.cjs — conversation, task, note, inbox queries (injected)
+ *   - axios — direct Anthropic API calls for brief/summary generation
+ *
+ * Boundaries:
+ *   - Data aggregation plus lightweight one-shot generation — no agentic
+ *     loop, no tool execution, no domain mutations.
+ *   - The brief and timeline-summary endpoints make direct Anthropic API
+ *     calls via axios (not the SDK) because they are simple one-shot
+ *     generations with no tool use, no streaming, and no multi-turn loop.
+ *   - GCal data for the brief is passed from the frontend (data.events),
+ *     not fetched server-side, because the dashboard already has it loaded.
+ *
+ * @note This route exists separately from ai.cjs because dashboard endpoints
+ * serve aggregated data for the UI shell (session, polling, briefs), while
+ * ai.cjs handles the interactive chat conversation with tool execution.
+ * They share no endpoints or state.
+ *
+ * @note This file uses two intentional trust models:
+ * - aria-brief fetches tasks server-side for correctness
+ * - timeline-summary accepts client-sent data because
+ *   it is cosmetic only
+ * This distinction is deliberate — do not change without
+ * considering the security implications.
+ */
+
 const express = require('express');
 const axios = require('axios');
 
+/**
+ * Factory function that creates the dashboard router.
+ *
+ * @param {Object} deps - Injected dependencies.
+ * @param {Function} deps.authenticateToken - JWT auth middleware.
+ * @param {Object} deps.db - Database helper module (db.cjs).
+ * @returns {express.Router} Mounted by proxy-server.cjs.
+ */
 module.exports = function createDashboardRouter({ authenticateToken, db }) {
   const router = express.Router();
 
   // ── Command Center ───────────────────────────────────────────────────────────
 
+  /**
+   * GET /api/dashboard/command-center/session — Load or create today's
+   * Command Center conversation and return its messages.
+   *
+   * @note The conversation is scoped to the user's local date (via their
+   * timezone). A new conversation is automatically created each day so
+   * the Command Center resets daily — yesterday's context doesn't bleed
+   * into today's session.
+   *
+   * @returns {Object} { conversation, messages }
+   */
   router.get('/api/dashboard/command-center/session', authenticateToken, async (req, res) => {
     try {
       const todayStr = new Intl.DateTimeFormat('en-CA', {
@@ -24,6 +88,20 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
     }
   });
 
+  /**
+   * GET /api/dashboard/command-center/updates?since=ISO — Poll for new
+   * inbox items and newly overdue tasks since the given timestamp.
+   *
+   * @note The frontend polls this endpoint on an interval (typically every
+   * 30–60 seconds) to surface real-time updates in the Command Center
+   * without a WebSocket connection. Falls back to 60 seconds ago if
+   * no "since" param is provided.
+   *
+   * @note Overdue detection compares due_date against the user's local
+   * today string. Tasks with empty or null due_date are excluded.
+   *
+   * @returns {Object} { updates }
+   */
   router.get('/api/dashboard/command-center/updates', authenticateToken, async (req, res) => {
     try {
       const since = req.query.since ? new Date(req.query.since) : new Date(Date.now() - 60000);
@@ -73,6 +151,30 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
 
   // ── Dashboard AI Brief (persona-aware) ────────────────────────────────────────
 
+  /**
+   * POST /api/dashboard/aria-brief — Generate Aria's persona-aware daily brief.
+   *
+   * Makes a one-shot Claude API call with a persona-tuned system prompt
+   * and the user's live task/note/calendar data. Returns 2–3 sentences
+   * of natural-language summary.
+   *
+   * @note Tasks are fetched server-side from the DB — never from the client
+   * request body. This was a deliberate fix (Bug 2) to prevent stale or
+   * manipulated task data from reaching the brief. Calendar events are
+   * still passed from the frontend (data.events) because the dashboard
+   * already has them loaded from GCal.
+   *
+   * @note The brief uses direct axios calls to the Anthropic API (not the
+   * SDK or agenticLoop) because it is a simple one-shot generation with
+   * no tool use and no streaming. Failures degrade gracefully to an empty
+   * string response so the dashboard shell remains usable.
+   *
+   * @note Persona tones (executive_assistant, coo, best_friend, life_coach,
+   * cfo) are mapped to tone descriptors that shape the brief's voice.
+   * The persona is selected by the user in Settings → AI Assistant.
+   *
+   * @returns {Object} { brief }
+   */
   router.post('/api/dashboard/aria-brief', authenticateToken, async (req, res) => {
     try {
       const apiKey = req.body.apiKey || process.env.CLAUDE_API_KEY;
@@ -131,6 +233,21 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
 
   // ── Dashboard Timeline Summary ────────────────────────────────────────────────
 
+  /**
+   * POST /api/dashboard/timeline-summary — Generate a one-sentence day summary.
+   *
+   * Takes today's calendar events and tasks from the request body and
+   * returns a max-15-word summary. Used as a tagline below the timeline
+   * header on the dashboard.
+   *
+   * @note This endpoint accepts client-sent task/event data
+   * because the output is cosmetic and non-authoritative.
+   *
+   * @note Failures degrade gracefully to an empty string response
+   * so the dashboard shell remains usable.
+   *
+   * @returns {Object} { summary }
+   */
   router.post('/api/dashboard/timeline-summary', authenticateToken, async (req, res) => {
     try {
       const apiKey = req.body.apiKey || process.env.CLAUDE_API_KEY;
