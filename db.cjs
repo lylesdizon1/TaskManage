@@ -898,7 +898,20 @@ async function saveSettings(data) {
 
 // ── Google Calendar tokens ───────────────────────────────────────────────────
 
-
+/**
+ * Load raw GCal token data for a user from the DB.
+ * Returns the tokens column as-is — may be encrypted (JSON string with
+ * { _enc: "..." } wrapper) or a plain object (legacy unencrypted rows).
+ * Callers should use loadGcalTokens() from server/utils/google.cjs which
+ * handles decryption transparently.
+ *
+ * @note This helper intentionally does not encrypt or decrypt tokens.
+ * Encryption is the sole responsibility of server/utils/google.cjs.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<Object|string|null>} Raw token data or null if not connected.
+ * @throws {Error} If the database query fails.
+ */
 async function getGcalTokensForUser(userId) {
   const { rows } = await pool.query(
     'SELECT tokens FROM gcal_tokens WHERE user_id = $1',
@@ -907,6 +920,19 @@ async function getGcalTokensForUser(userId) {
   return rows.length ? rows[0].tokens : null;
 }
 
+/**
+ * Store GCal tokens for a user, upserting on user_id conflict.
+ * Tokens are JSON-stringified before storage. Callers should use
+ * saveGcalTokens() from server/utils/google.cjs which encrypts first.
+ *
+ * @note This helper intentionally does not encrypt or decrypt tokens.
+ * Encryption is the sole responsibility of server/utils/google.cjs.
+ *
+ * @param {string} userId - User ID.
+ * @param {Object} tokens - Token data (plain or { _enc } wrapper).
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function setGcalTokensForUser(userId, tokens) {
   await pool.query(
     `INSERT INTO gcal_tokens (user_id, tokens, updated_at)
@@ -916,12 +942,31 @@ async function setGcalTokensForUser(userId, tokens) {
   );
 }
 
+/**
+ * Remove GCal tokens for a user. Called when the user disconnects
+ * their Google Calendar integration in Settings.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function deleteGcalTokensForUser(userId) {
   await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
 }
 
 // ── Gmail tokens & config ─────────────────────────────────────────────────────
 
+/**
+ * Load raw Gmail token data for a user. Same encryption pattern as GCal —
+ * use loadGmailTokens() from server/utils/google.cjs for transparent decryption.
+ *
+ * @note This helper intentionally does not encrypt or decrypt tokens.
+ * Encryption is the sole responsibility of server/utils/google.cjs.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<Object|string|null>} Raw token data or null.
+ * @throws {Error} If the database query fails.
+ */
 async function getGmailTokensForUser(userId) {
   const { rows } = await pool.query(
     'SELECT tokens FROM gmail_tokens WHERE user_id = $1',
@@ -930,6 +975,18 @@ async function getGmailTokensForUser(userId) {
   return rows.length ? rows[0].tokens : null;
 }
 
+/**
+ * Store Gmail tokens for a user, upserting on user_id conflict.
+ * Use saveGmailTokens() from server/utils/google.cjs which encrypts first.
+ *
+ * @note This helper intentionally does not encrypt or decrypt tokens.
+ * Encryption is the sole responsibility of server/utils/google.cjs.
+ *
+ * @param {string} userId - User ID.
+ * @param {Object} tokens - Token data (plain or { _enc } wrapper).
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function setGmailTokensForUser(userId, tokens) {
   await pool.query(
     `INSERT INTO gmail_tokens (user_id, tokens, updated_at)
@@ -939,10 +996,24 @@ async function setGmailTokensForUser(userId, tokens) {
   );
 }
 
+/**
+ * Remove Gmail tokens for a user. Called on Gmail disconnect.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function deleteGmailTokensForUser(userId) {
   await pool.query('DELETE FROM gmail_tokens WHERE user_id = $1', [userId]);
 }
 
+/**
+ * Load Gmail sync configuration for a user (label filters, sync frequency, etc.).
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<Object|null>} Config object or null if not configured.
+ * @throws {Error} If the database query fails.
+ */
 async function getGmailConfigForUser(userId) {
   const { rows } = await pool.query(
     'SELECT config FROM gmail_config WHERE user_id = $1',
@@ -951,6 +1022,14 @@ async function getGmailConfigForUser(userId) {
   return rows.length ? rows[0].config : null;
 }
 
+/**
+ * Store Gmail sync configuration for a user, upserting on conflict.
+ *
+ * @param {string} userId - User ID.
+ * @param {Object} config - Sync configuration object.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function setGmailConfigForUser(userId, config) {
   await pool.query(
     `INSERT INTO gmail_config (user_id, config, updated_at)
@@ -1426,6 +1505,18 @@ async function saveUserPreferences(userId, prefs) {
 
 // ── Chat messages ────────────────────────────────────────────────────────────
 
+/**
+ * Return legacy flat chat messages for a user (non-conversation mode).
+ * Ordered ASC so messages read top-to-bottom in chronological order.
+ *
+ * @note This is the pre-conversation chat model. Newer code uses
+ * getConversationMessages() with conversation_id scoping instead.
+ *
+ * @param {string} userId - User ID.
+ * @param {number} [limit=50] - Max messages to return.
+ * @returns {Promise<Array<Object>>} Chat messages oldest-first.
+ * @throws {Error} If the database query fails.
+ */
 async function getChatHistory(userId, limit = 50) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", role, content, model, created_at AS "createdAt"
@@ -1438,6 +1529,17 @@ async function getChatHistory(userId, limit = 50) {
   return rows;
 }
 
+/**
+ * Save a chat message (legacy flat model, no conversation_id).
+ *
+ * @param {Object} msg
+ * @param {string} msg.userId - User ID.
+ * @param {string} msg.role - 'user' or 'assistant'.
+ * @param {string} msg.content - Message content.
+ * @param {string} [msg.model='claude'] - Model that generated the response.
+ * @returns {Promise<Object>} Created message record.
+ * @throws {Error} If the database query fails.
+ */
 async function saveChatMessage({ userId, role, content, model }) {
   const { rows } = await pool.query(
     `INSERT INTO chat_messages (user_id, role, content, model)
@@ -1448,12 +1550,31 @@ async function saveChatMessage({ userId, role, content, model }) {
   return rows[0];
 }
 
+/**
+ * Delete all legacy flat chat messages for a user.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function clearChatHistory(userId) {
   await pool.query('DELETE FROM chat_messages WHERE user_id = $1', [userId]);
 }
 
 // ── Chat Conversations ──────────────────────────────────────────────────────
 
+/**
+ * Return all conversations for a user with a truncated last message preview.
+ *
+ * Uses LEFT JOIN LATERAL to fetch the most recent message per conversation
+ * in a single query (M11 audit fix — replaced N+1 correlated subquery).
+ * Message content is truncated to 100 chars in SQL via LEFT() to avoid
+ * pulling full message bodies into app memory.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<Array<Object>>} Conversations ordered by updated_at DESC.
+ * @throws {Error} If the database query fails.
+ */
 async function getConversations(userId) {
   const { rows } = await pool.query(
     `SELECT c.id, c.title, c.model, c.created_at AS "createdAt", c.updated_at AS "updatedAt",
@@ -1473,6 +1594,14 @@ async function getConversations(userId) {
   return rows;
 }
 
+/**
+ * Fetch a single conversation by ID, scoped to the owning user.
+ *
+ * @param {number} id - Conversation ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @returns {Promise<Object|null>} Conversation record or null.
+ * @throws {Error} If the database query fails.
+ */
 async function getConversation(id, userId) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", title, model, created_at AS "createdAt", updated_at AS "updatedAt"
@@ -1482,6 +1611,15 @@ async function getConversation(id, userId) {
   return rows[0] || null;
 }
 
+/**
+ * Create a new chat conversation. Title is initially NULL and gets
+ * auto-set from the first user message via addConversationMessage().
+ *
+ * @param {string} userId - User ID.
+ * @param {string} [model='claude'] - AI model identifier.
+ * @returns {Promise<Object>} Created conversation record.
+ * @throws {Error} If the database query fails.
+ */
 async function createConversation(userId, model) {
   const { rows } = await pool.query(
     `INSERT INTO chat_conversations (user_id, model) VALUES ($1, $2)
@@ -1491,6 +1629,16 @@ async function createConversation(userId, model) {
   return rows[0];
 }
 
+/**
+ * Manually rename a conversation. Also used by the auto-title flow
+ * when the AI generates a summary title after the first exchange.
+ *
+ * @param {number} id - Conversation ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @param {string} title - New conversation title.
+ * @returns {Promise<Object|null>} Updated conversation or null.
+ * @throws {Error} If the database query fails.
+ */
 async function updateConversationTitle(id, userId, title) {
   const { rows } = await pool.query(
     `UPDATE chat_conversations SET title = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2
@@ -1500,11 +1648,33 @@ async function updateConversationTitle(id, userId, title) {
   return rows[0] || null;
 }
 
+/**
+ * Delete a conversation and all its messages. Deletes messages first
+ * to satisfy foreign key constraints, then the conversation record.
+ *
+ * @note Not wrapped in a transaction. If the message delete succeeds
+ * and the conversation delete fails, the conversation row will remain
+ * without its messages.
+ *
+ * @param {number} id - Conversation ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @returns {Promise<void>}
+ * @throws {Error} If the database queries fail.
+ */
 async function deleteConversation(id, userId) {
   await pool.query('DELETE FROM chat_messages WHERE conversation_id = $1 AND user_id = $2', [id, userId]);
   await pool.query('DELETE FROM chat_conversations WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
+/**
+ * Return all messages in a conversation, ordered chronologically.
+ * Scoped to the owning user to prevent cross-user message access.
+ *
+ * @param {number} conversationId - Conversation ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @returns {Promise<Array<Object>>} Messages oldest-first.
+ * @throws {Error} If the database query fails.
+ */
 async function getConversationMessages(conversationId, userId) {
   const { rows } = await pool.query(
     `SELECT id, role, content, model, created_at AS "createdAt"
@@ -1515,6 +1685,23 @@ async function getConversationMessages(conversationId, userId) {
   return rows;
 }
 
+/**
+ * Add a message to a conversation and update the conversation timestamp.
+ * If this is the first user message and the conversation has no title,
+ * auto-titles with the first 50 characters of the message content.
+ *
+ * @note Performs three queries (insert, update timestamp, auto-title)
+ * without a transaction. The auto-title is best-effort — failure
+ * doesn't affect the message itself.
+ *
+ * @param {number} conversationId - Conversation ID.
+ * @param {string} userId - User ID.
+ * @param {string} role - 'user' or 'assistant'.
+ * @param {string} content - Message content.
+ * @param {string} [model='claude'] - Model identifier.
+ * @returns {Promise<Object>} Created message record.
+ * @throws {Error} If the insert query fails.
+ */
 async function addConversationMessage(conversationId, userId, role, content, model) {
   const { rows } = await pool.query(
     `INSERT INTO chat_messages (conversation_id, user_id, role, content, model)
@@ -1535,10 +1722,22 @@ async function addConversationMessage(conversationId, userId, role, content, mod
 }
 
 /**
- * Gets or creates a command center conversation for a user for a given date.
- * @param {string} userId
- * @param {string} dateStr - YYYY-MM-DD
- * @returns {Promise<object>} conversation row
+ * Get or create the Command Center conversation for a given date.
+ * The Command Center is a special daily conversation used by the
+ * dashboard chat panel — one per user per day, reset on each access.
+ *
+ * @note This function deletes any existing command_center conversation
+ * for the same date and creates a fresh one. This ensures the
+ * conversation always starts clean — Aria rebuilds context from
+ * the system prompt each session rather than accumulating stale history.
+ *
+ * @note This is intentionally different from normal chat conversations
+ * which preserve history — Command Center always starts fresh each day.
+ *
+ * @param {string} userId - User ID.
+ * @param {string} dateStr - Date in YYYY-MM-DD format for the conversation title.
+ * @returns {Promise<Object>} Created conversation record.
+ * @throws {Error} If the database queries fail.
  */
 async function getOrCreateCommandCenterConversation(userId, dateStr) {
   const title = `Command Center — ${dateStr}`;
@@ -2197,6 +2396,24 @@ async function getAllUsersWithOrg() {
 
 // ── Agent Memory ──────────────────────────────────────────────────────────
 
+/**
+ * Log an action to agent memory. Called after each tool execution in
+ * tools.cjs to build a history of what Aria has done for the user.
+ * This feeds into Aria's context window so she can reference past actions.
+ *
+ * @note Memory logging is always best-effort — callers wrap this in
+ * try/catch with swallowed errors so a failed memory write never
+ * blocks the primary action.
+ *
+ * @param {Object} entry
+ * @param {string} entry.userId - User ID.
+ * @param {string} [entry.type='action'] - Memory type.
+ * @param {string} entry.content - Human-readable description of the action.
+ * @param {string} [entry.tool] - Tool name (e.g. 'create_task').
+ * @param {Object} [entry.metadata={}] - Structured data for later retrieval.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function logMemory({ userId, type = 'action', content, tool = null, metadata = {} }) {
   const id = `mem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   await pool.query(
@@ -2206,6 +2423,21 @@ async function logMemory({ userId, type = 'action', content, tool = null, metada
   );
 }
 
+/**
+ * Return recent tool-action memories for a user. Used to inject recent
+ * action history into Aria's system prompt for context continuity.
+ *
+ * @note Filters to task/event tool actions only — general memories
+ * and notes are excluded to keep the context window focused.
+ *
+ * @note The result is prompt-facing context data, not an audit log —
+ * use getAllMemories() for admin visibility.
+ *
+ * @param {string} userId - User ID.
+ * @param {number} [limit=20] - Max memories to return.
+ * @returns {Promise<Array<Object>>} Memories newest-first.
+ * @throws {Error} If the database query fails.
+ */
 async function getRecentMemories(userId, limit = 20) {
   const { rows } = await pool.query(
     `SELECT id, type, content, tool, metadata, created_at AS "createdAt"
@@ -2219,6 +2451,18 @@ async function getRecentMemories(userId, limit = 20) {
   return rows;
 }
 
+/**
+ * Return all agent memories with user display names, paginated.
+ * Used by the admin panel's memory viewer. Optionally filtered to
+ * a single user.
+ *
+ * @param {Object} opts
+ * @param {number} [opts.limit=30] - Max rows.
+ * @param {number} [opts.offset=0] - Pagination offset.
+ * @param {string} [opts.userId] - Filter to a specific user, or null for all.
+ * @returns {Promise<Array<Object>>} Memories with user displayName and username.
+ * @throws {Error} If the database query fails.
+ */
 async function getAllMemories({ limit = 30, offset = 0, userId = null }) {
   const where = userId ? `WHERE m.user_id = $3` : '';
   const params = userId ? [limit, offset, userId] : [limit, offset];
@@ -2236,6 +2480,13 @@ async function getAllMemories({ limit = 30, offset = 0, userId = null }) {
   return rows;
 }
 
+/**
+ * Delete a single agent memory entry by ID. Used by admin memory management.
+ *
+ * @param {string} id - Memory entry ID.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function deleteMemory(id) {
   await pool.query('DELETE FROM agent_memory WHERE id = $1', [id]);
 }
