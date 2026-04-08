@@ -30,11 +30,12 @@ const ARIA_TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        title:    { type: 'string', description: 'Task title' },
-        priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Priority. Default: medium.' },
-        due_date: { type: 'string', description: 'Due date YYYY-MM-DD. Optional.' },
-        due_time: { type: 'string', description: 'Due time HH:MM 24hr. Optional.' },
-        notes:    { type: 'string', description: 'Additional description. Optional.' },
+        title:       { type: 'string', description: 'Task title' },
+        priority:    { type: 'string', enum: ['low', 'medium', 'high'], description: 'Priority. Default: medium.' },
+        due_date:    { type: 'string', description: 'Due date YYYY-MM-DD. Optional.' },
+        due_time:    { type: 'string', description: 'Due time HH:MM 24hr. Optional.' },
+        notes:       { type: 'string', description: 'Additional description. Optional.' },
+        entity_name: { type: 'string', description: 'Entity/business name to tag this task with. Optional.' },
       },
       required: ['title'],
     },
@@ -122,6 +123,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
     switch (toolName) {
       case 'create_task': {
         const id = `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const tags = toolInput.entity_name ? [toolInput.entity_name] : [];
         await db.upsertTask({
           id,
           title: toolInput.title,
@@ -129,8 +131,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           priority: toolInput.priority || 'medium',
           dueDate: toolInput.due_date || '',
           dueTime: toolInput.due_time || null,
-          tags: [],
-          visibility: 'private',
+          tags,
+          visibility: tags.length ? 'shared' : 'private',
           completed: false,
           owner: userId,
           createdBy: userId,
@@ -138,8 +140,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         try {
           await db.logMemory({
             userId, tool: 'create_task',
-            content: `Created task: "${toolInput.title}"${toolInput.due_date ? ` due ${toolInput.due_date}` : ''}${toolInput.priority && toolInput.priority !== 'medium' ? `, ${toolInput.priority} priority` : ''}`,
-            metadata: { task_id: id, title: toolInput.title, priority: toolInput.priority, due_date: toolInput.due_date },
+            content: `Created task: "${toolInput.title}"${toolInput.due_date ? ` due ${toolInput.due_date}` : ''}${toolInput.priority && toolInput.priority !== 'medium' ? `, ${toolInput.priority} priority` : ''}${toolInput.entity_name ? `, tagged ${toolInput.entity_name}` : ''}`,
+            metadata: { task_id: id, title: toolInput.title, priority: toolInput.priority, due_date: toolInput.due_date, entity_name: toolInput.entity_name || null },
           });
         } catch (e) { console.error('[memory] log failed:', e.message); }
         // Schedule alerts if task has a due date
@@ -148,7 +150,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             await db.scheduleTaskAlerts(userId, id, toolInput.title, toolInput.due_date, toolInput.due_time || null, toolInput.priority || 'medium', tz);
           } catch (e) { console.error('[schedule] alert scheduling failed:', e.message); }
         }
-        return { success: true, task_id: id, title: toolInput.title, due_date: toolInput.due_date || null, due_time: toolInput.due_time || null, priority: toolInput.priority || 'medium' };
+        return { success: true, task_id: id, title: toolInput.title, due_date: toolInput.due_date || null, due_time: toolInput.due_time || null, priority: toolInput.priority || 'medium', entity_name: toolInput.entity_name || null };
       }
 
       case 'complete_task': {
