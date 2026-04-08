@@ -173,10 +173,12 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       }
       const weekMapStr = `This week: ${weekMapParts.join(', ')}.`;
       const activeTasks = tasks.filter(t => !t.completed);
+      const recentCompleted = tasks.filter(t => t.completed && t.completionNote);
       const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>
           `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
         ).join('; ') || 'none'
+      }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
       }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
       }\nRecent Aria actions (last 10): ${

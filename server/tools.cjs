@@ -41,12 +41,13 @@ const ARIA_TOOLS = [
   },
   {
     name: 'complete_task',
-    description: 'Mark an existing task as complete.',
+    description: 'Mark an existing task as complete. Optionally include a short completion note about the outcome.',
     input_schema: {
       type: 'object',
       properties: {
-        task_id: { type: 'string', description: 'ID of the task to complete.' },
-        title:   { type: 'string', description: 'Title of the task — used to find it if ID is unknown.' },
+        task_id:         { type: 'string', description: 'ID of the task to complete.' },
+        title:           { type: 'string', description: 'Title of the task — used to find it if ID is unknown.' },
+        completion_note: { type: 'string', description: 'Optional short note about how it went or the outcome.' },
       },
       required: [],
     },
@@ -173,12 +174,14 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           }
         }
         if (!task) return { success: false, error: 'Task not found or access denied' };
-        await db.updateTask(task.id, { completed: true, completedAt: new Date().toISOString() });
+        const updateFields = { completed: true, completedAt: new Date().toISOString() };
+        if (toolInput.completion_note) updateFields.completionNote = toolInput.completion_note;
+        await db.updateTask(task.id, updateFields);
         try {
           await db.logMemory({
             userId, tool: 'complete_task',
-            content: `Completed task: "${task.title}"`,
-            metadata: { task_id: task.id },
+            content: `Completed task: "${task.title}"${toolInput.completion_note ? ` — Note: ${toolInput.completion_note}` : ''}`,
+            metadata: { task_id: task.id, completion_note: !!toolInput.completion_note },
           });
         } catch (e) { console.error('[memory] log failed:', e.message); }
         return { success: true, task_id: task.id, title: task.title };
