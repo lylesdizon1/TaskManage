@@ -1213,17 +1213,15 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                       <div className="space-y-2">
                         {completedToday.map((t) => (
                           <div key={t.id}>
-                            <div className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl">
+                            <div onClick={() => setEditingTask(t)} className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl cursor-pointer hover:bg-surface-container-low transition-colors group">
                               <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
                                 <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
                               </div>
                               <p className="text-xs font-medium text-on-surface-variant line-through flex-1 truncate">{t.title}</p>
-                              {t.completionNote && completionNoteTaskId !== t.id && (
-                                <button onClick={() => { setCompletionNoteTaskId(t.id); setCompletionNoteDraft(t.completionNote); }} className="text-[9px] text-primary font-medium flex-shrink-0 hover:underline">edit note</button>
-                              )}
                               <span className="text-[9px] text-on-surface-variant font-medium flex-shrink-0">
                                 {t.completedAt ? new Date(t.completedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Today'}
                               </span>
+                              <span className="material-symbols-outlined text-on-surface-variant/30 group-hover:text-on-surface-variant text-base transition-colors flex-shrink-0">chevron_right</span>
                             </div>
                             {t.completionNote && completionNoteTaskId !== t.id && (
                               <p className="text-[10px] text-on-surface-variant/70 ml-10 mt-1 italic">{t.completionNote}</p>
