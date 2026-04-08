@@ -163,6 +163,37 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
                     || msgBody.match(/\bfor\s+([A-Za-z0-9][A-Za-z0-9 &'.-]*[A-Za-z0-9])(?=\s+(?:by|on|due|before|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)/i);
       let entityCandidate = forMatch ? forMatch[1].trim() : null;
 
+      // ── Fuzzy match entity candidate against user's DB entities ────────
+      let matchedEntity = null; // { id, name }
+      let userEntityList = [];
+      try {
+        userEntityList = await db.getEntitiesForUser(userId);
+      } catch (e) { console.error('[whatsapp] entity load failed:', e.message); }
+
+      if (userEntityList.length > 0) {
+        // Pattern 2: if no "for X" match, check if message ends with a known entity name
+        if (!entityCandidate) {
+          const msgLower = msgBody.toLowerCase().replace(/[.!?]+$/, '').trim();
+          for (const ent of userEntityList) {
+            if (msgLower.endsWith(ent.name.toLowerCase())) {
+              entityCandidate = ent.name;
+              break;
+            }
+          }
+        }
+
+        // Fuzzy match: case-insensitive, startsWith or exact
+        if (entityCandidate) {
+          const candidateLower = entityCandidate.toLowerCase();
+          matchedEntity = userEntityList.find(e => e.name.toLowerCase() === candidateLower)
+                       || userEntityList.find(e => e.name.toLowerCase().startsWith(candidateLower))
+                       || null;
+          if (matchedEntity) {
+            console.log(`[whatsapp] Entity matched: "${entityCandidate}" → ${matchedEntity.name} (${matchedEntity.id})`);
+          }
+        }
+      }
+
       // ── Load full context (same pattern as /api/chat/execute) ───────────
       // Only load user's OWN tasks for AI context — never include shared/entity tasks
       // to prevent cross-user data leak (superadmin entityIds = all entities)
