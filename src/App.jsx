@@ -307,6 +307,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
   const [showTaskModal, setShowTaskModal]       = useState(false);
   const [editingTask, setEditingTask]           = useState(null);
+  const [completionNoteTaskId, setCompletionNoteTaskId] = useState(null);
+  const [completionNoteDraft, setCompletionNoteDraft]   = useState('');
   const [apiKeys, setApiKeys]                   = useState({ claude: '', openai: '' });
   const [emailSettings, setEmailSettings]       = useState({
     gmailUser: '',
@@ -788,6 +790,25 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({ completed: nowCompleted, completedAt }),
     }).catch((err) => console.error('[tasks] toggle failed:', err.message));
+    // Show completion note prompt when completing (not uncompleting)
+    if (nowCompleted) {
+      setCompletionNoteTaskId(id);
+      setCompletionNoteDraft(task.completionNote || '');
+    } else {
+      if (completionNoteTaskId === id) setCompletionNoteTaskId(null);
+    }
+  }
+
+  function saveCompletionNote(taskId) {
+    const note = completionNoteDraft.trim();
+    if (!note) { setCompletionNoteTaskId(null); return; }
+    setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, completionNote: note } : t));
+    apiFetch(`/api/tasks/${taskId}/completion-note`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ completion_note: note }),
+    }).catch((err) => console.error('[tasks] completion-note save failed:', err.message));
+    setCompletionNoteTaskId(null);
   }
 
   function deleteTask(id) {
@@ -1191,14 +1212,36 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                       </div>
                       <div className="space-y-2">
                         {completedToday.map((t) => (
-                          <div key={t.id} className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl">
-                            <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
-                              <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
+                          <div key={t.id}>
+                            <div className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl">
+                              <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
+                                <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
+                              </div>
+                              <p className="text-xs font-medium text-on-surface-variant line-through flex-1 truncate">{t.title}</p>
+                              {t.completionNote && completionNoteTaskId !== t.id && (
+                                <button onClick={() => { setCompletionNoteTaskId(t.id); setCompletionNoteDraft(t.completionNote); }} className="text-[9px] text-primary font-medium flex-shrink-0 hover:underline">edit note</button>
+                              )}
+                              <span className="text-[9px] text-on-surface-variant font-medium flex-shrink-0">
+                                {t.completedAt ? new Date(t.completedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Today'}
+                              </span>
                             </div>
-                            <p className="text-xs font-medium text-on-surface-variant line-through flex-1 truncate">{t.title}</p>
-                            <span className="text-[9px] text-on-surface-variant font-medium flex-shrink-0">
-                              {t.completedAt ? new Date(t.completedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Today'}
-                            </span>
+                            {t.completionNote && completionNoteTaskId !== t.id && (
+                              <p className="text-[10px] text-on-surface-variant/70 ml-10 mt-1 italic">{t.completionNote}</p>
+                            )}
+                            {completionNoteTaskId === t.id && (
+                              <div className="ml-10 mt-1.5">
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={completionNoteDraft}
+                                  onChange={(e) => setCompletionNoteDraft(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') saveCompletionNote(t.id); if (e.key === 'Escape') setCompletionNoteTaskId(null); }}
+                                  onBlur={() => setCompletionNoteTaskId(null)}
+                                  placeholder="How'd it go? (optional — Enter to save, Esc to skip)"
+                                  className="w-full text-xs bg-surface-container-lowest border border-surface-variant rounded-lg px-3 py-1.5 text-on-background placeholder-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                />
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1462,6 +1505,18 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   ))}
                 </select>
               </div>
+              {editingTask.completed && (
+                <div>
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Completion Note</label>
+                  <input
+                    type="text"
+                    value={editingTask.completionNote || ''}
+                    onChange={(e) => setEditingTask((t) => ({ ...t, completionNote: e.target.value }))}
+                    placeholder="How did it go?"
+                    className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+              )}
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => setEditingTask(null)}
@@ -1470,7 +1525,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   Cancel
                 </button>
                 <button
-                  onClick={() => { editTask(editingTask.id, { title: editingTask.title, priority: editingTask.priority, dueDate: editingTask.dueDate, tags: editingTask.tags }); setEditingTask(null); }}
+                  onClick={() => { editTask(editingTask.id, { title: editingTask.title, priority: editingTask.priority, dueDate: editingTask.dueDate, tags: editingTask.tags, completionNote: editingTask.completionNote }); setEditingTask(null); }}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-bold shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform"
                 >
                   Save
