@@ -2217,7 +2217,7 @@ async function runMigrations() {
   // 12. Entity dedup: "kids" → "Kids" (canonical capitalized)
   await pool.query(`
     UPDATE entities SET name = 'Kids'
-    WHERE id = 'entity-1772647916865' AND LOWER(name) = 'kids'
+    WHERE LOWER(name) = 'kids' AND name != 'Kids'
   `).catch(() => {});
   await pool.query(`
     UPDATE tasks
