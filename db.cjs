@@ -1431,6 +1431,11 @@ async function runMigrations() {
 
   // 9. Add type column to chat_conversations (command_center, general, etc.)
   await pool.query(`ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'general'`).catch(() => {});
+
+  // 10. Add missing indexes on frequently queried user_id columns
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_user_id ON inbox_items(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_scheduled_alerts_user_id ON scheduled_alerts(user_id)`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
