@@ -10,7 +10,7 @@
 
 | Severity | Count |
 |----------|-------|
-| Critical | 7 |
+| Critical | 6 (1 resolved) |
 | Medium   | 28 |
 | Low      | 18 |
 
@@ -30,11 +30,8 @@
 - **Why**: OAuth token hijacking for arbitrary users.
 - **Fix**: Require `authenticateToken`. Use `req.user.id` from JWT, not query param.
 
-### C3. OAuth tokens stored plaintext in database
-- **File**: `db.cjs` lines 785, 808, 829
-- **Issue**: `gcal_tokens`, `gmail_tokens`, and `gmail_config` tables store OAuth tokens as plaintext JSONB. CLAUDE.md specifies AES-256-CBC encryption via `ENCRYPTION_KEY`, but `db.cjs` token storage functions do not call `encrypt()`/`decrypt()`.
-- **Why**: If the database is compromised, all OAuth tokens are readable. Violates stated encryption policy.
-- **Fix**: Apply `encrypt()`/`decrypt()` from `server/utils/crypto.cjs` to all token read/write paths. Verify `loadGcalTokens()` in `server/utils/google.cjs` already decrypts (it does for GCal — confirm Gmail matches).
+### ~~C3. OAuth tokens stored plaintext in database~~ ✅ RESOLVED (false positive)
+- **Status**: Already encrypted. `server/utils/google.cjs` wraps all token read/write with `encryptTokens()`/`decryptTokens()` via `{ _enc: encrypted }` pattern. Both GCal and Gmail tokens use this path. The audit flagged the raw `db.cjs` storage functions (lines 785, 808) but those are only called through the encrypting wrapper. Legacy plaintext tokens handled gracefully via `_enc` check. `gmail_config` (VIP senders, keywords) is not encrypted but contains no OAuth credentials.
 
 ### C4. Duplicate apiFetch — apiClient.js uses wrong token key
 - **File**: `src/lib/apiClient.js` lines 3–4
@@ -319,8 +316,8 @@
 
 ## Top 5 Priority Fixes
 
-1. **C1/C2**: Add `authenticateToken` to Gmail + GCal auth-url routes. Replace `req.query.userId` with `req.user.id`. (~30 min)
-2. **C3**: Apply encrypt/decrypt to all OAuth token storage paths. (~1 hr)
+1. ~~**C1/C2**: Add `authenticateToken` to Gmail + GCal auth-url routes.~~ ✅ Fixed in `06ef601`
+2. ~~**C3**: Apply encrypt/decrypt to all OAuth token storage paths.~~ ✅ Already encrypted (false positive)
 3. **C6**: Propagate user timezone from profile through all date operations. (~2 hrs, systematic)
 4. **C4/C5**: Delete `apiClient.js`, fix localStorage token reads in AlertsModal/SettingsModal. (~15 min)
 5. **M3**: Add `getTaskById(taskId, userId)` helper to eliminate N+1 task lookups. (~30 min)
