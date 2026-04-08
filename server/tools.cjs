@@ -120,8 +120,19 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           task = tasks.find(t => t.id === toolInput.task_id);
         } else if (toolInput.title) {
           const titleLower = toolInput.title.toLowerCase();
-          task = tasks.find(t => t.title.toLowerCase() === titleLower)
-            || tasks.find(t => t.title.toLowerCase().includes(titleLower));
+          const activeTasks = tasks.filter(t => !t.completed);
+          // 1. Exact match (case-insensitive)
+          task = activeTasks.find(t => t.title.toLowerCase() === titleLower);
+          if (!task) {
+            // 2. Partial match — only proceed if exactly one candidate
+            const partials = activeTasks.filter(t => t.title.toLowerCase().includes(titleLower));
+            if (partials.length === 1) {
+              task = partials[0];
+            } else if (partials.length > 1) {
+              const list = partials.map((t, i) => `${i + 1}. ${t.title}${t.dueDate ? ` (due ${t.dueDate})` : ''}`).join('\n');
+              return { success: false, error: `I found ${partials.length} tasks matching "${toolInput.title}" — which one?\n${list}` };
+            }
+          }
         }
         if (!task) return { success: false, error: 'Task not found or access denied' };
         await db.updateTask(task.id, { completed: true, completedAt: new Date().toISOString() });
