@@ -626,7 +626,7 @@ async function getTasksForUser(userId, userEntityIds) {
               due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
               google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM tasks
-       WHERE owner = $1 OR visibility = 'private' AND owner = $1
+       WHERE owner = $1
        ORDER BY created_at DESC`,
       [userId],
     );
