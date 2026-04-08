@@ -107,14 +107,16 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const data = req.body?.data;
       if (!data) return res.json({ ok: true, skipped: 'no data' });
 
-      // Only handle text messages, skip media/status/etc
-      const msgBody = data.body;
+      // Extract text body and media URL (if any)
+      const msgBody = data.body || '';
       const fromRaw = data.from;
-      if (!msgBody || !fromRaw) return res.json({ ok: true, skipped: 'non-text or missing sender' });
+      const mediaUrl = data.media || null;
+      if (!fromRaw) return res.json({ ok: true, skipped: 'missing sender' });
+      if (!msgBody && !mediaUrl) return res.json({ ok: true, skipped: 'empty message' });
 
       // Normalize phone: strip non-digits
       const normalizedPhone = fromRaw.replace(/\D/g, '');
-      console.log(`[whatsapp] Message from ${normalizedPhone}: "${msgBody.slice(0, 50)}${msgBody.length > 50 ? '...' : ''}"`);
+      console.log(`[whatsapp] Message from ${normalizedPhone}: "${msgBody.slice(0, 50)}${msgBody.length > 50 ? '...' : ''}"${mediaUrl ? ' [+image]' : ''}`);
 
       // Look up user by WhatsApp phone
       const user = await db.getUserByWhatsAppPhone(normalizedPhone);
@@ -125,6 +127,46 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       const userId = user.id;
       const entityIds = user.entityIds || [];
+
+      // ── Image download (if media present) ─────────────────────────────
+      let imageData = null; // { mimeType, data (base64) }
+      if (mediaUrl) {
+        try {
+          const imgRes = await fetch(mediaUrl);
+          if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
+          const contentType = imgRes.headers.get('content-type') || '';
+          const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          const mimeType = supportedTypes.find(t => contentType.includes(t));
+          if (!mimeType) {
+            // Unsupported media type — reply and bail
+            const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+            const ultraToken = process.env.ULTRAMSG_TOKEN;
+            if (ultraInstance && ultraToken) {
+              await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: ultraToken, to: fromRaw, body: 'I can only read photos and documents — try sending a JPG or PNG.' }),
+              }).catch(() => {});
+            }
+            return res.json({ ok: true, skipped: 'unsupported media type' });
+          }
+          const arrayBuf = await imgRes.arrayBuffer();
+          imageData = { mimeType, data: Buffer.from(arrayBuf).toString('base64') };
+          console.log(`[whatsapp] Image downloaded: ${mimeType}, ${Math.round(arrayBuf.byteLength / 1024)}KB`);
+        } catch (imgErr) {
+          console.error('[whatsapp/inbound] Image download failed:', imgErr.message);
+          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+          const ultraToken = process.env.ULTRAMSG_TOKEN;
+          if (ultraInstance && ultraToken) {
+            await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: ultraToken, to: fromRaw, body: "I couldn't load that image — can you try sending it again?" }),
+            }).catch(() => {});
+          }
+          return res.json({ ok: true, skipped: 'image download failed' });
+        }
+      }
 
       // ── Check for pending completion note ────────────────────────────────
       const pendingKey = userId;
