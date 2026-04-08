@@ -37,9 +37,38 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
       const updated = await db.updateTask(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Task not found' });
+      if (req.body.completionNote !== undefined) {
+        try {
+          await db.logMemory({
+            userId: req.user.id, tool: 'update_task',
+            content: `Added completion note to task: "${task.title}"`,
+            metadata: { task_id: req.params.id, completion_note: true },
+          });
+        } catch (e) { console.error('[memory] log failed:', e.message); }
+      }
       return res.json(updated);
     } catch (err) {
       console.error('[tasks] update failed:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.patch('/api/tasks/:id/completion-note', authenticateToken, async (req, res) => {
+    try {
+      const task = await db.getTaskById(req.params.id, req.user.id);
+      if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
+      const updated = await db.updateTask(req.params.id, { completionNote: req.body.completion_note });
+      if (!updated) return res.status(404).json({ error: 'Task not found' });
+      try {
+        await db.logMemory({
+          userId: req.user.id, tool: 'update_task',
+          content: `Added completion note to task: "${task.title}"`,
+          metadata: { task_id: req.params.id, completion_note: true },
+        });
+      } catch (e) { console.error('[memory] log failed:', e.message); }
+      return res.json(updated);
+    } catch (err) {
+      console.error('[tasks] completion-note update failed:', err.message);
       return res.status(500).json({ error: err.message });
     }
   });
