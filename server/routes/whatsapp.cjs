@@ -38,9 +38,9 @@
  * by matching the sender phone against whatsapp_phone in the users table.
  * If no user matches, the message is silently dropped.
  *
- * @note Media messages are acknowledged (200 OK) but not processed
- * in v1 — text body is required. Image handling is a planned
- * feature.
+ * @note Image messages are supported — the media URL is downloaded,
+ * converted to base64, and passed as a vision content block to Claude.
+ * Unsupported media types and download failures get graceful error replies.
  */
 
 const express   = require('express');
@@ -318,7 +318,10 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const entityContext = matchedEntity
         ? `\nThe user's message references entity: "${matchedEntity.name}" (id: ${matchedEntity.id}). Apply this entity to any task created in this conversation by passing entity_name="${matchedEntity.name}" to create_task.`
         : '';
-      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}\nWhen setting due times, use the user's local timezone — NOT UTC.\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${entityContext}${contextAppend}`;
+      const imageInstructions = imageData
+        ? `\nIf the user sends an image with no message, describe what you see clearly and concisely, then recommend one specific action (create a task, log an expense, save a note). If the user sends an image with a message, use the message as context to interpret the image and act on it. If intent is unclear, ask one clarifying question only.`
+        : '';
+      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}\nWhen setting due times, use the user's local timezone — NOT UTC.\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${imageInstructions}${entityContext}${contextAppend}`;
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
