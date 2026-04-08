@@ -1,5 +1,56 @@
 'use strict';
 
+/**
+ * server/routes/ai.cjs — Web chat entry point for Aria with SSE streaming.
+ *
+ * Provides three endpoint categories:
+ *   1. /api/claude, /api/openai — thin API proxies (pass-through to LLM APIs)
+ *   2. /api/chat/stream — SSE streaming proxy for raw Claude conversations
+ *   3. /api/chat/execute — Aria's agentic chat with tool use and live context
+ *
+ * Responsibility:
+ *   - Authenticate requests via JWT (all endpoints require authenticateToken)
+ *   - Build Aria's system prompt with live context (tasks, notes, calendar, memories)
+ *   - Handle web chat transport, including standard JSON proxy
+ *     responses and SSE streaming endpoints
+ *   - Forward tool execution progress events to the client in real time
+ *
+ * Inputs:
+ *   - POST /api/chat/execute — JWT-authenticated. Body: { messages, systemPrompt,
+ *     model?, timeZone? }. The frontend's Command Center sends conversations here.
+ *
+ * Dependencies:
+ *   - server/lib/agenticLoop.cjs — multi-turn AI tool-use loop
+ *   - server/tools.cjs — ARIA_TOOLS schema + executeTool handler
+ *   - server/utils/date.cjs — timezone-aware date formatting
+ *   - @anthropic-ai/sdk — direct streaming for /api/chat/stream
+ *   - axios — HTTP proxy for /api/claude and /api/openai
+ *   - db.cjs — user/task/note/memory queries (injected)
+ *   - googleapis — GCal event fetching (injected)
+ *
+ * Boundaries:
+ *   - This module handles transport (SSE streaming) and context building.
+ *     All AI reasoning and tool execution lives in agenticLoop.cjs and tools.cjs.
+ *   - Context building (system prompt + live data) is shared with whatsapp.cjs.
+ *     Both surfaces build the same Aria context but deliver differently:
+ *     this module streams via SSE with real-time tool progress; whatsapp.cjs
+ *     fires and replies in a single message after the loop completes.
+ *
+ * @note The /api/claude and /api/openai endpoints are thin proxies — they
+ * forward the request body to the respective LLM API and return the response.
+ * They exist so the frontend never needs direct API keys in the browser.
+ *
+ * @note The /api/chat/execute endpoint uses SSE (Server-Sent Events) to stream
+ * tool execution progress and the final response to the browser. Events:
+ *   - tool_start: { tool, input } — fired when Aria begins executing a tool
+ *   - tool_complete: { tool, result } — fired when a tool succeeds
+ *   - tool_error: { tool, error } — fired when a tool fails
+ *   - text: { content } — final assistant response text
+ *   - tools_executed: { tools, summaries } — summary of all tools run
+ *   - warning: { message } — emitted if the iteration cap was hit
+ *   - done: {} — signals stream end
+ */
+
 const express   = require('express');
 const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -8,14 +59,19 @@ const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 
 /**
- * Creates the AI proxy router.
- * @param {Object} deps
- * @param {Function} deps.authenticateToken
- * @param {Object}   deps.db
- * @param {Function} deps.loadGcalTokens
- * @param {Function} deps.makeOAuth2Client
- * @param {Object}   deps.google
- * @returns {express.Router}
+ * Factory function that creates the AI router with all chat and proxy endpoints.
+ *
+ * @param {Object} deps - Injected dependencies.
+ * @param {Function} deps.authenticateToken - JWT auth middleware from server/middleware/auth.cjs.
+ * @param {Object} deps.db - Database helper module (db.cjs).
+ * @param {Function} deps.loadGcalTokens - Async function to load + decrypt GCal tokens for a user.
+ * @param {Function} deps.makeOAuth2Client - Factory for Google OAuth2 client.
+ * @param {Object} deps.google - googleapis module for GCal API calls.
+ * @returns {express.Router} Mounted by proxy-server.cjs.
+ *
+ * @note executeTool is imported from tools.cjs and bound with user context
+ * before being passed into agenticLoop. This module does not implement tool
+ * logic directly; it injects executeTool into agenticLoop and handles transport.
  */
 module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
@@ -23,9 +79,16 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
   // ── Claude proxy ────────────────────────────────────────────────────────────
 
   /**
-   * Claude proxy
-   * Body: { apiKey?: string, ...anthropicPayload }
+   * POST /api/claude — Thin proxy to the Anthropic Messages API.
+   * Body: { apiKey?: string, ...anthropicPayload }.
    * Falls back to CLAUDE_API_KEY env var if apiKey not in body.
+   *
+   * @note The apiKey check `!bodyKey.includes('****')` prevents the
+   * frontend from accidentally sending a masked key placeholder.
+   *
+   * @note Authenticated but thin pass-through proxy. Caller-side
+   * validation and rate limiting still matter — request bodies are
+   * forwarded largely unchanged to the upstream LLM API.
    */
   router.post('/api/claude', authenticateToken, async (req, res) => {
     const { apiKey: bodyKey, ...body } = req.body;
@@ -56,9 +119,13 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
   // ── Claude streaming proxy (SSE) ────────────────────────────────────────────
 
   /**
-   * Claude streaming proxy (SSE)
-   * Body: { apiKey?: string, ...anthropicPayload }
+   * POST /api/chat/stream — SSE streaming proxy to Claude.
+   * Body: { apiKey?: string, ...anthropicPayload }.
    * Falls back to CLAUDE_API_KEY env var if apiKey not in body.
+   *
+   * @note This endpoint does not inject Aria context, does not
+   * execute tools, and does not emit tool progress events.
+   * For Aria's agentic chat, use /api/chat/execute.
    */
   router.post('/api/chat/stream', authenticateToken, async (req, res) => {
     const { apiKey: bodyKey, ...body } = req.body;
@@ -100,9 +167,13 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
   // ── OpenAI proxy ────────────────────────────────────────────────────────────
 
   /**
-   * OpenAI proxy
-   * Body: { apiKey?: string, ...openaiPayload }
+   * POST /api/openai — Thin proxy to the OpenAI Chat Completions API.
+   * Body: { apiKey?: string, ...openaiPayload }.
    * Falls back to OPENAI_API_KEY env var if apiKey not in body.
+   *
+   * @note Authenticated but thin pass-through proxy. Caller-side
+   * validation and rate limiting still matter — request bodies are
+   * forwarded largely unchanged to the upstream LLM API.
    */
   router.post('/api/openai', authenticateToken, async (req, res) => {
     const { apiKey: bodyKey, ...body } = req.body;
@@ -131,6 +202,33 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
 
   // ── Chat Execute (server-side tool loop) ───────────────────────────────────
 
+  /**
+   * POST /api/chat/execute — Aria's agentic chat endpoint with SSE streaming.
+   *
+   * Flow: authenticate → load live context (tasks, notes, calendar, memories) →
+   * build system prompt → open SSE connection → run agentic loop with
+   * onProgress callback → stream tool events and final text → close.
+   *
+   * @note Context building loads the user's own tasks (never shared/entity tasks)
+   * to prevent cross-user data leaks when the user has broad entityIds
+   * (e.g. superadmin sees all entities). The empty array passed to
+   * getTasksForUser() disables entity-based task loading intentionally.
+   *
+   * @note The onProgress callback bridges agenticLoop to SSE: each tool_start,
+   * tool_complete, and tool_error event is forwarded to the browser in real time.
+   * This is what makes the Command Center show live "Creating task..." status
+   * updates. In contrast, whatsapp.cjs passes no onProgress — it waits for
+   * the full loop to complete before sending a single reply.
+   *
+   * @note SSE streaming pattern: headers are set and flushed before the agentic
+   * loop starts. If the loop throws, the error is written as an SSE event
+   * (not an HTTP error status) because headers have already been sent.
+   * The client must handle error events from the stream.
+   *
+   * @note The client is responsible for closing the EventSource
+   * when the 'done' event is received or when the component
+   * unmounts to prevent connection leaks.
+   */
   router.post('/api/chat/execute', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const entityIds = req.user.entityIds || [];
