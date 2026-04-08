@@ -309,6 +309,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [editingTask, setEditingTask]           = useState(null);
   const [completionNoteTaskId, setCompletionNoteTaskId] = useState(null);
   const [completionNoteDraft, setCompletionNoteDraft]   = useState('');
+  // Completed task history inline expansion
+  const [historyExpanded, setHistoryExpanded]           = useState(false);
+  const [historyTasks, setHistoryTasks]                 = useState([]);
+  const [historyLoading, setHistoryLoading]             = useState(false);
+  const [historyEntity, setHistoryEntity]               = useState('');
+  const [historyDateRange, setHistoryDateRange]         = useState('all');
+  const [historySearch, setHistorySearch]               = useState('');
   const [apiKeys, setApiKeys]                   = useState({ claude: '', openai: '' });
   const [emailSettings, setEmailSettings]       = useState({
     gmailUser: '',
@@ -811,6 +818,25 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     setCompletionNoteTaskId(null);
   }
 
+  const fetchCompletedHistory = useCallback(async (entityFilter, dateRangeFilter, searchFilter) => {
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({ completed: 'true', limit: '100' });
+      if (entityFilter) params.set('entity', entityFilter);
+      if (dateRangeFilter && dateRangeFilter !== 'all') params.set('dateRange', dateRangeFilter);
+      if (searchFilter) params.set('search', searchFilter);
+      const res = await apiFetch(`/api/tasks?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) setHistoryTasks(data);
+    } catch (err) {
+      console.error('[tasks] history fetch failed:', err.message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [authToken]);
+
   function deleteTask(id) {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   }
@@ -1208,7 +1234,20 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         <span className="material-symbols-outlined text-emerald-500 text-base">task_alt</span>
                         <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-slate-400">Completed Today</h2>
                         <div className="h-px flex-1 bg-surface-container-high" />
-                        <button className="text-[9px] font-bold text-on-surface-variant hover:text-primary transition-colors">Show all</button>
+                        <button
+                          onClick={() => {
+                            if (!historyExpanded) {
+                              setHistoryExpanded(true);
+                              setHistoryEntity('');
+                              setHistoryDateRange('all');
+                              setHistorySearch('');
+                              fetchCompletedHistory('', 'all', '');
+                            } else {
+                              setHistoryExpanded(false);
+                            }
+                          }}
+                          className="text-[9px] font-bold text-on-surface-variant hover:text-primary transition-colors"
+                        >{historyExpanded ? 'Show less' : 'Show all'}</button>
                       </div>
                       <div className="space-y-2">
                         {completedToday.map((t) => (
@@ -1243,6 +1282,93 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                           </div>
                         ))}
                       </div>
+                    </section>
+                  )}
+
+                  {/* COMPLETED HISTORY — inline expansion */}
+                  {historyExpanded && (
+                    <section className="opacity-70">
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="material-symbols-outlined text-on-surface-variant text-base">history</span>
+                        <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-on-surface-variant">Completed History</h2>
+                        <div className="h-px flex-1 bg-surface-container-high" />
+                        <span className="text-[9px] font-bold text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full">{historyTasks.length} task{historyTasks.length !== 1 ? 's' : ''}</span>
+                      </div>
+
+                      {/* Filters row */}
+                      <div className="flex flex-wrap items-center gap-2 mb-3">
+                        {/* Entity chips */}
+                        <button
+                          onClick={() => { setHistoryEntity(''); fetchCompletedHistory('', historyDateRange, historySearch); }}
+                          className={`px-3 py-1 rounded-full text-[9px] font-bold transition-all ${!historyEntity ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                        >All</button>
+                        {userEntities.map((entity) => (
+                          <button
+                            key={entity.id}
+                            onClick={() => { setHistoryEntity(entity.name); fetchCompletedHistory(entity.name, historyDateRange, historySearch); }}
+                            className={`px-3 py-1 rounded-full text-[9px] font-bold transition-all ${historyEntity === entity.name ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                          >{entity.name}</button>
+                        ))}
+
+                        <div className="h-4 w-px bg-outline-variant/30 mx-1" />
+
+                        {/* Date range toggle */}
+                        {['today', 'week', 'month', 'all'].map((range) => (
+                          <button
+                            key={range}
+                            onClick={() => { setHistoryDateRange(range); fetchCompletedHistory(historyEntity, range, historySearch); }}
+                            className={`px-3 py-1 rounded-full text-[9px] font-bold transition-all ${historyDateRange === range ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                          >{{ today: 'Today', week: 'This week', month: 'This month', all: 'All time' }[range]}</button>
+                        ))}
+                      </div>
+
+                      {/* Search bar */}
+                      <div className="relative mb-3">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50" style={{fontSize:"14px"}}>search</span>
+                        <input
+                          type="text"
+                          value={historySearch}
+                          onChange={(e) => {
+                            setHistorySearch(e.target.value);
+                            clearTimeout(window._historySearchTimer);
+                            window._historySearchTimer = setTimeout(() => fetchCompletedHistory(historyEntity, historyDateRange, e.target.value), 300);
+                          }}
+                          placeholder="Search completed tasks..."
+                          className="w-full pl-9 pr-3 py-2 text-xs bg-surface-container-lowest border border-surface-container-high rounded-xl text-on-background placeholder-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </div>
+
+                      {/* Results */}
+                      {historyLoading ? (
+                        <div className="flex items-center justify-center py-8">
+                          <div className="h-5 w-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                        </div>
+                      ) : historyTasks.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-8">
+                          <span className="material-symbols-outlined text-3xl text-on-surface-variant/30 mb-2">search_off</span>
+                          <p className="text-xs text-on-surface-variant/60">No completed tasks found</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {historyTasks.map((t) => (
+                            <div key={t.id} onClick={() => setEditingTask(t)} className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl cursor-pointer hover:bg-surface-container-low transition-colors group">
+                              <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
+                                <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-on-surface-variant line-through truncate">{t.title}</p>
+                                {t.completionNote && (
+                                  <p className="text-[10px] text-on-surface-variant/60 truncate italic mt-0.5">{t.completionNote}</p>
+                                )}
+                              </div>
+                              <span className="text-[9px] text-on-surface-variant font-medium flex-shrink-0">
+                                {t.completedAt ? new Date(t.completedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+                              </span>
+                              <span className="material-symbols-outlined text-on-surface-variant/30 group-hover:text-on-surface-variant text-base transition-colors flex-shrink-0">chevron_right</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </section>
                   )}
 
