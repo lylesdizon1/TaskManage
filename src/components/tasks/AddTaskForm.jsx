@@ -26,44 +26,30 @@ export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, a
 
   const runSuggestion = useCallback(
     async (title, desc) => {
-      console.log('[AI-Tags] runSuggestion called:', { title, desc, claudeKey: claudeKey ? '***set***' : '***MISSING***', entityNames: userEntityNames });
-      if (!claudeKey || !title.trim()) {
-        console.log('[AI-Tags] runSuggestion BAIL: claudeKey=%s title=%s', !!claudeKey, title);
-        return;
-      }
+      if (!claudeKey || !title.trim()) return;
       const callId = ++suggestionIdRef.current;
       setSuggesting(true);
       const suggested = await fetchSuggestedTags(title, desc, claudeKey, userEntityNames, authToken, apiFetch);
-      console.log('[AI-Tags] fetchSuggestedTags returned:', suggested, 'callId:', callId, 'current:', suggestionIdRef.current);
-      if (callId !== suggestionIdRef.current) {
-        console.log('[AI-Tags] STALE call discarded (callId=%d, current=%d)', callId, suggestionIdRef.current);
-        return;
-      }
+      if (callId !== suggestionIdRef.current) return; // stale — a newer call superseded this one
       setSuggesting(false);
       if (suggested.length > 0) {
-        console.log('[AI-Tags] setting aiSuggested:', suggested);
         setAiSuggested(suggested);
-        setForm((f) => {
-          const newTags = [...new Set([...f.tags, ...suggested])];
-          console.log('[AI-Tags] setForm tags: old=%o new=%o', f.tags, newTags);
-          return { ...f, tags: newTags };
-        });
-      } else {
-        console.log('[AI-Tags] no suggestions returned');
+        setForm((f) => ({
+          ...f,
+          tags: [...new Set([...f.tags, ...suggested])],
+        }));
       }
     },
     [claudeKey, userEntityNames, authToken], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   function scheduleOrRunSuggestion(title, desc) {
-    console.log('[AI-Tags] debounce scheduled for title:', title);
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => runSuggestion(title, desc), 600);
   }
 
   function handleTitleChange(e) {
     const val = e.target.value;
-    console.log('[AI-Tags] handleTitleChange:', val);
     setForm((f) => ({ ...f, title: val }));
     scheduleOrRunSuggestion(val, form.description);
   }
@@ -234,7 +220,6 @@ export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, a
                   const style = getEntityStyle(ent.color);
                   const isSelected = form.tags.includes(tag);
                   const isAiPick = aiSuggested.some((s) => s.toLowerCase() === tag.toLowerCase());
-                  if (aiSuggested.length > 0) console.log('[AI-Tags] render pill check:', { tag, isSelected, isAiPick, aiSuggested, formTags: form.tags });
                   return (
                     <button
                       key={tag}

@@ -606,7 +606,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   // Load settings once on mount
   useEffect(() => {
-    apiFetch('/api/settings')
+    apiFetch('/api/settings', { headers: { Authorization: `Bearer ${authToken}` } })
       .then((r) => r.json())
       .then((data) => {
         if (data.apiKeys)       setApiKeys(data.apiKeys);
@@ -620,7 +620,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         }
         if (data.envConfigured) setEnvConfigured(data.envConfigured);
       })
-      .catch(() => {})
+      .catch((err) => console.warn('[settings] failed to load:', err))
       .finally(() => { settingsLoadedRef.current = true; });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
