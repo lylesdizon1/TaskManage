@@ -260,7 +260,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
       const channels = { whatsapp: channel === 'whatsapp', slack: channel === 'slack', sms: false, email: channel === 'email' };
       const res = await apiFetch('/api/alerts/fire', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('tm_token')}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ message, channels, recipientEmail: emailSettings.recipientEmail }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

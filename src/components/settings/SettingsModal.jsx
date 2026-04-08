@@ -144,7 +144,7 @@ function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAle
       const ch = { whatsapp: channel === 'whatsapp', slack: channel === 'slack', sms: false, email: channel === 'email' };
       const res = await apiFetch('/api/alerts/fire', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('tm_token')}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ message, channels: ch, recipientEmail: emailSettings.recipientEmail }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
