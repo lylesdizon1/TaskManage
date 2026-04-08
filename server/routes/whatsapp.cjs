@@ -157,6 +157,12 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // Clean up expired entry
       if (pending) pendingCompletionNotes.delete(pendingKey);
 
+      // ── Entity candidate extraction ─────────────────────────────────────
+      // Pattern 1: "for [entity name]" anywhere in the message
+      const forMatch = msgBody.match(/\bfor\s+([A-Za-z0-9][A-Za-z0-9 &'.-]*[A-Za-z0-9])\s*[.!?]?\s*$/i)
+                    || msgBody.match(/\bfor\s+([A-Za-z0-9][A-Za-z0-9 &'.-]*[A-Za-z0-9])(?=\s+(?:by|on|due|before|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)/i);
+      let entityCandidate = forMatch ? forMatch[1].trim() : null;
+
       // ── Load full context (same pattern as /api/chat/execute) ───────────
       // Only load user's OWN tasks for AI context — never include shared/entity tasks
       // to prevent cross-user data leak (superadmin entityIds = all entities)
