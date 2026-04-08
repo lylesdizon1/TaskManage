@@ -26,6 +26,7 @@ async function authenticateToken(req, res, next) {
         if (ctx) {
           req.user.timezone = ctx.timezone || 'America/Los_Angeles';
           req.user.role = ctx.role || req.user.role;
+          req.user.entityIds = ctx.entityIds || [];
         }
       } catch {}
     }
