@@ -1,9 +1,9 @@
 # Dizon.ai — Phase Tracker
-Last updated: April 6, 2026
+Last updated: April 8, 2026
 
 ## Phase 0 — Feature Freeze
 - [x] Multi-channel alerts (WhatsApp/Slack/Email)
-- [x] App.jsx monolith extraction (1,499 lines)
+- [x] App.jsx monolith extraction (1,370 lines)
 - [x] Lazy loading (227kB bundle)
 - [x] Multi-user hardening (requireOwnership, upsertTask, GCal userId)
 - [x] CLAUDE.md + /docs structure
@@ -51,12 +51,23 @@ Last updated: April 6, 2026
 - [x] agent_tasks table
 - [x] agent_approvals table
 - [x] task_assignees table
+- [x] agent_memory table + logMemory() helper
 - [ ] oauth_tokens table
 - [ ] integration_config table
-- [ ] agent_memory table + logMemory() helper
 
 ## Phase 2 — Component Extraction
 App.jsx → component tree. Exit: wc -l App.jsx < 250.
+
+## Phase 2A — Server-Side Alerts + DND (Complete)
+- [x] Server-side alert scheduler (sole alert path)
+- [x] Client-side alert rules fully deprecated
+- [x] DND enforcement in SQL with AT TIME ZONE
+- [x] Alert cadence configuration (per-priority intervals)
+- [x] Command Center cache fixes
+
+## Phase 2B — Security Audit (Complete)
+- [x] Phase 2 criticals closed
+- [x] Phase 3 mediums/lows closed
 
 ## Phase 3 — Agent Foundation
 - [ ] logMemory() on all action handlers
@@ -71,12 +82,21 @@ App.jsx → component tree. Exit: wc -l App.jsx < 250.
 - [ ] Module system
 - [ ] Dashboard renders module array
 
-## Phase 5 — Multi-User
+## Phase 5 — Documentation + Quality (Complete)
+- [x] JSDoc documentation pass (all server/routes/, src/lib/, src/utils/)
+- [x] Entity dedup migration + case-insensitive UNIQUE index
+- [x] AI tag suggestion pipeline fix (auth header, case-insensitive matching)
+- [x] Settings fetch auth fix
 - [x] Invite-only registration
 - [x] Org hierarchy + super admin
 - [ ] Per-user OAuth verification
 - [ ] Onboard Zac + Liz
 
-## Phase 6 — Invite-Only Launch
+## Phase 6 — Feature Arc (Next)
+- [ ] Task completion notes
+- [ ] Entity tagging improvements
+- [ ] Image processing
+
+## Phase 7 — Invite-Only Launch
 - [ ] Staging environment
 - [ ] Free/Pro/BYOK tier logic
