@@ -183,8 +183,9 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       const tz = timeZone || 'America/Los_Angeles';
       const todayStr = getTodayLocal(tz);
       const todayDate = todayStr.split(', ')[1];
+      const currentTime = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date());
       const activeTasks = tasks.filter(t => !t.completed);
-      const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
+      const contextAppend = `\n\nCurrent time: ${currentTime} (${tz}). When setting due times, use the user's local timezone — NOT UTC.\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
         activeTasks.slice(0, 30).map(t =>
           `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
         ).join('; ') || 'none'

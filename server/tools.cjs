@@ -109,7 +109,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
             await db.scheduleTaskAlerts(userId, id, toolInput.title, toolInput.due_date, toolInput.due_time || null, toolInput.priority || 'medium');
           } catch (e) { console.error('[schedule] alert scheduling failed:', e.message); }
         }
-        return { success: true, task_id: id, title: toolInput.title };
+        return { success: true, task_id: id, title: toolInput.title, due_date: toolInput.due_date || null, due_time: toolInput.due_time || null, priority: toolInput.priority || 'medium' };
       }
 
       case 'complete_task': {
@@ -165,7 +165,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db) {
             }
           } catch (e) { console.error('[schedule] alert rescheduling failed:', e.message); }
         }
-        return { success: true, task_id: toolInput.task_id };
+        return { success: true, task_id: toolInput.task_id, title: fields.title || task.title, due_date: fields.dueDate ?? task.dueDate, due_time: fields.dueTime ?? task.dueTime, priority: fields.priority ?? task.priority };
       }
 
       case 'create_event': {
