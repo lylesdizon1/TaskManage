@@ -286,6 +286,188 @@ function EnvBadge() {
   );
 }
 
+const PRIORITY_META = {
+  high:     { label: 'High Priority',   color: 'bg-red-500',    lightBg: 'bg-red-50',    border: 'border-red-200',    text: 'text-red-700' },
+  medium:   { label: 'Medium Priority',  color: 'bg-amber-500',  lightBg: 'bg-amber-50',  border: 'border-amber-200',  text: 'text-amber-700' },
+  low:      { label: 'Low Priority',     color: 'bg-green-500',  lightBg: 'bg-green-50',  border: 'border-green-200',  text: 'text-green-700' },
+  floating: { label: 'Floating (No Due)', color: 'bg-gray-400',  lightBg: 'bg-gray-50',   border: 'border-gray-200',   text: 'text-gray-600' },
+};
+
+const CHANNEL_OPTIONS = [
+  { key: 'whatsapp', label: 'WhatsApp', color: 'bg-green-500' },
+  { key: 'email',    label: 'Email',    color: 'bg-orange-500' },
+  { key: 'slack',    label: 'Slack',    color: 'bg-purple-500' },
+];
+
+function AlertCadenceTab({ apiFetch, authToken }) {
+  const [configs, setConfigs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [addingOffset, setAddingOffset] = useState(null); // priority key or null
+  const [newMinutes, setNewMinutes] = useState('60');
+  const [newLabel, setNewLabel] = useState('');
+  const toast = useToast();
+
+  useEffect(() => {
+    apiFetch('/api/alerts/cadence', {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setConfigs(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveConfig(priority, updates) {
+    const cfg = configs.find((c) => c.priority === priority);
+    if (!cfg) return;
+    const body = { offsets: cfg.offsets, channels: cfg.channels, enabled: cfg.enabled, ...updates };
+    try {
+      const res = await apiFetch(`/api/alerts/cadence/${priority}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        if (Array.isArray(updated)) setConfigs(updated);
+      }
+    } catch {
+      toast.error('Failed to save cadence config');
+    }
+  }
+
+  function toggleEnabled(priority) {
+    const cfg = configs.find((c) => c.priority === priority);
+    if (!cfg) return;
+    const next = !cfg.enabled;
+    setConfigs((prev) => prev.map((c) => c.priority === priority ? { ...c, enabled: next } : c));
+    saveConfig(priority, { enabled: next });
+  }
+
+  function toggleChannel(priority, channel) {
+    const cfg = configs.find((c) => c.priority === priority);
+    if (!cfg) return;
+    const channels = cfg.channels.includes(channel)
+      ? cfg.channels.filter((c) => c !== channel)
+      : [...cfg.channels, channel];
+    setConfigs((prev) => prev.map((c) => c.priority === priority ? { ...c, channels } : c));
+    saveConfig(priority, { channels });
+  }
+
+  function removeOffset(priority, idx) {
+    const cfg = configs.find((c) => c.priority === priority);
+    if (!cfg) return;
+    const offsets = cfg.offsets.filter((_, i) => i !== idx);
+    setConfigs((prev) => prev.map((c) => c.priority === priority ? { ...c, offsets } : c));
+    saveConfig(priority, { offsets });
+  }
+
+  function addOffset(priority) {
+    const cfg = configs.find((c) => c.priority === priority);
+    if (!cfg) return;
+    const mins = parseInt(newMinutes, 10);
+    if (isNaN(mins) || mins < 0) return;
+    const label = newLabel.trim() || (mins === 0 ? 'At due time' : mins < 60 ? `${mins} min before` : mins < 1440 ? `${mins / 60}h before` : `${mins / 1440}d before`);
+    const offsets = [...cfg.offsets, { minutes_before: mins, label }];
+    setConfigs((prev) => prev.map((c) => c.priority === priority ? { ...c, offsets } : c));
+    saveConfig(priority, { offsets });
+    setAddingOffset(null);
+    setNewMinutes('60');
+    setNewLabel('');
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12 text-gray-400 text-sm">Loading cadence config...</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-700">Alert Cadence</h3>
+        <p className="text-xs text-gray-400 mt-0.5">Configure when Aria sends reminders based on task priority. Alerts fire automatically via the server-side scheduler.</p>
+      </div>
+
+      {['high', 'medium', 'low', 'floating'].map((priority) => {
+        const cfg = configs.find((c) => c.priority === priority);
+        if (!cfg) return null;
+        const meta = PRIORITY_META[priority];
+
+        return (
+          <div key={priority} className={`rounded-xl border transition-all ${cfg.enabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50/50'}`}>
+            <div className="flex items-center gap-3 px-4 py-3">
+              <button onClick={() => toggleEnabled(priority)} className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors ${cfg.enabled ? 'bg-indigo-600' : 'bg-gray-200'}`}>
+                <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${cfg.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+              </button>
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className={`w-2 h-2 rounded-full ${meta.color}`} />
+                <span className={`text-sm font-medium ${cfg.enabled ? 'text-gray-900' : 'text-gray-400'}`}>{meta.label}</span>
+              </div>
+            </div>
+
+            {cfg.enabled && (
+              <div className="px-4 pb-4 border-t border-gray-100 space-y-3">
+                {/* Channels */}
+                <div className="mt-2.5">
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Channels</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CHANNEL_OPTIONS.map(({ key, label, color }) => {
+                      const on = cfg.channels.includes(key);
+                      return (
+                        <button key={key} onClick={() => toggleChannel(priority, key)}
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${on ? `${color} text-white` : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}
+                        >{label}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Offset chips */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Reminder Timing</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {cfg.offsets.map((o, i) => (
+                      <span key={i} className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full ${meta.lightBg} ${meta.text} border ${meta.border}`}>
+                        {o.label || (o.minutes_before !== undefined ? `${o.minutes_before}min before` : `Day ${o.day_of_week} @ ${o.hour}:00`)}
+                        <button onClick={() => removeOffset(priority, i)} className="opacity-50 hover:opacity-100 ml-0.5">&times;</button>
+                      </span>
+                    ))}
+                    {addingOffset === priority ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min="0"
+                          value={newMinutes}
+                          onChange={(e) => setNewMinutes(e.target.value)}
+                          placeholder="Minutes"
+                          className="w-20 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={newLabel}
+                          onChange={(e) => setNewLabel(e.target.value)}
+                          placeholder="Label (optional)"
+                          onKeyDown={(e) => { if (e.key === 'Enter') addOffset(priority); }}
+                          className="w-32 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 outline-none"
+                        />
+                        <button onClick={() => addOffset(priority)} className="px-2 py-1 text-xs font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50">Add</button>
+                        <button onClick={() => setAddingOffset(null)} className="px-2 py-1 text-xs text-gray-400 hover:text-gray-600">&times;</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setAddingOffset(priority)} className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition-colors">
+                        + Add timing
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged, onUserUpdated, apiFetch, alertRules, onUpdateAlertRules, tasks, firedAlertsRef, envStatus, addToast: addToastProp, EntitySelectOptions }) {
   const [tab, setTab]               = useState('keys');
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
@@ -492,6 +674,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
             { key: 'assistant', label: 'AI Assistant' },
             { key: 'entities', label: 'Entities' },
             { key: 'password', label: 'Password' },
+            { key: 'cadence', label: 'Alert Cadence' },
             { key: 'gmail', label: 'Email Intelligence' },
           ].map(({ key, label }) => (
             <button
@@ -919,6 +1102,11 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                 {pwSaving ? 'Changing\u2026' : 'Change Password'}
               </button>
             </div>
+          )}
+
+          {/* Alert Cadence tab */}
+          {tab === 'cadence' && (
+            <AlertCadenceTab apiFetch={apiFetch} authToken={authToken} />
           )}
 
           {/* Email Intelligence tab */}
