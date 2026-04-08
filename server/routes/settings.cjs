@@ -8,7 +8,7 @@ const express = require('express');
  *   GET  /api/settings  — read merged env + DB settings (masked secrets)
  *   POST /api/settings  — write settings to DB
  */
-module.exports = function createSettingsRouter({ db }) {
+module.exports = function createSettingsRouter({ authenticateToken, db }) {
   const router = express.Router();
 
   function maskSecret(value) {
@@ -22,7 +22,7 @@ module.exports = function createSettingsRouter({ db }) {
    * masked values and an `envConfigured` map so the frontend knows which
    * fields to lock.
    */
-  router.get('/api/settings', async (_req, res) => {
+  router.get('/api/settings', authenticateToken, async (_req, res) => {
     try {
       const file = await db.getSettings();
 
@@ -68,7 +68,7 @@ module.exports = function createSettingsRouter({ db }) {
     }
   });
 
-  router.post('/api/settings', async (req, res) => {
+  router.post('/api/settings', authenticateToken, async (req, res) => {
     try {
       const current = await db.getSettings();
       const merged  = { ...current, ...req.body };

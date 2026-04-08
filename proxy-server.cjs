@@ -51,8 +51,8 @@ app.use('/', require('./server/routes/auth.cjs')({ authenticateToken, JWT_SECRET
 app.use('/', require('./server/routes/users.cjs')({ authenticateToken, requireAdmin, db }));
 app.use('/', require('./server/routes/entities.cjs')({ authenticateToken, requireAdmin, db }));
 app.use('/', require('./server/routes/ai.cjs')({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }));
-app.use('/', require('./server/routes/email.cjs')({}));
-app.use('/', require('./server/routes/settings.cjs')({ db }));
+app.use('/', require('./server/routes/email.cjs')({ authenticateToken }));
+app.use('/', require('./server/routes/settings.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/gcal.cjs')({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, google }));
 app.use('/', require('./server/routes/gmail.cjs')({ authenticateToken, db, makeGmailOAuth2Client, saveGmailTokens, loadGmailTokens, google }));
 app.use('/', require('./server/routes/inbox.cjs')({ authenticateToken, db }));

@@ -3,7 +3,7 @@
 const express = require('express');
 const { getResendClient, getFromEmail } = require('../utils/email.cjs');
 
-module.exports = function createEmailRouter({}) {
+module.exports = function createEmailRouter({ authenticateToken }) {
   const router = express.Router();
 
   /**
@@ -11,14 +11,13 @@ module.exports = function createEmailRouter({}) {
    * Sends a test email to verify Resend is working.
    * Body: { to? } — defaults to ALERT_RECIPIENT_EMAIL env var.
    */
-  router.post('/api/email/test', async (req, res) => {
-    console.log('[email/test] RESEND_API_KEY is set:', !!process.env.RESEND_API_KEY);
-    console.log('[email/test] RESEND_API_KEY length:', process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.length : 0);
+  router.post('/api/email/test', authenticateToken, async (req, res) => {
+    console.log('[email/test] email configured:', !!process.env.RESEND_API_KEY);
 
     const resend = getResendClient();
     if (!resend) {
-      console.log('[email/test] getResendClient() returned null - RESEND_API_KEY missing');
-      return res.status(400).json({ error: 'RESEND_API_KEY environment variable is not set' });
+      console.log('[email/test] email not configured');
+      return res.status(400).json({ error: 'Email sending is not configured' });
     }
 
     const to = req.body.to || req.body.recipientEmail || process.env.ALERT_RECIPIENT_EMAIL;
