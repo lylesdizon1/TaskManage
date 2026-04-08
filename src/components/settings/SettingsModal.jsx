@@ -314,15 +314,17 @@ function AlertCadenceTab({ apiFetch, authToken }) {
       headers: { Authorization: `Bearer ${authToken}` },
     })
       .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setConfigs(data);
-          if (data.length > 0 && data[0].dndStart) setDndStart(data[0].dndStart);
-          if (data.length > 0 && data[0].dndEnd) setDndEnd(data[0].dndEnd);
-        }
-      })
+      .then((data) => { if (Array.isArray(data)) setConfigs(data); })
       .catch(() => {})
       .finally(() => setLoading(false));
+    // Load DND from user preferences
+    apiFetch('/api/preferences', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((prefs) => {
+        if (prefs?.dndStart) setDndStart(prefs.dndStart);
+        if (prefs?.dndEnd) setDndEnd(prefs.dndEnd);
+      })
+      .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function saveConfig(priority, updates) {
@@ -346,15 +348,11 @@ function AlertCadenceTab({ apiFetch, authToken }) {
 
   async function saveDnd(start, end) {
     try {
-      const res = await apiFetch('/api/alerts/cadence/dnd', {
+      await apiFetch('/api/preferences/dnd', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ dndStart: start, dndEnd: end }),
       });
-      if (res.ok) {
-        const updated = await res.json();
-        if (Array.isArray(updated)) setConfigs(updated);
-      }
     } catch {
       toast.error('Failed to save quiet hours');
     }

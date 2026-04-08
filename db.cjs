@@ -402,8 +402,9 @@ async function initTables() {
     );
   `);
 
-  await pool.query(`ALTER TABLE alert_cadence_config ADD COLUMN IF NOT EXISTS dnd_start TIME DEFAULT '22:00'`);
-  await pool.query(`ALTER TABLE alert_cadence_config ADD COLUMN IF NOT EXISTS dnd_end TIME DEFAULT '07:00'`);
+  // DND quiet hours — user-level, not per-priority
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS dnd_start TIME DEFAULT '22:00'`);
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS dnd_end TIME DEFAULT '07:00'`);
 
   // ── fired_alerts table (server-side alert deduplication) ──
   await pool.query(`
@@ -1040,7 +1041,8 @@ async function getUserPreferences(userId) {
   const { rows } = await pool.query(
     `SELECT user_id AS "userId", theme, default_tag_filter AS "defaultTagFilter",
             default_status_filter AS "defaultStatusFilter",
-            notifications_enabled AS "notificationsEnabled", updated_at AS "updatedAt"
+            notifications_enabled AS "notificationsEnabled", updated_at AS "updatedAt",
+            dnd_start AS "dndStart", dnd_end AS "dndEnd"
      FROM user_preferences WHERE user_id = $1`,
     [userId],
   );
@@ -1834,8 +1836,7 @@ async function seedDefaultCadenceConfig(userId) {
 
 async function getCadenceConfigForUser(userId) {
   const { rows } = await pool.query(
-    `SELECT id, priority, offsets, channels, enabled, updated_at AS "updatedAt",
-            dnd_start AS "dndStart", dnd_end AS "dndEnd"
+    `SELECT id, priority, offsets, channels, enabled, updated_at AS "updatedAt"
      FROM alert_cadence_config WHERE user_id = $1 ORDER BY priority`,
     [userId]
   );
@@ -1852,10 +1853,11 @@ async function upsertCadenceConfig(userId, priority, offsets, channels, enabled)
   );
 }
 
-async function updateDndConfig(userId, dndStart, dndEnd) {
+async function updateDndPreferences(userId, dndStart, dndEnd) {
   await pool.query(
-    `UPDATE alert_cadence_config SET dnd_start = $2, dnd_end = $3, updated_at = NOW()
-     WHERE user_id = $1`,
+    `INSERT INTO user_preferences (user_id, dnd_start, dnd_end, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET dnd_start = $2, dnd_end = $3, updated_at = NOW()`,
     [userId, dndStart, dndEnd]
   );
 }
@@ -1962,51 +1964,30 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
 }
 
 async function getUnfiredAlerts() {
+  // Get current local time in user's timezone for DND check
+  const nowLocal = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date());
+
   const { rows } = await pool.query(
     `SELECT sa.id, sa.user_id, sa.task_id, sa.alert_key, sa.message, sa.channels, sa.fire_at,
             u.whatsapp_phone AS "whatsappPhone", u.email
      FROM scheduled_alerts sa
      JOIN users u ON u.id = sa.user_id
+     LEFT JOIN user_preferences up ON up.user_id = sa.user_id
      WHERE sa.fired = FALSE AND sa.fire_at <= NOW()
+       AND NOT (
+         CASE
+           WHEN COALESCE(up.dnd_start, '22:00') > COALESCE(up.dnd_end, '07:00')
+             THEN $1::time >= COALESCE(up.dnd_start, '22:00') OR $1::time < COALESCE(up.dnd_end, '07:00')
+           ELSE $1::time >= COALESCE(up.dnd_start, '22:00') AND $1::time < COALESCE(up.dnd_end, '07:00')
+         END
+       )
      ORDER BY sa.fire_at ASC
-     LIMIT 50`
+     LIMIT 50`,
+    [nowLocal]
   );
-  // Filter out alerts where user is currently in DND window
-  const filtered = [];
-  for (const alert of rows) {
-    try {
-      const dndRow = await pool.query(
-        `SELECT dnd_start, dnd_end FROM alert_cadence_config
-         WHERE user_id = $1 LIMIT 1`,
-        [alert.user_id]
-      );
-      if (dndRow.rows.length > 0) {
-        const { dnd_start, dnd_end } = dndRow.rows[0];
-        if (dnd_start && dnd_end) {
-          const tz = 'America/Los_Angeles';
-          const nowLocal = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
-          // Parse HH:MM to minutes since midnight for comparison
-          const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
-          const nowMin = toMin(nowLocal);
-          const startMin = toMin(dnd_start);
-          const endMin = toMin(dnd_end);
-          let inDnd = false;
-          if (startMin <= endMin) {
-            // Same-day window (e.g. 08:00–17:00)
-            inDnd = nowMin >= startMin && nowMin < endMin;
-          } else {
-            // Overnight window (e.g. 22:00–07:00) — spans midnight
-            inDnd = nowMin >= startMin || nowMin < endMin;
-          }
-          if (inDnd) continue; // skip this alert
-        }
-      }
-    } catch (e) {
-      console.error('[dnd] check failed for user', alert.user_id, e.message);
-    }
-    filtered.push(alert);
-  }
-  return filtered;
+  return rows;
 }
 
 async function markScheduledAlertFired(alertId) {
@@ -2129,7 +2110,7 @@ module.exports = {
   seedDefaultCadenceConfig,
   getCadenceConfigForUser,
   upsertCadenceConfig,
-  updateDndConfig,
+  updateDndPreferences,
   scheduleTaskAlerts,
   getUnfiredAlerts,
   markScheduledAlertFired,
