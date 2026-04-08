@@ -257,19 +257,6 @@ export function buildEmailHtml(ruleName, ruleDesc, tasks, tz) {
 </body></html>`;
 }
 
-/** POST to /api/email/send via the proxy (Resend). */
-export async function sendAlertEmail(apiFetch, emailSettings, to, subject, html) {
-  const res = await apiFetch('/api/email/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to, subject, html }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
-  return res.json();
-}
 
 export function persistFiredAlerts(firedRef) {
   try {
