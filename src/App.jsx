@@ -1454,94 +1454,136 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-base font-extrabold text-on-background font-headline">Edit Task</h2>
+              <h2 className="text-base font-extrabold text-on-background font-headline">{editingTask.completed ? 'Task Detail' : 'Edit Task'}</h2>
               <button onClick={() => setEditingTask(null)} className="text-on-surface-variant hover:text-on-background transition-colors">
                 <span className="material-symbols-outlined text-xl">close</span>
               </button>
             </div>
-            <div className="space-y-4">
-              <div>
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Title</label>
-                <input
-                  type="text"
-                  value={editingTask.title}
-                  onChange={(e) => setEditingTask((t) => ({ ...t, title: e.target.value }))}
-                  className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+            {editingTask.completed ? (
+              /* ── Completed task: read-only fields + editable outcome note ── */
+              <div className="space-y-4">
                 <div>
-                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Priority</label>
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Title</label>
+                  <p className="text-sm text-on-background font-medium line-through opacity-70 px-1">{editingTask.title}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Priority</label>
+                    <p className="text-sm text-on-background capitalize px-1">{editingTask.priority || 'medium'}</p>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Due Date</label>
+                    <p className="text-sm text-on-background px-1">{editingTask.dueDate || 'None'}</p>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Entity</label>
+                  <p className="text-sm text-on-background px-1">{editingTask.tags?.[0] || 'None'}</p>
+                </div>
+                {editingTask.description && (
+                  <div>
+                    <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Notes</label>
+                    <p className="text-sm text-on-surface-variant px-1 whitespace-pre-wrap">{editingTask.description}</p>
+                  </div>
+                )}
+                <div>
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Outcome Note</label>
+                  <textarea
+                    value={editingTask.completionNote || ''}
+                    onChange={(e) => setEditingTask((t) => ({ ...t, completionNote: e.target.value }))}
+                    onBlur={() => { if (editingTask.completionNote !== undefined) editTask(editingTask.id, { completionNote: editingTask.completionNote }); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editTask(editingTask.id, { completionNote: editingTask.completionNote }); e.target.blur(); } }}
+                    placeholder="How'd it go? (optional)"
+                    rows={2}
+                    className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                  />
+                </div>
+                {editingTask.completedAt && (
+                  <p className="text-[10px] text-on-surface-variant/50 px-1">Completed {new Date(editingTask.completedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
+                )}
+                <div className="pt-2">
+                  <button
+                    onClick={() => setEditingTask(null)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-surface-variant text-sm font-bold text-on-surface-variant hover:bg-surface-container transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ── Active task: editable form ── */
+              <div className="space-y-4">
+                <div>
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Title</label>
+                  <input
+                    type="text"
+                    value={editingTask.title}
+                    onChange={(e) => setEditingTask((t) => ({ ...t, title: e.target.value }))}
+                    className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Priority</label>
+                    <select
+                      value={editingTask.priority || 'medium'}
+                      onChange={(e) => setEditingTask((t) => ({ ...t, priority: e.target.value }))}
+                      className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    >
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Due Date</label>
+                    <input
+                      type="date"
+                      value={editingTask.dueDate || ''}
+                      onChange={(e) => setEditingTask((t) => ({ ...t, dueDate: e.target.value }))}
+                      className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Entity</label>
                   <select
-                    value={editingTask.priority || 'medium'}
-                    onChange={(e) => setEditingTask((t) => ({ ...t, priority: e.target.value }))}
+                    value={editingTask.tags?.[0] || ''}
+                    onChange={(e) => setEditingTask((t) => ({ ...t, tags: e.target.value ? [e.target.value] : [] }))}
                     className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
                   >
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
+                    <option value="">None</option>
+                    {(userEntities || []).map((ent) => (
+                      <option key={ent.id} value={ent.name}>{ent.name}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
-                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Due Date</label>
-                  <input
-                    type="date"
-                    value={editingTask.dueDate || ''}
-                    onChange={(e) => setEditingTask((t) => ({ ...t, dueDate: e.target.value }))}
-                    className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Notes</label>
+                  <textarea
+                    value={editingTask.description || ''}
+                    onChange={(e) => setEditingTask((t) => ({ ...t, description: e.target.value }))}
+                    placeholder="Add a note about this task (optional)"
+                    rows={2}
+                    className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
                   />
                 </div>
-              </div>
-              <div>
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Entity</label>
-                <select
-                  value={editingTask.tags?.[0] || ''}
-                  onChange={(e) => setEditingTask((t) => ({ ...t, tags: e.target.value ? [e.target.value] : [] }))}
-                  className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
-                >
-                  <option value="">None</option>
-                  {(userEntities || []).map((ent) => (
-                    <option key={ent.id} value={ent.name}>{ent.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Notes</label>
-                <textarea
-                  value={editingTask.description || ''}
-                  onChange={(e) => setEditingTask((t) => ({ ...t, description: e.target.value }))}
-                  placeholder="Add a note about this task (optional)"
-                  rows={2}
-                  className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
-                />
-              </div>
-              {editingTask.completed && (
-                <div>
-                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Outcome Note</label>
-                  <input
-                    type="text"
-                    value={editingTask.completionNote || ''}
-                    onChange={(e) => setEditingTask((t) => ({ ...t, completionNote: e.target.value }))}
-                    placeholder="How'd it go? (optional)"
-                    className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  />
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => setEditingTask(null)}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-surface-variant text-sm font-bold text-on-surface-variant hover:bg-surface-container transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => { editTask(editingTask.id, { title: editingTask.title, description: editingTask.description, priority: editingTask.priority, dueDate: editingTask.dueDate, tags: editingTask.tags }); setEditingTask(null); }}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-bold shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform"
+                  >
+                    Save
+                  </button>
                 </div>
-              )}
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={() => setEditingTask(null)}
-                  className="flex-1 px-4 py-2.5 rounded-xl border border-surface-variant text-sm font-bold text-on-surface-variant hover:bg-surface-container transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => { editTask(editingTask.id, { title: editingTask.title, description: editingTask.description, priority: editingTask.priority, dueDate: editingTask.dueDate, tags: editingTask.tags, completionNote: editingTask.completionNote }); setEditingTask(null); }}
-                  className="flex-1 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-bold shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform"
-                >
-                  Save
-                </button>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}
