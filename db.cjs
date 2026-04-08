@@ -847,10 +847,10 @@ async function setGmailConfigForUser(userId, config) {
 
 // ── Inbox items ───────────────────────────────────────────────────────────────
 
-async function getInboxItemsForUser(userId) {
+async function getInboxItemsForUser(userId, limit = 100, offset = 0) {
   const { rows } = await pool.query(
-    'SELECT * FROM inbox_items WHERE user_id = $1 ORDER BY created_at DESC',
-    [userId],
+    'SELECT * FROM inbox_items WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+    [userId, limit, offset],
   );
   return rows;
 }
