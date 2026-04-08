@@ -649,6 +649,14 @@ async function getEntitiesForUser(userId) {
  * enforced at the route layer — this helper assumes valid input.
  */
 async function createEntity({ id, name, color, createdBy, type, parentId, shared }) {
+  // Prevent case-insensitive duplicates at write-time (clear error before index rejection)
+  const { rows: existing } = await pool.query(
+    `SELECT id, name FROM entities WHERE LOWER(name) = LOWER($1)`,
+    [name],
+  );
+  if (existing.length > 0) {
+    throw new Error(`Entity "${existing[0].name}" already exists (case-insensitive match)`);
+  }
   const { rows } = await pool.query(
     `INSERT INTO entities (id, name, color, created_by, type, parent_id, shared)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -2194,6 +2202,35 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_user_id ON inbox_items(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_scheduled_alerts_user_id ON scheduled_alerts(user_id)`).catch(() => {});
+
+  // 11. Entity dedup: "Buyflip" → "BuyFlip" (canonical brand casing)
+  await pool.query(`
+    UPDATE tasks
+    SET tags = CASE
+      WHEN tags @> '["BuyFlip"]'::jsonb THEN tags - 'Buyflip'
+      ELSE (tags - 'Buyflip') || '["BuyFlip"]'::jsonb
+    END
+    WHERE tags @> '["Buyflip"]'::jsonb
+  `).catch(() => {});
+  await pool.query(`DELETE FROM entities WHERE id = 'entity-buyflip'`).catch(() => {});
+
+  // 12. Entity dedup: "kids" → "Kids" (canonical capitalized)
+  await pool.query(`
+    UPDATE entities SET name = 'Kids'
+    WHERE id = 'entity-1772647916865' AND LOWER(name) = 'kids'
+  `).catch(() => {});
+  await pool.query(`
+    UPDATE tasks
+    SET tags = CASE
+      WHEN tags @> '["Kids"]'::jsonb THEN tags - 'kids'
+      ELSE (tags - 'kids') || '["Kids"]'::jsonb
+    END
+    WHERE tags @> '["kids"]'::jsonb
+  `).catch(() => {});
+  await pool.query(`DELETE FROM entities WHERE id = 'entity-mnnstudn-60ux4a'`).catch(() => {});
+
+  // 13. Prevent future case-insensitive entity name duplicates
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_lower_name ON entities (LOWER(name))`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────

@@ -55,6 +55,9 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       return res.json(entity);
     } catch (err) {
       console.error('[entities] create failed:', err.message);
+      if (err.message.includes('already exists')) {
+        return res.status(409).json({ error: err.message });
+      }
       return res.status(500).json({ error: err.message });
     }
   });

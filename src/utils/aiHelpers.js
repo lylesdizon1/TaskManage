@@ -25,7 +25,9 @@ export async function fetchSuggestedTags(title, description, claudeKey, entityNa
     const match = text.match(/\[[\s\S]*?\]/);
     if (!match) return [];
     const parsed = JSON.parse(match[0]);
-    return parsed.filter((t) => entityNames.includes(t));
+    return parsed
+      .map((t) => entityNames.find((e) => e.toLowerCase() === t.toLowerCase()))
+      .filter(Boolean);
   } catch {
     return [];
   }
