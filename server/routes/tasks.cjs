@@ -33,8 +33,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
 
   router.put('/api/tasks/:id', authenticateToken, async (req, res) => {
     try {
-      const userTasks = await db.getTasksForUser(req.user.id, req.user.entityIds || []);
-      const task = userTasks.find(t => t.id === req.params.id);
+      const task = await db.getTaskById(req.params.id, req.user.id);
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
       const updated = await db.updateTask(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Task not found' });

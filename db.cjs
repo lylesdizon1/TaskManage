@@ -614,6 +614,19 @@ async function getTasks() {
   return rows;
 }
 
+async function getTaskById(taskId, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, title, description, priority, status, due_date AS "dueDate",
+            due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
+            google_event_id AS "googleEventId", created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM tasks
+     WHERE id = $1 AND owner = $2
+     LIMIT 1`,
+    [taskId, userId],
+  );
+  return rows[0] || null;
+}
+
 async function getTasksForUser(userId, userEntityIds) {
   // If no entity filter, fall back to simple owner/visibility check
   if (!userEntityIds || userEntityIds.length === 0) {
@@ -2040,6 +2053,7 @@ module.exports = {
   deleteEntity,
   seedEntitiesIfEmpty,
   getTasks,
+  getTaskById,
   getTasksForUser,
   replaceTasks,
   upsertTask,

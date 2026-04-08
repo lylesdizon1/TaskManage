@@ -113,12 +113,12 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       }
 
       case 'complete_task': {
-        // Only search user's own tasks — prevent cross-user mutation via shared entities
-        const tasks = await db.getTasksForUser(userId, []);
         let task = null;
         if (toolInput.task_id) {
-          task = tasks.find(t => t.id === toolInput.task_id);
+          task = await db.getTaskById(toolInput.task_id, userId);
         } else if (toolInput.title) {
+          // Title search requires loading all tasks for fuzzy matching
+          const tasks = await db.getTasksForUser(userId, []);
           const titleLower = toolInput.title.toLowerCase();
           const activeTasks = tasks.filter(t => !t.completed);
           // 1. Exact match (case-insensitive)
@@ -147,9 +147,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       }
 
       case 'update_task': {
-        // Only search user's own tasks — prevent cross-user mutation via shared entities
-        const tasks = await db.getTasksForUser(userId, []);
-        const task = tasks.find(t => t.id === toolInput.task_id);
+        const task = await db.getTaskById(toolInput.task_id, userId);
         if (!task) return { success: false, error: 'Task not found or access denied' };
         const fields = {};
         if (toolInput.title !== undefined) fields.title = toolInput.title;
