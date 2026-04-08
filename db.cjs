@@ -962,6 +962,19 @@ async function setGmailConfigForUser(userId, config) {
 
 // ── Inbox items ───────────────────────────────────────────────────────────────
 
+/**
+ * Return inbox items for a user, paginated and newest-first.
+ *
+ * @note Uses SELECT * which returns snake_case column names. Callers
+ * (inbox.cjs routes) are expected to handle the raw column format.
+ * Consider aliasing to camelCase for consistency with other helpers.
+ *
+ * @param {string} userId - User ID.
+ * @param {number} [limit=100] - Max rows to return.
+ * @param {number} [offset=0] - Rows to skip (for pagination).
+ * @returns {Promise<Array<Object>>} Inbox items ordered by created_at DESC.
+ * @throws {Error} If the database query fails.
+ */
 async function getInboxItemsForUser(userId, limit = 100, offset = 0) {
   const { rows } = await pool.query(
     'SELECT * FROM inbox_items WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
@@ -970,6 +983,27 @@ async function getInboxItemsForUser(userId, limit = 100, offset = 0) {
   return rows;
 }
 
+/**
+ * Insert a new inbox item. Used by Gmail sync and WhatsApp inbound
+ * processing to surface actionable messages in the user's inbox.
+ *
+ * @param {Object} item
+ * @param {string} item.id - Unique inbox item ID.
+ * @param {string} item.userId - Owner user ID.
+ * @param {string} item.type - Item type (e.g. 'email', 'whatsapp').
+ * @param {string} item.title - Display title.
+ * @param {string} item.summary - AI-generated summary.
+ * @param {string} item.source - Source system identifier.
+ * @param {string} item.sourceId - External ID for deduplication.
+ * @param {string} [item.gmailThreadId] - Gmail thread ID for linking.
+ * @param {string} [item.gmailLink] - Direct Gmail URL.
+ * @param {string} [item.sender] - Sender display name or address.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ *
+ * @note This helper does not enforce ownership beyond the passed
+ * userId/id values. Routes must scope access correctly before calling.
+ */
 async function createInboxItem(item) {
   await pool.query(
     `INSERT INTO inbox_items (id, user_id, type, title, summary, source, source_id, gmail_thread_id, gmail_link, sender, created_at)
@@ -978,6 +1012,16 @@ async function createInboxItem(item) {
   );
 }
 
+/**
+ * Check if an inbox item already exists for a given source ID.
+ * Used to deduplicate during Gmail sync — prevents re-importing
+ * the same email thread on every sync cycle.
+ *
+ * @param {string} userId - User ID.
+ * @param {string} sourceId - External source identifier.
+ * @returns {Promise<boolean>} True if an item with this sourceId exists.
+ * @throws {Error} If the database query fails.
+ */
 async function inboxItemExistsBySourceId(userId, sourceId) {
   const { rows } = await pool.query(
     'SELECT 1 FROM inbox_items WHERE user_id = $1 AND source_id = $2 LIMIT 1',
@@ -986,6 +1030,18 @@ async function inboxItemExistsBySourceId(userId, sourceId) {
   return rows.length > 0;
 }
 
+/**
+ * Record the action taken on an inbox item (e.g. 'archived', 'snoozed').
+ * Called from the inbox route when the user acts on an item.
+ *
+ * @note This helper does not enforce ownership beyond the passed
+ * userId/id values. Routes must scope access correctly before calling.
+ *
+ * @param {string} id - Inbox item ID.
+ * @param {string} action - Action label to store.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function updateInboxItemAction(id, action) {
   await pool.query(
     'UPDATE inbox_items SET action_taken = $2 WHERE id = $1',
@@ -993,14 +1049,39 @@ async function updateInboxItemAction(id, action) {
   );
 }
 
-// ── Notes (privacy-first: default private) ───────────────────────────────────
-
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Shared RETURNING clause for note queries. Aliased to camelCase so all
+ * note helpers return a consistent shape without per-query duplication.
+ * @type {string}
+ */
 const NOTE_RETURNING = `id, user_id AS "userId", title, content, visibility,
   type, pillar, category, subcategory, tags, pinned, archived, entity_id AS "entityId",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
+/**
+ * Return the main user-facing note list with optional filters,
+ * excluding digests — the primary note retrieval path, distinct
+ * from getPrivateNotesForAI() which is for internal AI context assembly.
+ *
+ * Builds a dynamic WHERE clause based on the filters provided. Digest
+ * notes (type='digest') are always excluded because they have their
+ * own retrieval path in the daily digest route.
+ *
+ * @note If no `archived` filter is specified, defaults to showing only
+ * non-archived notes. Pass `archived: true` explicitly to see archived.
+ *
+ * @param {string} userId - User ID.
+ * @param {Object} [filters={}] - Optional filters.
+ * @param {string} [filters.pillar] - Filter by life pillar.
+ * @param {string} [filters.entityId] - Filter by entity.
+ * @param {string} [filters.category] - Filter by category name.
+ * @param {boolean} [filters.pinned] - Filter pinned/unpinned.
+ * @param {boolean} [filters.archived] - Filter archived state.
+ * @returns {Promise<Array<Object>>} Notes ordered by pinned DESC, created_at DESC.
+ * @throws {Error} If the database query fails.
+ */
 async function getNotesForUser(userId, filters = {}) {
   const where = ['user_id = $1', "type != 'digest'"];
   const vals = [userId];
@@ -1018,6 +1099,14 @@ async function getNotesForUser(userId, filters = {}) {
   return rows;
 }
 
+/**
+ * Fetch a single note by ID, scoped to the owning user.
+ *
+ * @param {string} id - Note ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @returns {Promise<Object|null>} Note record or null.
+ * @throws {Error} If the database query fails.
+ */
 async function getNoteById(id, userId) {
   const { rows } = await pool.query(
     `SELECT ${NOTE_RETURNING} FROM notes WHERE id = $1 AND user_id = $2`,
@@ -1026,6 +1115,19 @@ async function getNoteById(id, userId) {
   return rows[0] || null;
 }
 
+/**
+ * Returns a minimal projection of the user's notes for AI context
+ * assembly. This is an internal context-building path, not a
+ * user-facing query path.
+ *
+ * @note Unlike getNotesForUser, this does NOT filter by visibility,
+ * type, or archived status — Aria needs the full picture to give
+ * context-aware responses.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<Array<Object>>} Notes with id, title, content, visibility, pillar, category.
+ * @throws {Error} If the database query fails.
+ */
 async function getPrivateNotesForAI(userId) {
   const { rows } = await pool.query(
     `SELECT id, title, content, visibility, pillar, category
@@ -1035,6 +1137,26 @@ async function getPrivateNotesForAI(userId) {
   return rows;
 }
 
+/**
+ * Create a new note. Default visibility is 'private' — notes are
+ * private-first by design. Used by the notes route, Aria's create_note
+ * tool, and the daily digest generator.
+ *
+ * @param {Object} note
+ * @param {string} note.id - Unique note ID.
+ * @param {string} note.userId - Owner user ID.
+ * @param {string} note.title - Note title.
+ * @param {string} note.content - Note body (markdown).
+ * @param {string} [note.visibility='private'] - 'private' or 'shared'.
+ * @param {string} [note.type='quick'] - Note type: 'quick', 'digest', etc.
+ * @param {string} [note.pillar] - Life pillar (hustle/home/grow/move).
+ * @param {string} [note.category] - Category name.
+ * @param {string} [note.subcategory] - Subcategory name.
+ * @param {string[]} [note.tags] - Tag array.
+ * @param {string} [note.entityId] - Associated entity ID.
+ * @returns {Promise<Object>} Created note record.
+ * @throws {Error} If the database query fails.
+ */
 async function createNote({ id, userId, title, content, visibility, type, pillar, category, subcategory, tags, entityId }) {
   const { rows } = await pool.query(
     `INSERT INTO notes (id, user_id, title, content, visibility, type, pillar, category, subcategory, tags, entity_id)
@@ -1047,6 +1169,19 @@ async function createNote({ id, userId, title, content, visibility, type, pillar
   return rows[0];
 }
 
+/**
+ * Partially update a note by ID, scoped to the owning user.
+ * Uses the same dynamic SET pattern as updateUser() — only fields
+ * present in the `fields` object are modified.
+ *
+ * @param {string} id - Note ID.
+ * @param {string} userId - Owner user ID (authorization scope in WHERE clause).
+ * @param {Object} fields - Partial note fields. Supported keys:
+ *   title, content, visibility, type, pillar, category, subcategory,
+ *   tags, pinned, archived, entityId.
+ * @returns {Promise<Object|null>} Updated note record or null.
+ * @throws {Error} If the database query fails.
+ */
 async function updateNote(id, userId, fields) {
   const sets = [];
   const vals = [id, userId];
@@ -1071,12 +1206,29 @@ async function updateNote(id, userId, fields) {
   return rows[0] || null;
 }
 
+/**
+ * Hard-delete a note by ID, scoped to the owning user.
+ * The WHERE clause includes user_id to prevent cross-user deletion.
+ *
+ * @param {string} id - Note ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function deleteNote(id, userId) {
   await pool.query('DELETE FROM notes WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
 // ── Note Images ──────────────────────────────────────────────────────────────
 
+/**
+ * Return all images attached to a note, scoped to the owning user.
+ *
+ * @param {string} noteId - Parent note ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @returns {Promise<Array<Object>>} Image records ordered by created_at ASC.
+ * @throws {Error} If the database query fails.
+ */
 async function getNoteImages(noteId, userId) {
   const { rows } = await pool.query(
     `SELECT id, note_id AS "noteId", user_id AS "userId", filename, original_name AS "originalName",
@@ -1087,6 +1239,22 @@ async function getNoteImages(noteId, userId) {
   return rows;
 }
 
+/**
+ * Attach an image record to a note. The actual file is stored externally
+ * (URL-referenced); this stores the metadata.
+ *
+ * @param {Object} img
+ * @param {string} img.id - Unique image ID.
+ * @param {string} img.noteId - Parent note ID.
+ * @param {string} img.userId - Owner user ID.
+ * @param {string} img.filename - Stored filename.
+ * @param {string} [img.originalName] - Original upload filename.
+ * @param {string} [img.mimeType] - MIME type.
+ * @param {number} [img.size] - File size in bytes.
+ * @param {string} img.url - Public URL to the stored file.
+ * @returns {Promise<Object>} Created image record.
+ * @throws {Error} If the database query fails.
+ */
 async function createNoteImage({ id, noteId, userId, filename, originalName, mimeType, size, url }) {
   const { rows } = await pool.query(
     `INSERT INTO note_images (id, note_id, user_id, filename, original_name, mime_type, size, url)
@@ -1098,6 +1266,15 @@ async function createNoteImage({ id, noteId, userId, filename, originalName, mim
   return rows[0];
 }
 
+/**
+ * Delete a note image record, scoped to the owning user.
+ * Returns the deleted row so the caller can clean up the external file.
+ *
+ * @param {string} id - Image record ID.
+ * @param {string} userId - Owner user ID (authorization scope).
+ * @returns {Promise<Object|null>} Deleted image record or null.
+ * @throws {Error} If the database query fails.
+ */
 async function deleteNoteImage(id, userId) {
   const { rows } = await pool.query(
     'DELETE FROM note_images WHERE id = $1 AND user_id = $2 RETURNING *',
@@ -1108,6 +1285,19 @@ async function deleteNoteImage(id, userId) {
 
 // ── Note Search ──────────────────────────────────────────────────────────────
 
+/**
+ * Search notes by title, content, or category using ILIKE.
+ * Excludes archived notes. Limited to 50 results to bound response size.
+ *
+ * @note Uses ILIKE with a leading wildcard (`%query%`), which cannot
+ * use a btree index. Acceptable at current scale but would need
+ * full-text search (tsvector) or trigram indexes if note volume grows.
+ *
+ * @param {string} userId - User ID.
+ * @param {string} query - Search string (case-insensitive partial match).
+ * @returns {Promise<Array<Object>>} Matching notes ordered by updated_at DESC.
+ * @throws {Error} If the database query fails.
+ */
 async function searchNotes(userId, query) {
   const q = `%${query}%`;
   const { rows } = await pool.query(
@@ -1122,6 +1312,14 @@ async function searchNotes(userId, query) {
 
 // ── Note Categories ───────────────────────────────────────────────────────────
 
+/**
+ * Return all note categories for a user, ordered by pillar then name.
+ * Categories form a two-level tree: pillar parents → topic children.
+ *
+ * @param {string} userId - User ID.
+ * @returns {Promise<Array<Object>>} Category records.
+ * @throws {Error} If the database query fails.
+ */
 async function getNoteCategories(userId) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", name, parent_id AS "parentId", pillar, color,
@@ -1132,6 +1330,24 @@ async function getNoteCategories(userId) {
   return rows;
 }
 
+/**
+ * Create a note category. Used by seedNoteCategoriesIfEmpty and
+ * could be exposed via a future category management UI.
+ *
+ * @note Uniqueness and duplicate prevention are handled by caller
+ * flow and seed logic — this helper does not guard against
+ * duplicate category names.
+ *
+ * @param {Object} cat
+ * @param {string} cat.id - Unique category ID.
+ * @param {string} cat.userId - Owner user ID.
+ * @param {string} cat.name - Category display name.
+ * @param {string} [cat.parentId] - Parent category ID (for tree nesting).
+ * @param {string} [cat.pillar] - Life pillar.
+ * @param {string} [cat.color] - Display color.
+ * @returns {Promise<Object>} Created category record.
+ * @throws {Error} If the database query fails.
+ */
 async function createNoteCategory({ id, userId, name, parentId, pillar, color }) {
   const { rows } = await pool.query(
     `INSERT INTO note_categories (id, user_id, name, parent_id, pillar, color)
@@ -1142,6 +1358,18 @@ async function createNoteCategory({ id, userId, name, parentId, pillar, color })
   return rows[0];
 }
 
+/**
+ * Seed default note categories for a new user if none exist.
+ * Creates the four-pillar tree structure (hustle/home/move/grow)
+ * with topic subcategories under each.
+ *
+ * @note Idempotent — checks for existing categories before seeding.
+ * Called during user onboarding flows.
+ *
+ * @param {string} userId - User ID to seed categories for.
+ * @returns {Promise<void>}
+ * @throws {Error} If any category creation fails.
+ */
 async function seedNoteCategoriesIfEmpty(userId) {
   const existing = await getNoteCategories(userId);
   if (existing.length > 0) return;
