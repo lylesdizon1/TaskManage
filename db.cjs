@@ -766,14 +766,6 @@ async function saveSettings(data) {
 
 // ── Google Calendar tokens ───────────────────────────────────────────────────
 
-async function getGcalTokens() {
-  const { rows } = await pool.query('SELECT user_id, tokens FROM gcal_tokens');
-  const result = {};
-  for (const r of rows) {
-    result[r.user_id] = r.tokens;
-  }
-  return result;
-}
 
 async function getGcalTokensForUser(userId) {
   const { rows } = await pool.query(
@@ -2058,7 +2050,6 @@ module.exports = {
   upsertTask,
   getSettings,
   saveSettings,
-  getGcalTokens,
   getGcalTokensForUser,
   setGcalTokensForUser,
   deleteGcalTokensForUser,
