@@ -79,6 +79,19 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
       if (!apiKey) return res.json({ brief: '' });
 
       const { assistantName, persona, userName, timeOfDay, data } = req.body;
+      const userId = req.user.id;
+
+      // Fetch fresh tasks from DB — never trust client-sent task data
+      const todayStr = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date());
+      const tasks = await db.getTasksForUser(userId, []);
+      const activeTasks = tasks.filter(t => !t.completed);
+      const overdue = activeTasks.filter(t => t.dueDate && t.dueDate < todayStr).map(t => t.title).join(', ') || 'None';
+      const highPriority = activeTasks.filter(t => t.priority === 'high').map(t => t.title).join(', ') || 'None';
+      const todayTasks = activeTasks.filter(t => t.dueDate === todayStr).map(t => t.title).join(', ') || 'None';
+      const notes = await db.getPrivateNotesForAI(userId);
 
       const personaTones = {
         executive_assistant: 'warm and professional',
@@ -92,7 +105,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
 
       const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-3 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. Only reference tasks, calendar events, and notes that are explicitly listed in the context below. Do not infer or reference activities from memory, business context, or profile information when summarizing the day. Sign off with just your name: — ${name}`;
 
-      const dataStr = `Overdue tasks: ${data.overdue || 'None'}\nHigh priority tasks: ${data.highPriority || 'None'}\nTasks due today: ${data.todayTasks || 'None'}\nToday's calendar events: ${data.events || 'None'}\nNotes this week: ${data.notesCount || 0}\nBusinesses: ${data.entities || 'None'}`;
+      const dataStr = `Overdue tasks: ${overdue}\nHigh priority tasks: ${highPriority}\nTasks due today: ${todayTasks}\nToday's calendar events: ${data?.events || 'None'}\nNotes this week: ${notes.length}\nBusinesses: ${data?.entities || 'None'}`;
 
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',

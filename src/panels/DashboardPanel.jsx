@@ -433,17 +433,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         }),
       });
       const { brief } = await briefRes.json();
-      if (brief) {
-        const now = new Date().toISOString();
-        await apiFetch(`/api/conversations/${ccConvId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
-        });
-        setCcMessages((prev) => [...prev, { role: 'assistant', content: brief, createdAt: now, ts: Date.now() }]);
-      }
+      const content = brief || 'Nothing new to report — you\'re all caught up!';
+      const now = new Date().toISOString();
+      await apiFetch(`/api/conversations/${ccConvId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ role: 'assistant', content, model: 'claude' }),
+      });
+      setCcMessages((prev) => [...prev, { role: 'assistant', content, createdAt: now, ts: Date.now() }]);
     } catch (err) {
       console.error('[CommandCenter] fresh update failed:', err);
+      setCcMessages((prev) => [...prev, { role: 'assistant', content: 'Couldn\'t fetch an update right now — try again in a moment.', createdAt: new Date().toISOString(), ts: Date.now() }]);
     } finally {
       setCcRefreshing(false);
     }
