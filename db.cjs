@@ -436,7 +436,7 @@ async function initTables() {
        ON CONFLICT (org_id, user_id) DO NOTHING`,
       ['org-dizon-household', 'user-lyle', 'admin', 'user-lyle']
     );
-    console.log('[seed] Created default org: Dizon Household');
+    console.log('[seed] Created default org');
   }
 
   console.log('[db] Tables initialised');
@@ -1030,7 +1030,7 @@ async function seedNoteCategoriesIfEmpty(userId) {
       await createNoteCategory({ id: childId, userId, name: child, parentId, pillar, color: '' });
     }
   }
-  console.log(`[db] Seeded default note categories for user ${userId}`);
+  console.log('[db] Seeded default note categories');
 }
 
 // ── User preferences ─────────────────────────────────────────────────────────
@@ -1364,14 +1364,14 @@ async function runMigrations() {
 
     if (needsUpdate) {
       await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames });
-      console.log('[db] Migration: set user-lyle as admin with all entities');
+      console.log('[db] Migration: set seed user as admin with all entities');
     }
   }
 
   // 3b. Promote lyle to superadmin (idempotent)
   if (lyle && lyle.role !== 'superadmin') {
     await updateUser('user-lyle', { role: 'superadmin' });
-    console.log('[db] Migration: promoted user-lyle to superadmin');
+    console.log('[db] Migration: promoted seed user to superadmin');
   }
 
   // 4. Legacy: only assign all entities to Lyle (superadmin)
