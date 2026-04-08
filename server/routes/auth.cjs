@@ -64,6 +64,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
           email: user.email || '',
           role: user.role || 'member',
           entityIds: user.entityIds || [],
+          timezone: user.timezone || 'America/Los_Angeles',
         },
       });
     } catch (err) {
@@ -199,7 +200,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
 
       return res.json({
         token: jwtToken,
-        user: { id, username, displayName: displayName || username, email: invite.email, role: invite.role, entityIds: [] },
+        user: { id, username, displayName: displayName || username, email: invite.email, role: invite.role, entityIds: [], timezone: 'America/Los_Angeles' },
       });
     } catch (err) {
       console.error('[auth] register failed:', err.message);

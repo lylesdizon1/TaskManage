@@ -37,6 +37,7 @@ async function initTables() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_household TEXT DEFAULT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_location TEXT DEFAULT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_notes TEXT DEFAULT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'America/Los_Angeles'`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entities (
@@ -446,7 +447,7 @@ async function initTables() {
 async function getUsers() {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
-            email, role, entity_ids AS "entityIds", active, created_at AS "createdAt"
+            email, role, entity_ids AS "entityIds", active, created_at AS "createdAt", timezone
      FROM users ORDER BY created_at ASC`,
   );
   return rows;
@@ -484,6 +485,7 @@ async function updateUser(id, fields) {
   if (fields.profileHousehold !== undefined) { sets.push(`profile_household = $${idx++}`); vals.push(fields.profileHousehold); }
   if (fields.profileLocation !== undefined) { sets.push(`profile_location = $${idx++}`); vals.push(fields.profileLocation); }
   if (fields.profileNotes !== undefined) { sets.push(`profile_notes = $${idx++}`); vals.push(fields.profileNotes); }
+  if (fields.timezone !== undefined) { sets.push(`timezone = $${idx++}`); vals.push(fields.timezone); }
 
   if (sets.length === 0) return null;
 
@@ -494,7 +496,7 @@ async function updateUser(id, fields) {
                persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
                profile_name AS "profileName", profile_businesses AS "profileBusinesses",
                profile_household AS "profileHousehold", profile_location AS "profileLocation",
-               profile_notes AS "profileNotes"`,
+               profile_notes AS "profileNotes", timezone`,
     vals,
   );
   return rows[0] || null;
@@ -1249,6 +1251,14 @@ async function updateTask(id, fields) {
 
 // ── Password update ──────────────────────────────────────────────────────────
 
+async function getUserAuthContext(id) {
+  const { rows } = await pool.query(
+    `SELECT id, timezone, role FROM users WHERE id = $1`,
+    [id],
+  );
+  return rows[0] || null;
+}
+
 async function getUserById(id) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
@@ -1256,7 +1266,7 @@ async function getUserById(id) {
             persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
             profile_name AS "profileName", profile_businesses AS "profileBusinesses",
             profile_household AS "profileHousehold", profile_location AS "profileLocation",
-            profile_notes AS "profileNotes"
+            profile_notes AS "profileNotes", timezone
      FROM users WHERE id = $1`,
     [id],
   );
@@ -1270,7 +1280,7 @@ async function getUserByWhatsAppPhone(normalizedPhone) {
             persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
             profile_name AS "profileName", profile_businesses AS "profileBusinesses",
             profile_household AS "profileHousehold", profile_location AS "profileLocation",
-            profile_notes AS "profileNotes"
+            profile_notes AS "profileNotes", timezone
      FROM users WHERE REGEXP_REPLACE(whatsapp_phone, '[^0-9]', '', 'g') = $1`,
     [normalizedPhone],
   );
@@ -2068,6 +2078,7 @@ module.exports = {
   addConversationMessage,
   getOrCreateCommandCenterConversation,
   updateTask,
+  getUserAuthContext,
   getUserById,
   updateUserPassword,
   seedUsersIfEmpty,
