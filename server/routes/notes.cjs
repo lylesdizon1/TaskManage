@@ -59,7 +59,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       if (existing && forceRegen) await db.deleteNote(existing.id, req.user.id);
 
       // Gather context for the AI
-      const tasks = await db.getTasks(req.user.id);
+      const tasks = await db.getTasksForUser(req.user.id, req.user.entityIds || []);
       const activeTasks = (Array.isArray(tasks) ? tasks : []).filter((t) => !t.completed);
       const recentNotes = notes.slice(0, 10);
 

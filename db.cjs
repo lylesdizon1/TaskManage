@@ -604,15 +604,6 @@ async function seedEntitiesIfEmpty() {
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
 
-async function getTasks() {
-  const { rows } = await pool.query(
-    `SELECT id, title, description, priority, status, due_date AS "dueDate",
-            tags, visibility, completed, owner, created_by AS "createdBy",
-            created_at AS "createdAt", updated_at AS "updatedAt"
-     FROM tasks ORDER BY created_at DESC`,
-  );
-  return rows;
-}
 
 async function getTaskById(taskId, userId) {
   const { rows } = await pool.query(
@@ -2057,7 +2048,6 @@ module.exports = {
   updateEntity,
   deleteEntity,
   seedEntitiesIfEmpty,
-  getTasks,
   getTaskById,
   getTasksForUser,
   replaceTasks,
