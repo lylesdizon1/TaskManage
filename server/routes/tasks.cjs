@@ -7,8 +7,66 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
 
   router.get('/api/tasks', authenticateToken, async (req, res) => {
     try {
-      const tasks = await db.getTasksForUser(req.user.id, req.user.entityIds || []);
-      return res.json(tasks);
+      const { completed, entity, dateRange, search, limit } = req.query;
+
+      // Default path: return all tasks (existing behavior)
+      if (completed === undefined && !entity && !dateRange && !search) {
+        const tasks = await db.getTasksForUser(req.user.id, req.user.entityIds || []);
+        return res.json(tasks);
+      }
+
+      // Filtered path: build dynamic query
+      const conditions = ['owner = $1'];
+      const params = [req.user.id];
+      let paramIdx = 2;
+
+      if (completed === 'true') {
+        conditions.push('completed = true');
+      } else if (completed === 'false') {
+        conditions.push('completed = false');
+      }
+
+      if (entity) {
+        conditions.push(`tags @> $${paramIdx}::jsonb`);
+        params.push(JSON.stringify([entity]));
+        paramIdx++;
+      }
+
+      if (dateRange && dateRange !== 'all') {
+        const tz = req.user.timezone || 'America/Los_Angeles';
+        if (dateRange === 'today') {
+          conditions.push(`completed_at >= (NOW() AT TIME ZONE $${paramIdx})::date`);
+          params.push(tz);
+          paramIdx++;
+        } else if (dateRange === 'week') {
+          conditions.push(`completed_at >= (NOW() AT TIME ZONE $${paramIdx})::date - INTERVAL '7 days'`);
+          params.push(tz);
+          paramIdx++;
+        } else if (dateRange === 'month') {
+          conditions.push(`completed_at >= (NOW() AT TIME ZONE $${paramIdx})::date - INTERVAL '30 days'`);
+          params.push(tz);
+          paramIdx++;
+        }
+      }
+
+      if (search) {
+        conditions.push(`(title ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR completion_note ILIKE $${paramIdx})`);
+        params.push(`%${search}%`);
+        paramIdx++;
+      }
+
+      const maxRows = Math.min(parseInt(limit, 10) || 100, 500);
+
+      const sql = `SELECT id, title, description, priority, status, due_date AS "dueDate",
+              due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
+              google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM tasks
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY completed_at DESC NULLS LAST, created_at DESC
+       LIMIT ${maxRows}`;
+
+      const { rows } = await db.pool.query(sql, params);
+      return res.json(rows);
     } catch (err) {
       console.error('[tasks] read failed:', err.message);
       return res.json([]);
