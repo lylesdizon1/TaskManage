@@ -324,8 +324,20 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz);
 
+      // Build user message — text-only or multipart (image + text) for vision
+      let userMessageContent;
+      if (imageData) {
+        const contentParts = [
+          { type: 'image', source: { type: 'base64', media_type: imageData.mimeType, data: imageData.data } },
+          { type: 'text', text: msgBody || 'What is this?' },
+        ];
+        userMessageContent = contentParts;
+      } else {
+        userMessageContent = msgBody;
+      }
+
       const { text, toolSummaries } = await runAgenticLoop({
-        messages: [{ role: 'user', content: msgBody }],
+        messages: [{ role: 'user', content: userMessageContent }],
         system: systemPrompt,
         tools: ARIA_TOOLS,
         userId,
