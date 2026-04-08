@@ -242,6 +242,22 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     }
   });
 
+  router.put('/api/alerts/cadence/dnd', authenticateToken, async (req, res) => {
+    try {
+      const { dndStart, dndEnd } = req.body;
+      const timeRe = /^\d{2}:\d{2}$/;
+      if (!timeRe.test(dndStart) || !timeRe.test(dndEnd)) {
+        return res.status(400).json({ error: 'dndStart and dndEnd must be HH:MM format' });
+      }
+      await db.updateDndConfig(req.user.id, dndStart, dndEnd);
+      const configs = await db.getCadenceConfigForUser(req.user.id);
+      return res.json(configs);
+    } catch (err) {
+      console.error('[alerts/cadence/dnd] PUT failed:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   router.put('/api/alerts/cadence/:priority', authenticateToken, async (req, res) => {
     try {
       const { priority } = req.params;

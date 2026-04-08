@@ -305,6 +305,8 @@ function AlertCadenceTab({ apiFetch, authToken }) {
   const [addingOffset, setAddingOffset] = useState(null); // priority key or null
   const [newMinutes, setNewMinutes] = useState('60');
   const [newLabel, setNewLabel] = useState('');
+  const [dndStart, setDndStart] = useState('22:00');
+  const [dndEnd, setDndEnd] = useState('07:00');
   const toast = useToast();
 
   useEffect(() => {
@@ -312,7 +314,13 @@ function AlertCadenceTab({ apiFetch, authToken }) {
       headers: { Authorization: `Bearer ${authToken}` },
     })
       .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setConfigs(data); })
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setConfigs(data);
+          if (data.length > 0 && data[0].dndStart) setDndStart(data[0].dndStart);
+          if (data.length > 0 && data[0].dndEnd) setDndEnd(data[0].dndEnd);
+        }
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -333,6 +341,22 @@ function AlertCadenceTab({ apiFetch, authToken }) {
       }
     } catch {
       toast.error('Failed to save cadence config');
+    }
+  }
+
+  async function saveDnd(start, end) {
+    try {
+      const res = await apiFetch('/api/alerts/cadence/dnd', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ dndStart: start, dndEnd: end }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        if (Array.isArray(updated)) setConfigs(updated);
+      }
+    } catch {
+      toast.error('Failed to save quiet hours');
     }
   }
 
@@ -385,6 +409,31 @@ function AlertCadenceTab({ apiFetch, authToken }) {
       <div>
         <h3 className="text-sm font-semibold text-gray-700">Alert Cadence</h3>
         <p className="text-xs text-gray-400 mt-0.5">Configure when Aria sends reminders based on task priority. Alerts fire automatically via the server-side scheduler.</p>
+      </div>
+
+      {/* Quiet Hours / DND */}
+      <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="material-symbols-outlined text-base text-gray-400">do_not_disturb_on</span>
+          <span className="text-sm font-medium text-gray-900">Quiet Hours</span>
+        </div>
+        <p className="text-xs text-gray-400 mb-2.5">No alerts will fire during this window. Applies to all priorities.</p>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-gray-500">From</span>
+          <input
+            type="time"
+            value={dndStart}
+            onChange={(e) => { setDndStart(e.target.value); saveDnd(e.target.value, dndEnd); }}
+            className="px-2 py-1 border border-gray-200 rounded-lg text-sm focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 outline-none"
+          />
+          <span className="text-gray-500">to</span>
+          <input
+            type="time"
+            value={dndEnd}
+            onChange={(e) => { setDndEnd(e.target.value); saveDnd(dndStart, e.target.value); }}
+            className="px-2 py-1 border border-gray-200 rounded-lg text-sm focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 outline-none"
+          />
+        </div>
       </div>
 
       {['high', 'medium', 'low', 'floating'].map((priority) => {

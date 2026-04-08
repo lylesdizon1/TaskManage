@@ -402,6 +402,9 @@ async function initTables() {
     );
   `);
 
+  await pool.query(`ALTER TABLE alert_cadence_config ADD COLUMN IF NOT EXISTS dnd_start TIME DEFAULT '22:00'`);
+  await pool.query(`ALTER TABLE alert_cadence_config ADD COLUMN IF NOT EXISTS dnd_end TIME DEFAULT '07:00'`);
+
   // ── fired_alerts table (server-side alert deduplication) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fired_alerts (
@@ -1831,7 +1834,8 @@ async function seedDefaultCadenceConfig(userId) {
 
 async function getCadenceConfigForUser(userId) {
   const { rows } = await pool.query(
-    `SELECT id, priority, offsets, channels, enabled, updated_at AS "updatedAt"
+    `SELECT id, priority, offsets, channels, enabled, updated_at AS "updatedAt",
+            dnd_start AS "dndStart", dnd_end AS "dndEnd"
      FROM alert_cadence_config WHERE user_id = $1 ORDER BY priority`,
     [userId]
   );
@@ -1845,6 +1849,14 @@ async function upsertCadenceConfig(userId, priority, offsets, channels, enabled)
      ON CONFLICT (user_id, priority) DO UPDATE SET
        offsets = $3, channels = $4, enabled = $5, updated_at = NOW()`,
     [userId, priority, JSON.stringify(offsets), JSON.stringify(channels), enabled]
+  );
+}
+
+async function updateDndConfig(userId, dndStart, dndEnd) {
+  await pool.query(
+    `UPDATE alert_cadence_config SET dnd_start = $2, dnd_end = $3, updated_at = NOW()
+     WHERE user_id = $1`,
+    [userId, dndStart, dndEnd]
   );
 }
 
@@ -1959,7 +1971,42 @@ async function getUnfiredAlerts() {
      ORDER BY sa.fire_at ASC
      LIMIT 50`
   );
-  return rows;
+  // Filter out alerts where user is currently in DND window
+  const filtered = [];
+  for (const alert of rows) {
+    try {
+      const dndRow = await pool.query(
+        `SELECT dnd_start, dnd_end FROM alert_cadence_config
+         WHERE user_id = $1 LIMIT 1`,
+        [alert.user_id]
+      );
+      if (dndRow.rows.length > 0) {
+        const { dnd_start, dnd_end } = dndRow.rows[0];
+        if (dnd_start && dnd_end) {
+          const tz = 'America/Los_Angeles';
+          const nowLocal = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+          // Parse HH:MM to minutes since midnight for comparison
+          const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+          const nowMin = toMin(nowLocal);
+          const startMin = toMin(dnd_start);
+          const endMin = toMin(dnd_end);
+          let inDnd = false;
+          if (startMin <= endMin) {
+            // Same-day window (e.g. 08:00–17:00)
+            inDnd = nowMin >= startMin && nowMin < endMin;
+          } else {
+            // Overnight window (e.g. 22:00–07:00) — spans midnight
+            inDnd = nowMin >= startMin || nowMin < endMin;
+          }
+          if (inDnd) continue; // skip this alert
+        }
+      }
+    } catch (e) {
+      console.error('[dnd] check failed for user', alert.user_id, e.message);
+    }
+    filtered.push(alert);
+  }
+  return filtered;
 }
 
 async function markScheduledAlertFired(alertId) {
@@ -2082,6 +2129,7 @@ module.exports = {
   seedDefaultCadenceConfig,
   getCadenceConfigForUser,
   upsertCadenceConfig,
+  updateDndConfig,
   scheduleTaskAlerts,
   getUnfiredAlerts,
   markScheduledAlertFired,
