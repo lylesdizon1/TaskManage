@@ -112,7 +112,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // Extract text body and media URL (if any)
       const msgBody = data.body || '';
       const fromRaw = data.from;
-      const mediaUrl = data.media || null;
+      const mediaUrl = data.media || data.image || data.mediaUrl || req.body?.message?.mediaUrl || null;
       if (!fromRaw) return res.json({ ok: true, skipped: 'missing sender' });
       if (!msgBody && !mediaUrl) return res.json({ ok: true, skipped: 'empty message' });
 
