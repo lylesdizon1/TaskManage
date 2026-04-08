@@ -14,7 +14,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [summaryLoading, setSummaryLoading] = useState(true);
   const toast = useToast();
 
-  const today = getTodayLocal();
+  const userTZ = currentUser?.timezone || 'America/Los_Angeles';
+  const today = getTodayLocal(userTZ);
   const tasksReady = tasks.length > 0 || tasks._loaded;
 
   // Clear stale date-keyed caches on mount
@@ -26,11 +27,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     });
   }, [today]);
 
-  // Greeting
-  const hour = new Date().getHours();
+  // Greeting — use profile timezone
+  const hour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: userTZ, hour: 'numeric', hour12: false }).format(new Date()), 10);
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const firstName = currentUser?.displayName?.split(' ')[0] || currentUser?.username || '';
-  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: userTZ });
 
   // Task computations
   const activeTasks = useMemo(() => tasks.filter((t) => !t.completed), [tasks]);
@@ -69,22 +70,21 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // Fetch calendar events for today
   useEffect(() => {
     if (!currentUser?.id) return;
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}`, {
+    apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}`, {
       headers: { Authorization: `Bearer ${authToken}` },
     })
       .then((r) => r.json())
       .then((data) => {
         if (!Array.isArray(data)) return;
         // Client-side safety filter: only keep events that overlap with today in user's local timezone
-        const todayLocal = getTodayLocal();
+        const todayLocal = getTodayLocal(userTZ);
         const filtered = data.filter((ev) => {
           if (ev.allDay) {
             // All-day events use date strings (YYYY-MM-DD)
             return ev.start === todayLocal || ev.end === todayLocal || (ev.start <= todayLocal && ev.end > todayLocal);
           }
           // Timed events: check if start date in local time matches today
-          const startLocal = new Date(ev.start).toLocaleDateString('en-CA'); // YYYY-MM-DD format
+          const startLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ev.start));
           return startLocal === todayLocal;
         });
         setCalendarEvents(filtered);
@@ -169,7 +169,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, [today, allDataReady, calendarEvents.length, overdueTasks.length, todayTasks.length, highPriorityTasks.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Command Center state ──────────────────────────────────────────────────
-  const ccStorageKey = `cc_messages_${getTodayLocal()}`;
+  const ccStorageKey = `cc_messages_${getTodayLocal(userTZ)}`;
   const [ccMessages, setCcMessages] = useState(() => {
     try {
       const cached = localStorage.getItem(ccStorageKey);
@@ -219,7 +219,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
       // Build full context system prompt
       const aName = currentUser?.assistantName || 'Aria';
-      const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents);
+      const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents, currentUser?.timezone);
       const sysPrompt = `You are ${aName}, ${firstName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything asked: advice, research, cooking, ideas, business, personal, anything. You also have action tools available to create tasks, notes, and calendar events. Use your tools when the user is asking you to take an action. For everything else, just respond naturally and conversationally. Be warm, direct, and concise. No sign-off.\n\n${fullContext}`;
 
       // Stream Aria's narration
@@ -230,7 +230,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           model: 'claude-sonnet-4-20250514',
           systemPrompt: sysPrompt,
           messages: [{ role: 'user', content: ariaPrompt }],
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles',
+          timeZone: userTZ,
         }),
       });
 
@@ -320,7 +320,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       }
 
       // Step 3: no messages — generate brief first
-      const h = new Date().getHours();
+      const h = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: userTZ, hour: 'numeric', hour12: false }).format(new Date()), 10);
       const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
       const aName = currentUser?.assistantName || 'Aria';
       const briefRes = await apiFetch('/api/dashboard/aria-brief', {
@@ -409,7 +409,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (!ccConvId || ccRefreshing) return;
     setCcRefreshing(true);
     try {
-      const h = new Date().getHours();
+      const h = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: userTZ, hour: 'numeric', hour12: false }).format(new Date()), 10);
       const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
       const aName = currentUser?.assistantName || 'Aria';
       const briefRes = await apiFetch('/api/dashboard/aria-brief', {
@@ -515,7 +515,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           model: 'claude-sonnet-4-20250514',
           systemPrompt: sysPrompt,
           messages: recentMsgs,
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles',
+          timeZone: userTZ,
         }),
       });
 
@@ -656,7 +656,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   // Performance stats (30 day window)
   const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().slice(0,10);
+  const thirtyDaysAgoStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(thirtyDaysAgo);
   const recentTasks = tasks.filter((t) => !t.dueDate || t.dueDate >= thirtyDaysAgoStr);
   const completedOnTime = recentTasks.filter((t) => t.completed && t.completedAt && t.dueDate && t.completedAt.slice(0,10) <= t.dueDate).length;
   const completedLate = recentTasks.filter((t) => t.completed && t.completedAt && t.dueDate && t.completedAt.slice(0,10) > t.dueDate).length;

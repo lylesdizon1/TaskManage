@@ -10,9 +10,10 @@ export default function InboxPanel({ tasks, authToken, currentUser, onToggleTask
   const [openMenuId, setOpenMenuId] = useState(null);
   const toast = useToast();
 
-  const today = getTodayLocal();
+  const userTZ = currentUser?.timezone || 'America/Los_Angeles';
+  const today = getTodayLocal(userTZ);
   const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  const cutoff = sevenDaysAgo.toISOString().slice(0, 10);
+  const cutoff = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(sevenDaysAgo);
 
   const activeTasks = tasks.filter((t) => !t.completed);
 

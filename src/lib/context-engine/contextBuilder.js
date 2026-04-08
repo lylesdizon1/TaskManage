@@ -2,12 +2,14 @@
 
 const DEFAULT_SYSTEM_PROMPT = `You are Aria, the AI core of Dizon.ai — a Life OS for high performers.`;
 
-export function buildContextPayload(slices, intent, personaSystemPrompt) {
+export function buildContextPayload(slices, intent, personaSystemPrompt, userTZ) {
   const parts = [];
 
   const systemPrompt = personaSystemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   parts.push(systemPrompt);
-  parts.push(`Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.`);
+  const dateOpts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+  if (userTZ) dateOpts.timeZone = userTZ;
+  parts.push(`Today is ${new Date().toLocaleDateString('en-US', dateOpts)}.`);
   parts.push(`User intent detected: ${intent}.`);
 
   if (slices.tasks?.length) {

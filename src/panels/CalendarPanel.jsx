@@ -96,7 +96,8 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   }
 
   // Connected — show embedded calendar
-  const calendarSrc = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(gcalStatus.email)}&ctz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`;
+  const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const calendarSrc = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(gcalStatus.email)}&ctz=${encodeURIComponent(userTZ)}`;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">

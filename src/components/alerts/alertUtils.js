@@ -90,9 +90,9 @@ export const EMPTY_NEW_RULE = {
   recipientOverride: '',
 };
 
-export function evaluateRule(rule, tasks) {
+export function evaluateRule(rule, tasks, tz) {
   const now      = new Date();
-  const todayStr = getTodayLocal();
+  const todayStr = getTodayLocal(tz);
   const active   = tasks.filter((t) => !t.completed);
 
   switch (rule.condition.type) {
@@ -129,14 +129,14 @@ export function evaluateRule(rule, tasks) {
 }
 
 /** Build a conversational Aria-voice alert for a single task. */
-export function buildConversationalAlert(firstName, ruleType, task) {
+export function buildConversationalAlert(firstName, ruleType, task, tz) {
   const name = firstName || 'there';
   const title = task.title;
 
   switch (ruleType) {
     case 'overdue': {
       const daysOver = task.dueDate
-        ? Math.floor((new Date(getTodayLocal()) - new Date(task.dueDate)) / 86400000)
+        ? Math.floor((new Date(getTodayLocal(tz)) - new Date(task.dueDate)) / 86400000)
         : 0;
       const daysNote = daysOver > 1 ? ` (${daysOver} days now)` : '';
       return `Hey ${name} — the "${title}" task is overdue${daysNote}.\n\nWorth a quick look when you get a chance.`;
@@ -184,9 +184,9 @@ export function buildPlainTextAlert(ruleName, tasks) {
 }
 
 /** Build a professional HTML alert email for the given tasks. */
-export function buildEmailHtml(ruleName, ruleDesc, tasks) {
+export function buildEmailHtml(ruleName, ruleDesc, tasks, tz) {
   const h        = escapeHtml;
-  const todayStr = getTodayLocal();
+  const todayStr = getTodayLocal(tz);
   const pColor   = { high: '#dc2626', medium: '#d97706', low: '#16a34a' };
   const pBg      = { high: '#fef2f2', medium: '#fffbeb', low: '#f0fdf4' };
 
@@ -288,14 +288,15 @@ function buildAlertKey(rule, task, todayStr) {
  */
 export async function runAlertRules(tasks, rules, emailSettings, firedRef, addToast, apiFetch, authToken, currentUser) {
   const { recipientEmail } = emailSettings;
-  const todayStr = getTodayLocal();
+  const userTZ = currentUser?.timezone;
+  const todayStr = getTodayLocal(userTZ);
   const firstName = currentUser?.displayName?.split(' ')[0] || currentUser?.username || '';
 
   // Phase 1: collect all candidate keys across all rules
   const candidates = [];
   for (const rule of rules) {
     if (!rule.enabled) continue;
-    const matching = evaluateRule(rule, tasks);
+    const matching = evaluateRule(rule, tasks, userTZ);
     if (matching.length === 0) continue;
     const scope = getRuleScope(rule.condition.type);
     if (scope === 'per-task') {
@@ -342,10 +343,10 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
 
     let message;
     if (scope === 'per-task') {
-      message = buildConversationalAlert(firstName, ruleType, task);
+      message = buildConversationalAlert(firstName, ruleType, task, userTZ);
     } else {
       // daily-digest or other daily/session scope
-      const matching = evaluateRule(rule, tasks);
+      const matching = evaluateRule(rule, tasks, userTZ);
       message = buildDigestAlert(firstName, matching);
     }
     if (!message) continue;

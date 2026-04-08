@@ -347,6 +347,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [chatCalendarEvents, setChatCalendarEvents] = useState([]);
   const [initialBriefData, setInitialBriefData]  = useState(null);
 
+  const userTZ = currentUser?.timezone || 'America/Los_Angeles';
+
   // Sync activeView → browser URL
   useEffect(() => {
     const current = new URLSearchParams(window.location.search).get('view');
@@ -632,7 +634,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         const taskData = Array.isArray(data) ? data : [];
         setTasks(taskData);
         // Compute brief data immediately from the raw task array
-        const todayISO = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+        const todayISO = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
         setInitialBriefData({
           overdue: taskData.filter(t => !t.completed && t.dueDate && t.dueDate < todayISO).map(t => t.title).join(', ') || 'None',
           highPriority: taskData.filter(t => !t.completed && t.priority === 'high').map(t => t.title).join(', ') || 'None',
@@ -665,8 +667,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   // Fetch Google Calendar events for chat context
   useEffect(() => {
     if (!currentUser?.id) return;
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}&days=7`, {
+    apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}&days=7`, {
       headers: { Authorization: `Bearer ${authToken}` },
     })
       .then((r) => r.json())
@@ -735,7 +736,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   async function handleSyncToCalendar(task) {
     if (!task.dueDate) return;
     try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const res = await apiFetch(`${API_BASE}/api/gcal/sync-task`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
@@ -745,7 +745,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           description: task.description || '',
           dueDate: task.dueDate,
           dueTime: task.dueTime || null,
-          timeZone: tz,
+          timeZone: userTZ,
         }),
       });
       const data = await res.json();
@@ -765,8 +765,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     if (syncToCalendar && taskData.dueDate && gcalConnected) {
       handleSyncToCalendar(taskData).then(() => {
         // Refresh calendar events so new event appears immediately
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-        apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}&days=7`, {
+        apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}&days=7`, {
           headers: { Authorization: `Bearer ${authToken}` },
         })
           .then((r) => r.json())
@@ -1019,11 +1018,11 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <div className="px-8 pt-6 pb-4">
               <h1 className="text-2xl font-extrabold font-headline text-on-background tracking-tight">Tasks</h1>
               <p className="text-on-surface-variant text-[11px] font-medium mt-0.5">
-                {visibleTasks.filter((t) => !t.completed && t.dueDate && t.dueDate < getTodayLocal()).length} overdue
+                {visibleTasks.filter((t) => !t.completed && t.dueDate && t.dueDate < getTodayLocal(userTZ)).length} overdue
                 {' · '}
-                {visibleTasks.filter((t) => !t.completed && t.dueDate === getTodayLocal()).length} due today
+                {visibleTasks.filter((t) => !t.completed && t.dueDate === getTodayLocal(userTZ)).length} due today
                 {' · '}
-                {visibleTasks.filter((t) => !t.completed && (!t.dueDate || t.dueDate > getTodayLocal())).length} upcoming
+                {visibleTasks.filter((t) => !t.completed && (!t.dueDate || t.dueDate > getTodayLocal(userTZ))).length} upcoming
               </p>
             </div>
 
@@ -1064,7 +1063,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
             {/* Task sections */}
             {(() => {
-              const todayStr = getTodayLocal();
+              const todayStr = getTodayLocal(userTZ);
               const base = (activeTagFilters.length > 0
                 ? visibleTasks.filter((t) => t.tags?.some((tag) => activeTagFilters.includes(tag)))
                 : visibleTasks
@@ -1332,8 +1331,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           onClose={() => setShowCreateEvent(false)}
           onCreated={() => {
             // Refresh calendar events
-            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-            apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(tz)}&days=7`, {
+            apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}&days=7`, {
               headers: { Authorization: `Bearer ${authToken}` },
             })
               .then((r) => r.json())

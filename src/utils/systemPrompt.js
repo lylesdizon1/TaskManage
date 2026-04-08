@@ -1,7 +1,7 @@
 // Build AI system prompt (extracted from old ChatPanel for reuse)
-export default function buildSystemPrompt(tasks, entities, notes, calendarEvents) {
+export default function buildSystemPrompt(tasks, entities, notes, calendarEvents, userTZ) {
   const today = new Date();
-  const userTZ = 'America/Los_Angeles';
+  if (!userTZ) userTZ = 'America/Los_Angeles';
   const dateStr = today.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
@@ -111,5 +111,5 @@ export default function buildSystemPrompt(tasks, entities, notes, calendarEvents
       return `- ${dayLabel}: ${time ? time + ' ' : ''}${e.summary || e.title || 'Untitled'}`;
     }).join('\n');
   }
-  return `You are a business productivity assistant. Today is ${dateStr}. Current time: ${timeStr} PST.\n${weekMapStr}\nThe user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + notesContext;
+  return `You are a business productivity assistant. Today is ${dateStr}. Current time: ${timeStr} (${userTZ}).\n${weekMapStr}\nThe user manages multiple ventures. Active (incomplete) tasks: ${JSON.stringify(taskSummary)}. Help prioritize and plan.` + todayContext + calendarContext + entityContext + notesContext;
 }

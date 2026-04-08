@@ -5,7 +5,8 @@ import { XIcon } from '../icons/Icons.jsx';
 const API_BASE = '';
 
 export function CreateEventModal({ currentUser, onClose, onCreated, addToast, apiFetch }) {
-  const todayStr = new Date().toLocaleDateString('en-CA');
+  const userTZ = currentUser?.timezone || 'America/Los_Angeles';
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const [form, setForm] = useState({ title: '', date: todayStr, startTime: '09:00', endTime: '10:00', description: '', syncToGcal: true });
   const [saving, setSaving] = useState(false);
 
@@ -15,15 +16,14 @@ export function CreateEventModal({ currentUser, onClose, onCreated, addToast, ap
     setSaving(true);
     try {
       if (form.syncToGcal) {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const body = {
           userId: currentUser.id,
           summary: form.title,
           description: form.description,
         };
         if (form.startTime) {
-          body.start = { dateTime: `${form.date}T${form.startTime}:00`, timeZone: tz };
-          body.end = { dateTime: `${form.date}T${form.endTime || form.startTime}:00`, timeZone: tz };
+          body.start = { dateTime: `${form.date}T${form.startTime}:00`, timeZone: userTZ };
+          body.end = { dateTime: `${form.date}T${form.endTime || form.startTime}:00`, timeZone: userTZ };
         } else {
           body.allDay = true;
           body.start = { date: form.date };
