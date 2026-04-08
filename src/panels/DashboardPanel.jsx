@@ -390,7 +390,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, []);
 
   // ── Fresh update logic ──────────────────────────────────────────────────────
-  const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+  const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
   function getLastMessageTimestamp(msgs) {
     if (!msgs || msgs.length === 0) return 0;
@@ -449,7 +449,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     }
   }, [ccConvId, ccRefreshing, currentUser, firstName, apiKeys, authToken, apiFetch, overdueTasks, highPriorityTasks, todayTasks, calendarEvents, notes, entities]);
 
-  // Auto-refresh on visibility change (returning to tab after 15min)
+  // Auto-refresh on visibility change (returning to tab after 5min)
   useEffect(() => {
     function onVisibilityChange() {
       if (document.visibilityState !== 'visible') return;
