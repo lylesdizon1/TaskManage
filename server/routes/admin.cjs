@@ -198,7 +198,7 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
 
   router.get('/api/admin/audit-log', async (req, res) => {
     try {
-      const page = parseInt(req.query.page) || 1;
+      const page = parseInt(req.query.page, 10) || 1;
       const limit = 20;
       const offset = (page - 1) * limit;
       const entries = await db.getAuditLog(limit, offset);
@@ -212,7 +212,7 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
 
   router.get('/api/admin/memory', async (req, res) => {
     try {
-      const page = parseInt(req.query.page) || 1;
+      const page = parseInt(req.query.page, 10) || 1;
       const limit = 100;
       const offset = (page - 1) * limit;
       const userId = req.query.userId || null;

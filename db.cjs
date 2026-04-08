@@ -1890,8 +1890,8 @@ function getTimezoneOffset(tz) {
   const offsetPart = parts.find(p => p.type === 'timeZoneName')?.value || 'GMT-7';
   const match = offsetPart.match(/GMT([+-]?\d+)(?::(\d+))?/);
   if (!match) return '-07:00';
-  const hours = parseInt(match[1]);
-  const mins = parseInt(match[2] || '0');
+  const hours = parseInt(match[1], 10);
+  const mins = parseInt(match[2] || '0', 10);
   const sign = hours >= 0 ? '+' : '-';
   return `${sign}${String(Math.abs(hours)).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }

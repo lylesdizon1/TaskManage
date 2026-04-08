@@ -66,7 +66,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
 
   router.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
     try {
-      await db.deleteConversation(parseInt(req.params.id), req.user.id);
+      await db.deleteConversation(parseInt(req.params.id, 10), req.user.id);
       return res.json({ success: true });
     } catch (err) {
       console.error('[conversations] delete failed:', err.message);
@@ -77,7 +77,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
   router.put('/api/conversations/:id', authenticateToken, async (req, res) => {
     try {
       const { title } = req.body;
-      const updated = await db.updateConversationTitle(parseInt(req.params.id), req.user.id, title);
+      const updated = await db.updateConversationTitle(parseInt(req.params.id, 10), req.user.id, title);
       if (!updated) return res.status(404).json({ error: 'Conversation not found' });
       return res.json(updated);
     } catch (err) {
@@ -88,7 +88,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
 
   router.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
     try {
-      const messages = await db.getConversationMessages(parseInt(req.params.id), req.user.id);
+      const messages = await db.getConversationMessages(parseInt(req.params.id, 10), req.user.id);
       return res.json(messages);
     } catch (err) {
       console.error('[conversations] messages read failed:', err.message);
@@ -100,7 +100,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
     try {
       const { role, content, model } = req.body;
       if (!role || !content) return res.status(400).json({ error: 'role and content are required' });
-      const msg = await db.addConversationMessage(parseInt(req.params.id), req.user.id, role, content, model);
+      const msg = await db.addConversationMessage(parseInt(req.params.id, 10), req.user.id, role, content, model);
       return res.json(msg);
     } catch (err) {
       console.error('[conversations] message save failed:', err.message);
