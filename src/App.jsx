@@ -1505,14 +1505,24 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   ))}
                 </select>
               </div>
+              <div>
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Notes</label>
+                <textarea
+                  value={editingTask.description || ''}
+                  onChange={(e) => setEditingTask((t) => ({ ...t, description: e.target.value }))}
+                  placeholder="Add a note about this task (optional)"
+                  rows={2}
+                  className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                />
+              </div>
               {editingTask.completed && (
                 <div>
-                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Completion Note</label>
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5 block">Outcome Note</label>
                   <input
                     type="text"
                     value={editingTask.completionNote || ''}
                     onChange={(e) => setEditingTask((t) => ({ ...t, completionNote: e.target.value }))}
-                    placeholder="How did it go?"
+                    placeholder="How'd it go? (optional)"
                     className="w-full bg-surface-container-lowest rounded-xl px-4 py-2.5 text-sm text-on-background border border-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
@@ -1525,7 +1535,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   Cancel
                 </button>
                 <button
-                  onClick={() => { editTask(editingTask.id, { title: editingTask.title, priority: editingTask.priority, dueDate: editingTask.dueDate, tags: editingTask.tags, completionNote: editingTask.completionNote }); setEditingTask(null); }}
+                  onClick={() => { editTask(editingTask.id, { title: editingTask.title, description: editingTask.description, priority: editingTask.priority, dueDate: editingTask.dueDate, tags: editingTask.tags, completionNote: editingTask.completionNote }); setEditingTask(null); }}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-bold shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform"
                 >
                   Save
