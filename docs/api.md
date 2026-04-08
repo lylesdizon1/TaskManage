@@ -1,5 +1,5 @@
 # Dizon.ai — API Reference
-Last updated: April 4, 2026
+Last updated: April 8, 2026
 
 ## Auth
 POST /api/auth/login
@@ -12,7 +12,23 @@ GET/POST     /api/users
 PUT/DELETE   /api/users/:id
 PUT          /api/users/settings
 
-## Entities (admin only)
+## Admin (superadmin only)
+GET/POST     /api/admin/orgs
+PUT          /api/admin/orgs/:id/suspend
+GET          /api/admin/users
+POST         /api/admin/users
+PUT          /api/admin/users/:id/suspend
+PUT          /api/admin/users/:id/password
+PUT          /api/admin/users/:id/email
+PUT          /api/admin/users/:id/org
+DELETE       /api/admin/users/:id
+POST         /api/admin/invites
+POST         /api/admin/impersonate/:userId
+GET          /api/admin/audit-log
+GET          /api/admin/memory
+DELETE       /api/admin/memory/:id
+
+## Entities (any authenticated user)
 GET/POST     /api/entities
 PUT/DELETE   /api/entities/:id
 
@@ -55,15 +71,20 @@ PATCH /api/inbox/items/:id
 ## Alerts
 POST /api/alerts/fire
 POST /api/alerts/morning
+POST /api/alerts/check-fired
+POST /api/alerts/mark-fired
+GET  /api/alerts/cadence           — get alert cadence config per priority
+PUT  /api/alerts/cadence/:priority — update cadence for a priority level
 GET  /api/config/status
 
-## WhatsApp Inbound (planned)
+## WhatsApp Inbound (live)
 POST /api/whatsapp/inbound    — UltraMsg webhook receiver
 
-## AI Proxy
-POST /api/claude
-POST /api/chat/stream
-POST /api/openai
+## AI + Chat
+POST /api/claude               — thin proxy to Anthropic Messages API
+POST /api/chat/stream          — SSE streaming proxy to Claude
+POST /api/openai               — thin proxy to OpenAI Chat Completions API
+POST /api/chat/execute         — Aria's agentic chat with tool use + SSE streaming
 
 ## Financial
 GET/POST     /api/financial/accounts
@@ -86,11 +107,11 @@ GET/POST /api/settings
 
 ## Preferences
 GET/POST /api/preferences
+PUT      /api/user/preferences/dnd    — update DND window (dnd_start, dnd_end)
 
 ## Chat + Conversations
 GET/DELETE           /api/chat/history
 POST                 /api/chat/message
-POST                 /api/chat/stream
 GET/POST             /api/conversations
 PUT/DELETE           /api/conversations/:id
 GET/POST             /api/conversations/:id/messages
