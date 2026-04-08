@@ -64,6 +64,10 @@ const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
+  // Pending completion note requests: Map<`${userId}`, { taskId, taskTitle, expiresAt }>
+  // 5-minute TTL — if user replies with a non-command message, save as completion_note.
+  const pendingCompletionNotes = new Map();
+
   /**
    * POST /api/whatsapp/inbound — UltraMsg webhook handler.
    *
@@ -119,9 +123,41 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         return res.json({ ok: true, skipped: 'unknown sender' });
       }
 
-      // ── Load full context (same pattern as /api/chat/execute) ───────────
       const userId = user.id;
       const entityIds = user.entityIds || [];
+
+      // ── Check for pending completion note ────────────────────────────────
+      const pendingKey = userId;
+      const pending = pendingCompletionNotes.get(pendingKey);
+      if (pending && Date.now() < pending.expiresAt) {
+        // This message might be a completion note reply — save it
+        pendingCompletionNotes.delete(pendingKey);
+        try {
+          await db.updateTask(pending.taskId, { completionNote: msgBody });
+          await db.logMemory({
+            userId, tool: 'complete_task',
+            content: `Added completion note to "${pending.taskTitle}": ${msgBody}`,
+            metadata: { task_id: pending.taskId, completion_note: true, source: 'whatsapp' },
+          }).catch(() => {});
+          // Reply confirming the note was saved
+          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+          const ultraToken = process.env.ULTRAMSG_TOKEN;
+          if (ultraInstance && ultraToken) {
+            await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: ultraToken, to: fromRaw, body: `Got it — saved your note on "${pending.taskTitle}".` }),
+            }).catch(() => {});
+          }
+          return res.json({ ok: true, completionNote: true });
+        } catch (err) {
+          console.error('[whatsapp/inbound] completion note save failed:', err.message);
+        }
+      }
+      // Clean up expired entry
+      if (pending) pendingCompletionNotes.delete(pendingKey);
+
+      // ── Load full context (same pattern as /api/chat/execute) ───────────
       // Only load user's OWN tasks for AI context — never include shared/entity tasks
       // to prevent cross-user data leak (superadmin entityIds = all entities)
       const tasks = await db.getTasksForUser(userId, []);
@@ -206,7 +242,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz);
 
-      const { text } = await runAgenticLoop({
+      const { text, toolSummaries } = await runAgenticLoop({
         messages: [{ role: 'user', content: msgBody }],
         system: systemPrompt,
         tools: ARIA_TOOLS,
@@ -229,6 +265,29 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           });
         } catch (replyErr) {
           console.error('[whatsapp/inbound] Reply failed:', replyErr.message);
+        }
+      }
+
+      // ── Completion note follow-up prompt ────────────────────────────────
+      // If a task was completed, send one follow-up asking for a note.
+      const completedTool = (toolSummaries || []).find(s => s.tool === 'complete_task' && s.success);
+      if (completedTool && ultraInstance && ultraToken) {
+        const taskId = completedTool.result?.task_id;
+        const taskTitle = completedTool.result?.title;
+        if (taskId && taskTitle && !completedTool.result?.completion_note) {
+          pendingCompletionNotes.set(userId, {
+            taskId, taskTitle,
+            expiresAt: Date.now() + 5 * 60 * 1000, // 5-minute TTL
+          });
+          try {
+            await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: ultraToken, to: fromRaw, body: 'Any notes on how it went? Reply with a note or just ignore this.' }),
+            });
+          } catch (promptErr) {
+            console.error('[whatsapp/inbound] Completion note prompt failed:', promptErr.message);
+          }
         }
       }
 
