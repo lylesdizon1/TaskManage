@@ -1868,17 +1868,13 @@ function getTimezoneOffset(tz) {
 }
 
 async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz = 'America/Los_Angeles') {
-  console.log('[schedule] scheduleTaskAlerts called:', { userId, taskId, dueDate, dueTime, priority, tz });
   // Load cadence config for this user + priority
   const { rows: configs } = await pool.query(
     `SELECT offsets, channels FROM alert_cadence_config
      WHERE user_id = $1 AND priority = $2 AND enabled = TRUE`,
     [userId, priority || 'medium']
   );
-  if (!configs.length) {
-    console.log('[schedule] no cadence config for', userId, priority);
-    return;
-  }
+  if (!configs.length) return;
 
   const cfg = configs[0];
   const cadenceOffsets = cfg.offsets || [];
@@ -1886,12 +1882,10 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
 
   // Build due datetime with explicit timezone offset
   const tzOffset = getTimezoneOffset(tz);
-  console.log('[schedule] tzOffset:', tzOffset);
   const dueStr = dueTime
     ? `${dueDate}T${dueTime}:00${tzOffset}`
     : `${dueDate}T09:00:00${tzOffset}`;
   const dueDt = new Date(dueStr);
-  console.log('[schedule] dueDt:', dueStr, '→', dueDt.toISOString());
   if (isNaN(dueDt.getTime())) return;
 
   // Delete existing unfired alerts for this task
@@ -1901,9 +1895,7 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
   );
 
   const now = new Date();
-  console.log('[schedule] now:', now.toISOString());
 
-  let insertedCount = 0;
   for (const cadenceOffset of cadenceOffsets) {
     let fireAt;
     if (cadenceOffset.minutes_before !== undefined) {
@@ -1921,7 +1913,6 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
       continue;
     }
 
-    console.log('[schedule] offset', cadenceOffset.minutes_before, 'fireAt:', fireAt.toISOString(), 'skipped:', fireAt <= now);
     // Skip past fire times
     if (fireAt <= now) continue;
 
@@ -1933,9 +1924,7 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [userId, taskId, alertKey, message, JSON.stringify(channels), fireAt.toISOString()]
     );
-    insertedCount++;
   }
-  console.log('[schedule] inserted', insertedCount, 'scheduled alerts');
 }
 
 async function getUnfiredAlerts() {
