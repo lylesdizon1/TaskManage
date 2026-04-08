@@ -197,9 +197,9 @@ export default function App() {
   const [sessionExpired, setSessionExpired] = useState(false);
 
   function handleLogin(user, token) {
-    // Clear all Aria/digest/timeline caches so fresh login always generates fresh brief
+    // Clear all Aria/digest/timeline/CC caches so fresh login always generates fresh brief
     Object.keys(localStorage).forEach((key) => {
-      if (key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) {
+      if (key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_') || key.startsWith('cc_messages_')) {
         localStorage.removeItem(key);
       }
     });
@@ -213,10 +213,15 @@ export default function App() {
     setCurrentUser(null);
     setAuthToken(null);
     setSessionExpired(false);
-    // Clear localStorage
+    // Clear localStorage — auth + all date-keyed caches
     localStorage.removeItem('tm_token');
     localStorage.removeItem('tm_user');
     localStorage.removeItem('tm_chat_draft');
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('cc_messages_') || key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) {
+        localStorage.removeItem(key);
+      }
+    });
     // Force full page reload to guarantee clean state
     window.location.href = '/';
   }

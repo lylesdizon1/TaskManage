@@ -1974,8 +1974,10 @@ async function getUnfiredAlerts() {
             u.whatsapp_phone AS "whatsappPhone", u.email
      FROM scheduled_alerts sa
      JOIN users u ON u.id = sa.user_id
+     JOIN tasks t ON t.id = sa.task_id
      LEFT JOIN user_preferences up ON up.user_id = sa.user_id
      WHERE sa.fired = FALSE AND sa.fire_at <= NOW()
+       AND t.completed = FALSE
        AND NOT (
          CASE
            WHEN COALESCE(up.dnd_start, '22:00') > COALESCE(up.dnd_end, '07:00')
