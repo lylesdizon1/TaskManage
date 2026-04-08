@@ -1,22 +1,103 @@
 'use strict';
 
+/**
+ * server/routes/whatsapp.cjs — WhatsApp webhook entry point for Aria.
+ *
+ * Handles inbound WhatsApp messages from UltraMsg's webhook and routes
+ * them through Aria's agentic tool-use loop, then replies via the
+ * UltraMsg REST API.
+ *
+ * Responsibility:
+ *   - Receive and validate UltraMsg webhook POSTs
+ *   - Resolve the sender phone to a Dizon.ai user
+ *   - Build Aria's system prompt with live context (tasks, notes, calendar)
+ *   - Delegate AI reasoning and tool execution to agenticLoop
+ *   - Send the final reply back via UltraMsg
+ *
+ * Inputs:
+ *   - POST /api/whatsapp/inbound — UltraMsg webhook payload with
+ *     { data: { from, body, ... } }. Public endpoint (no JWT auth) —
+ *     authentication is implicit via phone→user lookup.
+ *
+ * Dependencies:
+ *   - server/lib/agenticLoop.cjs — multi-turn AI tool-use loop
+ *   - server/tools.cjs — ARIA_TOOLS schema + executeTool handler
+ *   - server/utils/date.cjs — timezone-aware date formatting
+ *   - db.cjs — user lookup, task/note/memory queries (injected)
+ *   - googleapis — GCal event fetching (injected)
+ *
+ * Boundaries:
+ *   - This module handles transport only — receiving the webhook and
+ *     sending the reply. All AI reasoning and tool execution lives
+ *     in agenticLoop.cjs and tools.cjs.
+ *   - Context building (system prompt + live data) is duplicated from
+ *     ai.cjs. Both surfaces need the same Aria context, but extract
+ *     differently: ai.cjs streams via SSE, this module fires and replies.
+ *
+ * @note The inbound endpoint is public (no JWT). User identity is resolved
+ * by matching the sender phone against whatsapp_phone in the users table.
+ * If no user matches, the message is silently dropped.
+ *
+ * @note Media messages are acknowledged (200 OK) but not processed
+ * in v1 — text body is required. Image handling is a planned
+ * feature.
+ */
+
 const express   = require('express');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 
 /**
- * WhatsApp inbound webhook route
+ * Factory function that creates the WhatsApp webhook router.
  *
- *   POST /api/whatsapp/inbound  (public — no JWT auth)
+ * @param {Object} deps - Injected dependencies.
+ * @param {Object} deps.db - Database helper module (db.cjs).
+ * @param {Function} deps.loadGcalTokens - Async function to load + decrypt GCal tokens for a user.
+ * @param {Function} deps.makeOAuth2Client - Factory for Google OAuth2 client.
+ * @param {Object} deps.google - googleapis module for GCal API calls.
+ * @returns {express.Router} Mounted at /api/whatsapp by proxy-server.cjs.
  *
- * Single tool-use flow: Sonnet with ARIA_TOOLS decides whether to act,
- * then executeTool runs any requested mutations and a second Sonnet call
- * generates the confirmation text.
+ * @note executeTool is imported from tools.cjs and passed into
+ * agenticLoop. This module does not execute tools directly.
  */
 module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
+  /**
+   * POST /api/whatsapp/inbound — UltraMsg webhook handler.
+   *
+   * Flow: validate payload → normalize phone → resolve user →
+   * build context → run agentic loop → reply via UltraMsg.
+   *
+   * @note Phone normalization strips all non-digit characters (e.g.
+   * "+1 (555) 123-4567" → "15551234567"). This must match the format
+   * stored in users.whatsapp_phone. UltraMsg sends the "from" field
+   * with a country code prefix and optional formatting characters.
+   *
+   * @note The resolveUser pattern: instead of JWT auth, user identity
+   * is resolved by matching the normalized sender phone against
+   * db.getUserByWhatsAppPhone(). If no match is found, the message
+   * is acknowledged (200 OK) but not processed — this prevents
+   * UltraMsg from retrying and avoids exposing error details to
+   * unknown senders.
+   *
+   * @note UltraMsg response format: the reply is sent as a POST to
+   * the UltraMsg REST API with { token, to, body }. The "to" field
+   * uses the raw (unnormalized) sender address from the webhook,
+   * which UltraMsg expects for routing.
+   *
+   * @note Always returns 200 OK regardless of outcome to prevent
+   * UltraMsg from retrying failed webhooks. Errors are caught
+   * and logged internally.
+   *
+   * @note This endpoint is public — no JWT auth. Security relies
+   * on phone→user mapping and rate limiting. Never expose
+   * sensitive error details in the response body.
+   *
+   * @throws Internal errors are caught and logged. The HTTP
+   * response remains 200 to avoid webhook retries.
+   */
   router.post('/api/whatsapp/inbound', async (req, res) => {
     try {
       const data = req.body?.data;
