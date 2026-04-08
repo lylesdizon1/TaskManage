@@ -114,14 +114,6 @@ function EntitySelectOptions({ entities }) {
 import { uid, escapeHtml, conditionDescription, getRuleScope, getTodayLocal } from './utils/helpers.js';
 import {
   DEFAULT_ALERT_RULES,
-  CONDITION_META,
-  EMPTY_NEW_RULE,
-  evaluateRule,
-  buildPlainTextAlert,
-  buildEmailHtml,
-  sendAlertEmail,
-  persistFiredAlerts,
-  runAlertRules,
 } from './components/alerts/alertUtils.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,13 +320,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'notes'
   const [mobileChatOpen, setMobileChatOpen]    = useState(false); // list vs chat view inside mobile Aria
   const [entities, setEntities]                 = useState([]);
-  const firedAlertsRef                          = useRef((() => {
-    const todayStr = getTodayLocal();
-    const saved = JSON.parse(localStorage.getItem('dizon_fired_alerts') || '[]');
-    const filtered = saved.filter(k => !k.match(/\d{4}-\d{2}-\d{2}/) || k.includes(todayStr));
-    return new Set(filtered);
-  })());
-
   // Quick Capture FAB state
   const [noteCategories, setNoteCategories]     = useState([]);
   const [allNotes, setAllNotes]                 = useState([]);
@@ -736,21 +721,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     const fn = _toast[t.type] ?? _toast.info;
     fn(t.message);
   }
-
-  // Evaluate rules on mount (catches session-scoped digest) + every 60 s
-  useEffect(() => {
-    runAlertRules(
-      tasksRef.current, alertRulesRef.current,
-      emailSettingsRef.current, firedAlertsRef, addToast, apiFetch, authToken, currentUser,
-    );
-    const id = setInterval(() => {
-      runAlertRules(
-        tasksRef.current, alertRulesRef.current,
-        emailSettingsRef.current, firedAlertsRef, addToast, apiFetch, authToken, currentUser,
-      );
-    }, 60_000);
-    return () => clearInterval(id);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Google Calendar status check ──────────────────────────────────────────
   useEffect(() => {
@@ -1392,7 +1362,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           alertRules={alertRules}
           onUpdateAlertRules={setAlertRules}
           tasks={tasks}
-          firedAlertsRef={firedAlertsRef}
           envStatus={{
             slack:    !!envConfigured.channelSlack,
             whatsapp: !!envConfigured.channelWhatsapp,

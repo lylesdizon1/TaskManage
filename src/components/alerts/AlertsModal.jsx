@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { getRuleScope, conditionDescription, uid } from '../../utils/helpers.js';
-import { CONDITION_META, EMPTY_NEW_RULE, runAlertRules, buildPlainTextAlert } from './alertUtils.js';
+import { CONDITION_META, EMPTY_NEW_RULE, buildPlainTextAlert } from './alertUtils.js';
 import { XIcon, BellIcon } from '../icons/Icons.jsx';
 
 function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange, onChannelChange, onConditionChange, onIntervalChange }) {
@@ -185,10 +185,9 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
   );
 }
 
-export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, onClose, entities, envStatus, apiFetch, authToken, currentUser, EntitySelectOptions }) {
+export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToast, onClose, entities, envStatus, apiFetch, authToken, currentUser, EntitySelectOptions }) {
   const [showAdd, setShowAdd]       = useState(false);
   const [newRule, setNewRule]       = useState(EMPTY_NEW_RULE);
-  const [evaluating, setEvaluating] = useState(false);
   const [sending, setSending]       = useState(false);
   const [testPicker, setTestPicker] = useState(null);
 
@@ -253,12 +252,6 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedA
     setShowAdd(false);
   }
 
-  async function handleEvaluateNow() {
-    setEvaluating(true);
-    await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast, apiFetch, authToken, currentUser);
-    setEvaluating(false);
-  }
-
   async function handleSendTest(channel) {
     setSending(true);
     try {
@@ -296,13 +289,6 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, firedA
             <h2 className="text-lg font-bold text-gray-900">Alert Rules</h2>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleEvaluateNow}
-              disabled={evaluating}
-              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-            >
-              {evaluating ? 'Running…' : '▶ Evaluate Now'}
-            </button>
             <button
               onClick={onClose}
               className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-1 transition-colors"
