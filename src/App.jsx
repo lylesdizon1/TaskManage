@@ -316,6 +316,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [historyEntity, setHistoryEntity]               = useState('');
   const [historyDateRange, setHistoryDateRange]         = useState('all');
   const [historySearch, setHistorySearch]               = useState('');
+  const historySearchTimer                               = useRef(null);
   const [apiKeys, setApiKeys]                   = useState({ claude: '', openai: '' });
   const [emailSettings, setEmailSettings]       = useState({
     gmailUser: '',
@@ -1330,8 +1331,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                           value={historySearch}
                           onChange={(e) => {
                             setHistorySearch(e.target.value);
-                            clearTimeout(window._historySearchTimer);
-                            window._historySearchTimer = setTimeout(() => fetchCompletedHistory(historyEntity, historyDateRange, e.target.value), 300);
+                            clearTimeout(historySearchTimer.current);
+                            historySearchTimer.current = setTimeout(() => fetchCompletedHistory(historyEntity, historyDateRange, e.target.value), 300);
                           }}
                           placeholder="Search completed tasks..."
                           className="w-full pl-9 pr-3 py-2 text-xs bg-surface-container-lowest border border-surface-container-high rounded-xl text-on-background placeholder-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
