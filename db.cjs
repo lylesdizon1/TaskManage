@@ -41,8 +41,13 @@ const pool = new Pool({
 });
 
 /**
- * Create all tables if they don't exist yet.
- * Called once at server startup.
+ * Create all core tables if they don't exist yet. Called once at server
+ * startup before runMigrations(). Uses IF NOT EXISTS for idempotency.
+ *
+ * @note This only creates the base schema. Column additions, indexes,
+ * and constraints added after initial launch live in runMigrations().
+ *
+ * @returns {Promise<void>}
  */
 async function initTables() {
   await pool.query(`
@@ -585,6 +590,12 @@ async function deleteUser(id) {
 
 // ── Entities ──────────────────────────────────────────────────────────────────
 
+/**
+ * Return all entities across the platform. Used by admin views and
+ * runMigrations() to build the global entity list.
+ *
+ * @returns {Promise<Array<Object>>} All entities with parent name resolved via LEFT JOIN.
+ */
 async function getEntities() {
   const { rows } = await pool.query(
     `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
@@ -597,6 +608,14 @@ async function getEntities() {
   return rows;
 }
 
+/**
+ * Return entities visible to a specific user: entities they created plus
+ * shared entities. The isOwner flag lets the frontend distinguish
+ * owned entities (deletable) from shared ones (read-only).
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @returns {Promise<Array<Object>>} Entities with isOwner boolean.
+ */
 async function getEntitiesForUser(userId) {
   const { rows } = await pool.query(
     `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
@@ -612,6 +631,23 @@ async function getEntitiesForUser(userId) {
   return rows;
 }
 
+/**
+ * Create a new entity and return the inserted row.
+ *
+ * @param {Object} entity
+ * @param {string} entity.id - Pre-generated entity ID.
+ * @param {string} entity.name - Entity display name.
+ * @param {string} [entity.color='slate'] - Tailwind color key for UI badges.
+ * @param {string} [entity.createdBy] - User ID of the creator.
+ * @param {string} [entity.type='business'] - Entity type (business or personal).
+ * @param {string|null} [entity.parentId] - Parent entity ID for hierarchy.
+ * @param {boolean} [entity.shared=false] - Whether visible to all users.
+ * @returns {Promise<Object>} The created entity row.
+ * @throws {Error} If the database query fails.
+ *
+ * @note Authorization (who can create/update entities) is
+ * enforced at the route layer — this helper assumes valid input.
+ */
 async function createEntity({ id, name, color, createdBy, type, parentId, shared }) {
   const { rows } = await pool.query(
     `INSERT INTO entities (id, name, color, created_by, type, parent_id, shared)
@@ -623,6 +659,18 @@ async function createEntity({ id, name, color, createdBy, type, parentId, shared
   return rows[0];
 }
 
+/**
+ * Partial-update an entity. Only fields present in the input are SET —
+ * uses dynamic query building to avoid overwriting unchanged columns.
+ *
+ * @param {string} id - Entity ID to update.
+ * @param {Object} fields - Fields to update (name, color, type, parentId, shared).
+ * @returns {Promise<Object|null>} Updated entity row, or null if no fields provided or not found.
+ * @throws {Error} If the database query fails.
+ *
+ * @note Authorization (who can create/update entities) is
+ * enforced at the route layer — this helper assumes valid input.
+ */
 async function updateEntity(id, fields) {
   const sets = [];
   const vals = [id];
@@ -645,6 +693,14 @@ async function updateEntity(id, fields) {
   return rows[0] || null;
 }
 
+/**
+ * Fetch a single entity by ID. Used by route handlers to verify
+ * existence and ownership before mutations.
+ *
+ * @param {string} id - Entity ID.
+ * @returns {Promise<Object|null>} Entity row or null if not found.
+ * @throws {Error} If the database query fails.
+ */
 async function getEntityById(id) {
   const { rows } = await pool.query(
     `SELECT id, name, color, created_by AS "createdBy", type, parent_id AS "parentId", shared
@@ -654,10 +710,28 @@ async function getEntityById(id) {
   return rows[0] || null;
 }
 
+/**
+ * Delete an entity, scoped to the creating user. The WHERE clause
+ * enforces ownership at the DB level — only the creator can delete.
+ *
+ * @param {string} id - Entity ID to delete.
+ * @param {string} userId - Authenticated user ID (must match created_by).
+ * @returns {Promise<void>}
+ */
 async function deleteEntity(id, userId) {
   await pool.query('DELETE FROM entities WHERE id = $1 AND created_by = $2', [id, userId]);
 }
 
+/**
+ * Seed default entities on first boot if the table is empty.
+ * Uses ON CONFLICT DO NOTHING for idempotency. Only runs when
+ * count is zero — subsequent calls are no-ops.
+ *
+ * @note These defaults are Lyle's original business entities.
+ * New users do NOT inherit these — they create their own via the UI.
+ *
+ * @returns {Promise<void>}
+ */
 async function seedEntitiesIfEmpty() {
   const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM entities');
   if (rows[0].count > 0) return;
@@ -866,6 +940,14 @@ async function upsertTask(t) {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
+/**
+ * Load all key-value settings from the settings table. Returns a
+ * flat object keyed by setting name. Used by the settings route to
+ * populate the frontend Settings modal.
+ *
+ * @returns {Promise<Object>} Map of { key: value } pairs.
+ * @throws {Error} If the database query fails.
+ */
 async function getSettings() {
   const { rows } = await pool.query('SELECT key, value FROM settings');
   const result = {};
@@ -875,6 +957,17 @@ async function getSettings() {
   return result;
 }
 
+/**
+ * Persist multiple settings in a single transaction. Each key is
+ * upserted individually — ON CONFLICT updates the value and timestamp.
+ *
+ * @note Values are JSON.stringify'd before storage. The settings table
+ * stores all values as text, so callers must parse on read if needed.
+ *
+ * @param {Object} data - Map of { key: value } pairs to save.
+ * @returns {Promise<void>}
+ * @throws {Error} Rolls back the transaction on any write failure.
+ */
 async function saveSettings(data) {
   const client = await pool.connect();
   try {
@@ -1474,6 +1567,14 @@ async function seedNoteCategoriesIfEmpty(userId) {
 
 // ── User preferences ─────────────────────────────────────────────────────────
 
+/**
+ * Load a user's UI and notification preferences. Includes DND window
+ * times used by the alert scheduler to suppress notifications during
+ * quiet hours.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @returns {Promise<Object|null>} Preferences row or null if never saved.
+ */
 async function getUserPreferences(userId) {
   const { rows } = await pool.query(
     `SELECT user_id AS "userId", theme, default_tag_filter AS "defaultTagFilter",
@@ -1486,6 +1587,22 @@ async function getUserPreferences(userId) {
   return rows[0] || null;
 }
 
+/**
+ * Upsert a user's UI and notification preferences. Creates the row
+ * on first save, updates on subsequent calls.
+ *
+ * @note DND fields (dndStart, dndEnd) are NOT included in this upsert —
+ * they are managed separately via updateDndPreferences(). This avoids
+ * accidentally clearing DND times when saving unrelated preferences.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {Object} prefs - Preference fields.
+ * @param {string} [prefs.theme='light'] - UI theme.
+ * @param {Array<string>} [prefs.defaultTagFilter=[]] - Default tag filter on task views.
+ * @param {string} [prefs.defaultStatusFilter='all'] - Default status filter.
+ * @param {boolean} [prefs.notificationsEnabled=true] - Whether notifications are on.
+ * @returns {Promise<void>}
+ */
 async function saveUserPreferences(userId, prefs) {
   await pool.query(
     `INSERT INTO user_preferences (user_id, theme, default_tag_filter, default_status_filter, notifications_enabled, updated_at)
@@ -1923,6 +2040,16 @@ async function updateUserPassword(id, newHash) {
 
 // ── Seed users from users.json (one-time migration) ──────────────────────────
 
+/**
+ * One-time migration: seed users from a local users.json file if the
+ * users table is empty. Only runs on first boot — subsequent starts
+ * skip because count > 0.
+ *
+ * @note users.json is a local-only file not committed to the repo.
+ * If the file is missing, this silently no-ops.
+ *
+ * @returns {Promise<void>}
+ */
 async function seedUsersIfEmpty() {
   const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM users');
   if (rows[0].count > 0) return;
@@ -1944,9 +2071,23 @@ async function seedUsersIfEmpty() {
 }
 
 /**
- * Robust migration that runs on EVERY startup.
- * Ensures entities exist, lyle is admin with all entities assigned,
- * and all users have the new columns populated.
+ * Incremental migration that runs on EVERY startup. Adds columns,
+ * indexes, constraints, and seeds data idempotently. Each step uses
+ * IF NOT EXISTS, ON CONFLICT DO NOTHING, or .catch() to be safe on
+ * re-runs.
+ *
+ * @note This function also promotes the seed user (user-lyle) to
+ * superadmin and assigns all entities. This is intentional — the seed
+ * user is the platform operator and needs full access.
+ *
+ * @note Errors in individual migration steps are caught and logged
+ * rather than thrown, so one failing step doesn't block the rest.
+ *
+ * @note This function mutates live schema and data. It should
+ * not be run concurrently across multiple instances without
+ * coordination.
+ *
+ * @returns {Promise<void>}
  */
 async function runMigrations() {
   // ── 0. Add entity columns FIRST (before any query that references them) ──
@@ -2057,6 +2198,18 @@ async function runMigrations() {
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
 
+/**
+ * Fetch financial accounts. Admins see all accounts; regular users
+ * see only their own.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {string} role - User role from JWT/DB — 'admin' bypasses user scoping.
+ * @returns {Promise<Array<Object>>} Financial account rows, newest first.
+ * @throws {Error} If the database query fails.
+ *
+ * @note Admin access bypasses user scoping — callers must ensure
+ * the admin role is verified before passing role='admin'.
+ */
 async function getFinancialAccounts(userId, role) {
   if (role === 'admin') {
     const { rows } = await pool.query(
@@ -2075,6 +2228,20 @@ async function getFinancialAccounts(userId, role) {
   return rows;
 }
 
+/**
+ * Create a new financial account and return the inserted row.
+ *
+ * @param {Object} account
+ * @param {string} account.id - Pre-generated account ID.
+ * @param {string} account.userId - Owning user ID.
+ * @param {string} account.name - Account display name.
+ * @param {string} [account.type='checking'] - Account type (checking, savings, credit, etc.).
+ * @param {string} [account.institution] - Bank or institution name.
+ * @param {string} [account.currency='USD'] - ISO currency code.
+ * @param {string} [account.entityId] - Associated entity ID.
+ * @param {string} [account.accountClass='personal'] - personal or business classification.
+ * @returns {Promise<Object>} The created account row.
+ */
 async function createFinancialAccount({ id, userId, name, type, institution, currency, entityId, accountClass }) {
   const { rows } = await pool.query(
     `INSERT INTO financial_accounts (id, user_id, name, type, institution, currency, entity_id, account_class)
@@ -2086,6 +2253,13 @@ async function createFinancialAccount({ id, userId, name, type, institution, cur
   return rows[0];
 }
 
+/**
+ * Partial-update a financial account. Only fields present in input are SET.
+ *
+ * @param {string} id - Account ID.
+ * @param {Object} fields - Fields to update.
+ * @returns {Promise<Object|null>} Updated row, or null if no fields or not found.
+ */
 async function updateFinancialAccount(id, fields) {
   const sets = [];
   const vals = [id];
@@ -2106,6 +2280,17 @@ async function updateFinancialAccount(id, fields) {
   return rows[0] || null;
 }
 
+/**
+ * Delete a financial account and all its transactions. Transactions
+ * are deleted first to avoid FK constraint violations.
+ *
+ * @note This is a cascading delete — all transaction history for the
+ * account is permanently lost. The route handler must verify ownership
+ * via requireOwnership() before calling this.
+ *
+ * @param {string} id - Account ID to delete.
+ * @returns {Promise<void>}
+ */
 async function deleteFinancialAccount(id) {
   await pool.query('DELETE FROM transactions WHERE account_id = $1', [id]);
   await pool.query('DELETE FROM financial_accounts WHERE id = $1', [id]);
@@ -2113,6 +2298,25 @@ async function deleteFinancialAccount(id) {
 
 // ── Transactions ──────────────────────────────────────────────────────────────
 
+/**
+ * Fetch transactions with optional filters. Admins see all; regular
+ * users see only their own. Supports filtering by account, entity,
+ * accountClass, category, and date range.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {string} role - User role — 'admin' bypasses user scoping.
+ * @param {Object} [filters={}] - Optional query filters.
+ * @param {string} [filters.accountId] - Filter to a specific account.
+ * @param {string} [filters.entityId] - Filter to a specific entity.
+ * @param {string} [filters.accountClass] - Filter by personal/business.
+ * @param {string} [filters.category] - Filter by spending category.
+ * @param {string} [filters.startDate] - Inclusive start date (YYYY-MM-DD).
+ * @param {string} [filters.endDate] - Inclusive end date (YYYY-MM-DD).
+ * @returns {Promise<Array<Object>>} Transaction rows, newest first.
+ *
+ * @note Admin access bypasses user scoping — callers must ensure
+ * the admin role is verified before passing role='admin'.
+ */
 async function getTransactions(userId, role, filters = {}) {
   const where = [];
   const vals = [];
@@ -2158,6 +2362,23 @@ async function getTransactions(userId, role, filters = {}) {
   return rows;
 }
 
+/**
+ * Create a single transaction and return the inserted row.
+ *
+ * @param {Object} txn
+ * @param {string} txn.id - Pre-generated transaction ID.
+ * @param {string} txn.accountId - Parent financial account ID.
+ * @param {string} txn.userId - Owning user ID.
+ * @param {string} txn.date - Transaction date (YYYY-MM-DD).
+ * @param {string} [txn.description] - Transaction description.
+ * @param {number} txn.amount - Transaction amount.
+ * @param {string} [txn.type='debit'] - credit or debit.
+ * @param {string} [txn.category='Uncategorized'] - Spending category.
+ * @param {string} [txn.entityId] - Associated entity ID.
+ * @param {string} [txn.accountClass='personal'] - personal or business.
+ * @param {string} [txn.notes] - Optional notes.
+ * @returns {Promise<Object>} The created transaction row.
+ */
 async function createTransaction({ id, accountId, userId, date, description, amount, type, category, entityId, accountClass, notes }) {
   const { rows } = await pool.query(
     `INSERT INTO transactions (id, account_id, user_id, date, description, amount, type, category, entity_id, account_class, notes)
@@ -2170,6 +2391,14 @@ async function createTransaction({ id, accountId, userId, date, description, amo
   return rows[0];
 }
 
+/**
+ * Insert multiple transactions in a single database transaction.
+ * Used by CSV import flows. All-or-nothing — rolls back on any failure.
+ *
+ * @param {Array<Object>} txns - Array of transaction objects (same shape as createTransaction).
+ * @returns {Promise<Array<Object>>} All created transaction rows.
+ * @throws {Error} Rolls back the transaction and rethrows on any insert failure.
+ */
 async function bulkCreateTransactions(txns) {
   const client = await pool.connect();
   try {
@@ -2196,10 +2425,23 @@ async function bulkCreateTransactions(txns) {
   }
 }
 
+/**
+ * Delete a single transaction by ID.
+ *
+ * @param {string} id - Transaction ID to delete.
+ * @returns {Promise<void>}
+ */
 async function deleteTransaction(id) {
   await pool.query('DELETE FROM transactions WHERE id = $1', [id]);
 }
 
+/**
+ * Partial-update a transaction. Only fields present in input are SET.
+ *
+ * @param {string} id - Transaction ID.
+ * @param {Object} fields - Fields to update (date, description, amount, type, category, entityId, accountClass, notes).
+ * @returns {Promise<Object|null>} Updated row, or null if no fields or not found.
+ */
 async function updateTransaction(id, fields) {
   const sets = [];
   const vals = [id];
@@ -2223,6 +2465,22 @@ async function updateTransaction(id, fields) {
   return rows[0] || null;
 }
 
+/**
+ * Build a financial summary: monthly income/expenses by entity and
+ * account class, per-account balances, and top spending categories.
+ * Admins see all data; regular users see only their own.
+ *
+ * @note Balance is computed as SUM(credits) - SUM(debits), not stored.
+ * This means balance accuracy depends on all transactions being present.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {string} role - User role — 'admin' bypasses user scoping.
+ * @returns {Promise<Object>} { monthly, balances, topCategories }.
+ *
+ * @note This is an aggregate query — may become expensive as
+ * transaction volume grows. Consider caching or pagination
+ * if needed at scale.
+ */
 async function getFinancialSummary(userId, role) {
   const userFilter = role === 'admin' ? '' : 'WHERE t.user_id = $1';
   const vals = role === 'admin' ? [] : [userId];
@@ -2264,6 +2522,16 @@ async function getFinancialSummary(userId, role) {
 
 // ── Organizations ──────────────────────────────────────────────────────────
 
+/**
+ * Return the first organization a user belongs to, with their
+ * membership role. Returns null if the user has no org membership.
+ *
+ * @note LIMIT 1 assumes single-org membership. If multi-org support
+ * is added, this must return an array.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @returns {Promise<Object|null>} Org row with memberRole, or null.
+ */
 async function getOrgForUser(userId) {
   const { rows } = await pool.query(
     `SELECT o.id, o.name, o.type, o.active, o.created_by AS "createdBy", o.created_at AS "createdAt",
@@ -2277,6 +2545,13 @@ async function getOrgForUser(userId) {
   return rows[0] || null;
 }
 
+/**
+ * Return all organizations with member counts. Used by the super admin
+ * panel for org management.
+ *
+ * @returns {Promise<Array<Object>>} Org rows with memberCount.
+ * @throws {Error} If the database query fails.
+ */
 async function getOrganizations() {
   const { rows } = await pool.query(
     `SELECT o.id, o.name, o.type, o.active, o.created_by AS "createdBy", o.created_at AS "createdAt",
@@ -2289,6 +2564,17 @@ async function getOrganizations() {
   return rows;
 }
 
+/**
+ * Create a new organization and return the inserted row.
+ *
+ * @param {Object} org
+ * @param {string} org.id - Pre-generated org ID.
+ * @param {string} org.name - Org display name.
+ * @param {string} [org.type='household'] - Org type (household, business, etc.).
+ * @param {string} org.createdBy - User ID of the creator.
+ * @returns {Promise<Object>} The created org row.
+ * @throws {Error} If the database query fails.
+ */
 async function createOrganization({ id, name, type, createdBy }) {
   const { rows } = await pool.query(
     `INSERT INTO organizations (id, name, type, created_by)
@@ -2299,6 +2585,13 @@ async function createOrganization({ id, name, type, createdBy }) {
   return rows[0];
 }
 
+/**
+ * Partial-update an organization (name, active status).
+ *
+ * @param {string} id - Org ID.
+ * @param {Object} fields - Fields to update.
+ * @returns {Promise<Object|null>} Updated row, or null if no fields or not found.
+ */
 async function updateOrganization(id, fields) {
   const sets = [];
   const vals = [id];
@@ -2314,6 +2607,17 @@ async function updateOrganization(id, fields) {
   return rows[0] || null;
 }
 
+/**
+ * Add a user to an organization. ON CONFLICT DO NOTHING makes this
+ * idempotent — re-inviting an existing member is a no-op.
+ *
+ * @param {string} orgId - Organization ID.
+ * @param {string} userId - User ID to add.
+ * @param {string} role - Membership role (e.g. 'member', 'admin').
+ * @param {string} invitedBy - User ID who sent the invite.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function addOrgMember(orgId, userId, role, invitedBy) {
   await pool.query(
     `INSERT INTO org_members (org_id, user_id, role, invited_by)
@@ -2325,6 +2629,20 @@ async function addOrgMember(orgId, userId, role, invitedBy) {
 
 // ── Invites ────────────────────────────────────────────────────────────────
 
+/**
+ * Create an invite token for a new user. The token is included in the
+ * registration URL — users cannot register without a valid invite.
+ *
+ * @param {Object} invite
+ * @param {string} invite.id - Pre-generated invite ID.
+ * @param {string} invite.token - Unique invite token for the registration URL.
+ * @param {string} invite.email - Invited email address.
+ * @param {string} invite.orgId - Organization to join on acceptance.
+ * @param {string} [invite.role='member'] - Role assigned on acceptance.
+ * @param {string} invite.invitedBy - Super admin user ID who created the invite.
+ * @param {string} invite.expiresAt - ISO 8601 expiration timestamp.
+ * @returns {Promise<Object>} The created invite row.
+ */
 async function createInvite({ id, token, email, orgId, role, invitedBy, expiresAt }) {
   const { rows } = await pool.query(
     `INSERT INTO invites (id, token, email, org_id, role, invited_by, expires_at)
@@ -2336,6 +2654,14 @@ async function createInvite({ id, token, email, orgId, role, invitedBy, expiresA
   return rows[0];
 }
 
+/**
+ * Look up an invite by its token. Used during registration to validate
+ * the invite and determine org membership. Joins organizations to
+ * include orgName for display.
+ *
+ * @param {string} token - Invite token from the registration URL.
+ * @returns {Promise<Object|null>} Invite row with orgName, or null if invalid.
+ */
 async function getInviteByToken(token) {
   const { rows } = await pool.query(
     `SELECT i.id, i.token, i.email, i.org_id AS "orgId", i.role,
@@ -2350,6 +2676,18 @@ async function getInviteByToken(token) {
   return rows[0] || null;
 }
 
+/**
+ * Mark an invite as accepted by setting accepted_at. Called after
+ * successful registration to prevent token reuse.
+ *
+ * @note This only timestamps the invite — the actual org membership
+ * is created separately via addOrgMember(). The auth route handles
+ * both steps.
+ *
+ * @param {string} token - Invite token to mark as accepted.
+ * @param {string} userId - User ID who accepted (unused in query, kept for audit trail).
+ * @returns {Promise<void>}
+ */
 async function acceptInvite(token, userId) {
   await pool.query(
     `UPDATE invites SET accepted_at = NOW() WHERE token = $1`,
@@ -2359,6 +2697,18 @@ async function acceptInvite(token, userId) {
 
 // ── Audit log ──────────────────────────────────────────────────────────────
 
+/**
+ * Record an admin action to the audit log. Called by super admin routes
+ * for traceability on sensitive operations (user CRUD, impersonation, etc.).
+ *
+ * @param {Object} entry
+ * @param {string} entry.superAdminUserId - Admin who performed the action.
+ * @param {string} entry.action - Action name (e.g. 'create_user', 'suspend_user').
+ * @param {string} [entry.targetType] - Target entity type (e.g. 'user', 'org').
+ * @param {string} [entry.targetId] - Target entity ID.
+ * @param {Object} [entry.metadata={}] - Additional context, stored as JSONB.
+ * @returns {Promise<void>}
+ */
 async function logAdminAction({ superAdminUserId, action, targetType, targetId, metadata }) {
   await pool.query(
     `INSERT INTO admin_audit_log (super_admin_user_id, action, target_type, target_id, metadata)
@@ -2367,6 +2717,15 @@ async function logAdminAction({ superAdminUserId, action, targetType, targetId, 
   );
 }
 
+/**
+ * Return paginated admin audit log entries, newest first.
+ * Used by the super admin panel's audit log viewer.
+ *
+ * @param {number} [limit=20] - Max rows to return.
+ * @param {number} [offset=0] - Pagination offset.
+ * @returns {Promise<Array<Object>>} Audit log entries.
+ * @throws {Error} If the database query fails.
+ */
 async function getAuditLog(limit = 20, offset = 0) {
   const { rows } = await pool.query(
     `SELECT id, super_admin_user_id AS "superAdminUserId", action,
@@ -2382,6 +2741,13 @@ async function getAuditLog(limit = 20, offset = 0) {
 
 // ── All users (with org info) ──────────────────────────────────────────────
 
+/**
+ * Return all users with their org membership (if any). Used by the
+ * super admin panel's user management table. LEFT JOINs ensure users
+ * without org membership still appear.
+ *
+ * @returns {Promise<Array<Object>>} User rows with orgName and orgId.
+ */
 async function getAllUsersWithOrg() {
   const { rows } = await pool.query(
     `SELECT u.id, u.username, u.display_name AS "displayName", u.email, u.role, u.active,
@@ -2493,6 +2859,17 @@ async function deleteMemory(id) {
 
 // ── Alert Cadence Config ──────────────────────────────────────────────────
 
+/**
+ * Default alert cadence configurations seeded for new users. Defines
+ * how many notifications fire per priority level, how far before the
+ * due time, and which channels to use.
+ *
+ * @note The 'floating' priority uses day_of_week + hour offsets instead
+ * of minutes_before — it fires on a fixed weekly schedule (Sunday 8am
+ * digest) rather than relative to a due date.
+ *
+ * @type {Array<Object>}
+ */
 const DEFAULT_CADENCE_CONFIGS = [
   {
     priority: 'high',
@@ -2520,6 +2897,13 @@ const DEFAULT_CADENCE_CONFIGS = [
   },
 ];
 
+/**
+ * Seed default cadence configs for a new user. ON CONFLICT DO NOTHING
+ * makes this idempotent — safe to call multiple times.
+ *
+ * @param {string} userId - User ID to seed defaults for.
+ * @returns {Promise<void>}
+ */
 async function seedDefaultCadenceConfig(userId) {
   for (const cfg of DEFAULT_CADENCE_CONFIGS) {
     await pool.query(
@@ -2531,6 +2915,14 @@ async function seedDefaultCadenceConfig(userId) {
   }
 }
 
+/**
+ * Return all cadence configs for a user, ordered by priority.
+ * Used by the alerts settings UI to display and edit notification timing.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @returns {Promise<Array<Object>>} Cadence config rows.
+ * @throws {Error} If the database query fails.
+ */
 async function getCadenceConfigForUser(userId) {
   const { rows } = await pool.query(
     `SELECT id, priority, offsets, channels, enabled, updated_at AS "updatedAt"
@@ -2540,6 +2932,18 @@ async function getCadenceConfigForUser(userId) {
   return rows;
 }
 
+/**
+ * Create or update a cadence config for a specific priority level.
+ * ON CONFLICT on (user_id, priority) ensures one config per priority per user.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {string} priority - Priority level (high, medium, low, floating).
+ * @param {Array<Object>} offsets - Alert timing offsets.
+ * @param {Array<string>} channels - Notification channels (whatsapp, email, slack).
+ * @param {boolean} enabled - Whether this cadence is active.
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function upsertCadenceConfig(userId, priority, offsets, channels, enabled) {
   await pool.query(
     `INSERT INTO alert_cadence_config (user_id, priority, offsets, channels, enabled, updated_at)
@@ -2550,6 +2954,17 @@ async function upsertCadenceConfig(userId, priority, offsets, channels, enabled)
   );
 }
 
+/**
+ * Set a user's Do Not Disturb window. Stored in user_preferences
+ * (not cadence config) because DND applies across all priorities.
+ * The cron scheduler checks these times to suppress alerts.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {string} dndStart - DND start time (HH:MM, user's local timezone).
+ * @param {string} dndEnd - DND end time (HH:MM, user's local timezone).
+ * @returns {Promise<void>}
+ * @throws {Error} If the database query fails.
+ */
 async function updateDndPreferences(userId, dndStart, dndEnd) {
   await pool.query(
     `INSERT INTO user_preferences (user_id, dnd_start, dnd_end, updated_at)
@@ -2561,7 +2976,14 @@ async function updateDndPreferences(userId, dndStart, dndEnd) {
 
 /**
  * Get the current UTC offset string (e.g. "-07:00") for a given IANA timezone.
- * Handles DST transitions automatically.
+ * Uses Intl.DateTimeFormat to resolve the offset at the current instant,
+ * so DST transitions are handled automatically.
+ *
+ * @note Falls back to "-07:00" (US Pacific) if the timezone string cannot
+ * be parsed. This matches the app-wide default timezone.
+ *
+ * @param {string} tz - IANA timezone string (e.g. 'America/Los_Angeles').
+ * @returns {string} UTC offset in ±HH:MM format.
  */
 function getTimezoneOffset(tz) {
   const formatter = new Intl.DateTimeFormat('en-US', {
@@ -2748,6 +3170,17 @@ async function markScheduledAlertFired(alertId) {
   );
 }
 
+/**
+ * Check which alert keys have already fired for a user in the last 24 hours.
+ * Used by the frontend alert evaluation flow to avoid duplicate notifications.
+ *
+ * @note This is the legacy client-side alert system (fired_alerts table),
+ * separate from the server-side scheduled_alerts cron system.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {Array<string>} keys - Alert keys to check.
+ * @returns {Promise<Array<string>>} Keys that have already fired.
+ */
 async function checkFiredAlerts(userId, keys) {
   if (!keys || keys.length === 0) return [];
   const { rows } = await pool.query(
@@ -2758,6 +3191,14 @@ async function checkFiredAlerts(userId, keys) {
   return rows.map(r => r.alert_key);
 }
 
+/**
+ * Record that an alert key has fired for a user. ON CONFLICT DO NOTHING
+ * makes this idempotent — calling twice for the same key is a no-op.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {string} key - Unique alert key to mark as fired.
+ * @returns {Promise<void>}
+ */
 async function markFiredAlert(userId, key) {
   await pool.query(
     `INSERT INTO fired_alerts (user_id, alert_key) VALUES ($1, $2)
