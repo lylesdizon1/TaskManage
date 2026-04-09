@@ -65,6 +65,7 @@ app.use('/', require('./server/routes/chat.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/financial.cjs')({ authenticateToken, requireOwnership, db }));
 app.use('/', require('./server/routes/dashboard.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }));
+app.use('/', require('./server/routes/calendar-notes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/admin.cjs')({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }));
 
