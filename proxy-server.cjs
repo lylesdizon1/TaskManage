@@ -147,3 +147,58 @@ cron.schedule('* * * * *', async () => {
   }
 });
 console.log('[cron] Alert scheduler started');
+
+// ── Post-meeting note reminder cron — runs every minute ─────────────────────
+cron.schedule('* * * * *', async () => {
+  try {
+    const events = await db.getRecentlyEndedEventsForAlerts();
+    if (!events.length) return;
+
+    for (const ev of events) {
+      try {
+        const msg = `Your meeting "${ev.eventTitle || 'Untitled'}" just ended. Reply with your outcomes & decisions — Aria will save them for you.`;
+        let sent = false;
+
+        // WhatsApp
+        if (ev.whatsappPhone) {
+          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
+          const ultraToken = process.env.ULTRAMSG_TOKEN;
+          if (ultraInstance && ultraToken) {
+            try {
+              const waRes = await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ token: ultraToken, to: ev.whatsappPhone, body: msg }),
+              });
+              if (waRes.ok) { sent = true; console.log(`[cron] Post-meeting alert sent (WhatsApp) for event "${ev.eventTitle}"`); }
+            } catch { /* silent */ }
+          }
+        }
+
+        // Email fallback
+        if (!sent && ev.email) {
+          const resend = _getResendClient();
+          if (resend) {
+            try {
+              await resend.emails.send({
+                from: _getFromEmail(),
+                to: ev.email,
+                subject: `Meeting ended: ${ev.eventTitle || 'Untitled'}`,
+                text: msg,
+              });
+              sent = true;
+              console.log(`[cron] Post-meeting alert sent (Email) for event "${ev.eventTitle}"`);
+            } catch { /* silent */ }
+          }
+        }
+
+        await db.markCalendarNoteAlertSent(ev.userId, ev.eventId);
+      } catch (err) {
+        console.error(`[cron] Post-meeting alert failed for ${ev.eventId}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('[cron] Post-meeting cron error:', err.message);
+  }
+});
+console.log('[cron] Post-meeting alert scheduler started');
