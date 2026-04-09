@@ -464,6 +464,26 @@ async function initTables() {
   // Cleanup: remove entries older than 7 days
   await pool.query(`DELETE FROM fired_alerts WHERE fired_at < NOW() - INTERVAL '7 days'`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calendar_notes (
+      id               SERIAL PRIMARY KEY,
+      user_id          TEXT NOT NULL,
+      event_id         TEXT NOT NULL,
+      event_title      TEXT,
+      event_start      TIMESTAMPTZ,
+      event_end        TIMESTAMPTZ,
+      source_account   TEXT,
+      pre_note         TEXT,
+      post_note        TEXT,
+      post_alert_sent  BOOLEAN DEFAULT false,
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, event_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_calendar_notes_user ON calendar_notes(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_calendar_notes_start ON calendar_notes(event_start)`).catch(() => {});
+
   // ── Seed default org ──
   const { rows: orgRows } = await pool.query('SELECT COUNT(*)::int AS count FROM organizations');
   if (orgRows[0].count === 0) {
@@ -3354,6 +3374,126 @@ async function markFiredAlert(userId, key) {
   );
 }
 
+// ── Calendar Notes ──────────────────────────────────────────────────────────
+
+async function getCalendarNote(userId, eventId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", event_id AS "eventId", event_title AS "eventTitle",
+            event_start AS "eventStart", event_end AS "eventEnd", source_account AS "sourceAccount",
+            pre_note AS "preNote", post_note AS "postNote", post_alert_sent AS "postAlertSent",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM calendar_notes WHERE user_id = $1 AND event_id = $2`,
+    [userId, eventId],
+  );
+  return rows[0] || null;
+}
+
+async function upsertCalendarNote(userId, eventId, fields) {
+  const { eventTitle, eventStart, eventEnd, sourceAccount, preNote, postNote } = fields;
+  const { rows } = await pool.query(
+    `INSERT INTO calendar_notes (user_id, event_id, event_title, event_start, event_end, source_account, pre_note, post_note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (user_id, event_id) DO UPDATE SET
+       event_title = COALESCE($3, calendar_notes.event_title),
+       event_start = COALESCE($4, calendar_notes.event_start),
+       event_end = COALESCE($5, calendar_notes.event_end),
+       source_account = COALESCE($6, calendar_notes.source_account),
+       pre_note = COALESCE($7, calendar_notes.pre_note),
+       post_note = COALESCE($8, calendar_notes.post_note),
+       updated_at = NOW()
+     RETURNING id, user_id AS "userId", event_id AS "eventId", event_title AS "eventTitle",
+               event_start AS "eventStart", event_end AS "eventEnd", source_account AS "sourceAccount",
+               pre_note AS "preNote", post_note AS "postNote", post_alert_sent AS "postAlertSent",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [userId, eventId, eventTitle || null, eventStart || null, eventEnd || null, sourceAccount || null, preNote, postNote],
+  );
+  return rows[0];
+}
+
+async function getCalendarNotesHistory(userId, { search, dateRange, limit } = {}) {
+  const conditions = ['user_id = $1', "(pre_note IS NOT NULL OR post_note IS NOT NULL)"];
+  const params = [userId];
+  let paramIdx = 2;
+
+  if (dateRange && dateRange !== 'all') {
+    const intervals = { today: '1 day', week: '7 days', month: '30 days', '3months': '90 days' };
+    const interval = intervals[dateRange];
+    if (interval) {
+      conditions.push(`event_start >= NOW() - INTERVAL '${interval}'`);
+    }
+  }
+
+  if (search) {
+    conditions.push(`(event_title ILIKE $${paramIdx} OR pre_note ILIKE $${paramIdx} OR post_note ILIKE $${paramIdx})`);
+    params.push(`%${search}%`);
+    paramIdx++;
+  }
+
+  const maxRows = Math.min(parseInt(limit, 10) || 50, 200);
+  const { rows } = await pool.query(
+    `SELECT id, event_id AS "eventId", event_title AS "eventTitle",
+            event_start AS "eventStart", event_end AS "eventEnd", source_account AS "sourceAccount",
+            pre_note AS "preNote", post_note AS "postNote",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM calendar_notes
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY event_start DESC NULLS LAST
+     LIMIT ${maxRows}`,
+    params,
+  );
+  return rows;
+}
+
+async function getCalendarNotesForAI(userId) {
+  const { rows } = await pool.query(
+    `SELECT event_id AS "eventId", event_title AS "eventTitle",
+            event_start AS "eventStart", event_end AS "eventEnd", source_account AS "sourceAccount",
+            pre_note AS "preNote", post_note AS "postNote"
+     FROM calendar_notes
+     WHERE user_id = $1
+       AND event_start >= NOW() - INTERVAL '7 days'
+       AND event_start <= NOW() + INTERVAL '7 days'
+       AND (pre_note IS NOT NULL OR post_note IS NOT NULL)
+     ORDER BY event_start ASC
+     LIMIT 30`,
+    [userId],
+  );
+  return rows;
+}
+
+async function getRecentlyEndedEventsForAlerts() {
+  const { rows } = await pool.query(
+    `SELECT cn.id, cn.user_id AS "userId", cn.event_id AS "eventId",
+            cn.event_title AS "eventTitle", cn.event_end AS "eventEnd",
+            u.whatsapp_phone AS "whatsappPhone", u.email, u.timezone
+     FROM calendar_notes cn
+     JOIN users u ON u.id = cn.user_id
+     LEFT JOIN user_preferences up ON up.user_id = cn.user_id
+     WHERE cn.post_alert_sent = false
+       AND cn.event_end IS NOT NULL
+       AND cn.event_end <= NOW()
+       AND cn.event_end >= NOW() - INTERVAL '5 minutes'
+       AND NOT (
+         CASE
+           WHEN COALESCE(up.dnd_start, '22:00') > COALESCE(up.dnd_end, '07:00')
+             THEN (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time >= COALESCE(up.dnd_start, '22:00')::time
+                OR (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time < COALESCE(up.dnd_end, '07:00')::time
+           ELSE (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time >= COALESCE(up.dnd_start, '22:00')::time
+            AND (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time < COALESCE(up.dnd_end, '07:00')::time
+         END
+       )
+     LIMIT 20`
+  );
+  return rows;
+}
+
+async function markCalendarNoteAlertSent(userId, eventId) {
+  await pool.query(
+    `UPDATE calendar_notes SET post_alert_sent = true WHERE user_id = $1 AND event_id = $2`,
+    [userId, eventId],
+  );
+}
+
 module.exports = {
   pool,
   initTables,
@@ -3457,4 +3597,10 @@ module.exports = {
   getUnfiredAlerts,
   markScheduledAlertFired,
   DEFAULT_CADENCE_CONFIGS,
+  getCalendarNote,
+  upsertCalendarNote,
+  getCalendarNotesHistory,
+  getCalendarNotesForAI,
+  getRecentlyEndedEventsForAlerts,
+  markCalendarNoteAlertSent,
 };
