@@ -112,8 +112,10 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   const accounts = gcalStatus.accounts || [];
   const primaryAccount = accounts.find(a => a.isPrimary) || accounts[0];
   const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const calendarSrc = primaryAccount
-    ? `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(primaryAccount.email)}&ctz=${encodeURIComponent(userTZ)}`
+  // Include all accounts as separate src params so the embed overlays all calendars
+  const srcParams = accounts.map(a => `src=${encodeURIComponent(a.email)}`).join('&');
+  const calendarSrc = accounts.length
+    ? `https://calendar.google.com/calendar/embed?${srcParams}&ctz=${encodeURIComponent(userTZ)}`
     : '';
 
   return (
