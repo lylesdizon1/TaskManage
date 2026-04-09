@@ -276,6 +276,9 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       let recentMemories = [];
       try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
 
+      let calendarNotes = [];
+      try { calendarNotes = await db.getCalendarNotesForAI(userId); } catch {}
+
       const tz = user.timezone;
       const todayStr = getTodayLocal(tz);
       const todayDate = todayStr.split(', ')[1];
@@ -297,6 +300,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         ).join('; ') || 'none'
       }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
       }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
+      }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? new Date(cn.eventStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
       }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
       }\nRecent Aria actions (last 10): ${
         recentMemories.length
