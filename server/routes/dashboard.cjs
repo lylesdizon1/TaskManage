@@ -177,7 +177,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
    */
   router.post('/api/dashboard/aria-brief', authenticateToken, async (req, res) => {
     try {
-      const apiKey = req.body.apiKey || process.env.CLAUDE_API_KEY;
+      const apiKey = process.env.CLAUDE_API_KEY;
       if (!apiKey) return res.json({ brief: '' });
 
       const { assistantName, persona, userName, timeOfDay, data } = req.body;
@@ -250,7 +250,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
    */
   router.post('/api/dashboard/timeline-summary', authenticateToken, async (req, res) => {
     try {
-      const apiKey = req.body.apiKey || process.env.CLAUDE_API_KEY;
+      const apiKey = process.env.CLAUDE_API_KEY;
       if (!apiKey) return res.json({ summary: '' });
 
       const { events, tasks } = req.body;
