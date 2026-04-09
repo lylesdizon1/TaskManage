@@ -1,13 +1,35 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
+import { format, parse, startOfWeek, getDay, startOfMonth, endOfMonth, addMonths, subMonths } from 'date-fns';
+import enUS from 'date-fns/locale/en-US';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
 import { SpinnerIcon, CalendarIcon } from '../components/icons/Icons.jsx';
 
 const API_BASE = '';
 
+const locales = { 'en-US': enUS };
+const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
+
+const ENTITY_COLORS = [
+  '#4f4dcf', '#0ea5e9', '#10b981', '#f59e0b',
+  '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6',
+];
+const NEUTRAL_COLOR = '#94a3b8';
+
 export default function CalendarPanel({ currentUser, authToken, addToast, apiFetch }) {
   const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null, accounts: [] });
   const [loading, setLoading]       = useState(true);
+  const [events, setEvents]         = useState([]);
+  const [entities, setEntities]     = useState([]);
+  const [view, setView]             = useState('month');
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
+  const popoverRef = useRef(null);
 
-  // Check connection status on mount and after OAuth redirect
+  const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  // ── Status check ──────────────────────────────────────────────
   useEffect(() => {
     checkStatus();
     const params = new URLSearchParams(window.location.search);
@@ -33,18 +55,87 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     }
   }
 
+  // ── Fetch entities for color mapping ──────────────────────────
+  useEffect(() => {
+    if (!gcalStatus.connected) return;
+    apiFetch(`${API_BASE}/api/entities`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setEntities(data); })
+      .catch(() => {});
+  }, [gcalStatus.connected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Entity color map ──────────────────────────────────────────
+  const entityColorMap = useMemo(() => {
+    const map = {};
+    entities.forEach((e, i) => {
+      map[e.name.toLowerCase()] = ENTITY_COLORS[i % ENTITY_COLORS.length];
+    });
+    return map;
+  }, [entities]);
+
+  function getEventColor(event) {
+    // Check entity_name field first
+    if (event.entityName) {
+      const c = entityColorMap[event.entityName.toLowerCase()];
+      if (c) return c;
+    }
+    // Scan title for entity name mentions
+    const titleLower = (event.title || '').toLowerCase();
+    for (const [name, color] of Object.entries(entityColorMap)) {
+      if (titleLower.includes(name)) return color;
+    }
+    return NEUTRAL_COLOR;
+  }
+
+  // ── Fetch events ──────────────────────────────────────────────
+  const fetchEvents = useCallback(async () => {
+    if (!gcalStatus.connected) return;
+    try {
+      const res = await apiFetch(
+        `${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}&days=31`,
+        { headers: { Authorization: `Bearer ${authToken}` } },
+      );
+      const data = await res.json();
+      if (!Array.isArray(data)) return;
+      const mapped = data.map(ev => ({
+        id: ev.id,
+        title: ev.title || '(No title)',
+        start: ev.allDay ? new Date(ev.start + 'T00:00:00') : new Date(ev.start),
+        end: ev.allDay ? new Date((ev.end || ev.start) + 'T00:00:00') : new Date(ev.end || ev.start),
+        allDay: ev.allDay || false,
+        account: ev.account || '',
+        entityName: ev.entityName || '',
+      }));
+      setEvents(mapped);
+    } catch {
+      // silent
+    }
+  }, [gcalStatus.connected, authToken, userTZ]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { fetchEvents(); }, [fetchEvents]);
+
+  // ── Close popover on outside click ────────────────────────────
+  useEffect(() => {
+    if (!selectedEvent) return;
+    function handleClick(e) {
+      if (popoverRef.current && !popoverRef.current.contains(e.target)) {
+        setSelectedEvent(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [selectedEvent]);
+
+  // ── Handlers ──────────────────────────────────────────────────
   async function handleConnect() {
     try {
       const res = await apiFetch(`${API_BASE}/api/gcal/auth-url`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
-      if (data.error) {
-        addToast({ type: 'error', message: data.error });
-        return;
-      }
+      if (data.error) { addToast({ type: 'error', message: data.error }); return; }
       window.location.href = data.url;
-    } catch (err) {
-      addToast({ type: 'error', message: 'Failed to start Google sign-in' });
-    }
+    } catch { addToast({ type: 'error', message: 'Failed to start Google sign-in' }); }
   }
 
   async function handleDisconnect(email) {
@@ -56,9 +147,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       });
       addToast({ type: 'success', message: email ? `Disconnected ${email}` : 'Google Calendar disconnected' });
       checkStatus();
-    } catch {
-      addToast({ type: 'error', message: 'Failed to disconnect' });
-    }
+    } catch { addToast({ type: 'error', message: 'Failed to disconnect' }); }
   }
 
   async function handleSetPrimary(email) {
@@ -70,11 +159,36 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       });
       addToast({ type: 'success', message: `${email} set as primary` });
       checkStatus();
-    } catch {
-      addToast({ type: 'error', message: 'Failed to set primary' });
-    }
+    } catch { addToast({ type: 'error', message: 'Failed to set primary' }); }
   }
 
+  function handleSelectEvent(event, e) {
+    const rect = e?.target?.getBoundingClientRect?.() || e?.currentTarget?.getBoundingClientRect?.();
+    if (rect) {
+      setPopoverPos({ top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - 300) });
+    }
+    setSelectedEvent(event);
+  }
+
+  function handleNavigate(newDate) { setCurrentDate(newDate); }
+
+  // ── Event styling ─────────────────────────────────────────────
+  const eventPropGetter = useCallback((event) => {
+    const bg = getEventColor(event);
+    return {
+      style: {
+        backgroundColor: bg,
+        color: '#fff',
+        border: 'none',
+        borderRadius: '4px',
+        fontSize: '12px',
+        fontFamily: "'Manrope', sans-serif",
+        padding: '1px 4px',
+      },
+    };
+  }, [entityColorMap]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Loading state ─────────────────────────────────────────────
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-400">
@@ -83,6 +197,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     );
   }
 
+  // ── Not connected ─────────────────────────────────────────────
   if (!gcalStatus.connected) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
@@ -109,17 +224,11 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     );
   }
 
+  // ── Connected — render native calendar ────────────────────────
   const accounts = gcalStatus.accounts || [];
-  const primaryAccount = accounts.find(a => a.isPrimary) || accounts[0];
-  const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-  // Include all accounts as separate src params so the embed overlays all calendars
-  const srcParams = accounts.map(a => `src=${encodeURIComponent(a.email)}`).join('&');
-  const calendarSrc = accounts.length
-    ? `https://calendar.google.com/calendar/embed?${srcParams}&ctz=${encodeURIComponent(userTZ)}`
-    : '';
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: '#fbf8fe' }}>
       {/* Accounts bar */}
       <div className="px-4 py-2 bg-green-50 border-b border-green-100 flex-shrink-0">
         <div className="flex items-center justify-between mb-1">
@@ -163,32 +272,173 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           ))}
         </div>
       </div>
-      {/* Calendar iframe (desktop) / Open button (mobile) */}
-      {calendarSrc && (
-        <iframe
-          src={calendarSrc}
-          className="flex-1 w-full border-0 hidden md:block"
-          title="Google Calendar"
-        />
-      )}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 md:hidden">
-        <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mb-4">
-          <CalendarIcon className="w-8 h-8 text-indigo-600" />
+
+      {/* View toggle + calendar header */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setCurrentDate(new Date())}
+            className="px-3 py-1 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Today
+          </button>
+          <button
+            onClick={() => setCurrentDate(d => view === 'month' ? subMonths(d, 1) : new Date(d.getTime() - 7 * 86400000))}
+            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+          >
+            <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+          </button>
+          <button
+            onClick={() => setCurrentDate(d => view === 'month' ? addMonths(d, 1) : new Date(d.getTime() + 7 * 86400000))}
+            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+          >
+            <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+          </button>
+          <h2 className="text-sm font-semibold text-gray-900 ml-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+            {format(currentDate, view === 'month' ? 'MMMM yyyy' : "'Week of' MMM d, yyyy")}
+          </h2>
         </div>
-        <h3 className="text-lg font-bold text-gray-900 mb-2">Your Calendar</h3>
-        <p className="text-sm text-gray-500 mb-6 max-w-xs text-center">
-          View and manage your Google Calendar events in a new tab.
-        </p>
-        <a
-          href={`https://calendar.google.com/calendar/r?authuser=${encodeURIComponent(primaryAccount?.email || '')}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-3 px-6 py-3 bg-indigo-600 text-white rounded-xl shadow-sm hover:bg-indigo-700 transition-colors text-sm font-medium min-h-[48px]"
-        >
-          <CalendarIcon className="w-5 h-5" />
-          Open Google Calendar
-        </a>
+        <div className="flex bg-gray-100 rounded-lg p-0.5">
+          {['month', 'week'].map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors capitalize ${
+                view === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {/* Calendar */}
+      <div className="flex-1 overflow-auto px-2 py-1 dizon-calendar">
+        <Calendar
+          localizer={localizer}
+          events={events}
+          view={view}
+          onView={setView}
+          views={['month', 'week']}
+          date={currentDate}
+          onNavigate={handleNavigate}
+          onSelectEvent={handleSelectEvent}
+          eventPropGetter={eventPropGetter}
+          toolbar={false}
+          popup
+          style={{ height: '100%', minHeight: 500 }}
+        />
+      </div>
+
+      {/* Event popover */}
+      {selectedEvent && (
+        <div
+          ref={popoverRef}
+          className="fixed z-50 bg-white rounded-xl shadow-lg border border-gray-200 p-4 w-72"
+          style={{ top: Math.min(popoverPos.top, window.innerHeight - 200), left: popoverPos.left }}
+        >
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <span
+                className="w-3 h-3 rounded-full flex-shrink-0"
+                style={{ backgroundColor: getEventColor(selectedEvent) }}
+              />
+              <h4 className="text-sm font-semibold text-gray-900 leading-tight">{selectedEvent.title}</h4>
+            </div>
+            <button
+              onClick={() => setSelectedEvent(null)}
+              className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+            >
+              <span className="material-symbols-outlined text-[16px]">close</span>
+            </button>
+          </div>
+          <div className="text-xs text-gray-500 space-y-1">
+            <div className="flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-[14px]">schedule</span>
+              {selectedEvent.allDay
+                ? format(selectedEvent.start, 'EEE, MMM d, yyyy')
+                : `${format(selectedEvent.start, 'EEE, MMM d · h:mm a')}${selectedEvent.end ? ` – ${format(selectedEvent.end, 'h:mm a')}` : ''}`
+              }
+            </div>
+            {selectedEvent.account && (
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[14px]">account_circle</span>
+                {selectedEvent.account}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Override react-big-calendar styles to match Dizon design system */}
+      <style>{`
+        .dizon-calendar .rbc-calendar {
+          font-family: 'Manrope', sans-serif;
+          background: #fbf8fe;
+        }
+        .dizon-calendar .rbc-header {
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-size: 11px;
+          font-weight: 600;
+          color: #6b7280;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          padding: 8px 4px;
+          border-bottom: 1px solid #e5e7eb;
+        }
+        .dizon-calendar .rbc-month-view,
+        .dizon-calendar .rbc-time-view {
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .dizon-calendar .rbc-day-bg {
+          background: #fff;
+        }
+        .dizon-calendar .rbc-off-range-bg {
+          background: #f9fafb;
+        }
+        .dizon-calendar .rbc-today {
+          background: #f0edff !important;
+        }
+        .dizon-calendar .rbc-date-cell {
+          font-size: 12px;
+          padding: 4px 6px;
+          color: #374151;
+        }
+        .dizon-calendar .rbc-date-cell.rbc-now {
+          font-weight: 700;
+          color: #4f4dcf;
+        }
+        .dizon-calendar .rbc-event {
+          border-radius: 4px !important;
+          font-size: 11px !important;
+          padding: 1px 4px !important;
+          line-height: 1.4;
+        }
+        .dizon-calendar .rbc-event.rbc-selected {
+          box-shadow: 0 0 0 2px #4f4dcf;
+        }
+        .dizon-calendar .rbc-show-more {
+          font-size: 11px;
+          color: #4f4dcf;
+          font-weight: 500;
+        }
+        .dizon-calendar .rbc-time-header-cell .rbc-header {
+          border-bottom: none;
+        }
+        .dizon-calendar .rbc-time-slot {
+          font-size: 10px;
+          color: #9ca3af;
+        }
+        .dizon-calendar .rbc-current-time-indicator {
+          background-color: #4f4dcf;
+        }
+        .dizon-calendar .rbc-allday-cell {
+          min-height: 20px;
+        }
+      `}</style>
     </div>
   );
 }
