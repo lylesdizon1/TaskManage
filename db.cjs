@@ -121,9 +121,13 @@ async function initTables() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS gcal_tokens (
-      user_id    TEXT PRIMARY KEY,
-      tokens     JSONB NOT NULL,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      user_id       TEXT NOT NULL,
+      google_email  TEXT NOT NULL DEFAULT 'primary@placeholder',
+      tokens        JSONB NOT NULL,
+      is_primary    BOOLEAN DEFAULT false,
+      updated_at    TIMESTAMPTZ DEFAULT NOW(),
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, google_email)
     );
   `);
 
@@ -2313,16 +2317,30 @@ async function runMigrations() {
     WHERE google_email IS NULL
   `).catch(() => {});
 
-  // Migrate PK from user_id to (user_id, google_email) — only if still single-column
-  await pool.query(`
-    DO $$ BEGIN
-      ALTER TABLE gcal_tokens DROP CONSTRAINT gcal_tokens_pkey;
-      ALTER TABLE gcal_tokens ALTER COLUMN google_email SET NOT NULL;
-      ALTER TABLE gcal_tokens ADD PRIMARY KEY (user_id, google_email);
-    EXCEPTION
-      WHEN others THEN NULL;  -- already migrated or constraint name differs
-    END $$;
-  `).catch((err) => console.warn('[migration] gcal_tokens PK:', err.message));
+  // Check if PK is still single-column (user_id only) and migrate to composite
+  try {
+    const { rows: pkCols } = await pool.query(`
+      SELECT a.attname FROM pg_index i
+      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE i.indrelid = 'gcal_tokens'::regclass AND i.indisprimary
+      ORDER BY array_position(i.indkey, a.attnum)
+    `);
+    const pkColNames = pkCols.map(r => r.attname);
+    if (pkColNames.length === 1 && pkColNames[0] === 'user_id') {
+      console.log('[migration] gcal_tokens: migrating PK from (user_id) to (user_id, google_email)');
+      // Ensure no nulls before setting NOT NULL
+      await pool.query(`UPDATE gcal_tokens SET google_email = 'primary@placeholder' WHERE google_email IS NULL`);
+      await pool.query(`ALTER TABLE gcal_tokens DROP CONSTRAINT gcal_tokens_pkey`);
+      await pool.query(`ALTER TABLE gcal_tokens ALTER COLUMN google_email SET NOT NULL`);
+      await pool.query(`ALTER TABLE gcal_tokens ADD PRIMARY KEY (user_id, google_email)`);
+      console.log('[migration] gcal_tokens: PK migration complete');
+    }
+  } catch (err) {
+    console.warn('[migration] gcal_tokens PK check/migration:', err.message);
+  }
+
+  // Ensure google_email is NOT NULL even if PK migration was already done
+  await pool.query(`ALTER TABLE gcal_tokens ALTER COLUMN google_email SET NOT NULL`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
