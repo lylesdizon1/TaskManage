@@ -26,6 +26,15 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
   const popoverRef = useRef(null);
+  const [eventNotes, setEventNotes] = useState({ preNote: '', postNote: '' });
+  const [editingPre, setEditingPre] = useState('');
+  const [editingPost, setEditingPost] = useState('');
+  const [noteSaved, setNoteSaved] = useState(false);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [historyNotes, setHistoryNotes] = useState([]);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyRange, setHistoryRange] = useState('month');
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -115,6 +124,77 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   }, [gcalStatus.connected, authToken, userTZ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
+
+  // ── Fetch notes when event selected ──────────────────────────
+  useEffect(() => {
+    if (!selectedEvent) return;
+    setNotesLoading(true);
+    const rawId = selectedEvent.id;
+    // strip account prefix (email::eventId → eventId)
+    const eventId = rawId.includes('::') ? rawId.split('::').slice(1).join('::') : rawId;
+    apiFetch(`${API_BASE}/api/calendar-notes?eventId=${encodeURIComponent(eventId)}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then(r => r.json())
+      .then(data => {
+        const pre = data.preNote || data.pre_note || '';
+        const post = data.postNote || data.post_note || '';
+        setEventNotes({ preNote: pre, postNote: post });
+        setEditingPre(pre);
+        setEditingPost(post);
+      })
+      .catch(() => {
+        setEventNotes({ preNote: '', postNote: '' });
+        setEditingPre('');
+        setEditingPost('');
+      })
+      .finally(() => setNotesLoading(false));
+  }, [selectedEvent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveNote(field, value) {
+    if (!selectedEvent) return;
+    const rawId = selectedEvent.id;
+    const eventId = rawId.includes('::') ? rawId.split('::').slice(1).join('::') : rawId;
+    try {
+      await apiFetch(`${API_BASE}/api/calendar-notes/${encodeURIComponent(eventId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          [field]: value,
+          event_title: selectedEvent.title,
+          event_start: selectedEvent.start?.toISOString(),
+          event_end: selectedEvent.end?.toISOString(),
+          source_account: selectedEvent.account || null,
+        }),
+      });
+      setEventNotes(prev => ({ ...prev, [field === 'pre_note' ? 'preNote' : 'postNote']: value }));
+      setNoteSaved(true);
+      setTimeout(() => setNoteSaved(false), 1500);
+    } catch {
+      addToast({ type: 'error', message: 'Failed to save note' });
+    }
+  }
+
+  // ── Fetch history notes ──────────────────────────────────────
+  const fetchHistory = useCallback(async () => {
+    if (view !== 'history') return;
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({ dateRange: historyRange, limit: '50' });
+      if (historySearch) params.set('search', historySearch);
+      const res = await apiFetch(`${API_BASE}/api/calendar-notes/history?${params}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      setHistoryNotes(Array.isArray(data) ? data : []);
+    } catch {
+      setHistoryNotes([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [view, historyRange, historySearch, authToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
   // ── Close popover on outside click ────────────────────────────
   useEffect(() => {
@@ -299,7 +379,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           </h2>
         </div>
         <div className="flex bg-gray-100 rounded-lg p-0.5">
-          {['month', 'week'].map((v) => (
+          {['month', 'week', 'history'].map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -313,63 +393,187 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         </div>
       </div>
 
-      {/* Calendar */}
-      <div className="flex-1 overflow-auto px-2 py-1 dizon-calendar">
-        <Calendar
-          localizer={localizer}
-          events={events}
-          view={view}
-          onView={setView}
-          views={['month', 'week']}
-          date={currentDate}
-          onNavigate={handleNavigate}
-          onSelectEvent={handleSelectEvent}
-          eventPropGetter={eventPropGetter}
-          toolbar={false}
-          popup
-          style={{ height: '100%', minHeight: 500 }}
-        />
-      </div>
-
-      {/* Event popover */}
-      {selectedEvent && (
-        <div
-          ref={popoverRef}
-          className="fixed z-50 bg-white rounded-xl shadow-lg border border-gray-200 p-4 w-72"
-          style={{ top: Math.min(popoverPos.top, window.innerHeight - 200), left: popoverPos.left }}
-        >
-          <div className="flex items-start justify-between gap-2 mb-2">
-            <div className="flex items-center gap-2">
-              <span
-                className="w-3 h-3 rounded-full flex-shrink-0"
-                style={{ backgroundColor: getEventColor(selectedEvent) }}
-              />
-              <h4 className="text-sm font-semibold text-gray-900 leading-tight">{selectedEvent.title}</h4>
-            </div>
-            <button
-              onClick={() => setSelectedEvent(null)}
-              className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+      {/* Calendar or History */}
+      {view === 'history' ? (
+        <div className="flex-1 overflow-auto px-4 py-3">
+          {/* Search + filter */}
+          <div className="flex items-center gap-2 mb-3">
+            <input
+              type="text"
+              value={historySearch}
+              onChange={e => setHistorySearch(e.target.value)}
+              placeholder="Search meetings…"
+              className="flex-1 text-xs bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+              style={{ fontFamily: "'Manrope', sans-serif" }}
+            />
+            <select
+              value={historyRange}
+              onChange={e => setHistoryRange(e.target.value)}
+              className="text-xs bg-white border border-gray-200 rounded-lg px-2 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+              style={{ fontFamily: "'Manrope', sans-serif" }}
             >
-              <span className="material-symbols-outlined text-[16px]">close</span>
-            </button>
+              <option value="week">Past Week</option>
+              <option value="month">Past Month</option>
+              <option value="3months">Past 3 Months</option>
+              <option value="all">All Time</option>
+            </select>
           </div>
-          <div className="text-xs text-gray-500 space-y-1">
-            <div className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[14px]">schedule</span>
-              {selectedEvent.allDay
-                ? format(selectedEvent.start, 'EEE, MMM d, yyyy')
-                : `${format(selectedEvent.start, 'EEE, MMM d · h:mm a')}${selectedEvent.end ? ` – ${format(selectedEvent.end, 'h:mm a')}` : ''}`
-              }
+
+          {historyLoading ? (
+            <div className="flex items-center justify-center py-8 text-gray-400">
+              <SpinnerIcon className="w-5 h-5 animate-spin" />
             </div>
-            {selectedEvent.account && (
-              <div className="flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[14px]">account_circle</span>
-                {selectedEvent.account}
-              </div>
-            )}
-          </div>
+          ) : historyNotes.length === 0 ? (
+            <div className="text-center py-8 text-gray-400 text-sm">
+              No meeting notes found
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {historyNotes.map(note => (
+                <div key={note.id || note.eventId} className="bg-white rounded-lg border border-gray-200 p-3">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <h4 className="text-sm font-semibold text-gray-900">{note.eventTitle || note.event_title || '(Untitled)'}</h4>
+                    <span className="text-[10px] text-gray-400 flex-shrink-0">
+                      {note.eventStart || note.event_start
+                        ? format(new Date(note.eventStart || note.event_start), 'MMM d, yyyy · h:mm a')
+                        : ''}
+                    </span>
+                  </div>
+                  {note.sourceAccount || note.source_account ? (
+                    <div className="text-[10px] text-gray-400 mb-2">{note.sourceAccount || note.source_account}</div>
+                  ) : null}
+                  {(note.preNote || note.pre_note) && (
+                    <div className="mb-2">
+                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agenda</span>
+                      <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap">{note.preNote || note.pre_note}</p>
+                    </div>
+                  )}
+                  {(note.postNote || note.post_note) && (
+                    <div>
+                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Outcomes</span>
+                      <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap">{note.postNote || note.post_note}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex-1 overflow-auto px-2 py-1 dizon-calendar">
+          <Calendar
+            localizer={localizer}
+            events={events}
+            view={view}
+            onView={v => { if (v !== 'history') setView(v); }}
+            views={['month', 'week']}
+            date={currentDate}
+            onNavigate={handleNavigate}
+            onSelectEvent={handleSelectEvent}
+            eventPropGetter={eventPropGetter}
+            toolbar={false}
+            popup
+            style={{ height: '100%', minHeight: 500 }}
+          />
         </div>
       )}
+
+      {/* Event popover */}
+      {selectedEvent && (() => {
+        const eventEnded = selectedEvent.end && new Date(selectedEvent.end) < new Date();
+        return (
+          <div
+            ref={popoverRef}
+            className="fixed z-50 bg-white rounded-xl shadow-lg border border-gray-200 p-4 w-80 max-h-[80vh] overflow-y-auto"
+            style={{ top: Math.min(popoverPos.top, window.innerHeight - 300), left: popoverPos.left }}
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <span
+                  className="w-3 h-3 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: getEventColor(selectedEvent) }}
+                />
+                <h4 className="text-sm font-semibold text-gray-900 leading-tight">{selectedEvent.title}</h4>
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                {noteSaved && (
+                  <span className="text-[10px] text-green-600 font-medium animate-pulse">Saved</span>
+                )}
+                <button
+                  onClick={() => setSelectedEvent(null)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[16px]">close</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Date/Time + Account */}
+            <div className="text-xs text-gray-500 space-y-1 mb-3">
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[14px]">schedule</span>
+                {selectedEvent.allDay
+                  ? format(selectedEvent.start, 'EEE, MMM d, yyyy')
+                  : `${format(selectedEvent.start, 'EEE, MMM d · h:mm a')}${selectedEvent.end ? ` – ${format(selectedEvent.end, 'h:mm a')}` : ''}`
+                }
+              </div>
+              {selectedEvent.account && (
+                <div className="flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[14px]">account_circle</span>
+                  {selectedEvent.account}
+                </div>
+              )}
+            </div>
+
+            {notesLoading ? (
+              <div className="flex items-center justify-center py-3 text-gray-400">
+                <SpinnerIcon className="w-4 h-4 animate-spin" />
+              </div>
+            ) : (
+              <>
+                {/* Pre-meeting note */}
+                <div className="mb-3">
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                    Agenda / Prep
+                  </label>
+                  <textarea
+                    value={editingPre}
+                    onChange={e => setEditingPre(e.target.value)}
+                    onBlur={() => {
+                      if (editingPre !== eventNotes.preNote) saveNote('pre_note', editingPre);
+                    }}
+                    placeholder="Meeting agenda, prep notes…"
+                    rows={3}
+                    className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-300 focus:border-indigo-300 placeholder-gray-300"
+                    style={{ fontFamily: "'Manrope', sans-serif" }}
+                  />
+                </div>
+
+                {/* Post-meeting note — only if event has ended */}
+                {eventEnded && (
+                  <div>
+                    <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                      Outcomes / Decisions
+                    </label>
+                    <textarea
+                      value={editingPost}
+                      onChange={e => setEditingPost(e.target.value)}
+                      onBlur={() => {
+                        if (editingPost !== eventNotes.postNote) saveNote('post_note', editingPost);
+                      }}
+                      placeholder="Key outcomes, action items…"
+                      rows={3}
+                      className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-300 focus:border-indigo-300 placeholder-gray-300"
+                      style={{ fontFamily: "'Manrope', sans-serif" }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Override react-big-calendar styles to match Dizon design system */}
       <style>{`
