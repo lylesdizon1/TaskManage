@@ -102,8 +102,13 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   const fetchEvents = useCallback(async () => {
     if (!gcalStatus.connected) return;
     try {
+      // Fetch from start of current view month to cover past + future days
+      const monthStart = startOfMonth(currentDate);
+      const monthEnd = endOfMonth(currentDate);
+      const days = Math.ceil((monthEnd - monthStart) / 86400000) + 7; // extra week buffer
+      const startDate = format(monthStart, 'yyyy-MM-dd');
       const res = await apiFetch(
-        `${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}&days=31`,
+        `${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}&days=${days}&startDate=${startDate}`,
         { headers: { Authorization: `Bearer ${authToken}` } },
       );
       const data = await res.json();
@@ -121,7 +126,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     } catch {
       // silent
     }
-  }, [gcalStatus.connected, authToken, userTZ]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gcalStatus.connected, authToken, userTZ, currentDate.getMonth(), currentDate.getFullYear()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
 
@@ -425,7 +430,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             </div>
           ) : historyNotes.length === 0 ? (
             <div className="text-center py-8 text-gray-400 text-sm">
-              No meeting notes found
+              {historySearch ? 'No matching meeting notes found' : 'No meeting notes yet. Click any past event to add notes.'}
             </div>
           ) : (
             <div className="space-y-3">

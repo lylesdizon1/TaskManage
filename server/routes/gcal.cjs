@@ -209,30 +209,35 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    */
   router.get('/api/gcal/events', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-    const { timeZone, days } = req.query;
-    const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 30);
+    const { timeZone, days, startDate: startDateParam } = req.query;
+    const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 62);
 
     const allAccounts = await loadAllGcalAccounts(userId);
     console.log(`[gcal] events: ${allAccounts.length} account(s) for ${userId}: ${allAccounts.map(a => a.googleEmail).join(', ')}`);
     if (!allAccounts.length) return res.json([]);
 
     // Compute time boundaries
-    let startOfDay, endOfDay;
-    if (timeZone) {
+    let timeMin, timeMax;
+    if (startDateParam) {
+      // Client specified an explicit start date (YYYY-MM-DD)
+      timeMin = new Date(`${startDateParam}T00:00:00`);
+      timeMax = new Date(timeMin);
+      timeMax.setDate(timeMax.getDate() + numDays);
+    } else if (timeZone) {
       const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
       const todayStr = formatter.format(new Date());
       const midpoint = new Date(`${todayStr}T12:00:00Z`);
       const localMs = new Date(midpoint.toLocaleString('en-US', { timeZone })).getTime();
       const offsetMs = midpoint.getTime() - localMs;
-      startOfDay = new Date(`${todayStr}T00:00:00Z`);
-      startOfDay = new Date(startOfDay.getTime() + offsetMs);
-      endOfDay = new Date(startOfDay);
-      endOfDay.setDate(endOfDay.getDate() + numDays);
+      timeMin = new Date(`${todayStr}T00:00:00Z`);
+      timeMin = new Date(timeMin.getTime() + offsetMs);
+      timeMax = new Date(timeMin);
+      timeMax.setDate(timeMax.getDate() + numDays);
     } else {
       const now = new Date();
-      startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      endOfDay = new Date(startOfDay);
-      endOfDay.setDate(endOfDay.getDate() + numDays);
+      timeMin = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      timeMax = new Date(timeMin);
+      timeMax.setDate(timeMax.getDate() + numDays);
     }
 
     // Fetch from all accounts in parallel, fault-tolerant
@@ -254,8 +259,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       // Each account gets its own params copy to prevent any mutation cross-talk
       const params = {
         calendarId: 'primary',
-        timeMin: startOfDay.toISOString(),
-        timeMax: endOfDay.toISOString(),
+        timeMin: timeMin.toISOString(),
+        timeMax: timeMax.toISOString(),
         singleEvents: true,
         orderBy: 'startTime',
         maxResults: numDays > 1 ? 50 : 20,
