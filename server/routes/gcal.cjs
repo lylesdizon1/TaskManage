@@ -305,48 +305,100 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
   });
 
   /**
-   * POST /api/calendar/events
-   * Create a new Google Calendar event.
+   * POST /api/gcal/events
+   * Create a new Google Calendar event on a specific account.
+   * Body: { title, start, end, googleEmail, description?, entityTag? }
    */
-  router.post('/api/calendar/events', authenticateToken, async (req, res) => {
+  router.post('/api/gcal/events', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-    const { summary, description, start, end, allDay } = req.body;
-    if (!summary) return res.status(400).json({ error: 'summary required' });
+    const { title, start, end, googleEmail, description, entityTag } = req.body;
+    if (!title) return res.status(400).json({ error: 'title is required' });
+    if (!googleEmail) return res.status(400).json({ error: 'googleEmail is required' });
 
-    const tokens = await loadGcalTokens(userId);
-    if (!tokens) return res.status(401).json({ error: 'Google Calendar not connected' });
+    const tokens = await loadGcalTokens(userId, googleEmail);
+    if (!tokens) return res.status(401).json({ error: `Google Calendar not connected for ${googleEmail}` });
 
     const oauth2 = makeOAuth2Client();
     if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured' });
 
     oauth2.setCredentials(tokens);
     oauth2.on('tokens', async (newTokens) => {
-      const existing = await loadGcalTokens(userId);
-      await saveGcalTokens(userId, { ...existing, ...newTokens });
+      try {
+        const existing = await loadGcalTokens(userId, googleEmail);
+        await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
+      } catch (e) { console.error(`[gcal] token refresh save failed:`, e.message); }
     });
 
     try {
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-      const requestBody = { summary, description: description || '' };
+      const descParts = [];
+      if (entityTag) descParts.push(`[${entityTag}]`);
+      if (description) descParts.push(description);
+      const requestBody = { summary: title, description: descParts.join('\n\n') };
+      const tz = req.user.timezone || 'America/Los_Angeles';
 
-      if (allDay) {
-        // All-day event: use date strings
+      if (start.date && !start.dateTime) {
+        // All-day event
         requestBody.start = { date: start.date };
         const endDate = end?.date || start.date;
-        // Google requires end date to be day after for single-day all-day events
         const nextDay = new Date(endDate);
         nextDay.setDate(nextDay.getDate() + 1);
         requestBody.end = { date: nextDay.toISOString().slice(0, 10) };
       } else {
-        requestBody.start = { dateTime: start.dateTime, timeZone: start.timeZone };
-        requestBody.end = { dateTime: end.dateTime, timeZone: end.timeZone };
+        requestBody.start = { dateTime: start.dateTime, timeZone: start.timeZone || tz };
+        requestBody.end = { dateTime: end.dateTime, timeZone: end.timeZone || tz };
       }
 
       const event = await calendar.events.insert({ calendarId: 'primary', requestBody });
-      console.log(`[gcal] Created event ${event.data.id} for ${userId}`);
+      console.log(`[gcal] Created event ${event.data.id} on ${googleEmail} for ${userId}`);
       res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
     } catch (err) {
       console.error('[gcal] create event failed:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * DELETE /api/gcal/events/:eventId
+   * Delete an event from a specific Google account + clean up calendar_notes.
+   * Body: { googleEmail }
+   */
+  router.delete('/api/gcal/events/:eventId', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const { eventId } = req.params;
+    const { googleEmail } = req.body;
+    if (!googleEmail) return res.status(400).json({ error: 'googleEmail is required' });
+
+    const tokens = await loadGcalTokens(userId, googleEmail);
+    if (!tokens) return res.status(401).json({ error: `Google Calendar not connected for ${googleEmail}` });
+
+    const oauth2 = makeOAuth2Client();
+    if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured' });
+
+    oauth2.setCredentials(tokens);
+    oauth2.on('tokens', async (newTokens) => {
+      try {
+        const existing = await loadGcalTokens(userId, googleEmail);
+        await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
+      } catch (e) { console.error(`[gcal] token refresh save failed:`, e.message); }
+    });
+
+    try {
+      const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+      await calendar.events.delete({ calendarId: 'primary', eventId });
+      console.log(`[gcal] Deleted event ${eventId} from ${googleEmail} for ${userId}`);
+
+      // Clean up calendar_notes
+      try {
+        await db.pool.query(
+          `DELETE FROM calendar_notes WHERE user_id = $1 AND event_id = $2`,
+          [userId, eventId],
+        );
+      } catch (e) { /* calendar_notes row may not exist */ }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[gcal] delete event failed:', err.message);
       res.status(500).json({ error: err.message });
     }
   });
