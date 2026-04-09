@@ -104,15 +104,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
    */
   router.post('/api/whatsapp/inbound', async (req, res) => {
     try {
-      console.log('RAW WHATSAPP PAYLOAD:', JSON.stringify(req.body, null, 2));
-
       const data = req.body?.data;
       if (!data) return res.json({ ok: true, skipped: 'no data' });
 
       // Extract text body and media URL (if any)
       const msgBody = data.body || '';
       const fromRaw = data.from;
-      const mediaUrl = data.media || data.image || data.mediaUrl || req.body?.message?.mediaUrl || null;
+      const rawMedia = data.media;
+      const mediaUrl = (typeof rawMedia === 'string' && rawMedia.trim() !== '') ? rawMedia.trim() : null;
       if (!fromRaw) return res.json({ ok: true, skipped: 'missing sender' });
       if (!msgBody && !mediaUrl) return res.json({ ok: true, skipped: 'empty message' });
 
