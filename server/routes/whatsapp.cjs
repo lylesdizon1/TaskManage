@@ -105,6 +105,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
   router.post('/api/whatsapp/inbound', async (req, res) => {
     try {
       const data = req.body?.data;
+      console.log('WHATSAPP INBOUND:', JSON.stringify(req.body, null, 2));
       if (!data) return res.json({ ok: true, skipped: 'no data' });
 
       // Extract text body and media URL (if any)
