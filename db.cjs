@@ -1015,45 +1015,111 @@ async function saveSettings(data) {
  * @throws {Error} If the database query fails.
  */
 async function getGcalTokensForUser(userId) {
+  // Legacy single-account compat: return the primary account's tokens
   const { rows } = await pool.query(
-    'SELECT tokens FROM gcal_tokens WHERE user_id = $1',
+    'SELECT tokens FROM gcal_tokens WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC LIMIT 1',
     [userId],
   );
   return rows.length ? rows[0].tokens : null;
 }
 
 /**
- * Store GCal tokens for a user, upserting on user_id conflict.
- * Tokens are JSON-stringified before storage. Callers should use
- * saveGcalTokens() from server/utils/google.cjs which encrypts first.
- *
- * @note This helper intentionally does not encrypt or decrypt tokens.
- * Encryption is the sole responsibility of server/utils/google.cjs.
+ * Return all connected GCal accounts for a user.
  *
  * @param {string} userId - User ID.
- * @param {Object} tokens - Token data (plain or { _enc } wrapper).
- * @returns {Promise<void>}
- * @throws {Error} If the database query fails.
+ * @returns {Promise<Array<{ googleEmail: string, isPrimary: boolean, createdAt: string }>>}
  */
-async function setGcalTokensForUser(userId, tokens) {
+async function getAllGcalAccountsForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT google_email AS "googleEmail", is_primary AS "isPrimary", tokens,
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM gcal_tokens WHERE user_id = $1
+     ORDER BY is_primary DESC, created_at ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * Load tokens for a specific GCal account (by email).
+ *
+ * @param {string} userId
+ * @param {string} googleEmail
+ * @returns {Promise<Object|null>} Raw tokens or null.
+ */
+async function getGcalTokensByEmail(userId, googleEmail) {
+  const { rows } = await pool.query(
+    'SELECT tokens FROM gcal_tokens WHERE user_id = $1 AND google_email = $2',
+    [userId, googleEmail.toLowerCase()],
+  );
+  return rows.length ? rows[0].tokens : null;
+}
+
+/**
+ * Store GCal tokens for a user+email account, upserting on composite PK.
+ * If this is the user's first account, auto-set is_primary = true.
+ *
+ * @param {string} userId
+ * @param {Object} tokens - Token data (plain or { _enc } wrapper).
+ * @param {string} [googleEmail='primary@placeholder'] - Google account email.
+ * @returns {Promise<void>}
+ */
+async function setGcalTokensForUser(userId, tokens, googleEmail) {
+  const email = (googleEmail || 'primary@placeholder').toLowerCase();
+
+  // Check if user has any existing accounts
+  const { rows: existing } = await pool.query(
+    'SELECT google_email FROM gcal_tokens WHERE user_id = $1',
+    [userId],
+  );
+  const isPrimary = existing.length === 0;
+
   await pool.query(
-    `INSERT INTO gcal_tokens (user_id, tokens, updated_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (user_id) DO UPDATE SET tokens = $2, updated_at = NOW()`,
-    [userId, JSON.stringify(tokens)],
+    `INSERT INTO gcal_tokens (user_id, google_email, tokens, is_primary, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (user_id, google_email) DO UPDATE SET tokens = $3, updated_at = NOW()`,
+    [userId, email, JSON.stringify(tokens), isPrimary],
   );
 }
 
 /**
- * Remove GCal tokens for a user. Called when the user disconnects
- * their Google Calendar integration in Settings.
+ * Remove a specific GCal account for a user. If the removed account was
+ * primary and others remain, promotes the oldest remaining account.
  *
- * @param {string} userId - User ID.
- * @returns {Promise<void>}
- * @throws {Error} If the database query fails.
+ * @param {string} userId
+ * @param {string} [googleEmail] - If omitted, removes ALL accounts (legacy compat).
  */
-async function deleteGcalTokensForUser(userId) {
-  await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
+async function deleteGcalTokensForUser(userId, googleEmail) {
+  if (googleEmail) {
+    await pool.query(
+      'DELETE FROM gcal_tokens WHERE user_id = $1 AND google_email = $2',
+      [userId, googleEmail.toLowerCase()],
+    );
+    // Promote oldest remaining if we just deleted the primary
+    await pool.query(`
+      UPDATE gcal_tokens SET is_primary = true
+      WHERE user_id = $1 AND google_email = (
+        SELECT google_email FROM gcal_tokens WHERE user_id = $1
+        ORDER BY created_at ASC LIMIT 1
+      ) AND NOT EXISTS (SELECT 1 FROM gcal_tokens WHERE user_id = $1 AND is_primary = true)
+    `, [userId]).catch(() => {});
+  } else {
+    await pool.query('DELETE FROM gcal_tokens WHERE user_id = $1', [userId]);
+  }
+}
+
+/**
+ * Set a specific account as primary for the user.
+ *
+ * @param {string} userId
+ * @param {string} googleEmail
+ */
+async function setGcalPrimaryAccount(userId, googleEmail) {
+  await pool.query('UPDATE gcal_tokens SET is_primary = false WHERE user_id = $1', [userId]);
+  await pool.query(
+    'UPDATE gcal_tokens SET is_primary = true WHERE user_id = $1 AND google_email = $2',
+    [userId, googleEmail.toLowerCase()],
+  );
 }
 
 // ── Gmail tokens & config ─────────────────────────────────────────────────────
@@ -2234,6 +2300,29 @@ async function runMigrations() {
 
   // 13. Prevent future case-insensitive entity name duplicates
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_lower_name ON entities (LOWER(name))`).catch(() => {});
+
+  // 14. Multi-account GCal: add google_email, is_primary, created_at columns
+  //     and migrate from single-row-per-user to composite PK (user_id, google_email).
+  await pool.query(`ALTER TABLE gcal_tokens ADD COLUMN IF NOT EXISTS google_email TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE gcal_tokens ADD COLUMN IF NOT EXISTS is_primary BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE gcal_tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
+
+  // Backfill: set placeholder email + is_primary for any legacy rows missing google_email
+  await pool.query(`
+    UPDATE gcal_tokens SET google_email = 'primary@placeholder', is_primary = true
+    WHERE google_email IS NULL
+  `).catch(() => {});
+
+  // Migrate PK from user_id to (user_id, google_email) — only if still single-column
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE gcal_tokens DROP CONSTRAINT gcal_tokens_pkey;
+      ALTER TABLE gcal_tokens ALTER COLUMN google_email SET NOT NULL;
+      ALTER TABLE gcal_tokens ADD PRIMARY KEY (user_id, google_email);
+    EXCEPTION
+      WHEN others THEN NULL;  -- already migrated or constraint name differs
+    END $$;
+  `).catch((err) => console.warn('[migration] gcal_tokens PK:', err.message));
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -3268,8 +3357,11 @@ module.exports = {
   getSettings,
   saveSettings,
   getGcalTokensForUser,
+  getAllGcalAccountsForUser,
+  getGcalTokensByEmail,
   setGcalTokensForUser,
   deleteGcalTokensForUser,
+  setGcalPrimaryAccount,
   getNotesForUser,
   getNoteById,
   getPrivateNotesForAI,

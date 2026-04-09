@@ -57,34 +57,55 @@ function makeGmailOAuth2Client() {
 }
 
 /**
- * Persist GCal OAuth tokens for a user, encrypting if ENCRYPTION_KEY is set.
+ * Persist GCal OAuth tokens for a user+email, encrypting if ENCRYPTION_KEY is set.
  *
  * @param {string} userId
  * @param {Object} tokens - OAuth2 credentials from Google.
  * @param {Object} db - Database helper module.
+ * @param {string} [googleEmail] - Google account email (for multi-account).
  */
-const saveGcalTokens = async (userId, tokens, db) => {
+const saveGcalTokens = async (userId, tokens, db, googleEmail) => {
   if (ENCRYPTION_KEY) {
     const encrypted = encryptTokens(tokens);
-    await db.setGcalTokensForUser(userId, { _enc: encrypted });
+    await db.setGcalTokensForUser(userId, { _enc: encrypted }, googleEmail);
   } else {
-    await db.setGcalTokensForUser(userId, tokens);
+    await db.setGcalTokensForUser(userId, tokens, googleEmail);
   }
 };
 
 /**
  * Load and decrypt GCal OAuth tokens for a user.
- * Returns null if the user has not connected Google Calendar.
+ * If googleEmail is provided, loads that specific account.
+ * Otherwise loads the primary (or first) account (backward-compat).
  *
  * @param {string} userId
  * @param {Object} db - Database helper module.
+ * @param {string} [googleEmail] - Specific account to load.
  * @returns {Promise<Object|null>} Decrypted token credentials or null.
  */
-const loadGcalTokens = async (userId, db) => {
-  const stored = await db.getGcalTokensForUser(userId);
+const loadGcalTokens = async (userId, db, googleEmail) => {
+  const stored = googleEmail
+    ? await db.getGcalTokensByEmail(userId, googleEmail)
+    : await db.getGcalTokensForUser(userId);
   if (!stored) return null;
   if (stored._enc) return decryptTokens(stored._enc);
   return stored; // legacy unencrypted tokens
+};
+
+/**
+ * Load and decrypt ALL GCal accounts for a user.
+ *
+ * @param {string} userId
+ * @param {Object} db
+ * @returns {Promise<Array<{ googleEmail: string, isPrimary: boolean, tokens: Object }>>}
+ */
+const loadAllGcalAccounts = async (userId, db) => {
+  const rows = await db.getAllGcalAccountsForUser(userId);
+  return rows.map((row) => {
+    let tokens = row.tokens;
+    if (tokens && tokens._enc) tokens = decryptTokens(tokens._enc);
+    return { googleEmail: row.googleEmail, isPrimary: row.isPrimary, tokens };
+  });
 };
 
 /**
@@ -118,4 +139,4 @@ const loadGmailTokens = async (userId, db) => {
   return stored;
 };
 
-module.exports = { getAppUrl, makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens, loadGcalTokens, saveGmailTokens, loadGmailTokens };
+module.exports = { getAppUrl, makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, saveGmailTokens, loadGmailTokens };

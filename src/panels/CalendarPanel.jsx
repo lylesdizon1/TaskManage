@@ -4,13 +4,12 @@ import { SpinnerIcon, CalendarIcon } from '../components/icons/Icons.jsx';
 const API_BASE = '';
 
 export default function CalendarPanel({ currentUser, authToken, addToast, apiFetch }) {
-  const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null });
+  const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null, accounts: [] });
   const [loading, setLoading]       = useState(true);
 
   // Check connection status on mount and after OAuth redirect
   useEffect(() => {
     checkStatus();
-    // Handle ?gcal=connected redirect from OAuth callback
     const params = new URLSearchParams(window.location.search);
     if (params.get('gcal') === 'connected') {
       window.history.replaceState({}, '', window.location.pathname);
@@ -28,7 +27,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       const data = await res.json();
       setGcalStatus(data);
     } catch {
-      setGcalStatus({ connected: false });
+      setGcalStatus({ connected: false, accounts: [] });
     } finally {
       setLoading(false);
     }
@@ -48,16 +47,31 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     }
   }
 
-  async function handleDisconnect() {
+  async function handleDisconnect(email) {
     try {
       await apiFetch(`${API_BASE}/api/gcal/disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ email }),
       });
-      setGcalStatus({ connected: false, email: null });
-      addToast({ type: 'success', message: 'Google Calendar disconnected' });
+      addToast({ type: 'success', message: email ? `Disconnected ${email}` : 'Google Calendar disconnected' });
+      checkStatus();
     } catch {
       addToast({ type: 'error', message: 'Failed to disconnect' });
+    }
+  }
+
+  async function handleSetPrimary(email) {
+    try {
+      await apiFetch(`${API_BASE}/api/gcal/set-primary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ email }),
+      });
+      addToast({ type: 'success', message: `${email} set as primary` });
+      checkStatus();
+    } catch {
+      addToast({ type: 'error', message: 'Failed to set primary' });
     }
   }
 
@@ -95,31 +109,66 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     );
   }
 
-  // Connected — show embedded calendar
+  const accounts = gcalStatus.accounts || [];
+  const primaryAccount = accounts.find(a => a.isPrimary) || accounts[0];
   const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const calendarSrc = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(gcalStatus.email)}&ctz=${encodeURIComponent(userTZ)}`;
+  const calendarSrc = primaryAccount
+    ? `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(primaryAccount.email)}&ctz=${encodeURIComponent(userTZ)}`
+    : '';
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Connection status bar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-green-50 border-b border-green-100 flex-shrink-0">
-        <div className="flex items-center gap-2 text-xs text-green-700">
-          <span className="w-2 h-2 bg-green-500 rounded-full" />
-          Connected as {gcalStatus.email}
+      {/* Accounts bar */}
+      <div className="px-4 py-2 bg-green-50 border-b border-green-100 flex-shrink-0">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-medium text-green-700">Connected Accounts</span>
+          <button
+            onClick={handleConnect}
+            className="text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
+          >
+            + Add Account
+          </button>
         </div>
-        <button
-          onClick={handleDisconnect}
-          className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium"
-        >
-          Disconnect
-        </button>
+        <div className="flex flex-col gap-1">
+          {accounts.map((acct) => (
+            <div key={acct.email} className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 text-green-700">
+                <span className="w-2 h-2 bg-green-500 rounded-full" />
+                <span>{acct.email}</span>
+                {acct.isPrimary && (
+                  <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded text-[10px] font-medium">
+                    Primary
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {!acct.isPrimary && accounts.length > 1 && (
+                  <button
+                    onClick={() => handleSetPrimary(acct.email)}
+                    className="text-gray-400 hover:text-indigo-600 transition-colors font-medium"
+                  >
+                    Set Primary
+                  </button>
+                )}
+                <button
+                  onClick={() => handleDisconnect(acct.email)}
+                  className="text-gray-400 hover:text-red-500 transition-colors font-medium"
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
       {/* Calendar iframe (desktop) / Open button (mobile) */}
-      <iframe
-        src={calendarSrc}
-        className="flex-1 w-full border-0 hidden md:block"
-        title="Google Calendar"
-      />
+      {calendarSrc && (
+        <iframe
+          src={calendarSrc}
+          className="flex-1 w-full border-0 hidden md:block"
+          title="Google Calendar"
+        />
+      )}
       <div className="flex-1 flex flex-col items-center justify-center px-6 md:hidden">
         <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mb-4">
           <CalendarIcon className="w-8 h-8 text-indigo-600" />
@@ -129,7 +178,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           View and manage your Google Calendar events in a new tab.
         </p>
         <a
-          href={`https://calendar.google.com/calendar/r?authuser=${encodeURIComponent(gcalStatus.email)}`}
+          href={`https://calendar.google.com/calendar/r?authuser=${encodeURIComponent(primaryAccount?.email || '')}`}
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-3 px-6 py-3 bg-indigo-600 text-white rounded-xl shadow-sm hover:bg-indigo-700 transition-colors text-sm font-medium min-h-[48px]"

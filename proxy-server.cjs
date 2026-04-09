@@ -18,10 +18,11 @@ const db       = require('./db.cjs');
 const { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership, setDb } = require('./server/middleware/auth.cjs');
 setDb(db);
 const { authLimiter, apiLimiter } = require('./server/middleware/rateLimit.cjs');
-const { makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, saveGmailTokens: _saveGmailTokens, loadGmailTokens: _loadGmailTokens } = require('./server/utils/google.cjs');
+const { makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, loadAllGcalAccounts: _loadAllGcalAccounts, saveGmailTokens: _saveGmailTokens, loadGmailTokens: _loadGmailTokens } = require('./server/utils/google.cjs');
 
-const saveGcalTokens  = (userId, tokens) => _saveGcalTokens(userId, tokens, db);
-const loadGcalTokens  = (userId) => _loadGcalTokens(userId, db);
+const saveGcalTokens  = (userId, tokens, googleEmail) => _saveGcalTokens(userId, tokens, db, googleEmail);
+const loadGcalTokens  = (userId, googleEmail) => _loadGcalTokens(userId, db, googleEmail);
+const loadAllGcalAccounts = (userId) => _loadAllGcalAccounts(userId, db);
 const saveGmailTokens = (userId, tokens) => _saveGmailTokens(userId, tokens, db);
 const loadGmailTokens = (userId) => _loadGmailTokens(userId, db);
 
@@ -54,7 +55,7 @@ app.use('/', require('./server/routes/entities.cjs')({ authenticateToken, requir
 app.use('/', require('./server/routes/ai.cjs')({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/email.cjs')({ authenticateToken }));
 app.use('/', require('./server/routes/settings.cjs')({ authenticateToken, db }));
-app.use('/', require('./server/routes/gcal.cjs')({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, google }));
+app.use('/', require('./server/routes/gcal.cjs')({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, google }));
 app.use('/', require('./server/routes/gmail.cjs')({ authenticateToken, db, makeGmailOAuth2Client, saveGmailTokens, loadGmailTokens, google }));
 app.use('/', require('./server/routes/inbox.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/tasks.cjs')({ authenticateToken, db }));

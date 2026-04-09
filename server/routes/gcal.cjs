@@ -4,7 +4,7 @@ const express = require('express');
 
 const GCAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
 
-module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, google }) {
+module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, google }) {
   const router = express.Router();
 
   /**
@@ -28,7 +28,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
   /**
    * GET /api/gcal/callback?code=...&state=userId
-   * Google redirects here after consent. Exchanges code for tokens and stores them.
+   * Google redirects here after consent. Exchanges code for tokens,
+   * fetches the account email, and stores with dedup.
    */
   router.get('/api/gcal/callback', async (req, res) => {
     const oauth2 = makeOAuth2Client();
@@ -39,9 +40,30 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
     try {
       const { tokens } = await oauth2.getToken(code);
-      await saveGcalTokens(userId, tokens);
-      console.log(`[gcal] Stored tokens for ${userId}`);
-      // Redirect back to the app's calendar tab
+
+      // Fetch the Google account email for dedup
+      oauth2.setCredentials(tokens);
+      const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+      let googleEmail;
+      try {
+        const { data } = await calendar.calendarList.get({ calendarId: 'primary' });
+        googleEmail = (data.id || '').toLowerCase();
+      } catch (e) {
+        console.warn('[gcal] Could not fetch email after auth:', e.message);
+        googleEmail = `unknown-${Date.now()}`;
+      }
+
+      await saveGcalTokens(userId, tokens, googleEmail);
+
+      // Replace any legacy placeholder rows for this user
+      try {
+        await db.pool.query(
+          `DELETE FROM gcal_tokens WHERE user_id = $1 AND google_email = 'primary@placeholder'`,
+          [userId],
+        );
+      } catch (e) { /* ignore — placeholder may not exist */ }
+
+      console.log(`[gcal] Stored tokens for ${userId} (${googleEmail})`);
       res.redirect('/?gcal=connected');
     } catch (err) {
       console.error('[gcal] Token exchange failed:', err.message);
@@ -51,34 +73,53 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
   /**
    * GET /api/gcal/status
-   * Returns { connected: bool, email?: string }
+   * Returns { connected: bool, email?: string, accounts: [...] }
    */
   router.get('/api/gcal/status', authenticateToken, async (req, res) => {
     const userId = req.user.id;
 
-    const tokens = await loadGcalTokens(userId);
-    if (!tokens) return res.json({ connected: false });
+    const allAccounts = await loadAllGcalAccounts(userId);
+    if (!allAccounts.length) return res.json({ connected: false, accounts: [] });
 
-    const oauth2 = makeOAuth2Client();
-    if (!oauth2) return res.json({ connected: false });
+    const oauth2Base = makeOAuth2Client();
+    if (!oauth2Base) return res.json({ connected: false, accounts: [] });
 
-    oauth2.setCredentials(tokens);
-    // Refresh if needed and persist
-    oauth2.on('tokens', async (newTokens) => {
-      const existing = await loadGcalTokens(userId);
-      await saveGcalTokens(userId, { ...existing, ...newTokens });
-    });
+    const validAccounts = [];
+    for (const acct of allAccounts) {
+      const oauth2 = makeOAuth2Client();
+      oauth2.setCredentials(acct.tokens);
+      oauth2.on('tokens', async (newTokens) => {
+        const existing = await loadGcalTokens(userId, acct.googleEmail);
+        await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+      });
 
-    try {
-      const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-      const { data } = await calendar.calendarList.get({ calendarId: 'primary' });
-      res.json({ connected: true, email: data.id });
-    } catch (err) {
-      console.error('[gcal] status check failed:', err.message);
-      // Token likely revoked
-      await db.deleteGcalTokensForUser(userId);
-      res.json({ connected: false });
+      try {
+        const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+        const { data } = await calendar.calendarList.get({ calendarId: 'primary' });
+        // Update placeholder email if we now know the real one
+        const realEmail = (data.id || '').toLowerCase();
+        if (acct.googleEmail === 'primary@placeholder' && realEmail) {
+          await db.pool.query(
+            `UPDATE gcal_tokens SET google_email = $1 WHERE user_id = $2 AND google_email = 'primary@placeholder'`,
+            [realEmail, userId],
+          ).catch(() => {});
+          acct.googleEmail = realEmail;
+        }
+        validAccounts.push({ email: realEmail || acct.googleEmail, isPrimary: acct.isPrimary });
+      } catch (err) {
+        console.warn(`[gcal] status check failed for ${acct.googleEmail}:`, err.message);
+        // Token revoked — remove this account
+        await db.deleteGcalTokensForUser(userId, acct.googleEmail);
+      }
     }
+
+    // Backward compat: connected + email from primary
+    const primary = validAccounts.find(a => a.isPrimary) || validAccounts[0];
+    res.json({
+      connected: validAccounts.length > 0,
+      email: primary?.email || null,
+      accounts: validAccounts,
+    });
   });
 
   /**
@@ -136,87 +177,117 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
   /**
    * POST /api/gcal/disconnect
-   * Body: { userId }
-   * Removes stored tokens for the user.
+   * Body: { email } — optional. If provided, disconnects that account only.
+   * If omitted, disconnects ALL accounts (legacy compat).
    */
   router.post('/api/gcal/disconnect', authenticateToken, async (req, res) => {
     const userId = req.user.id;
+    const { email } = req.body;
 
-    await db.deleteGcalTokensForUser(userId);
-    console.log(`[gcal] Disconnected ${userId}`);
+    await db.deleteGcalTokensForUser(userId, email || undefined);
+    console.log(`[gcal] Disconnected ${userId}${email ? ` (${email})` : ' (all)'}`);
     res.json({ success: true });
   });
 
   /**
-   * GET /api/gcal/events?userId=...
-   * Returns today's calendar events from Google Calendar.
+   * POST /api/gcal/set-primary
+   * Body: { email } — set this account as the primary calendar.
+   */
+  router.post('/api/gcal/set-primary', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email is required' });
+
+    await db.setGcalPrimaryAccount(userId, email);
+    console.log(`[gcal] Set primary account for ${userId}: ${email}`);
+    res.json({ success: true });
+  });
+
+  /**
+   * GET /api/gcal/events
+   * Returns calendar events from ALL connected Google accounts, merged + deduped.
    */
   router.get('/api/gcal/events', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const { timeZone, days } = req.query;
     const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 30);
 
-    const tokens = await loadGcalTokens(userId);
-    if (!tokens) return res.json([]);
+    const allAccounts = await loadAllGcalAccounts(userId);
+    if (!allAccounts.length) return res.json([]);
 
-    const oauth2 = makeOAuth2Client();
-    if (!oauth2) return res.json([]);
+    // Compute time boundaries
+    let startOfDay, endOfDay;
+    if (timeZone) {
+      const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+      const todayStr = formatter.format(new Date());
+      const midpoint = new Date(`${todayStr}T12:00:00Z`);
+      const localMs = new Date(midpoint.toLocaleString('en-US', { timeZone })).getTime();
+      const offsetMs = midpoint.getTime() - localMs;
+      startOfDay = new Date(`${todayStr}T00:00:00Z`);
+      startOfDay = new Date(startOfDay.getTime() + offsetMs);
+      endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + numDays);
+    } else {
+      const now = new Date();
+      startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + numDays);
+    }
 
-    oauth2.setCredentials(tokens);
-    oauth2.on('tokens', async (newTokens) => {
-      const existing = await loadGcalTokens(userId);
-      await saveGcalTokens(userId, { ...existing, ...newTokens });
-    });
+    const listParams = {
+      calendarId: 'primary',
+      timeMin: startOfDay.toISOString(),
+      timeMax: endOfDay.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: numDays > 1 ? 50 : 20,
+    };
+    if (timeZone) listParams.timeZone = timeZone;
 
-    try {
+    // Fetch from all accounts in parallel, fault-tolerant
+    const allEvents = [];
+    const seenIds = new Set();
+
+    const results = await Promise.allSettled(allAccounts.map(async (acct) => {
+      const oauth2 = makeOAuth2Client();
+      if (!oauth2) return [];
+      oauth2.setCredentials(acct.tokens);
+      oauth2.on('tokens', async (newTokens) => {
+        const existing = await loadGcalTokens(userId, acct.googleEmail);
+        await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+      });
+
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-
-      // Use client timezone to determine "today", falling back to server local time
-      let startOfDay, endOfDay;
-      if (timeZone) {
-        // Build today's date string in the user's timezone, then create proper boundaries
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
-        const todayStr = formatter.format(new Date()); // YYYY-MM-DD in user's tz
-        // Compute UTC offset for user's timezone so midnight is correct locally
-        const midpoint = new Date(`${todayStr}T12:00:00Z`);
-        const localMs = new Date(midpoint.toLocaleString('en-US', { timeZone })).getTime();
-        const offsetMs = midpoint.getTime() - localMs;
-        startOfDay = new Date(`${todayStr}T00:00:00Z`);
-        startOfDay = new Date(startOfDay.getTime() + offsetMs);
-        endOfDay = new Date(startOfDay);
-        endOfDay.setDate(endOfDay.getDate() + numDays);
-      } else {
-        const now = new Date();
-        startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        endOfDay = new Date(startOfDay);
-        endOfDay.setDate(endOfDay.getDate() + numDays);
-      }
-
-      const listParams = {
-        calendarId: 'primary',
-        timeMin: startOfDay.toISOString(),
-        timeMax: endOfDay.toISOString(),
-        singleEvents: true,
-        orderBy: 'startTime',
-        maxResults: numDays > 1 ? 50 : 20,
-      };
-      if (timeZone) listParams.timeZone = timeZone;
-
       const { data } = await calendar.events.list(listParams);
-
-      const events = (data.items || []).map((ev) => ({
+      return (data.items || []).map((ev) => ({
         id: ev.id,
         title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
         start: ev.start?.dateTime || ev.start?.date || null,
         end: ev.end?.dateTime || ev.end?.date || null,
         allDay: !ev.start?.dateTime,
+        account: acct.googleEmail,
       }));
+    }));
 
-      res.json(events);
-    } catch (err) {
-      console.error('[gcal] events list failed:', err.message);
-      res.json([]);
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        for (const ev of result.value) {
+          if (!seenIds.has(ev.id)) {
+            seenIds.add(ev.id);
+            allEvents.push(ev);
+          }
+        }
+      }
     }
+
+    // Sort by start time
+    allEvents.sort((a, b) => {
+      const aStart = a.start || '';
+      const bStart = b.start || '';
+      return aStart < bStart ? -1 : aStart > bStart ? 1 : 0;
+    });
+
+    res.json(allEvents);
   });
 
   /**
