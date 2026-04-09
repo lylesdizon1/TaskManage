@@ -529,6 +529,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   const [newEntityName, setNewEntityName] = useState('');
   const [entityLoading, setEntityLoading] = useState(false);
 
+  const addToast = addToastProp || (() => {});
+
   async function handleCreateEntity() {
     if (!newEntityName.trim()) return;
     setEntityLoading(true);
@@ -538,10 +540,17 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ name: newEntityName.trim(), type: 'business' }),
       });
-      const created = await res.json();
+      const data = await res.json();
+      if (!res.ok) {
+        addToast({ type: 'error', message: data.error || 'Failed to create entity' });
+        return;
+      }
       setNewEntityName('');
+      addToast({ type: 'success', message: `Created "${data.name}"` });
       // Small delay before reload so DB write is fully committed
       setTimeout(() => onEntitiesChanged(), 300);
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to create entity' });
     } finally {
       setEntityLoading(false);
     }
