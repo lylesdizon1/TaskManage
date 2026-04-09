@@ -35,6 +35,11 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   const [historySearch, setHistorySearch] = useState('');
   const [historyRange, setHistoryRange] = useState('month');
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createForm, setCreateForm] = useState({ title: '', date: '', startTime: '', endTime: '', googleEmail: '', entityTag: '', notes: '' });
+  const [createSaving, setCreateSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -253,9 +258,115 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       setPopoverPos({ top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - 300) });
     }
     setSelectedEvent(event);
+    setConfirmDelete(false);
   }
 
   function handleNavigate(newDate) { setCurrentDate(newDate); }
+
+  function openCreateModal(slotInfo) {
+    const accounts = gcalStatus.accounts || [];
+    const primary = accounts.find(a => a.isPrimary) || accounts[0];
+    const dateStr = slotInfo?.start ? format(slotInfo.start, 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd');
+    const hasTime = slotInfo?.start && slotInfo.start.getHours() !== 0;
+    setCreateForm({
+      title: '',
+      date: dateStr,
+      startTime: hasTime ? format(slotInfo.start, 'HH:mm') : '',
+      endTime: hasTime && slotInfo.end ? format(slotInfo.end, 'HH:mm') : '',
+      googleEmail: primary?.email || '',
+      entityTag: '',
+      notes: '',
+    });
+    setShowCreateModal(true);
+  }
+
+  async function handleCreateEvent() {
+    if (!createForm.title.trim()) { addToast({ type: 'error', message: 'Title is required' }); return; }
+    setCreateSaving(true);
+    try {
+      const tz = userTZ;
+      const startPayload = {};
+      const endPayload = {};
+
+      if (createForm.startTime) {
+        startPayload.dateTime = `${createForm.date}T${createForm.startTime}:00`;
+        startPayload.timeZone = tz;
+        const endTime = createForm.endTime || (() => {
+          const [h, m] = createForm.startTime.split(':').map(Number);
+          return `${String(h + 1).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        })();
+        endPayload.dateTime = `${createForm.date}T${endTime}:00`;
+        endPayload.timeZone = tz;
+      } else {
+        startPayload.date = createForm.date;
+        endPayload.date = createForm.date;
+      }
+
+      const res = await apiFetch(`${API_BASE}/api/gcal/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          title: createForm.title.trim(),
+          start: startPayload,
+          end: endPayload,
+          googleEmail: createForm.googleEmail,
+          description: createForm.notes || undefined,
+          entityTag: createForm.entityTag || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { addToast({ type: 'error', message: data.error || 'Failed to create event' }); return; }
+
+      // Save pre_note if notes provided
+      if (createForm.notes && data.eventId) {
+        try {
+          await apiFetch(`${API_BASE}/api/calendar-notes/${encodeURIComponent(data.eventId)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({
+              pre_note: createForm.notes,
+              event_title: createForm.title.trim(),
+              event_start: startPayload.dateTime ? new Date(startPayload.dateTime).toISOString() : new Date(createForm.date).toISOString(),
+              source_account: createForm.googleEmail,
+            }),
+          });
+        } catch { /* best effort */ }
+      }
+
+      addToast({ type: 'success', message: 'Event created' });
+      setShowCreateModal(false);
+      fetchEvents();
+    } catch {
+      addToast({ type: 'error', message: 'Failed to create event' });
+    } finally {
+      setCreateSaving(false);
+    }
+  }
+
+  async function handleDeleteEvent() {
+    if (!selectedEvent) return;
+    setDeleting(true);
+    const rawId = selectedEvent.id;
+    const account = selectedEvent.account;
+    const eventId = rawId.includes('::') ? rawId.split('::').slice(1).join('::') : rawId;
+    try {
+      const res = await apiFetch(`${API_BASE}/api/gcal/events/${encodeURIComponent(eventId)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ googleEmail: account }),
+      });
+      const data = await res.json();
+      if (!res.ok) { addToast({ type: 'error', message: data.error || 'Failed to delete' }); return; }
+      addToast({ type: 'success', message: 'Event deleted' });
+      setSelectedEvent(null);
+      setConfirmDelete(false);
+      fetchEvents();
+    } catch {
+      addToast({ type: 'error', message: 'Failed to delete event' });
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   // ── Event styling ─────────────────────────────────────────────
   const eventPropGetter = useCallback((event) => {
@@ -383,7 +494,15 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             {format(currentDate, view === 'month' ? 'MMMM yyyy' : "'Week of' MMM d, yyyy")}
           </h2>
         </div>
-        <div className="flex bg-gray-100 rounded-lg p-0.5">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => openCreateModal(null)}
+            className="px-3 py-1 text-xs font-medium text-white rounded-lg transition-colors"
+            style={{ backgroundColor: '#4f4dcf' }}
+          >
+            + New Event
+          </button>
+          <div className="flex bg-gray-100 rounded-lg p-0.5">
           {['month', 'week', 'history'].map((v) => (
             <button
               key={v}
@@ -395,6 +514,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
               {v}
             </button>
           ))}
+          </div>
         </div>
       </div>
 
@@ -475,6 +595,8 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             date={currentDate}
             onNavigate={handleNavigate}
             onSelectEvent={handleSelectEvent}
+            onSelectSlot={openCreateModal}
+            selectable
             eventPropGetter={eventPropGetter}
             toolbar={false}
             popup
@@ -574,11 +696,183 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                     />
                   </div>
                 )}
+
+                {/* Delete */}
+                <div className="mt-3 pt-2 border-t border-gray-100">
+                  {!confirmDelete ? (
+                    <button
+                      onClick={() => setConfirmDelete(true)}
+                      className="text-[11px] text-red-400 hover:text-red-600 transition-colors font-medium"
+                    >
+                      Delete Event
+                    </button>
+                  ) : (
+                    <div>
+                      <p className="text-[11px] text-gray-500 mb-1.5">Delete this event? This cannot be undone.</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleDeleteEvent}
+                          disabled={deleting}
+                          className="text-[11px] font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-50"
+                        >
+                          {deleting ? 'Deleting…' : 'Yes, delete'}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(false)}
+                          className="text-[11px] font-medium text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
         );
       })()}
+
+      {/* Create event modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setShowCreateModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl border border-gray-200 w-96 max-h-[90vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>New Event</h3>
+              <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {/* Title */}
+              <div>
+                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Title</label>
+                <input
+                  type="text"
+                  value={createForm.title}
+                  onChange={e => setCreateForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="Event title"
+                  autoFocus
+                  className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300 focus:border-indigo-300"
+                  style={{ fontFamily: "'Manrope', sans-serif" }}
+                />
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Date</label>
+                <input
+                  type="date"
+                  value={createForm.date}
+                  onChange={e => setCreateForm(f => ({ ...f, date: e.target.value }))}
+                  className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                  style={{ fontFamily: "'Manrope', sans-serif" }}
+                />
+              </div>
+
+              {/* Start / End time */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Start Time</label>
+                  <input
+                    type="time"
+                    value={createForm.startTime}
+                    onChange={e => {
+                      const st = e.target.value;
+                      setCreateForm(f => {
+                        const updated = { ...f, startTime: st };
+                        // Auto-set end time to start + 1 hour if no end time yet
+                        if (st && !f.endTime) {
+                          const [h, m] = st.split(':').map(Number);
+                          updated.endTime = `${String(Math.min(h + 1, 23)).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                        }
+                        return updated;
+                      });
+                    }}
+                    className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    style={{ fontFamily: "'Manrope', sans-serif" }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">End Time</label>
+                  <input
+                    type="time"
+                    value={createForm.endTime}
+                    onChange={e => setCreateForm(f => ({ ...f, endTime: e.target.value }))}
+                    className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    style={{ fontFamily: "'Manrope', sans-serif" }}
+                  />
+                </div>
+              </div>
+
+              {/* Calendar account */}
+              <div>
+                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Calendar</label>
+                <select
+                  value={createForm.googleEmail}
+                  onChange={e => setCreateForm(f => ({ ...f, googleEmail: e.target.value }))}
+                  className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                  style={{ fontFamily: "'Manrope', sans-serif" }}
+                >
+                  {(gcalStatus.accounts || []).map(acct => (
+                    <option key={acct.email} value={acct.email}>{acct.email}{acct.isPrimary ? ' (Primary)' : ''}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Entity tag */}
+              {entities.length > 0 && (
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Entity Tag</label>
+                  <select
+                    value={createForm.entityTag}
+                    onChange={e => setCreateForm(f => ({ ...f, entityTag: e.target.value }))}
+                    className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    style={{ fontFamily: "'Manrope', sans-serif" }}
+                  >
+                    <option value="">None</option>
+                    {entities.map(ent => (
+                      <option key={ent.id} value={ent.name}>{ent.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Notes */}
+              <div>
+                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Agenda / Notes</label>
+                <textarea
+                  value={createForm.notes}
+                  onChange={e => setCreateForm(f => ({ ...f, notes: e.target.value }))}
+                  placeholder="Meeting agenda, prep notes…"
+                  rows={3}
+                  className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-300 placeholder-gray-300"
+                  style={{ fontFamily: "'Manrope', sans-serif" }}
+                />
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="px-4 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateEvent}
+                disabled={createSaving}
+                className="px-4 py-2 text-xs font-medium text-white rounded-lg transition-colors disabled:opacity-50"
+                style={{ backgroundColor: '#4f4dcf' }}
+              >
+                {createSaving ? 'Creating…' : 'Create Event'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Override react-big-calendar styles to match Dizon design system */}
       <style>{`
