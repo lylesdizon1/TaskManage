@@ -3405,13 +3405,13 @@ async function upsertCalendarNote(userId, eventId, fields) {
                event_start AS "eventStart", event_end AS "eventEnd", source_account AS "sourceAccount",
                pre_note AS "preNote", post_note AS "postNote", post_alert_sent AS "postAlertSent",
                created_at AS "createdAt", updated_at AS "updatedAt"`,
-    [userId, eventId, eventTitle || null, eventStart || null, eventEnd || null, sourceAccount || null, preNote, postNote],
+    [userId, eventId, eventTitle || null, eventStart || null, eventEnd || null, sourceAccount || null, preNote || null, postNote || null],
   );
   return rows[0];
 }
 
 async function getCalendarNotesHistory(userId, { search, dateRange, limit } = {}) {
-  const conditions = ['user_id = $1', "(pre_note IS NOT NULL OR post_note IS NOT NULL)"];
+  const conditions = ['user_id = $1', "(COALESCE(pre_note, '') != '' OR COALESCE(post_note, '') != '')"];
   const params = [userId];
   let paramIdx = 2;
 
@@ -3419,7 +3419,7 @@ async function getCalendarNotesHistory(userId, { search, dateRange, limit } = {}
     const intervals = { today: '1 day', week: '7 days', month: '30 days', '3months': '90 days' };
     const interval = intervals[dateRange];
     if (interval) {
-      conditions.push(`event_start >= NOW() - INTERVAL '${interval}'`);
+      conditions.push(`(event_start IS NULL OR event_start >= NOW() - INTERVAL '${interval}')`);
     }
   }
 
