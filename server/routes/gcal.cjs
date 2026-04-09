@@ -213,6 +213,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
     const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 30);
 
     const allAccounts = await loadAllGcalAccounts(userId);
+    console.log(`[gcal] events: ${allAccounts.length} account(s) for ${userId}: ${allAccounts.map(a => a.googleEmail).join(', ')}`);
     if (!allAccounts.length) return res.json([]);
 
     // Compute time boundaries
@@ -234,16 +235,6 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       endOfDay.setDate(endOfDay.getDate() + numDays);
     }
 
-    const listParams = {
-      calendarId: 'primary',
-      timeMin: startOfDay.toISOString(),
-      timeMax: endOfDay.toISOString(),
-      singleEvents: true,
-      orderBy: 'startTime',
-      maxResults: numDays > 1 ? 50 : 20,
-    };
-    if (timeZone) listParams.timeZone = timeZone;
-
     // Fetch from all accounts in parallel, fault-tolerant
     const allEvents = [];
     const seenIds = new Set();
@@ -253,14 +244,29 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       if (!oauth2) return [];
       oauth2.setCredentials(acct.tokens);
       oauth2.on('tokens', async (newTokens) => {
-        const existing = await loadGcalTokens(userId, acct.googleEmail);
-        await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+        try {
+          const existing = await loadGcalTokens(userId, acct.googleEmail);
+          await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+        } catch (e) { console.error(`[gcal] token refresh save failed for ${acct.googleEmail}:`, e.message); }
       });
 
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-      const { data } = await calendar.events.list(listParams);
-      return (data.items || []).map((ev) => ({
-        id: ev.id,
+      // Each account gets its own params copy to prevent any mutation cross-talk
+      const params = {
+        calendarId: 'primary',
+        timeMin: startOfDay.toISOString(),
+        timeMax: endOfDay.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+        maxResults: numDays > 1 ? 50 : 20,
+      };
+      if (timeZone) params.timeZone = timeZone;
+
+      const { data } = await calendar.events.list(params);
+      const items = data.items || [];
+      console.log(`[gcal] events: ${acct.googleEmail} returned ${items.length} event(s)`);
+      return items.map((ev) => ({
+        id: `${acct.googleEmail}::${ev.id}`,
         title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
         start: ev.start?.dateTime || ev.start?.date || null,
         end: ev.end?.dateTime || ev.end?.date || null,
@@ -277,6 +283,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
             allEvents.push(ev);
           }
         }
+      } else {
+        console.error('[gcal] events: account fetch rejected:', result.reason?.message || result.reason);
       }
     }
 
@@ -287,6 +295,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       return aStart < bStart ? -1 : aStart > bStart ? 1 : 0;
     });
 
+    console.log(`[gcal] events: returning ${allEvents.length} total event(s) from ${allAccounts.length} account(s)`);
     res.json(allEvents);
   });
 
