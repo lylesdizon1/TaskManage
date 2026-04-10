@@ -630,13 +630,19 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors ${!editorData.entityId ? 'bg-primary text-on-primary' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70'}`}>
             None
           </button>
-          {(entities || []).map((ent) => (
-            <button type="button" key={ent.id}
-              onClick={() => handleEditorChange('entityId', editorData.entityId === ent.id ? '' : ent.id)}
-              className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors ${editorData.entityId === ent.id ? 'bg-primary text-on-primary' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70'}`}>
-              {ent.name}
-            </button>
-          ))}
+          {(entities || []).map((ent, idx) => {
+            const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+            const entColor = (ent.color && ent.color.startsWith('#')) ? ent.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
+            const isActive = editorData.entityId === ent.id;
+            return (
+              <button type="button" key={ent.id}
+                onClick={() => handleEditorChange('entityId', isActive ? '' : ent.id)}
+                className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors ${isActive ? 'text-white' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70'}`}
+                style={isActive ? { backgroundColor: entColor } : { borderLeft: `3px solid ${entColor}` }}>
+                {ent.name}
+              </button>
+            );
+          })}
         </div>
         <div style={{ flex: 1, cursor: 'text', minHeight: '100%' }} onClick={() => tiptapEditor?.commands?.focus()}>
           <EditorContent editor={tiptapEditor} />

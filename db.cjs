@@ -625,6 +625,7 @@ async function getEntities() {
   const { rows } = await pool.query(
     `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
             e.type, e.parent_id AS "parentId", e.shared,
+            e.calendar_id AS "calendarId", e.color_source AS "colorSource",
             p.name AS "parentName"
      FROM entities e
      LEFT JOIN entities p ON e.parent_id = p.id
@@ -645,6 +646,7 @@ async function getEntitiesForUser(userId) {
   const { rows } = await pool.query(
     `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
             e.type, e.parent_id AS "parentId", e.shared,
+            e.calendar_id AS "calendarId", e.color_source AS "colorSource",
             p.name AS "parentName",
             (e.created_by = $1) AS "isOwner"
      FROM entities e
@@ -686,7 +688,8 @@ async function createEntity({ id, name, color, createdBy, type, parentId, shared
     `INSERT INTO entities (id, name, color, created_by, type, parent_id, shared)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt",
-               type, parent_id AS "parentId", shared`,
+               type, parent_id AS "parentId", shared,
+               calendar_id AS "calendarId", color_source AS "colorSource"`,
     [id, name, color || 'slate', createdBy || '', type || 'business', parentId || null, shared || false],
   );
   return rows[0];
@@ -714,13 +717,16 @@ async function updateEntity(id, fields) {
   if (fields.type !== undefined) { sets.push(`type = $${idx++}`); vals.push(fields.type); }
   if (fields.parentId !== undefined) { sets.push(`parent_id = $${idx++}`); vals.push(fields.parentId || null); }
   if (fields.shared !== undefined) { sets.push(`shared = $${idx++}`); vals.push(fields.shared); }
+  if (fields.calendarId !== undefined) { sets.push(`calendar_id = $${idx++}`); vals.push(fields.calendarId || null); }
+  if (fields.colorSource !== undefined) { sets.push(`color_source = $${idx++}`); vals.push(fields.colorSource); }
 
   if (sets.length === 0) return null;
 
   const { rows } = await pool.query(
     `UPDATE entities SET ${sets.join(', ')} WHERE id = $1
      RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt",
-               type, parent_id AS "parentId", shared`,
+               type, parent_id AS "parentId", shared,
+               calendar_id AS "calendarId", color_source AS "colorSource"`,
     vals,
   );
   return rows[0] || null;
@@ -736,7 +742,8 @@ async function updateEntity(id, fields) {
  */
 async function getEntityById(id) {
   const { rows } = await pool.query(
-    `SELECT id, name, color, created_by AS "createdBy", type, parent_id AS "parentId", shared
+    `SELECT id, name, color, created_by AS "createdBy", type, parent_id AS "parentId", shared,
+            calendar_id AS "calendarId", color_source AS "colorSource"
      FROM entities WHERE id = $1`,
     [id],
   );
@@ -2397,6 +2404,10 @@ async function runMigrations() {
     );
   `).catch((err) => console.warn('[migration] whatsapp_conversations table:', err.message));
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_conv_phone ON whatsapp_conversations(phone, created_at DESC)`).catch(() => {});
+
+  // ── entity calendar mapping columns ─────────────────────────────────────
+  await pool.query(`ALTER TABLE entities ADD COLUMN IF NOT EXISTS calendar_id TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE entities ADD COLUMN IF NOT EXISTS color_source TEXT DEFAULT 'system'`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────

@@ -207,6 +207,41 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
   });
 
   /**
+   * GET /api/gcal/calendars
+   * Returns all calendars from all connected GCal accounts for the user.
+   */
+  router.get('/api/gcal/calendars', authenticateToken, logger.tool('getCalendars'), async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const allAccounts = await loadAllGcalAccounts(userId);
+      if (!allAccounts.length) return res.json([]);
+
+      const allCalendars = [];
+      const results = await Promise.allSettled(allAccounts.map(async (acct) => {
+        const oauth2 = makeOAuth2Client();
+        if (!oauth2) return [];
+        oauth2.setCredentials(acct.tokens);
+        const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+        const { data } = await calendar.calendarList.list();
+        return (data.items || []).map(cal => ({
+          calendarId: cal.id,
+          summary: cal.summary || cal.id,
+          backgroundColor: cal.backgroundColor || null,
+          account: acct.googleEmail,
+        }));
+      }));
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') allCalendars.push(...result.value);
+      }
+      return res.json(allCalendars);
+    } catch (err) {
+      logger.error('gcal.calendars.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
    * GET /api/gcal/events
    * Returns calendar events from ALL connected Google accounts, merged + deduped.
    */
@@ -279,6 +314,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
         start: ev.start?.dateTime || ev.start?.date || null,
         end: ev.end?.dateTime || ev.end?.date || null,
         allDay: !ev.start?.dateTime,
+        calendarId: ev.organizer?.email || acct.googleEmail,
         account: acct.googleEmail,
       }));
     }));

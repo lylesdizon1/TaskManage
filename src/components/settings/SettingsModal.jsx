@@ -533,6 +533,16 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   // Entity state
   const [newEntityName, setNewEntityName] = useState('');
   const [entityLoading, setEntityLoading] = useState(false);
+  const [gcalCalendars, setGcalCalendars] = useState([]);
+
+  // Fetch GCal calendars when entities tab is active
+  useEffect(() => {
+    if (tab !== 'entities') return;
+    apiFetch('/api/gcal/calendars', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setGcalCalendars)
+      .catch(() => {});
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addToast = addToastProp || (() => {});
 
@@ -566,6 +576,32 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     await apiFetch(`/api/entities/${id}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${authToken}` },
+    });
+    onEntitiesChanged();
+  }
+
+  async function handleLinkCalendar(entityId, calendarId) {
+    const cal = gcalCalendars.find(c => c.calendarId === calendarId);
+    const body = { calendarId: calendarId || null };
+    if (cal?.backgroundColor) {
+      body.color = cal.backgroundColor;
+      body.colorSource = 'gcal';
+    } else if (!calendarId) {
+      body.colorSource = 'system';
+    }
+    await apiFetch(`/api/entities/${entityId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify(body),
+    });
+    onEntitiesChanged();
+  }
+
+  async function handleEntityColorChange(entityId, color) {
+    await apiFetch(`/api/entities/${entityId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ color, colorSource: 'user' }),
     });
     onEntitiesChanged();
   }
@@ -1053,21 +1089,41 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
               <div className="space-y-2">
                 {entities.map((e, idx) => {
                   const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
-                  const swatchColor = ENTITY_COLORS[idx % ENTITY_COLORS.length];
+                  const swatchColor = (e.color && e.color.startsWith('#')) ? e.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
                   return (
-                  <div key={e.id} className="flex items-center justify-between px-3 py-2.5 bg-gray-50 rounded-lg border border-gray-100">
-                    <div className="flex items-center gap-2">
-                      <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: swatchColor }} />
-                      <span className="text-sm font-medium text-gray-800">{e.name}</span>
-                      {e.shared && <span className="ml-2 text-[10px] font-bold text-indigo-500 uppercase">Shared</span>}
+                  <div key={e.id} className="px-3 py-2.5 bg-gray-50 rounded-lg border border-gray-100 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <label className="relative w-5 h-5 flex-shrink-0 cursor-pointer" title="Change color">
+                          <span className="block w-5 h-5 rounded-full border border-gray-200" style={{ backgroundColor: swatchColor }} />
+                          <input type="color" value={swatchColor} onChange={(ev) => handleEntityColorChange(e.id, ev.target.value)}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                        </label>
+                        <span className="text-sm font-medium text-gray-800">{e.name}</span>
+                        {e.shared && <span className="ml-2 text-[10px] font-bold text-indigo-500 uppercase">Shared</span>}
+                      </div>
+                      {e.isOwner && (
+                        <button
+                          onClick={() => handleDeleteEntity(e.id)}
+                          className="text-xs text-red-500 hover:text-red-700 font-medium transition"
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
-                    {e.isOwner && (
-                      <button
-                        onClick={() => handleDeleteEntity(e.id)}
-                        className="text-xs text-red-500 hover:text-red-700 font-medium transition"
+                    {e.isOwner && gcalCalendars.length > 0 && (
+                      <select
+                        value={e.calendarId || ''}
+                        onChange={(ev) => handleLinkCalendar(e.id, ev.target.value)}
+                        className="w-full px-2 py-1.5 text-xs bg-white border border-gray-200 rounded-lg text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                       >
-                        Delete
-                      </button>
+                        <option value="">Link a calendar…</option>
+                        {gcalCalendars.map(cal => (
+                          <option key={`${cal.account}::${cal.calendarId}`} value={cal.calendarId}>
+                            {cal.summary} ({cal.account})
+                          </option>
+                        ))}
+                      </select>
                     )}
                   </div>
                   );

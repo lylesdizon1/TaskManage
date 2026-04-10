@@ -645,12 +645,26 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cfg.bg} ${cfg.text}`}>{cfg.label}</span>;
   };
 
+  // Entity color map: entity name → hex color
+  const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+  const entityColorMap = useMemo(() => {
+    const map = {};
+    (entities || []).forEach((e, i) => {
+      map[e.name.toLowerCase()] = (e.color && e.color.startsWith('#')) ? e.color : ENTITY_COLORS[i % ENTITY_COLORS.length];
+    });
+    return map;
+  }, [entities]);
+
   // Entity badge for tasks
   const entityBadge = (tags) => {
     if (!tags || tags.length === 0) return null;
     const tag = tags[0];
     const pillarLower = tag.toLowerCase();
     if (['hustle', 'home', 'move', 'grow'].includes(pillarLower)) return pillarBadge(pillarLower);
+    const color = entityColorMap[pillarLower];
+    if (color) {
+      return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: color }}>{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
+    }
     return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
   };
 

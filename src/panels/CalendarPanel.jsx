@@ -84,7 +84,18 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   const entityColorMap = useMemo(() => {
     const map = {};
     entities.forEach((e, i) => {
-      map[e.name.toLowerCase()] = ENTITY_COLORS[i % ENTITY_COLORS.length];
+      map[e.name.toLowerCase()] = (e.color && e.color.startsWith('#')) ? e.color : ENTITY_COLORS[i % ENTITY_COLORS.length];
+    });
+    return map;
+  }, [entities]);
+
+  // Map calendarId → entity color for GCal calendar matching
+  const calendarEntityColorMap = useMemo(() => {
+    const map = {};
+    entities.forEach((e, i) => {
+      if (e.calendarId) {
+        map[e.calendarId] = (e.color && e.color.startsWith('#')) ? e.color : ENTITY_COLORS[i % ENTITY_COLORS.length];
+      }
     });
     return map;
   }, [entities]);
@@ -94,6 +105,10 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     if (event.entityName) {
       const c = entityColorMap[event.entityName.toLowerCase()];
       if (c) return c;
+    }
+    // Check if event's calendarId matches a linked entity
+    if (event.calendarId && calendarEntityColorMap[event.calendarId]) {
+      return calendarEntityColorMap[event.calendarId];
     }
     // Scan title for entity name mentions
     const titleLower = (event.title || '').toLowerCase();
@@ -125,6 +140,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         end: ev.allDay ? new Date((ev.end || ev.start) + 'T00:00:00') : new Date(ev.end || ev.start),
         allDay: ev.allDay || false,
         account: ev.account || '',
+        calendarId: ev.calendarId || '',
         entityName: ev.entityName || '',
       }));
       setEvents(mapped);
