@@ -205,11 +205,13 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
           const todayLocal = new Intl.DateTimeFormat('en-CA', {
             timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
           }).format(new Date());
-          const startOfDay = new Date(`${todayLocal}T00:00:00`);
-          const endOfDay = new Date(`${todayLocal}T00:00:00`);
-          endOfDay.setDate(endOfDay.getDate() + 1);
+          // Use RFC 3339 with timezone offset so GCal interprets boundaries in user's local time
+          const timeMin = `${todayLocal}T00:00:00`;
+          const nextDay = new Date(new Date(`${todayLocal}T12:00:00Z`).getTime() + 86400000);
+          const nextDayStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(nextDay);
+          const timeMax = `${nextDayStr}T00:00:00`;
 
-          logger.info('ariaBrief.fetchStart', { requestId: req.requestId, userId, timeMin: startOfDay.toISOString(), timeMax: endOfDay.toISOString(), userTz });
+          logger.info('ariaBrief.fetchStart', { requestId: req.requestId, userId, timeMin, timeMax, userTz });
 
           const results = await Promise.allSettled(allAccounts.map(async (acct) => {
             const acctStart = Date.now();
@@ -226,8 +228,8 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
             const calendar = google.calendar({ version: 'v3', auth: oauth2 });
             const { data: calData } = await calendar.events.list({
               calendarId: 'primary',
-              timeMin: startOfDay.toISOString(),
-              timeMax: endOfDay.toISOString(),
+              timeMin,
+              timeMax,
               timeZone: userTz,
               singleEvents: true,
               orderBy: 'startTime',

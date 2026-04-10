@@ -263,10 +263,10 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
           const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
           if (!allAccounts.length) return [];
           const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-          const timeMin = new Date(`${todayLocal}T00:00:00`).toISOString();
-          const weekOut = new Date(`${todayLocal}T00:00:00`);
-          weekOut.setDate(weekOut.getDate() + 7);
-          const timeMax = weekOut.toISOString();
+          const timeMin = `${todayLocal}T00:00:00`;
+          const weekOut = new Date(new Date(`${todayLocal}T12:00:00Z`).getTime() + 7 * 86400000);
+          const weekOutStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(weekOut);
+          const timeMax = `${weekOutStr}T00:00:00`;
 
           const results = await Promise.allSettled(allAccounts.map(async (acct) => {
             const oauth2 = makeOAuth2Client();

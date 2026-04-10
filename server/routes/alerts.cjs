@@ -38,9 +38,10 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
           const todayLocal = new Intl.DateTimeFormat('en-CA', {
             timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
           }).format(new Date());
-          const startOfDay = new Date(`${todayLocal}T00:00:00`);
-          const endOfDay = new Date(`${todayLocal}T00:00:00`);
-          endOfDay.setDate(endOfDay.getDate() + 1);
+          const timeMin = `${todayLocal}T00:00:00`;
+          const nextDay = new Date(new Date(`${todayLocal}T12:00:00Z`).getTime() + 86400000);
+          const nextDayStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(nextDay);
+          const timeMax = `${nextDayStr}T00:00:00`;
 
           const results = await Promise.allSettled(allAccounts.map(async (acct) => {
             const oauth2 = makeOAuth2Client();
@@ -55,8 +56,8 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
             const calendar = google.calendar({ version: 'v3', auth: oauth2 });
             const { data } = await calendar.events.list({
               calendarId: 'primary',
-              timeMin: startOfDay.toISOString(),
-              timeMax: endOfDay.toISOString(),
+              timeMin,
+              timeMax,
               timeZone: userTz,
               singleEvents: true,
               orderBy: 'startTime',
