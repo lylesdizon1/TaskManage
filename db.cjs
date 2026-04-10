@@ -797,7 +797,9 @@ async function getEntityById(id) {
  * @returns {Promise<void>}
  */
 async function deleteEntity(id, userId) {
-  await pool.query('DELETE FROM entities WHERE id = $1 AND created_by = $2', [id, userId]);
+  // Route already validates ownership or admin/superadmin — delete by id only
+  // (seeded entities have NULL created_by, so AND created_by = $2 would never match)
+  await pool.query('DELETE FROM entities WHERE id = $1', [id]);
 }
 
 /**

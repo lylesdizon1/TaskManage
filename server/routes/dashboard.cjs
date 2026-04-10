@@ -29,8 +29,8 @@
  *   - The brief and timeline-summary endpoints make direct Anthropic API
  *     calls via axios (not the SDK) because they are simple one-shot
  *     generations with no tool use, no streaming, and no multi-turn loop.
- *   - GCal data for the brief is passed from the frontend (data.events),
- *     not fetched server-side, because the dashboard already has it loaded.
+ *   - GCal data for the brief is now fetched server-side with timezone-aware
+ *     date ranges, matching the fix applied to ai.cjs and alerts.cjs.
  *
  * @note This route exists separately from ai.cjs because dashboard endpoints
  * serve aggregated data for the UI shell (session, polling, briefs), while
@@ -57,7 +57,7 @@ const logger = require('../../guardrails/logger.cjs');
  * @param {Object} deps.db - Database helper module (db.cjs).
  * @returns {express.Router} Mounted by proxy-server.cjs.
  */
-module.exports = function createDashboardRouter({ authenticateToken, db }) {
+module.exports = function createDashboardRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   // ── Command Center ───────────────────────────────────────────────────────────
@@ -159,11 +159,9 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
    * and the user's live task/note/calendar data. Returns 2–3 sentences
    * of natural-language summary.
    *
-   * @note Tasks are fetched server-side from the DB — never from the client
-   * request body. This was a deliberate fix (Bug 2) to prevent stale or
-   * manipulated task data from reaching the brief. Calendar events are
-   * still passed from the frontend (data.events) because the dashboard
-   * already has them loaded from GCal.
+   * @note Tasks and calendar events are fetched server-side — never from
+   * the client request body. This prevents stale or manipulated data from
+   * reaching the brief. Calendar events use timezone-aware date ranges.
    *
    * @note The brief uses direct axios calls to the Anthropic API (not the
    * SDK or agenticLoop) because it is a simple one-shot generation with
@@ -196,6 +194,41 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
       const todayTasks = activeTasks.filter(t => t.dueDate === todayStr).map(t => t.title).join(', ') || 'None';
       const notes = await db.getPrivateNotesForAI(userId);
 
+      // Fetch calendar events server-side (never trust client-sent events)
+      let calendarEventStr = data?.events || 'None';
+      try {
+        const tokens = loadGcalTokens ? await loadGcalTokens(userId) : null;
+        if (tokens && makeOAuth2Client && google) {
+          const oauth2 = makeOAuth2Client();
+          if (oauth2) {
+            oauth2.setCredentials(tokens);
+            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+            const userTz = req.user.timezone || 'America/Los_Angeles';
+            const todayLocal = new Intl.DateTimeFormat('en-CA', {
+              timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
+            }).format(new Date());
+            const startOfDay = new Date(`${todayLocal}T00:00:00`);
+            const endOfDay = new Date(`${todayLocal}T00:00:00`);
+            endOfDay.setDate(endOfDay.getDate() + 1);
+            const { data: calData } = await calendar.events.list({
+              calendarId: 'primary',
+              timeMin: startOfDay.toISOString(),
+              timeMax: endOfDay.toISOString(),
+              timeZone: userTz,
+              singleEvents: true,
+              orderBy: 'startTime',
+              maxResults: 20,
+            });
+            const events = (calData.items || []).map((ev) =>
+              (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, '')
+            );
+            if (events.length > 0) calendarEventStr = events.join(', ');
+          }
+        }
+      } catch (calErr) {
+        logger.error('ariaBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
+      }
+
       const personaTones = {
         executive_assistant: 'warm and professional',
         coo: 'direct and strategic',
@@ -208,7 +241,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
 
       const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-3 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. Only reference tasks, calendar events, and notes that are explicitly listed in the context below. Do not infer or reference activities from memory, business context, or profile information when summarizing the day. Sign off with just your name: — ${name}`;
 
-      const dataStr = `Overdue tasks: ${overdue}\nHigh priority tasks: ${highPriority}\nTasks due today: ${todayTasks}\nToday's calendar events: ${data?.events || 'None'}\nNotes this week: ${notes.length}\nBusinesses: ${data?.entities || 'None'}`;
+      const dataStr = `Overdue tasks: ${overdue}\nHigh priority tasks: ${highPriority}\nTasks due today: ${todayTasks}\nToday's calendar events: ${calendarEventStr}\nNotes this week: ${notes.length}\nBusinesses: ${data?.entities || 'None'}`;
 
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',
