@@ -48,6 +48,9 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/', apiLimiter);
 app.use((req, _res, next) => { console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`); next(); });
 
+const logger = require('./guardrails/logger.cjs');
+app.use(logger.attachRequestId);
+
 // ── Route mounts ─────────────────────────────────────────────────────────────
 app.use('/', require('./server/routes/auth.cjs')({ authenticateToken, JWT_SECRET, db }));
 app.use('/', require('./server/routes/users.cjs')({ authenticateToken, requireAdmin, db }));
