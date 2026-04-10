@@ -316,15 +316,21 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       const { data } = await calendar.events.list(params);
       const items = data.items || [];
       logger.info('gcal.events.accountResult', { userId, googleEmail: acct.googleEmail, eventCount: items.length });
-      return items.map((ev) => ({
-        id: `${acct.googleEmail}::${ev.id}`,
-        title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
-        start: ev.start?.dateTime || ev.start?.date || null,
-        end: ev.end?.dateTime || ev.end?.date || null,
-        allDay: !ev.start?.dateTime,
-        calendarId: ev.organizer?.email || acct.googleEmail,
-        account: acct.googleEmail,
-      }));
+      return items.map((ev) => {
+        const description = ev.description || '';
+        const entityMatch = description.match(/\[([^\]]+)\]/);
+        const entityName = entityMatch ? entityMatch[1] : '';
+        return {
+          id: `${acct.googleEmail}::${ev.id}`,
+          title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+          start: ev.start?.dateTime || ev.start?.date || null,
+          end: ev.end?.dateTime || ev.end?.date || null,
+          allDay: !ev.start?.dateTime,
+          calendarId: ev.organizer?.email || acct.googleEmail,
+          account: acct.googleEmail,
+          entityName,
+        };
+      });
     }));
 
     for (const result of results) {
