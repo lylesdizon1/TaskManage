@@ -103,7 +103,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
   );
 }
 
-function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, entities, envStatus, apiFetch, EntitySelectOptions }) {
+function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, entities, envStatus, apiFetch, authToken, currentUser, EntitySelectOptions }) {
   const [showAdd, setShowAdd]       = useState(false);
   const [newRule, setNewRule]       = useState(EMPTY_NEW_RULE);
   const [evaluating, setEvaluating] = useState(false);
@@ -820,6 +820,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
             entities={entities}
             envStatus={envStatus}
             apiFetch={apiFetch}
+            authToken={authToken}
+            currentUser={currentUser}
             EntitySelectOptions={EntitySelectOptions}
           />}
 
