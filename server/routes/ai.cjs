@@ -262,11 +262,13 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         try {
           const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
           if (!allAccounts.length) return [];
+          // Convert local midnight to UTC ISO string GCal accepts
           const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-          const timeMin = `${todayLocal}T00:00:00`;
-          const weekOut = new Date(new Date(`${todayLocal}T12:00:00Z`).getTime() + 7 * 86400000);
-          const weekOutStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(weekOut);
-          const timeMax = `${weekOutStr}T00:00:00`;
+          const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
+          const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
+          const offsetMs = noonUtc.getTime() - noonLocal.getTime();
+          const timeMin = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs).toISOString();
+          const timeMax = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs + 7 * 86400000).toISOString();
 
           const results = await Promise.allSettled(allAccounts.map(async (acct) => {
             const oauth2 = makeOAuth2Client();

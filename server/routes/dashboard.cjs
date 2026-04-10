@@ -202,14 +202,16 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
 
         if (allAccounts.length > 0 && makeOAuth2Client && google) {
           const userTz = req.user.timezone || 'America/Los_Angeles';
+          // Convert local midnight to UTC ISO string GCal accepts
           const todayLocal = new Intl.DateTimeFormat('en-CA', {
             timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
           }).format(new Date());
-          // Use RFC 3339 with timezone offset so GCal interprets boundaries in user's local time
-          const timeMin = `${todayLocal}T00:00:00`;
-          const nextDay = new Date(new Date(`${todayLocal}T12:00:00Z`).getTime() + 86400000);
-          const nextDayStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(nextDay);
-          const timeMax = `${nextDayStr}T00:00:00`;
+          // Parse as UTC noon (safe from DST), then compute offset to get local midnight in UTC
+          const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
+          const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
+          const offsetMs = noonUtc.getTime() - noonLocal.getTime();
+          const timeMin = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs).toISOString();
+          const timeMax = new Date(noonUtc.getTime() + 12 * 3600000 + offsetMs).toISOString();
 
           logger.info('ariaBrief.fetchStart', { requestId: req.requestId, userId, timeMin, timeMax, userTz });
 

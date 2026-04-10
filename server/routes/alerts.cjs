@@ -35,13 +35,15 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
         const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(req.user.id) : [];
         if (allAccounts.length > 0 && makeOAuth2Client && google) {
           const userTz = tz || 'America/Los_Angeles';
+          // Convert local midnight to UTC ISO string GCal accepts
           const todayLocal = new Intl.DateTimeFormat('en-CA', {
             timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
           }).format(new Date());
-          const timeMin = `${todayLocal}T00:00:00`;
-          const nextDay = new Date(new Date(`${todayLocal}T12:00:00Z`).getTime() + 86400000);
-          const nextDayStr = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(nextDay);
-          const timeMax = `${nextDayStr}T00:00:00`;
+          const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
+          const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
+          const offsetMs = noonUtc.getTime() - noonLocal.getTime();
+          const timeMin = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs).toISOString();
+          const timeMax = new Date(noonUtc.getTime() + 12 * 3600000 + offsetMs).toISOString();
 
           const results = await Promise.allSettled(allAccounts.map(async (acct) => {
             const oauth2 = makeOAuth2Client();
