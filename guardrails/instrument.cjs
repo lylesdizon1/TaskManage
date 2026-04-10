@@ -1,11 +1,16 @@
 const Sentry = require("@sentry/node");
-console.log('[sentry] initializing with DSN:', process.env.SENTRY_DSN ? 'SET' : 'NOT SET');
 
-Sentry.init({
-  dsn: process.env.SENTRY_DSN,
-  environment: process.env.NODE_ENV ?? 'development',
-  sendDefaultPii: true,
-  tracesSampleRate: 0.2,
-});
+if (!process.env.SENTRY_DSN) {
+  console.error('[sentry] FATAL: SENTRY_DSN is not set');
+} else {
+  console.log('[sentry] DSN found, initializing...');
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV ?? 'development',
+    sendDefaultPii: true,
+    tracesSampleRate: 0.2,
+  });
+  console.log('[sentry] init complete');
+}
 
 module.exports = Sentry;
