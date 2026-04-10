@@ -703,12 +703,18 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${!pillarFilter ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
             All
           </button>
-          {(entities || []).map((ent) => (
-            <button type="button" key={ent.id} onClick={() => { setPillarFilter(pillarFilter === ent.id ? '' : ent.id); setCategoryFilter(''); }}
-              className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${pillarFilter === ent.id ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
-              {ent.name}
-            </button>
-          ))}
+          {(entities || []).map((ent, idx) => {
+            const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+            const dotColor = (ent.color && ent.color.startsWith('#')) ? ent.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
+            const isActive = pillarFilter === ent.id;
+            return (
+              <button type="button" key={ent.id} onClick={() => { setPillarFilter(isActive ? '' : ent.id); setCategoryFilter(''); }}
+                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold transition-colors ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-variant/50'}`}>
+                {!isActive && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />}
+                {ent.name}
+              </button>
+            );
+          })}
         </div>
 
         {/* New Note button — above list */}

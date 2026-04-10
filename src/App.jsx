@@ -1082,13 +1082,21 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 onClick={() => setActiveTagFilters([])}
                 className={`px-4 py-1.5 rounded-full text-[10px] font-bold shadow shadow-primary/20 transition-all ${activeTagFilters.length === 0 ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
               >All</button>
-              {userEntities.map((entity) => (
-                <button
-                  key={entity.id}
-                  onClick={() => setActiveTagFilters([entity.name])}
-                  className={`px-4 py-1.5 rounded-full text-[10px] font-bold transition-all ${activeTagFilters.includes(entity.name) ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
-                >{entity.name}</button>
-              ))}
+              {userEntities.map((entity, idx) => {
+                const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+                const dotColor = (entity.color && entity.color.startsWith('#')) ? entity.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
+                const isActive = activeTagFilters.includes(entity.name);
+                return (
+                  <button
+                    key={entity.id}
+                    onClick={() => setActiveTagFilters([entity.name])}
+                    className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[10px] font-bold transition-all ${isActive ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                  >
+                    {!isActive && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />}
+                    {entity.name}
+                  </button>
+                );
+              })}
               <div className="h-4 w-px bg-outline-variant/30 mx-1" />
               <div className="relative">
                 <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50" style={{fontSize:"14px"}}>filter_list</span>
@@ -1245,13 +1253,21 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                           onClick={() => { setHistoryEntity(''); fetchCompletedHistory('', historyDateRange, historySearch); }}
                           className={`px-3 py-1 rounded-full text-[9px] font-bold transition-all ${!historyEntity ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
                         >All</button>
-                        {userEntities.map((entity) => (
-                          <button
-                            key={entity.id}
-                            onClick={() => { setHistoryEntity(entity.name); fetchCompletedHistory(entity.name, historyDateRange, historySearch); }}
-                            className={`px-3 py-1 rounded-full text-[9px] font-bold transition-all ${historyEntity === entity.name ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
-                          >{entity.name}</button>
-                        ))}
+                        {userEntities.map((entity, idx) => {
+                          const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+                          const dotColor = (entity.color && entity.color.startsWith('#')) ? entity.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
+                          const isActive = historyEntity === entity.name;
+                          return (
+                            <button
+                              key={entity.id}
+                              onClick={() => { setHistoryEntity(entity.name); fetchCompletedHistory(entity.name, historyDateRange, historySearch); }}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-bold transition-all ${isActive ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                            >
+                              {!isActive && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />}
+                              {entity.name}
+                            </button>
+                          );
+                        })}
 
                         <div className="h-4 w-px bg-outline-variant/30 mx-1" />
 
