@@ -829,10 +829,11 @@ async function getTaskById(taskId, userId) {
  *
  * @param {string} userId - User ID.
  * @param {string[]} userEntityIds - Entity name strings from req.user.entityIds.
+ * @param {number} [limit=100] - Maximum number of rows to return.
  * @returns {Promise<Array<Object>>} Tasks ordered by created_at DESC.
  * @throws {Error} If the database query fails.
  */
-async function getTasksForUser(userId, userEntityIds) {
+async function getTasksForUser(userId, userEntityIds, limit = 100) {
   // If no entity filter, fall back to simple owner check
   if (!userEntityIds || userEntityIds.length === 0) {
     const { rows } = await pool.query(
@@ -841,8 +842,9 @@ async function getTasksForUser(userId, userEntityIds) {
               google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM tasks
        WHERE owner = $1
-       ORDER BY created_at DESC`,
-      [userId],
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [userId, limit],
     );
     return rows;
   }
@@ -856,8 +858,9 @@ async function getTasksForUser(userId, userEntityIds) {
      FROM tasks
      WHERE owner = $1
         OR (visibility = 'shared' AND tags ?| $2)
-     ORDER BY created_at DESC`,
-    [userId, entityNames],
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    [userId, entityNames, limit],
   );
   return rows;
 }
