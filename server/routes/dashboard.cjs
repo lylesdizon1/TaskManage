@@ -57,7 +57,7 @@ const logger = require('../../guardrails/logger.cjs');
  * @param {Object} deps.db - Database helper module (db.cjs).
  * @returns {express.Router} Mounted by proxy-server.cjs.
  */
-module.exports = function createDashboardRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
+module.exports = function createDashboardRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   // ── Command Center ───────────────────────────────────────────────────────────
@@ -194,22 +194,30 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       const todayTasks = activeTasks.filter(t => t.dueDate === todayStr).map(t => t.title).join(', ') || 'None';
       const notes = await db.getPrivateNotesForAI(userId);
 
-      // Fetch calendar events server-side (never trust client-sent events)
+      // Fetch calendar events server-side from ALL connected accounts
       let calendarEventStr = data?.events || 'None';
       try {
-        const tokens = loadGcalTokens ? await loadGcalTokens(userId) : null;
-        if (tokens && makeOAuth2Client && google) {
-          const oauth2 = makeOAuth2Client();
-          if (oauth2) {
-            oauth2.setCredentials(tokens);
+        const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
+        if (allAccounts.length > 0 && makeOAuth2Client && google) {
+          const userTz = req.user.timezone || 'America/Los_Angeles';
+          const todayLocal = new Intl.DateTimeFormat('en-CA', {
+            timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
+          }).format(new Date());
+          const startOfDay = new Date(`${todayLocal}T00:00:00`);
+          const endOfDay = new Date(`${todayLocal}T00:00:00`);
+          endOfDay.setDate(endOfDay.getDate() + 1);
+
+          const results = await Promise.allSettled(allAccounts.map(async (acct) => {
+            const oauth2 = makeOAuth2Client();
+            if (!oauth2) return [];
+            oauth2.setCredentials(acct.tokens);
+            oauth2.on('tokens', async (newTokens) => {
+              try {
+                const existing = await loadGcalTokens(userId, acct.googleEmail);
+                await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+              } catch (e) { logger.error('ariaBrief.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
+            });
             const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-            const userTz = req.user.timezone || 'America/Los_Angeles';
-            const todayLocal = new Intl.DateTimeFormat('en-CA', {
-              timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
-            }).format(new Date());
-            const startOfDay = new Date(`${todayLocal}T00:00:00`);
-            const endOfDay = new Date(`${todayLocal}T00:00:00`);
-            endOfDay.setDate(endOfDay.getDate() + 1);
             const { data: calData } = await calendar.events.list({
               calendarId: 'primary',
               timeMin: startOfDay.toISOString(),
@@ -219,11 +227,27 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
               orderBy: 'startTime',
               maxResults: 20,
             });
-            const events = (calData.items || []).map((ev) =>
-              (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, '')
-            );
-            if (events.length > 0) calendarEventStr = events.join(', ');
+            return (calData.items || []).map((ev) => ({
+              title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+              start: ev.start?.dateTime || ev.start?.date || '',
+            }));
+          }));
+
+          const allEvents = [];
+          const seenTitles = new Set();
+          for (const result of results) {
+            if (result.status === 'fulfilled') {
+              for (const ev of result.value) {
+                const key = `${ev.title}::${ev.start}`;
+                if (!seenTitles.has(key)) {
+                  seenTitles.add(key);
+                  allEvents.push(ev);
+                }
+              }
+            }
           }
+          allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+          if (allEvents.length > 0) calendarEventStr = allEvents.map((e) => e.title).join(', ');
         }
       } catch (calErr) {
         logger.error('ariaBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
