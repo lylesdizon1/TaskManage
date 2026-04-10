@@ -573,11 +573,20 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
 
   async function handleDeleteEntity(id) {
     if (!window.confirm('Delete this entity? Tasks and notes tagged with it will lose this tag.')) return;
-    await apiFetch(`/api/entities/${id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
-    onEntitiesChanged();
+    try {
+      const res = await apiFetch(`/api/entities/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        addToast({ type: 'error', message: data.error || 'Failed to delete entity' });
+        return;
+      }
+      onEntitiesChanged();
+    } catch (err) {
+      addToast({ type: 'error', message: `Delete failed: ${err.message}` });
+    }
   }
 
   async function handleLinkCalendar(entityId, calendarId) {
@@ -1118,11 +1127,14 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                         className="w-full px-2 py-1.5 text-xs bg-white border border-gray-200 rounded-lg text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                       >
                         <option value="">Link a calendar…</option>
-                        {gcalCalendars.map(cal => (
-                          <option key={`${cal.account}::${cal.calendarId}`} value={cal.calendarId}>
-                            {cal.summary} ({cal.account})
-                          </option>
-                        ))}
+                        {gcalCalendars.map(cal => {
+                          const label = cal.summary === cal.account ? `Primary (${cal.account})` : `${cal.summary} (${cal.account})`;
+                          return (
+                            <option key={`${cal.account}::${cal.calendarId}`} value={cal.calendarId}>
+                              {label}
+                            </option>
+                          );
+                        })}
                       </select>
                     )}
                   </div>
