@@ -622,16 +622,29 @@ async function deleteUser(id) {
  * @returns {Promise<Array<Object>>} All entities with parent name resolved via LEFT JOIN.
  */
 async function getEntities() {
-  const { rows } = await pool.query(
-    `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
-            e.type, e.parent_id AS "parentId", e.shared,
-            e.calendar_id AS "calendarId", e.color_source AS "colorSource",
-            p.name AS "parentName"
-     FROM entities e
-     LEFT JOIN entities p ON e.parent_id = p.id
-     ORDER BY e.created_at ASC`,
-  );
-  return rows;
+  try {
+    const { rows } = await pool.query(
+      `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
+              e.type, e.parent_id AS "parentId", e.shared,
+              e.calendar_id AS "calendarId", e.color_source AS "colorSource",
+              p.name AS "parentName"
+       FROM entities e
+       LEFT JOIN entities p ON e.parent_id = p.id
+       ORDER BY e.created_at ASC`,
+    );
+    return rows;
+  } catch {
+    // Fallback if calendar_id/color_source columns don't exist yet
+    const { rows } = await pool.query(
+      `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
+              e.type, e.parent_id AS "parentId", e.shared,
+              p.name AS "parentName"
+       FROM entities e
+       LEFT JOIN entities p ON e.parent_id = p.id
+       ORDER BY e.created_at ASC`,
+    );
+    return rows;
+  }
 }
 
 /**
@@ -643,19 +656,35 @@ async function getEntities() {
  * @returns {Promise<Array<Object>>} Entities with isOwner boolean.
  */
 async function getEntitiesForUser(userId) {
-  const { rows } = await pool.query(
-    `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
-            e.type, e.parent_id AS "parentId", e.shared,
-            e.calendar_id AS "calendarId", e.color_source AS "colorSource",
-            p.name AS "parentName",
-            (e.created_by = $1) AS "isOwner"
-     FROM entities e
-     LEFT JOIN entities p ON e.parent_id = p.id
-     WHERE e.created_by = $1 OR e.shared = true
-     ORDER BY e.created_at ASC`,
-    [userId],
-  );
-  return rows;
+  try {
+    const { rows } = await pool.query(
+      `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
+              e.type, e.parent_id AS "parentId", e.shared,
+              e.calendar_id AS "calendarId", e.color_source AS "colorSource",
+              p.name AS "parentName",
+              (e.created_by = $1) AS "isOwner"
+       FROM entities e
+       LEFT JOIN entities p ON e.parent_id = p.id
+       WHERE e.created_by = $1 OR e.shared = true
+       ORDER BY e.created_at ASC`,
+      [userId],
+    );
+    return rows;
+  } catch {
+    // Fallback if calendar_id/color_source columns don't exist yet
+    const { rows } = await pool.query(
+      `SELECT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
+              e.type, e.parent_id AS "parentId", e.shared,
+              p.name AS "parentName",
+              (e.created_by = $1) AS "isOwner"
+       FROM entities e
+       LEFT JOIN entities p ON e.parent_id = p.id
+       WHERE e.created_by = $1 OR e.shared = true
+       ORDER BY e.created_at ASC`,
+      [userId],
+    );
+    return rows;
+  }
 }
 
 /**
@@ -741,13 +770,22 @@ async function updateEntity(id, fields) {
  * @throws {Error} If the database query fails.
  */
 async function getEntityById(id) {
-  const { rows } = await pool.query(
-    `SELECT id, name, color, created_by AS "createdBy", type, parent_id AS "parentId", shared,
-            calendar_id AS "calendarId", color_source AS "colorSource"
-     FROM entities WHERE id = $1`,
-    [id],
-  );
-  return rows[0] || null;
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, color, created_by AS "createdBy", type, parent_id AS "parentId", shared,
+              calendar_id AS "calendarId", color_source AS "colorSource"
+       FROM entities WHERE id = $1`,
+      [id],
+    );
+    return rows[0] || null;
+  } catch {
+    const { rows } = await pool.query(
+      `SELECT id, name, color, created_by AS "createdBy", type, parent_id AS "parentId", shared
+       FROM entities WHERE id = $1`,
+      [id],
+    );
+    return rows[0] || null;
+  }
 }
 
 /**
