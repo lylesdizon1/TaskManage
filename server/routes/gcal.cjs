@@ -310,13 +310,14 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
         singleEvents: true,
         orderBy: 'startTime',
         maxResults: numDays > 1 ? 50 : 20,
+        fields: 'items(id,summary,description,start,end,organizer,extendedProperties)',
       };
       if (timeZone) params.timeZone = timeZone;
 
       const { data } = await calendar.events.list(params);
       const items = data.items || [];
       logger.info('gcal.events.accountResult', { userId, googleEmail: acct.googleEmail, eventCount: items.length });
-      items.filter(ev => (ev.summary || '').toLowerCase().includes('tahoe')).forEach(ev =>
+      items.filter(ev => (ev.summary || '').toLowerCase().includes('tahoe') || (ev.summary || '').toLowerCase().includes('fun')).forEach(ev =>
         logger.info('gcal.debug.tahoe', { summary: ev.summary, description: ev.description, organizer: ev.organizer?.email })
       );
       return items.map((ev) => {
