@@ -101,6 +101,17 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   }, [entities]);
 
   function getEventColor(event) {
+    if ((event.title || '').toLowerCase().includes('tahoe') || (event.title || '').toLowerCase().includes('fun')) {
+      console.log('[DEBUG getEventColor]', {
+        title: event.title,
+        entityName: event.entityName,
+        calendarId: event.calendarId,
+        entityColorMapKeys: Object.keys(entityColorMap),
+        calendarEntityColorMapKeys: Object.keys(calendarEntityColorMap),
+        lookupResult: event.entityName ? entityColorMap[event.entityName.toLowerCase()] : 'no entityName',
+        calendarIdResult: event.calendarId ? calendarEntityColorMap[event.calendarId] : 'no calendarId',
+      });
+    }
     // Check if event's calendarId matches a linked entity
     if (event.calendarId && calendarEntityColorMap[event.calendarId]) {
       return calendarEntityColorMap[event.calendarId];
