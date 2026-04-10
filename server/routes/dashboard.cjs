@@ -198,6 +198,8 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       let calendarEventStr = data?.events || 'None';
       try {
         const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
+        logger.info('ariaBrief.accounts', { requestId: req.requestId, userId, accountCount: allAccounts.length, emails: allAccounts.map(a => a.googleEmail) });
+
         if (allAccounts.length > 0 && makeOAuth2Client && google) {
           const userTz = req.user.timezone || 'America/Los_Angeles';
           const todayLocal = new Intl.DateTimeFormat('en-CA', {
@@ -207,14 +209,18 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
           const endOfDay = new Date(`${todayLocal}T00:00:00`);
           endOfDay.setDate(endOfDay.getDate() + 1);
 
+          logger.info('ariaBrief.fetchStart', { requestId: req.requestId, userId, timeMin: startOfDay.toISOString(), timeMax: endOfDay.toISOString(), userTz });
+
           const results = await Promise.allSettled(allAccounts.map(async (acct) => {
+            const acctStart = Date.now();
             const oauth2 = makeOAuth2Client();
-            if (!oauth2) return [];
+            if (!oauth2) { logger.warn('ariaBrief.noOAuth2', { userId, googleEmail: acct.googleEmail }); return []; }
             oauth2.setCredentials(acct.tokens);
             oauth2.on('tokens', async (newTokens) => {
               try {
                 const existing = await loadGcalTokens(userId, acct.googleEmail);
                 await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+                logger.info('ariaBrief.tokenRefreshed', { userId, googleEmail: acct.googleEmail });
               } catch (e) { logger.error('ariaBrief.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
             });
             const calendar = google.calendar({ version: 'v3', auth: oauth2 });
@@ -227,11 +233,15 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
               orderBy: 'startTime',
               maxResults: 20,
             });
-            return (calData.items || []).map((ev) => ({
+            const events = (calData.items || []).map((ev) => ({
               title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
               start: ev.start?.dateTime || ev.start?.date || '',
             }));
+            logger.info('ariaBrief.accountResult', { userId, googleEmail: acct.googleEmail, eventCount: events.length, titles: events.map(e => e.title), durationMs: Date.now() - acctStart });
+            return events;
           }));
+
+          logger.info('ariaBrief.allSettled', { requestId: req.requestId, userId, statuses: results.map((r, i) => ({ email: allAccounts[i]?.googleEmail, status: r.status, reason: r.status === 'rejected' ? String(r.reason?.message || r.reason) : undefined })) });
 
           const allEvents = [];
           const seenTitles = new Set();
@@ -255,10 +265,10 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
               return `${e.title} at ${time}`;
             }).join('; ');
           }
-          logger.info('ariaBrief.calendarEvents', { requestId: req.requestId, userId, eventCount: allEvents.length, titles: allEvents.map(e => e.title) });
+          logger.info('ariaBrief.calendarEvents', { requestId: req.requestId, userId, eventCount: allEvents.length, titles: allEvents.map(e => e.title), calendarEventStr });
         }
       } catch (calErr) {
-        logger.error('ariaBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
+        logger.error('ariaBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message, stack: calErr.stack?.split('\n').slice(0, 3).join(' | ') });
       }
 
       const personaTones = {
