@@ -101,16 +101,19 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   }, [entities]);
 
   function getEventColor(event) {
-    // Check entity_name field first
+    // Pass 1: Match calendarId or account email to entity's linked calendar
+    if (event.calendarId && calendarEntityColorMap[event.calendarId]) {
+      return calendarEntityColorMap[event.calendarId];
+    }
+    if (event.account && event.account !== event.calendarId && calendarEntityColorMap[event.account]) {
+      return calendarEntityColorMap[event.account];
+    }
+    // Pass 2: Match by entity name tag
     if (event.entityName) {
       const c = entityColorMap[event.entityName.toLowerCase()];
       if (c) return c;
     }
-    // Check if event's calendarId matches a linked entity
-    if (event.calendarId && calendarEntityColorMap[event.calendarId]) {
-      return calendarEntityColorMap[event.calendarId];
-    }
-    // Scan title for entity name mentions
+    // Pass 3: Scan title for entity name mentions
     const titleLower = (event.title || '').toLowerCase();
     for (const [name, color] of Object.entries(entityColorMap)) {
       if (titleLower.includes(name)) return color;
