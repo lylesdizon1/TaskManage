@@ -113,11 +113,11 @@ export function evaluateRule(rule, tasks, tz) {
       return active.filter((t) => t.priority === 'high');
 
     case 'tag-match':
-      return active.filter((t) => t.tags.includes(rule.condition.tag));
+      return active.filter((t) => (t.tags || []).includes(rule.condition.tag));
 
     case 'tag-overdue':
       return active.filter(
-        (t) => t.dueDate && t.dueDate < todayStr && t.tags.includes(rule.condition.tag),
+        (t) => t.dueDate && t.dueDate < todayStr && (t.tags || []).includes(rule.condition.tag),
       );
 
     case 'daily-digest':

@@ -132,8 +132,13 @@ function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAle
 
   async function handleEvaluateNow() {
     setEvaluating(true);
-    await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast, apiFetch, authToken, currentUser);
-    setEvaluating(false);
+    try {
+      await runAlertRules(tasks, rules, emailSettings, firedAlertsRef, addToast, apiFetch, authToken, currentUser);
+    } catch (err) {
+      console.error('runAlertRules failed:', err);
+    } finally {
+      setEvaluating(false);
+    }
   }
 
   async function handleSendTest(channel) {
