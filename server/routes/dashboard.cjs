@@ -247,7 +247,15 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
             }
           }
           allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-          if (allEvents.length > 0) calendarEventStr = allEvents.map((e) => e.title).join(', ');
+          if (allEvents.length > 0) {
+            calendarEventStr = allEvents.map((e) => {
+              if (!e.start || !e.start.includes('T')) return e.title;
+              const t = new Date(e.start);
+              const time = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: userTz });
+              return `${e.title} at ${time}`;
+            }).join('; ');
+          }
+          logger.info('ariaBrief.calendarEvents', { requestId: req.requestId, userId, eventCount: allEvents.length, titles: allEvents.map(e => e.title) });
         }
       } catch (calErr) {
         logger.error('ariaBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
@@ -263,7 +271,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       const tone = personaTones[persona] || personaTones.executive_assistant;
       const name = assistantName || 'Aria';
 
-      const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-3 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. Only reference tasks, calendar events, and notes that are explicitly listed in the context below. Do not infer or reference activities from memory, business context, or profile information when summarizing the day. Do NOT mention note counts or how many notes exist — only mention a specific note if it contains something actionable, time-sensitive, or relevant to today. Sign off with just your name: — ${name}`;
+      const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-4 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. IMPORTANT: mention EVERY calendar event listed below with its time — do not skip or summarize events. If there are 2 events, mention both. If there are 5, mention all 5. Only reference tasks, calendar events, and notes that are explicitly listed in the context below. Do not infer or reference activities from memory, business context, or profile information. Do NOT mention note counts — only mention a specific note if it contains something actionable today. Sign off with just your name: — ${name}`;
 
       // Build actionable notes string — only include notes with actionable/time-sensitive content
       const actionableNotes = notes
@@ -278,7 +286,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         'https://api.anthropic.com/v1/messages',
         {
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 150,
+          max_tokens: 300,
           system: systemPrompt,
           messages: [{ role: 'user', content: `Write my ${timeOfDay || 'morning'} brief.\n\n${dataStr}` }],
         },

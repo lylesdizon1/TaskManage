@@ -186,6 +186,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const lastCheckedRef = useRef(new Date().toISOString());
   const ccAutoRefreshedRef = useRef(false);
 
+  // Rotating thinking messages
+  const THINKING_MESSAGES = ['Thinking...', 'Checking your calendar...', 'Reviewing your tasks...', 'Pulling context...', 'Almost there...'];
+  const [thinkingIdx, setThinkingIdx] = useState(0);
+  useEffect(() => {
+    if (!ccLoading && !ccSending) return;
+    const timer = setInterval(() => setThinkingIdx((i) => (i + 1) % THINKING_MESSAGES.length), 1800);
+    return () => clearInterval(timer);
+  }, [ccLoading, ccSending]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -718,7 +727,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
               <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
-              <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', color: '#6b7280' }}>Aria is thinking...</span>
+              <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', color: '#6b7280', transition: 'opacity 0.3s' }}>{THINKING_MESSAGES[thinkingIdx]}</span>
             </div>
           ) : ccMessages.length === 0 ? (
             <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>No messages yet.</p>
@@ -733,7 +742,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                       : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
                     }
                   >
-                    {msg.content || <span className="animate-pulse">...</span>}
+                    {msg.content || <span className="animate-pulse" style={{ color: '#6b7280' }}>{THINKING_MESSAGES[thinkingIdx]}</span>}
                   </div>
                 </div>
               ))}
