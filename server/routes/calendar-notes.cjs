@@ -2,6 +2,7 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const { writeAudit } = require('../../guardrails/audit.cjs');
 
 module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -33,6 +34,9 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
       const userId = req.user.id;
       const { pre_note, post_note, event_title, event_start, event_end, source_account } = req.body;
 
+      // Snapshot before for audit
+      const before = await db.getCalendarNote(userId, eventId);
+
       const result = await db.upsertCalendarNote(userId, eventId, {
         eventTitle: event_title,
         eventStart: event_start,
@@ -41,6 +45,8 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
         preNote: pre_note,
         postNote: post_note,
       });
+
+      try { await writeAudit({ userId, entityType: 'calendar_note', entityId: eventId, action: before ? 'updated' : 'created', before, after: result, requestId: req.requestId }); } catch {}
 
       // Log to agent memory (best-effort)
       try {

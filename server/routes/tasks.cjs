@@ -2,6 +2,7 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const { writeAudit } = require('../../guardrails/audit.cjs');
 
 module.exports = function createTasksRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -83,6 +84,9 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       const results = await Promise.all(
         tasks.map((task) => db.upsertTask({ ...task, userId: req.user.id }))
       );
+      for (const row of results) {
+        try { await writeAudit({ userId: req.user.id, entityType: 'task', entityId: row.id, action: 'created', after: row, requestId: req.requestId }); } catch {}
+      }
       return res.json({ success: true, count: results.length });
     } catch (err) {
       logger.error('tasks.write.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
@@ -96,6 +100,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
       const updated = await db.updateTask(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Task not found' });
+      try { await writeAudit({ userId: req.user.id, entityType: 'task', entityId: req.params.id, action: 'updated', before: task, after: updated, requestId: req.requestId }); } catch {}
       if (req.body.completionNote !== undefined) {
         try {
           await db.logMemory({
@@ -118,6 +123,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
       const updated = await db.updateTask(req.params.id, { completionNote: req.body.completion_note });
       if (!updated) return res.status(404).json({ error: 'Task not found' });
+      try { await writeAudit({ userId: req.user.id, entityType: 'task', entityId: req.params.id, action: 'updated', before: task, after: updated, requestId: req.requestId }); } catch {}
       try {
         await db.logMemory({
           userId: req.user.id, tool: 'update_task',

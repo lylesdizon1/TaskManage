@@ -2,6 +2,7 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const { writeAudit } = require('../../guardrails/audit.cjs');
 
 const GCAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
 
@@ -169,6 +170,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
       const event = await calendar.events.insert({ calendarId: 'primary', requestBody });
       logger.info('gcal.event.created', { requestId: req.requestId, userId, eventId: event.data.id });
+      try { await writeAudit({ userId, entityType: 'event', entityId: event.data.id, action: 'created', after: { id: event.data.id, title, dueDate, dueTime, htmlLink: event.data.htmlLink }, requestId: req.requestId }); } catch {}
       res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
     } catch (err) {
       logger.error('gcal.syncTask.failed', { requestId: req.requestId, userId, error: err.message });
@@ -352,6 +354,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
       const event = await calendar.events.insert({ calendarId: 'primary', requestBody });
       logger.info('gcal.event.created', { requestId: req.requestId, userId, eventId: event.data.id, googleEmail });
+      try { await writeAudit({ userId, entityType: 'event', entityId: event.data.id, action: 'created', after: { id: event.data.id, title, start, end, googleEmail, entityTag }, requestId: req.requestId }); } catch {}
       res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
     } catch (err) {
       logger.error('gcal.createEvent.failed', { requestId: req.requestId, userId, error: err.message });
@@ -385,9 +388,19 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
     });
 
     try {
+      // Snapshot before delete for audit
+      let beforeSnapshot = null;
+      try {
+        const { rows } = await db.pool.query(
+          `SELECT * FROM calendar_notes WHERE user_id = $1 AND event_id = $2`, [userId, eventId]
+        );
+        beforeSnapshot = rows[0] || { eventId, googleEmail };
+      } catch { beforeSnapshot = { eventId, googleEmail }; }
+
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });
       await calendar.events.delete({ calendarId: 'primary', eventId });
       logger.info('gcal.event.deleted', { requestId: req.requestId, userId, eventId, googleEmail });
+      try { await writeAudit({ userId, entityType: 'event', entityId: eventId, action: 'deleted', before: beforeSnapshot, requestId: req.requestId, source: req.headers['x-source'] === 'agent' ? 'agent' : 'api' }); } catch {}
 
       // Clean up calendar_notes
       try {

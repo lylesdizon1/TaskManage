@@ -2361,6 +2361,26 @@ async function runMigrations() {
 
   // Ensure google_email is NOT NULL even if PK migration was already done
   await pool.query(`ALTER TABLE gcal_tokens ALTER COLUMN google_email SET NOT NULL`).catch(() => {});
+
+  // ── audit_log table ──────────────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id            SERIAL PRIMARY KEY,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      actor_id      TEXT,
+      entity_type   TEXT NOT NULL,
+      entity_id     TEXT NOT NULL,
+      action        TEXT NOT NULL,
+      changes       JSONB,
+      request_id    TEXT,
+      metadata      JSONB DEFAULT '{}'::jsonb,
+      source        TEXT DEFAULT 'api'
+    )
+  `).catch((err) => console.warn('[migration] audit_log table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_user   ON audit_log(user_id, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_req    ON audit_log(request_id)`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
