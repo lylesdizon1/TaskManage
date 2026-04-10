@@ -105,10 +105,12 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       console.log('[DEBUG getEventColor]', {
         title: event.title,
         entityName: event.entityName,
+        entityNameLower: event.entityName ? event.entityName.toLowerCase() : '',
         calendarId: event.calendarId,
-        entityColorMapKeys: Object.keys(entityColorMap),
-        calendarEntityColorMapKeys: Object.keys(calendarEntityColorMap),
-        lookupResult: event.entityName ? entityColorMap[event.entityName.toLowerCase()] : 'no entityName',
+        entityColorMap: JSON.parse(JSON.stringify(entityColorMap)),
+        calendarEntityColorMap: JSON.parse(JSON.stringify(calendarEntityColorMap)),
+        directLookup: entityColorMap['personal'],
+        lowerLookup: event.entityName ? entityColorMap[event.entityName.toLowerCase()] : 'no entityName',
         calendarIdResult: event.calendarId ? calendarEntityColorMap[event.calendarId] : 'no calendarId',
       });
     }
