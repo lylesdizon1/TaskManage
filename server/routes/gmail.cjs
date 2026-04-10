@@ -85,11 +85,15 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
    * Removes stored Gmail tokens for the user.
    */
   router.delete('/api/gmail/disconnect', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
-
-    await db.deleteGmailTokensForUser(userId);
-    logger.info('gmail.disconnected', { requestId: req.requestId, userId });
-    res.json({ success: true });
+    try {
+      const userId = req.user.id;
+      await db.deleteGmailTokensForUser(userId);
+      logger.info('gmail.disconnected', { requestId: req.requestId, userId });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('gmail.disconnect.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
   });
 
   /**
@@ -108,13 +112,18 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
    * Body: { config: { vipSenders, triggerKeywords, commitmentDetection } }
    */
   router.put('/api/gmail/config', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
-    const { config } = req.body;
-    if (!config) return res.status(400).json({ error: 'config required' });
+    try {
+      const userId = req.user.id;
+      const { config } = req.body;
+      if (!config) return res.status(400).json({ error: 'config required' });
 
-    await db.setGmailConfigForUser(userId, config);
-    logger.info('gmail.config.saved', { requestId: req.requestId, userId });
-    res.json({ success: true });
+      await db.setGmailConfigForUser(userId, config);
+      logger.info('gmail.config.saved', { requestId: req.requestId, userId });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('gmail.config.save.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
   });
 
   /**

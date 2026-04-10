@@ -184,12 +184,16 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    * If omitted, disconnects ALL accounts (legacy compat).
    */
   router.post('/api/gcal/disconnect', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
-    const { email } = req.body;
-
-    await db.deleteGcalTokensForUser(userId, email || undefined);
-    logger.info('gcal.disconnected', { requestId: req.requestId, userId, email: email || 'all' });
-    res.json({ success: true });
+    try {
+      const userId = req.user.id;
+      const { email } = req.body;
+      await db.deleteGcalTokensForUser(userId, email || undefined);
+      logger.info('gcal.disconnected', { requestId: req.requestId, userId, email: email || 'all' });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('gcal.disconnect.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
   });
 
   /**
@@ -197,13 +201,17 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    * Body: { email } — set this account as the primary calendar.
    */
   router.post('/api/gcal/set-primary', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'email is required' });
-
-    await db.setGcalPrimaryAccount(userId, email);
-    logger.info('gcal.primarySet', { requestId: req.requestId, userId, email });
-    res.json({ success: true });
+    try {
+      const userId = req.user.id;
+      const { email } = req.body;
+      if (!email) return res.status(400).json({ error: 'email is required' });
+      await db.setGcalPrimaryAccount(userId, email);
+      logger.info('gcal.primarySet', { requestId: req.requestId, userId, email });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('gcal.setPrimary.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
   });
 
   /**

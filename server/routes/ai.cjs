@@ -257,6 +257,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
 
     try {
       // Load user context — independent queries run in parallel
+      const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
       const gcalPromise = (async () => {
         try {
           const tokens = await getCachedGcalTokens(userId);
@@ -265,13 +266,17 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
           if (!oauth2) return [];
           oauth2.setCredentials(tokens);
           const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-          const now = new Date();
-          const weekOut = new Date(now);
+          // Calculate "today" in the user's local timezone, not UTC
+          const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+          const timeMin = new Date(`${todayLocal}T00:00:00`).toISOString();
+          const weekOut = new Date(`${todayLocal}T00:00:00`);
           weekOut.setDate(weekOut.getDate() + 7);
+          const timeMax = weekOut.toISOString();
           const { data } = await calendar.events.list({
             calendarId: 'primary',
-            timeMin: now.toISOString(),
-            timeMax: weekOut.toISOString(),
+            timeMin,
+            timeMax,
+            timeZone: userTz,
             singleEvents: true,
             orderBy: 'startTime',
             maxResults: 20,
@@ -281,6 +286,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
             start: ev.start?.dateTime || ev.start?.date || '',
           }));
         } catch (calErr) {
+          gcalTokenCache.delete(userId);
           logger.error('chat.execute.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
           return [];
         }
@@ -297,7 +303,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         gcalPromise,
       ]);
 
-      const tz = timeZone || req.user.timezone;
+      const tz = userTz;
       const todayStr = getTodayLocal(tz);
       const todayDate = todayStr.split(', ')[1];
       const currentTime = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date());
