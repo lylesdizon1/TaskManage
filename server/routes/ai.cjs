@@ -77,6 +77,22 @@ const logger = require('../../guardrails/logger.cjs');
 module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
+  // ── GCal token cache (5-minute TTL per user) ───────────────────────────────
+  const gcalTokenCache = new Map();
+  const GCAL_TOKEN_TTL = 5 * 60 * 1000;
+
+  async function getCachedGcalTokens(userId) {
+    const cached = gcalTokenCache.get(userId);
+    if (cached && Date.now() - cached.ts < GCAL_TOKEN_TTL) {
+      return cached.tokens;
+    }
+    const tokens = await loadGcalTokens(userId);
+    if (tokens) {
+      gcalTokenCache.set(userId, { tokens, ts: Date.now() });
+    }
+    return tokens;
+  }
+
   // ── Claude proxy ────────────────────────────────────────────────────────────
 
   /**
@@ -243,7 +259,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       // Load user context — independent queries run in parallel
       const gcalPromise = (async () => {
         try {
-          const tokens = await loadGcalTokens(userId);
+          const tokens = await getCachedGcalTokens(userId);
           if (!tokens) return [];
           const oauth2 = makeOAuth2Client();
           if (!oauth2) return [];
