@@ -2269,14 +2269,24 @@ async function runMigrations() {
   `).catch(() => {});
 
   // 1. Seed default entities if the table is empty
-  await seedEntitiesIfEmpty();
+  await seedEntitiesIfEmpty().catch((err) => console.warn('[migration] seedEntitiesIfEmpty:', err.message));
 
   // 2. Get all entity names (now safe — columns exist)
-  const entities = await getEntities();
-  const allEntityNames = entities.map((e) => e.name);
+  let allEntityNames = [];
+  try {
+    const entities = await getEntities();
+    allEntityNames = entities.map((e) => e.name);
+  } catch (err) {
+    console.warn('[migration] getEntities:', err.message);
+  }
 
   // 3. Find lyle — always ensure admin + all entities
-  const lyle = await getUserById('user-lyle');
+  let lyle = null;
+  try {
+    lyle = await getUserById('user-lyle');
+  } catch (err) {
+    console.warn('[migration] getUserById:', err.message);
+  }
   if (lyle) {
     const needsUpdate =
       (lyle.role !== 'admin' && lyle.role !== 'superadmin') ||
@@ -2285,14 +2295,16 @@ async function runMigrations() {
       !allEntityNames.every((n) => lyle.entityIds.includes(n));
 
     if (needsUpdate) {
-      await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames });
+      await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames })
+        .catch((err) => console.warn('[migration] updateUser admin:', err.message));
       console.log('[db] Migration: set seed user as admin with all entities');
     }
   }
 
   // 3b. Promote lyle to superadmin (idempotent)
   if (lyle && lyle.role !== 'superadmin') {
-    await updateUser('user-lyle', { role: 'superadmin' });
+    await updateUser('user-lyle', { role: 'superadmin' })
+      .catch((err) => console.warn('[migration] updateUser superadmin:', err.message));
     console.log('[db] Migration: promoted seed user to superadmin');
   }
 

@@ -314,6 +314,14 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       res.json({ newItems: newCount });
     } catch (err) {
       logger.error('gmailScan.failed', { requestId: req.requestId, userId, error: err.message });
+
+      // Handle revoked/expired tokens — clear them so user knows to reconnect
+      if (err.message?.includes('invalid_grant') || err.response?.data?.error === 'invalid_grant') {
+        await db.deleteGmailTokensForUser(userId).catch(() => {});
+        logger.warn('gmail.invalidGrant.tokensCleared', { requestId: req.requestId, userId });
+        return res.status(401).json({ error: 'Gmail connection expired. Please reconnect Gmail in Settings.' });
+      }
+
       res.status(500).json({ error: err.message });
     }
   });

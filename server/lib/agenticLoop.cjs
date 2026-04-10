@@ -91,13 +91,18 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
   while (iterations < MAX_ITERATIONS) {
     iterations++;
 
-    const response = await client.messages.create({
-      model: model || 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
-      system,
-      tools: tools ?? [],
-      messages: currentMessages,
-    });
+    const response = await Promise.race([
+      client.messages.create({
+        model: model || 'claude-sonnet-4-20250514',
+        max_tokens: 8192,
+        system,
+        tools: tools ?? [],
+        messages: currentMessages,
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Aria is taking too long to respond. Please try again.')), 30_000)
+      ),
+    ]);
 
     const textBlocks    = response.content.filter(b => b.type === 'text');
     const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');

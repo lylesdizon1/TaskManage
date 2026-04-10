@@ -38,14 +38,18 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
           if (oauth2) {
             oauth2.setCredentials(tokens);
             const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-            const now = new Date();
-            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const endOfDay = new Date(startOfDay);
+            const userTz = tz || 'America/Los_Angeles';
+            const todayLocal = new Intl.DateTimeFormat('en-CA', {
+              timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
+            }).format(new Date());
+            const startOfDay = new Date(`${todayLocal}T00:00:00`);
+            const endOfDay = new Date(`${todayLocal}T00:00:00`);
             endOfDay.setDate(endOfDay.getDate() + 1);
             const { data } = await calendar.events.list({
               calendarId: 'primary',
               timeMin: startOfDay.toISOString(),
               timeMax: endOfDay.toISOString(),
+              timeZone: userTz,
               singleEvents: true,
               orderBy: 'startTime',
               maxResults: 20,
