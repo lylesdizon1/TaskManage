@@ -2384,6 +2384,19 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_user   ON audit_log(user_id, created_at DESC)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_req    ON audit_log(request_id)`).catch(() => {});
+
+  // ── whatsapp_conversations table ────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_conversations (
+      id          SERIAL PRIMARY KEY,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      user_id     TEXT NOT NULL,
+      phone       TEXT NOT NULL,
+      role        TEXT NOT NULL,
+      content     TEXT NOT NULL
+    );
+  `).catch((err) => console.warn('[migration] whatsapp_conversations table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_conv_phone ON whatsapp_conversations(phone, created_at DESC)`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -3517,6 +3530,27 @@ async function markCalendarNoteAlertSent(userId, eventId) {
   );
 }
 
+// ── WhatsApp conversation history ────────────────────────────────────────────
+
+async function getWhatsAppHistory(phone, limit = 6) {
+  const { rows } = await pool.query(
+    `SELECT role, content FROM whatsapp_conversations
+     WHERE phone = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [phone, limit],
+  );
+  return rows.reverse(); // oldest first
+}
+
+async function saveWhatsAppMessage(userId, phone, role, content) {
+  await pool.query(
+    `INSERT INTO whatsapp_conversations (user_id, phone, role, content)
+     VALUES ($1, $2, $3, $4)`,
+    [userId, phone, role, content],
+  );
+}
+
 module.exports = {
   pool,
   initTables,
@@ -3626,4 +3660,6 @@ module.exports = {
   getCalendarNotesForAI,
   getRecentlyEndedEventsForAlerts,
   markCalendarNoteAlertSent,
+  getWhatsAppHistory,
+  saveWhatsAppMessage,
 };

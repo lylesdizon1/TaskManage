@@ -334,6 +334,13 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz);
 
+      // ── Load conversation history (last 3 exchanges = 6 messages) ────
+      let priorMessages = [];
+      try {
+        const history = await db.getWhatsAppHistory(normalizedPhone, 6);
+        priorMessages = history.map(m => ({ role: m.role, content: m.content }));
+      } catch (e) { logger.error('whatsapp.history.loadFailed', { requestId: req.requestId, userId, error: e.message }); }
+
       // Build user message — text-only or multipart (image + text) for vision
       let userMessageContent;
       if (imageData) {
@@ -347,7 +354,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       }
 
       const { text, toolSummaries } = await runAgenticLoop({
-        messages: [{ role: 'user', content: userMessageContent }],
+        messages: [...priorMessages, { role: 'user', content: userMessageContent }],
         system: systemPrompt,
         tools: ARIA_TOOLS,
         userId,
@@ -356,6 +363,12 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       });
 
       const reply = text;
+
+      // ── Persist conversation (best-effort) ─────────────────────────────
+      try {
+        await db.saveWhatsAppMessage(userId, normalizedPhone, 'user', msgBody || '[image]');
+        if (reply) await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply);
+      } catch (e) { logger.error('whatsapp.history.saveFailed', { requestId: req.requestId, userId, error: e.message }); }
 
       // ── Reply via UltraMsg ──────────────────────────────────────────────
       const ultraInstance = process.env.ULTRAMSG_INSTANCE;
