@@ -74,7 +74,7 @@ const logger = require('../../guardrails/logger.cjs');
  * before being passed into agenticLoop. This module does not implement tool
  * logic directly; it injects executeTool into agenticLoop and handles transport.
  */
-module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
+module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   // ── GCal token cache (5-minute TTL per user) ───────────────────────────────
@@ -260,31 +260,46 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
       const gcalPromise = (async () => {
         try {
-          const tokens = await getCachedGcalTokens(userId);
-          if (!tokens) return [];
-          const oauth2 = makeOAuth2Client();
-          if (!oauth2) return [];
-          oauth2.setCredentials(tokens);
-          const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-          // Calculate "today" in the user's local timezone, not UTC
+          const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
+          if (!allAccounts.length) return [];
           const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
           const timeMin = new Date(`${todayLocal}T00:00:00`).toISOString();
           const weekOut = new Date(`${todayLocal}T00:00:00`);
           weekOut.setDate(weekOut.getDate() + 7);
           const timeMax = weekOut.toISOString();
-          const { data } = await calendar.events.list({
-            calendarId: 'primary',
-            timeMin,
-            timeMax,
-            timeZone: userTz,
-            singleEvents: true,
-            orderBy: 'startTime',
-            maxResults: 20,
-          });
-          return (data.items || []).map(ev => ({
-            title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
-            start: ev.start?.dateTime || ev.start?.date || '',
+
+          const results = await Promise.allSettled(allAccounts.map(async (acct) => {
+            const oauth2 = makeOAuth2Client();
+            if (!oauth2) return [];
+            oauth2.setCredentials(acct.tokens);
+            oauth2.on('tokens', async (newTokens) => {
+              try {
+                const existing = await loadGcalTokens(userId, acct.googleEmail);
+                await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+              } catch (e) { logger.error('chat.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
+            });
+            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+            const { data } = await calendar.events.list({
+              calendarId: 'primary', timeMin, timeMax, timeZone: userTz,
+              singleEvents: true, orderBy: 'startTime', maxResults: 20,
+            });
+            return (data.items || []).map(ev => ({
+              title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+              start: ev.start?.dateTime || ev.start?.date || '',
+            }));
           }));
+
+          const allEvents = [];
+          const seen = new Set();
+          for (const r of results) {
+            if (r.status === 'fulfilled') {
+              for (const ev of r.value) {
+                const key = `${ev.title}::${ev.start}`;
+                if (!seen.has(key)) { seen.add(key); allEvents.push(ev); }
+              }
+            }
+          }
+          return allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
         } catch (calErr) {
           gcalTokenCache.delete(userId);
           logger.error('chat.execute.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });

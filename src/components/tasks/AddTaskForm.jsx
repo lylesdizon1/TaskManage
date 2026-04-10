@@ -113,7 +113,8 @@ export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, a
         <div className={forceOpen ? '' : 'fixed inset-0 z-50 bg-white overflow-y-auto md:static md:inset-auto md:z-auto md:bg-transparent md:overflow-visible'}>
         <form
           onSubmit={handleSubmit}
-          className="p-5 md:bg-white md:rounded-xl md:border md:border-gray-200 md:shadow-sm"
+          className="p-5 md:rounded-xl"
+          style={{ fontFamily: "'Plus Jakarta Sans', 'Manrope', sans-serif" }}
         >
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-base md:text-sm font-semibold text-gray-900">New Task</h3>
@@ -217,17 +218,25 @@ export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, a
               <div className="flex flex-wrap gap-2">
                 {buildGroupedEntities(entities).map((ent) => {
                   const tag = ent.name;
+                  const isHex = ent.color && ent.color.startsWith('#');
                   const style = getEntityStyle(ent.color);
                   const isSelected = form.tags.includes(tag);
                   const isAiPick = aiSuggested.some((s) => s.toLowerCase() === tag.toLowerCase());
+                  // Use inline hex styles when entity has a hex color (from GCal)
+                  const inlineStyle = isHex && isSelected
+                    ? { backgroundColor: ent.color + '20', color: ent.color, borderColor: ent.color + '60', boxShadow: `0 0 0 2px ${ent.color}40` }
+                    : isHex && !isSelected
+                    ? { borderLeftColor: ent.color, borderLeftWidth: '3px' }
+                    : undefined;
                   return (
                     <button
                       key={tag}
                       type="button"
                       onClick={() => toggleTag(tag)}
+                      style={inlineStyle}
                       className={`inline-flex items-center gap-1 text-xs px-3 py-2 md:px-2.5 md:py-1 rounded-full font-medium border transition-all min-h-[36px] md:min-h-0 ${
                         isSelected
-                          ? `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
+                          ? isHex ? 'font-bold' : `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
                           : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
                       }`}
                     >

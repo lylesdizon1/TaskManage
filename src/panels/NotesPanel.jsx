@@ -668,7 +668,7 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
   return (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
       {/* Left sidebar — notes list */}
-      <div className={`w-full md:w-96 flex-shrink-0 flex flex-col bg-surface-container-low ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`w-full md:w-96 flex-shrink-0 flex flex-col overflow-hidden bg-surface-container-low ${selectedNote ? 'hidden md:flex' : 'flex'}`}>
         {/* Library header */}
         <div className="px-6 pt-6 pb-4 flex items-center justify-between">
           <h2 className="text-xl font-bold font-headline tracking-tight text-on-background">Library</h2>

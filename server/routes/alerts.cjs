@@ -4,7 +4,7 @@ const express = require('express');
 const { getResendClient, getFromEmail } = require('../utils/email.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
-module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
+module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   router.post('/api/alerts/morning', authenticateToken, async (req, res) => {
@@ -29,22 +29,30 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const todayTasks = tasks.filter((t) => !t.completed && t.dueDate === todayStr);
       const highPriority = tasks.filter((t) => !t.completed && t.priority === 'high');
 
-      // Fetch calendar events for today
+      // Fetch calendar events for today from ALL connected accounts
       let calendarEvents = [];
       try {
-        const tokens = await loadGcalTokens(req.user.id);
-        if (tokens) {
-          const oauth2 = makeOAuth2Client();
-          if (oauth2) {
-            oauth2.setCredentials(tokens);
+        const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(req.user.id) : [];
+        if (allAccounts.length > 0 && makeOAuth2Client && google) {
+          const userTz = tz || 'America/Los_Angeles';
+          const todayLocal = new Intl.DateTimeFormat('en-CA', {
+            timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
+          }).format(new Date());
+          const startOfDay = new Date(`${todayLocal}T00:00:00`);
+          const endOfDay = new Date(`${todayLocal}T00:00:00`);
+          endOfDay.setDate(endOfDay.getDate() + 1);
+
+          const results = await Promise.allSettled(allAccounts.map(async (acct) => {
+            const oauth2 = makeOAuth2Client();
+            if (!oauth2) return [];
+            oauth2.setCredentials(acct.tokens);
+            oauth2.on('tokens', async (newTokens) => {
+              try {
+                const existing = await loadGcalTokens(req.user.id, acct.googleEmail);
+                await saveGcalTokens(req.user.id, { ...existing, ...newTokens }, acct.googleEmail);
+              } catch (e) { logger.error('morningBrief.tokenRefresh.failed', { userId: req.user.id, googleEmail: acct.googleEmail, error: e.message }); }
+            });
             const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-            const userTz = tz || 'America/Los_Angeles';
-            const todayLocal = new Intl.DateTimeFormat('en-CA', {
-              timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
-            }).format(new Date());
-            const startOfDay = new Date(`${todayLocal}T00:00:00`);
-            const endOfDay = new Date(`${todayLocal}T00:00:00`);
-            endOfDay.setDate(endOfDay.getDate() + 1);
             const { data } = await calendar.events.list({
               calendarId: 'primary',
               timeMin: startOfDay.toISOString(),
@@ -54,11 +62,22 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
               orderBy: 'startTime',
               maxResults: 20,
             });
-            calendarEvents = (data.items || []).map((ev) => ({
+            return (data.items || []).map((ev) => ({
               title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
               start: ev.start?.dateTime || ev.start?.date || '',
             }));
+          }));
+
+          const seen = new Set();
+          for (const r of results) {
+            if (r.status === 'fulfilled') {
+              for (const ev of r.value) {
+                const key = `${ev.title}::${ev.start}`;
+                if (!seen.has(key)) { seen.add(key); calendarEvents.push(ev); }
+              }
+            }
           }
+          calendarEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
         }
       } catch (calErr) {
         logger.error('morningBrief.calendarFetch.failed', { requestId: req.requestId, userId: req.user?.id, error: calErr.message });

@@ -1453,7 +1453,7 @@ async function getNoteById(id, userId) {
 async function getPrivateNotesForAI(userId) {
   const { rows } = await pool.query(
     `SELECT id, title, content, visibility, pillar, category
-     FROM notes WHERE user_id = $1 AND archived = FALSE
+     FROM notes WHERE user_id = $1 AND archived = FALSE AND deleted_at IS NULL
      ORDER BY created_at DESC LIMIT 50`,
     [userId],
   );
