@@ -114,14 +114,14 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         calendarIdResult: event.calendarId ? calendarEntityColorMap[event.calendarId] : 'no calendarId',
       });
     }
-    // Check if event's calendarId matches a linked entity
-    if (event.calendarId && calendarEntityColorMap[event.calendarId]) {
-      return calendarEntityColorMap[event.calendarId];
-    }
-    // If no calendarId match, check entity tag/name on the event resource
+    // Explicit entity tag takes priority — user chose this deliberately
     if (event.entityName) {
       const c = entityColorMap[event.entityName.toLowerCase()];
       if (c) return c;
+    }
+    // Fall back to calendarId → entity mapping
+    if (event.calendarId && calendarEntityColorMap[event.calendarId]) {
+      return calendarEntityColorMap[event.calendarId];
     }
     // Scan title for entity name mentions
     const titleLower = (event.title || '').toLowerCase();
