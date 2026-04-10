@@ -74,10 +74,6 @@ app.use('/', require('./server/routes/calendar-notes.cjs')({ authenticateToken, 
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/admin.cjs')({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }));
 
-app.get('/debug-sentry', function mainHandler(req, res) {
-  throw new Error('My first Sentry error!');
-});
-
 // ── Sentry error handler ────────────────────────────────────────────────────
 const Sentry = require('./guardrails/instrument.cjs');
 Sentry.setupExpressErrorHandler(app);
