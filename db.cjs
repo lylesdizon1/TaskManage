@@ -1373,9 +1373,10 @@ async function getNotesForUser(userId, filters = {}) {
   if (filters.pinned !== undefined) { where.push(`pinned = $${idx++}`); vals.push(filters.pinned); }
   if (filters.archived !== undefined) { where.push(`archived = $${idx++}`); vals.push(filters.archived); }
   else { where.push('archived = FALSE'); }
+  const limit = filters.limit || 100;
   const { rows } = await pool.query(
-    `SELECT ${NOTE_RETURNING} FROM notes WHERE ${where.join(' AND ')} ORDER BY pinned DESC, created_at DESC`,
-    vals,
+    `SELECT ${NOTE_RETURNING} FROM notes WHERE ${where.join(' AND ')} ORDER BY pinned DESC, created_at DESC LIMIT $${idx}`,
+    [...vals, limit],
   );
   return rows;
 }
@@ -1401,9 +1402,9 @@ async function getNoteById(id, userId) {
  * assembly. This is an internal context-building path, not a
  * user-facing query path.
  *
- * @note Unlike getNotesForUser, this does NOT filter by visibility,
- * type, or archived status — Aria needs the full picture to give
- * context-aware responses.
+ * @note Unlike getNotesForUser, this does NOT filter by visibility
+ * or type — Aria needs the full picture to give context-aware
+ * responses. Archived notes are excluded to avoid stale context.
  *
  * @param {string} userId - User ID.
  * @returns {Promise<Array<Object>>} Notes with id, title, content, visibility, pillar, category.
@@ -1412,7 +1413,8 @@ async function getNoteById(id, userId) {
 async function getPrivateNotesForAI(userId) {
   const { rows } = await pool.query(
     `SELECT id, title, content, visibility, pillar, category
-     FROM notes WHERE user_id = $1 ORDER BY created_at DESC`,
+     FROM notes WHERE user_id = $1 AND archived = FALSE
+     ORDER BY created_at DESC LIMIT 50`,
     [userId],
   );
   return rows;
