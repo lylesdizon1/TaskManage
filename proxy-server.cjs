@@ -1,3 +1,5 @@
+require('./guardrails/instrument.cjs');
+
 /**
  * proxy-server.cjs — Dizon.ai entry point
  * Start with: node proxy-server.cjs
@@ -71,6 +73,10 @@ app.use('/', require('./server/routes/alerts.cjs')({ authenticateToken, db, load
 app.use('/', require('./server/routes/calendar-notes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/admin.cjs')({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }));
+
+// ── Sentry error handler ────────────────────────────────────────────────────
+const Sentry = require('./guardrails/instrument.cjs');
+Sentry.setupExpressErrorHandler(app);
 
 // ── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', port: PORT, time: new Date().toISOString() }));
