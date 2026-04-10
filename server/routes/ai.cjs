@@ -240,47 +240,46 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
     const model = reqModel || 'claude-sonnet-4-20250514';
 
     try {
-      // Load user context
-      const user = await db.getUserById(userId);
+      // Load user context — independent queries run in parallel
+      const gcalPromise = (async () => {
+        try {
+          const tokens = await loadGcalTokens(userId);
+          if (!tokens) return [];
+          const oauth2 = makeOAuth2Client();
+          if (!oauth2) return [];
+          oauth2.setCredentials(tokens);
+          const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+          const now = new Date();
+          const weekOut = new Date(now);
+          weekOut.setDate(weekOut.getDate() + 7);
+          const { data } = await calendar.events.list({
+            calendarId: 'primary',
+            timeMin: now.toISOString(),
+            timeMax: weekOut.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 20,
+          });
+          return (data.items || []).map(ev => ({
+            title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+            start: ev.start?.dateTime || ev.start?.date || '',
+          }));
+        } catch (calErr) {
+          logger.error('chat.execute.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
+          return [];
+        }
+      })();
+
       // Only load user's OWN tasks for AI context — never include shared/entity tasks
       // to prevent cross-user data leak (superadmin entityIds = all entities)
-      const tasks = await db.getTasksForUser(userId, []);
-      const notes = await db.getPrivateNotesForAI(userId);
-
-      let calendarEvents = [];
-      try {
-        const tokens = await loadGcalTokens(userId);
-        if (tokens) {
-          const oauth2 = makeOAuth2Client();
-          if (oauth2) {
-            oauth2.setCredentials(tokens);
-            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-            const now = new Date();
-            const weekOut = new Date(now);
-            weekOut.setDate(weekOut.getDate() + 7);
-            const { data } = await calendar.events.list({
-              calendarId: 'primary',
-              timeMin: now.toISOString(),
-              timeMax: weekOut.toISOString(),
-              singleEvents: true,
-              orderBy: 'startTime',
-              maxResults: 20,
-            });
-            calendarEvents = (data.items || []).map(ev => ({
-              title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
-              start: ev.start?.dateTime || ev.start?.date || '',
-            }));
-          }
-        }
-      } catch (calErr) {
-        logger.error('chat.execute.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
-      }
-
-      let recentMemories = [];
-      try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
-
-      let calendarNotes = [];
-      try { calendarNotes = await db.getCalendarNotesForAI(userId); } catch {}
+      const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents] = await Promise.all([
+        db.getUserById(userId),
+        db.getTasksForUser(userId, []),
+        db.getPrivateNotesForAI(userId),
+        db.getRecentMemories(userId, 20).catch(() => []),
+        db.getCalendarNotesForAI(userId).catch(() => []),
+        gcalPromise,
+      ]);
 
       const tz = timeZone || req.user.timezone;
       const todayStr = getTodayLocal(tz);
