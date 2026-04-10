@@ -398,7 +398,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         padding: '1px 4px',
       },
     };
-  }, [entityColorMap]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [entityColorMap, calendarEntityColorMap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Loading state ─────────────────────────────────────────────
   if (loading) {
