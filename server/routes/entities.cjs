@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * Entity routes extracted from proxy-server.cjs
@@ -27,7 +28,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       }));
       return res.json(result);
     } catch (err) {
-      console.error('[entities] read failed:', err.message);
+      logger.error('entities.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -54,7 +55,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       });
       return res.json(entity);
     } catch (err) {
-      console.error('[entities] create failed:', err.message);
+      logger.error('entities.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       if (err.message.includes('already exists')) {
         return res.status(409).json({ error: err.message });
       }
@@ -82,7 +83,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       if (!updated) return res.status(404).json({ error: 'Entity not found' });
       return res.json(updated);
     } catch (err) {
-      console.error('[entities] update failed:', err.message);
+      logger.error('entities.update.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -97,7 +98,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       await db.deleteEntity(req.params.id, req.user.id);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[entities] delete failed:', err.message);
+      logger.error('entities.delete.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

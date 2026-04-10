@@ -4,6 +4,7 @@ const express = require('express');
 const crypto  = require('crypto');
 const jwt     = require('jsonwebtoken');
 const bcrypt  = require('bcryptjs');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createAdminRouter({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }) {
   const router = express.Router();

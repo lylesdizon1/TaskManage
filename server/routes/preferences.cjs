@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * User preferences routes extracted from proxy-server.cjs
@@ -16,7 +17,7 @@ module.exports = function createPreferencesRouter({ authenticateToken, db }) {
       const prefs = await db.getUserPreferences(req.user.id);
       return res.json(prefs || { theme: 'light', defaultTagFilter: [], defaultStatusFilter: 'all', notificationsEnabled: true });
     } catch (err) {
-      console.error('[preferences] read failed:', err.message);
+      logger.error('preferences.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -26,7 +27,7 @@ module.exports = function createPreferencesRouter({ authenticateToken, db }) {
       await db.saveUserPreferences(req.user.id, req.body);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[preferences] write failed:', err.message);
+      logger.error('preferences.write.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -41,7 +42,7 @@ module.exports = function createPreferencesRouter({ authenticateToken, db }) {
       await db.updateDndPreferences(req.user.id, dndStart, dndEnd);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[preferences/dnd] PUT failed:', err.message);
+      logger.error('preferences.dnd.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

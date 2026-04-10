@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createChatRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -12,7 +13,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       const messages = await db.getChatHistory(req.user.id, 50);
       return res.json(messages);
     } catch (err) {
-      console.error('[chat] history read failed:', err.message);
+      logger.error('chat.history.readFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -26,7 +27,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       const msg = await db.saveChatMessage({ userId: req.user.id, role, content, model });
       return res.json(msg);
     } catch (err) {
-      console.error('[chat] message save failed:', err.message);
+      logger.error('chat.message.saveFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -36,7 +37,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       await db.clearChatHistory(req.user.id);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[chat] history clear failed:', err.message);
+      logger.error('chat.history.clearFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -48,7 +49,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       const conversations = await db.getConversations(req.user.id);
       return res.json(conversations);
     } catch (err) {
-      console.error('[conversations] list failed:', err.message);
+      logger.error('conversations.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -59,7 +60,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       const conv = await db.createConversation(req.user.id, model || 'claude');
       return res.json(conv);
     } catch (err) {
-      console.error('[conversations] create failed:', err.message);
+      logger.error('conversations.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -69,7 +70,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       await db.deleteConversation(parseInt(req.params.id, 10), req.user.id);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[conversations] delete failed:', err.message);
+      logger.error('conversations.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -81,7 +82,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       if (!updated) return res.status(404).json({ error: 'Conversation not found' });
       return res.json(updated);
     } catch (err) {
-      console.error('[conversations] update failed:', err.message);
+      logger.error('conversations.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -91,7 +92,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       const messages = await db.getConversationMessages(parseInt(req.params.id, 10), req.user.id);
       return res.json(messages);
     } catch (err) {
-      console.error('[conversations] messages read failed:', err.message);
+      logger.error('conversations.messages.readFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -103,7 +104,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       const msg = await db.addConversationMessage(parseInt(req.params.id, 10), req.user.id, role, content, model);
       return res.json(msg);
     } catch (err) {
-      console.error('[conversations] message save failed:', err.message);
+      logger.error('conversations.messages.saveFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

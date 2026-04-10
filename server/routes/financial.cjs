@@ -4,6 +4,7 @@ const express = require('express');
 const axios = require('axios');
 const XLSX = require('xlsx');
 const pdfParse = require('pdf-parse');
+const logger = require('../../guardrails/logger.cjs');
 
 // ── CSV/Excel/PDF parsing helpers ─────────────────────────────────────────────
 
@@ -307,7 +308,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       const accounts = await db.getFinancialAccounts(req.user.id, req.user.role);
       return res.json(accounts);
     } catch (err) {
-      console.error('[financial] accounts read failed:', err.message);
+      logger.error('financial.accounts.readFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -322,7 +323,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       });
       return res.json(account);
     } catch (err) {
-      console.error('[financial] account create failed:', err.message);
+      logger.error('financial.account.createFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -341,7 +342,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       if (!updated) return res.status(404).json({ error: 'Account not found' });
       return res.json(updated);
     } catch (err) {
-      console.error('[financial] account update failed:', err.message);
+      logger.error('financial.account.updateFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -359,7 +360,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       await db.deleteFinancialAccount(req.params.id);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[financial] account delete failed:', err.message);
+      logger.error('financial.account.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -378,7 +379,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       const txns = await db.getTransactions(req.user.id, req.user.role, filters);
       return res.json(txns);
     } catch (err) {
-      console.error('[financial] transactions read failed:', err.message);
+      logger.error('financial.transactions.readFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -396,7 +397,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       });
       return res.json(txn);
     } catch (err) {
-      console.error('[financial] transaction create failed:', err.message);
+      logger.error('financial.transaction.createFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -413,7 +414,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       if (!updated) return res.status(404).json({ error: 'Transaction not found' });
       return res.json(updated);
     } catch (err) {
-      console.error('[financial] transaction update failed:', err.message);
+      logger.error('financial.transaction.updateFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -429,7 +430,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       await db.deleteTransaction(req.params.id);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[financial] transaction delete failed:', err.message);
+      logger.error('financial.transaction.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -497,7 +498,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       const created = await db.bulkCreateTransactions(txns);
       return res.json({ success: true, count: created.length, format, transactions: created });
     } catch (err) {
-      console.error('[financial] file import failed:', err.message);
+      logger.error('financial.import.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -509,7 +510,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       const summary = await db.getFinancialSummary(req.user.id, req.user.role);
       return res.json(summary);
     } catch (err) {
-      console.error('[financial] summary failed:', err.message);
+      logger.error('financial.summary.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

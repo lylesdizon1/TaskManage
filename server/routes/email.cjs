@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { getResendClient, getFromEmail } = require('../utils/email.cjs');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createEmailRouter({ authenticateToken }) {
   const router = express.Router();
@@ -12,17 +13,17 @@ module.exports = function createEmailRouter({ authenticateToken }) {
    * Body: { to? } — defaults to ALERT_RECIPIENT_EMAIL env var.
    */
   router.post('/api/email/test', authenticateToken, async (req, res) => {
-    console.log('[email/test] email configured:', !!process.env.RESEND_API_KEY);
+    logger.info('email.test.configured', { requestId: req.requestId, configured: !!process.env.RESEND_API_KEY });
 
     const resend = getResendClient();
     if (!resend) {
-      console.log('[email/test] email not configured');
+      logger.info('email.test.notConfigured', { requestId: req.requestId });
       return res.status(400).json({ error: 'Email sending is not configured' });
     }
 
     const to = req.body.to || req.body.recipientEmail || process.env.ALERT_RECIPIENT_EMAIL;
-    console.log('[email/test] Recipient email:', to);
-    console.log('[email/test] From email:', getFromEmail());
+    logger.info('email.test.recipient', { requestId: req.requestId, to });
+    logger.info('email.test.from', { requestId: req.requestId, from: getFromEmail() });
 
     if (!to) {
       return res.status(400).json({ error: 'No recipient email provided' });
@@ -35,11 +36,10 @@ module.exports = function createEmailRouter({ authenticateToken }) {
         subject: '[Dizon.ai] Connection Test',
         html: '<p>Your Resend email integration is working.</p>',
       });
-      console.log('[email/test] Resend API response:', JSON.stringify(response, null, 2));
+      logger.info('email.test.success', { requestId: req.requestId, responseId: response?.data?.id });
       return res.json({ success: true, message: 'Test email sent via Resend', response });
     } catch (err) {
-      console.error('[email/test] Resend test failed:', err.message);
-      console.error('[email/test] Full error:', JSON.stringify(err, null, 2));
+      logger.error('email.test.failed', { requestId: req.requestId, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -67,10 +67,10 @@ module.exports = function createEmailRouter({ authenticateToken }) {
         html: html || '<p>(no content)</p>',
       });
 
-      console.log(`[email/send] Sent to ${to} via Resend — id: ${data.data?.id}`);
+      logger.info('email.send.success', { to, messageId: data.data?.id });
       return res.json({ success: true, messageId: data.data?.id });
     } catch (err) {
-      console.error('[email/send] Resend failed:', err.message);
+      logger.error('email.send.failed', { to, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

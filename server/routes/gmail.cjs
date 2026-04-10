@@ -2,6 +2,7 @@
 
 const express = require('express');
 const axios = require('axios');
+const logger = require('../../guardrails/logger.cjs');
 
 const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
 
@@ -41,10 +42,10 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
     try {
       const { tokens } = await oauth2.getToken(code);
       await saveGmailTokens(userId, tokens);
-      console.log(`[gmail] Stored tokens for ${userId}`);
+      logger.info('gmail.tokens.stored', { userId });
       res.redirect('/?gmail=connected');
     } catch (err) {
-      console.error('[gmail] Token exchange failed:', err.message);
+      logger.error('gmail.tokenExchange.failed', { userId, error: err.message });
       res.status(500).send(`Gmail auth failed: ${err.message}`);
     }
   });
@@ -73,7 +74,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       const { data } = await gmail.users.getProfile({ userId: 'me' });
       res.json({ connected: true, email: data.emailAddress });
     } catch (err) {
-      console.error('[gmail] status check failed:', err.message);
+      logger.error('gmail.status.failed', { requestId: req.requestId, userId, error: err.message });
       await db.deleteGmailTokensForUser(userId);
       res.json({ connected: false });
     }
@@ -87,7 +88,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
     const userId = req.user.id;
 
     await db.deleteGmailTokensForUser(userId);
-    console.log(`[gmail] Disconnected ${userId}`);
+    logger.info('gmail.disconnected', { requestId: req.requestId, userId });
     res.json({ success: true });
   });
 
@@ -112,7 +113,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
     if (!config) return res.status(400).json({ error: 'config required' });
 
     await db.setGmailConfigForUser(userId, config);
-    console.log(`[gmail] Saved config for ${userId}`);
+    logger.info('gmail.config.saved', { requestId: req.requestId, userId });
     res.json({ success: true });
   });
 
@@ -270,7 +271,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
                 const text = resp.data?.content?.[0]?.text;
                 if (text) summary = text.trim();
               } catch (err) {
-                console.error(`[gmail-scan] Claude summary failed for ${f.msg.id}:`, err.message);
+                logger.error('gmailScan.summaryFailed', { requestId: req.requestId, userId, messageId: f.msg.id, error: err.message });
               }
             }
 
@@ -300,10 +301,10 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
         }
       }
 
-      console.log(`[gmail-scan] ${newCount} new items for ${userId}`);
+      logger.info('gmailScan.complete', { requestId: req.requestId, userId, newItems: newCount });
       res.json({ newItems: newCount });
     } catch (err) {
-      console.error('[gmail-scan] failed:', err.message);
+      logger.error('gmailScan.failed', { requestId: req.requestId, userId, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });

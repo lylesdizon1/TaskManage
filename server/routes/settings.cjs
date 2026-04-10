@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * Settings routes extracted from proxy-server.cjs
@@ -63,7 +64,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
         envConfigured,
       });
     } catch (err) {
-      console.error('[settings] read failed:', err.message);
+      logger.error('settings.read.failed', { requestId: req.requestId, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
@@ -75,7 +76,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       await db.saveSettings(merged);
       res.json({ success: true });
     } catch (err) {
-      console.error('[settings] write failed:', err.message);
+      logger.error('settings.write.failed', { requestId: req.requestId, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });

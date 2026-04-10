@@ -47,6 +47,7 @@ const express   = require('express');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * Factory function that creates the WhatsApp webhook router.
@@ -105,7 +106,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
   router.post('/api/whatsapp/inbound', async (req, res) => {
     try {
       const data = req.body?.data;
-      console.log('WHATSAPP INBOUND:', JSON.stringify(req.body, null, 2));
+      logger.info('whatsapp.inbound', { requestId: req.requestId, hasData: !!req.body?.data });
       if (!data) return res.json({ ok: true, skipped: 'no data' });
 
       // Extract text body and media URL (if any)
@@ -118,12 +119,12 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       // Normalize phone: strip non-digits
       const normalizedPhone = fromRaw.replace(/\D/g, '');
-      console.log(`[whatsapp] Message from ${normalizedPhone}: "${msgBody.slice(0, 50)}${msgBody.length > 50 ? '...' : ''}"${mediaUrl ? ' [+image]' : ''}`);
+      logger.info('whatsapp.message.received', { requestId: req.requestId, phone: normalizedPhone, hasMedia: !!mediaUrl, bodyPreview: msgBody.slice(0, 50) });
 
       // Look up user by WhatsApp phone
       const user = await db.getUserByWhatsAppPhone(normalizedPhone);
       if (!user) {
-        console.log(`[whatsapp/inbound] No user found for phone ${normalizedPhone}`);
+        logger.warn('whatsapp.inbound.unknownSender', { requestId: req.requestId, phone: normalizedPhone });
         return res.json({ ok: true, skipped: 'unknown sender' });
       }
 
@@ -154,9 +155,9 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           }
           const arrayBuf = await imgRes.arrayBuffer();
           imageData = { mimeType, data: Buffer.from(arrayBuf).toString('base64') };
-          console.log(`[whatsapp] Image downloaded: ${mimeType}, ${Math.round(arrayBuf.byteLength / 1024)}KB`);
+          logger.info('whatsapp.image.downloaded', { requestId: req.requestId, mimeType, sizeKB: Math.round(arrayBuf.byteLength / 1024) });
         } catch (imgErr) {
-          console.error('[whatsapp/inbound] Image download failed:', imgErr.message);
+          logger.error('whatsapp.image.downloadFailed', { requestId: req.requestId, error: imgErr.message });
           const ultraInstance = process.env.ULTRAMSG_INSTANCE;
           const ultraToken = process.env.ULTRAMSG_TOKEN;
           if (ultraInstance && ultraToken) {
@@ -195,7 +196,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           }
           return res.json({ ok: true, completionNote: true });
         } catch (err) {
-          console.error('[whatsapp/inbound] completion note save failed:', err.message);
+          logger.error('whatsapp.completionNote.saveFailed', { requestId: req.requestId, userId, error: err.message });
         }
       }
       // Clean up expired entry
@@ -212,7 +213,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       let userEntityList = [];
       try {
         userEntityList = await db.getEntitiesForUser(userId);
-      } catch (e) { console.error('[whatsapp] entity load failed:', e.message); }
+      } catch (e) { logger.error('whatsapp.entityLoad.failed', { requestId: req.requestId, userId, error: e.message }); }
 
       if (userEntityList.length > 0) {
         // Pattern 2: if no "for X" match, check if message ends with a known entity name
@@ -233,7 +234,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
                        || userEntityList.find(e => e.name.toLowerCase().startsWith(candidateLower))
                        || null;
           if (matchedEntity) {
-            console.log(`[whatsapp] Entity matched: "${entityCandidate}" → ${matchedEntity.name} (${matchedEntity.id})`);
+            logger.info('whatsapp.entity.matched', { requestId: req.requestId, userId, candidate: entityCandidate, matchedName: matchedEntity.name, matchedId: matchedEntity.id });
           }
         }
       }
@@ -270,7 +271,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           }
         }
       } catch (calErr) {
-        console.error('[whatsapp/inbound] calendar fetch failed:', calErr.message);
+        logger.error('whatsapp.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
       }
 
       let recentMemories = [];
@@ -367,7 +368,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             body: JSON.stringify({ token: ultraToken, to: fromRaw, body: reply }),
           });
         } catch (replyErr) {
-          console.error('[whatsapp/inbound] Reply failed:', replyErr.message);
+          logger.error('whatsapp.reply.failed', { requestId: req.requestId, userId, error: replyErr.message });
         }
       }
 
@@ -389,14 +390,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
               body: JSON.stringify({ token: ultraToken, to: fromRaw, body: 'Any notes on how it went? Reply with a note or just ignore this.' }),
             });
           } catch (promptErr) {
-            console.error('[whatsapp/inbound] Completion note prompt failed:', promptErr.message);
+            logger.error('whatsapp.completionPrompt.failed', { requestId: req.requestId, userId, error: promptErr.message });
           }
         }
       }
 
       return res.json({ ok: true });
     } catch (err) {
-      console.error('[whatsapp/inbound] Error:', err.message);
+      logger.error('whatsapp.inbound.failed', { requestId: req.requestId, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -9,14 +10,14 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
    * GET /api/calendar-notes?eventId=:id
    * Returns the note for a specific event, scoped to req.user.id.
    */
-  router.get('/api/calendar-notes', authenticateToken, async (req, res) => {
+  router.get('/api/calendar-notes', authenticateToken, logger.tool('getCalendarNote'), async (req, res) => {
     try {
       const { eventId } = req.query;
       if (!eventId) return res.status(400).json({ error: 'eventId query param required' });
       const note = await db.getCalendarNote(req.user.id, eventId);
       return res.json(note || { preNote: null, postNote: null });
     } catch (err) {
-      console.error('[calendar-notes] get failed:', err.message);
+      logger.error('calendarNotes.get.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -26,7 +27,7 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
    * Upsert a calendar note for the given event.
    * Body: { pre_note?, post_note?, event_title?, event_start?, event_end?, source_account? }
    */
-  router.patch('/api/calendar-notes/:eventId', authenticateToken, async (req, res) => {
+  router.patch('/api/calendar-notes/:eventId', authenticateToken, logger.tool('upsertCalendarNote'), async (req, res) => {
     try {
       const eventId = req.params.eventId;
       const userId = req.user.id;
@@ -49,11 +50,11 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
           content: `${pre_note !== undefined ? 'Updated agenda' : 'Updated outcome'} note for event: "${event_title || result.eventTitle || eventId}"`,
           metadata: { eventId, event_title: event_title || result.eventTitle, had_pre_note: !!result.preNote, had_post_note: !!result.postNote },
         });
-      } catch (e) { console.error('[memory] calendar-note log failed:', e.message); }
+      } catch (e) { logger.error('memory.calendarNote.failed', { requestId: req.requestId, userId, error: e.message }); }
 
       return res.json(result);
     } catch (err) {
-      console.error('[calendar-notes] upsert failed:', err.message);
+      logger.error('calendarNotes.upsert.failed', { requestId: req.requestId, userId: req.user?.id, eventId: req.params.eventId, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -63,13 +64,13 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
    * Returns past events with notes for the user.
    * Query: search, dateRange (today/week/month/3months/all), limit
    */
-  router.get('/api/calendar-notes/history', authenticateToken, async (req, res) => {
+  router.get('/api/calendar-notes/history', authenticateToken, logger.tool('getCalendarNoteHistory'), async (req, res) => {
     try {
       const { search, dateRange, limit } = req.query;
       const notes = await db.getCalendarNotesHistory(req.user.id, { search, dateRange, limit });
       return res.json(notes);
     } catch (err) {
-      console.error('[calendar-notes] history failed:', err.message);
+      logger.error('calendarNotes.history.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });

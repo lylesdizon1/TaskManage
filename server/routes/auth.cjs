@@ -3,6 +3,7 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * Auth routes extracted from proxy-server.cjs
@@ -68,7 +69,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
         },
       });
     } catch (err) {
-      console.error('[auth] login failed:', err.message);
+      logger.error('auth.login.failed', { error: err.message });
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -118,7 +119,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
       const { passwordHash, ...safe } = user;
       return res.json({ token, user: safe });
     } catch (err) {
-      console.error('[auth] refresh failed:', err.message);
+      logger.error('auth.refresh.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: 'Token refresh failed' });
     }
   });
@@ -145,7 +146,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
       await db.updateUserPassword(user.id, newHash);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[auth] change-password failed:', err.message);
+      logger.error('auth.changePassword.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -186,7 +187,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
       });
 
       // Seed default alert cadence config
-      try { await db.seedDefaultCadenceConfig(id); } catch (e) { console.error('[register] cadence seed failed:', e.message); }
+      try { await db.seedDefaultCadenceConfig(id); } catch (e) { logger.error('auth.register.cadenceSeed.failed', { error: e.message }); }
 
       // Add to org
       await db.addOrgMember(invite.orgId, id, invite.role, invite.invitedBy);
@@ -203,7 +204,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
         user: { id, username, displayName: displayName || username, email: invite.email, role: invite.role, entityIds: [], timezone: 'America/Los_Angeles' },
       });
     } catch (err) {
-      console.error('[auth] register failed:', err.message);
+      logger.error('auth.register.failed', { error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

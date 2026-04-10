@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createInboxRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -14,7 +15,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       const items = await db.getInboxItemsForUser(req.user.id);
       res.json(items);
     } catch (err) {
-      console.error('[inbox] fetch failed:', err.message);
+      logger.error('inbox.fetch.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
@@ -35,7 +36,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       await db.updateInboxItemAction(req.params.id, action);
       res.json({ success: true });
     } catch (err) {
-      console.error('[inbox] action update failed:', err.message);
+      logger.error('inbox.actionUpdate.failed', { requestId: req.requestId, userId: req.user?.id, itemId: req.params.id, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });

@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 const GCAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
 
@@ -49,7 +50,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
         const { data } = await calendar.calendarList.get({ calendarId: 'primary' });
         googleEmail = (data.id || '').toLowerCase();
       } catch (e) {
-        console.warn('[gcal] Could not fetch email after auth:', e.message);
+        logger.warn('gcal.callback.emailFetch.failed', { userId, error: e.message });
         googleEmail = `unknown-${Date.now()}`;
       }
 
@@ -63,10 +64,10 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
         );
       } catch (e) { /* ignore — placeholder may not exist */ }
 
-      console.log(`[gcal] Stored tokens for ${userId} (${googleEmail})`);
+      logger.info('gcal.tokens.stored', { userId, googleEmail });
       res.redirect('/?gcal=connected');
     } catch (err) {
-      console.error('[gcal] Token exchange failed:', err.message);
+      logger.error('gcal.tokenExchange.failed', { userId, error: err.message });
       res.status(500).send(`Google Calendar auth failed: ${err.message}`);
     }
   });
@@ -107,7 +108,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
         }
         validAccounts.push({ email: realEmail || acct.googleEmail, isPrimary: acct.isPrimary });
       } catch (err) {
-        console.warn(`[gcal] status check failed for ${acct.googleEmail}:`, err.message);
+        logger.warn('gcal.status.failed', { requestId: req.requestId, userId, googleEmail: acct.googleEmail, error: err.message });
         // Token revoked — remove this account
         await db.deleteGcalTokensForUser(userId, acct.googleEmail);
       }
@@ -127,7 +128,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    * Body: { userId, title, description?, dueDate (YYYY-MM-DD) }
    * Creates a Google Calendar all-day event for the task.
    */
-  router.post('/api/gcal/sync-task', authenticateToken, async (req, res) => {
+  router.post('/api/gcal/sync-task', authenticateToken, logger.tool('syncTask'), async (req, res) => {
     const userId = req.user.id;
     const { title, description, dueDate, dueTime, timeZone } = req.body;
     if (!title || !dueDate) {
@@ -167,10 +168,10 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       }
 
       const event = await calendar.events.insert({ calendarId: 'primary', requestBody });
-      console.log(`[gcal] Created event ${event.data.id} for ${userId}`);
+      logger.info('gcal.event.created', { requestId: req.requestId, userId, eventId: event.data.id });
       res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
     } catch (err) {
-      console.error('[gcal] sync-task failed:', err.message);
+      logger.error('gcal.syncTask.failed', { requestId: req.requestId, userId, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
@@ -185,7 +186,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
     const { email } = req.body;
 
     await db.deleteGcalTokensForUser(userId, email || undefined);
-    console.log(`[gcal] Disconnected ${userId}${email ? ` (${email})` : ' (all)'}`);
+    logger.info('gcal.disconnected', { requestId: req.requestId, userId, email: email || 'all' });
     res.json({ success: true });
   });
 
@@ -199,7 +200,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
     if (!email) return res.status(400).json({ error: 'email is required' });
 
     await db.setGcalPrimaryAccount(userId, email);
-    console.log(`[gcal] Set primary account for ${userId}: ${email}`);
+    logger.info('gcal.primarySet', { requestId: req.requestId, userId, email });
     res.json({ success: true });
   });
 
@@ -207,13 +208,13 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    * GET /api/gcal/events
    * Returns calendar events from ALL connected Google accounts, merged + deduped.
    */
-  router.get('/api/gcal/events', authenticateToken, async (req, res) => {
+  router.get('/api/gcal/events', authenticateToken, logger.tool('getEvents'), async (req, res) => {
     const userId = req.user.id;
     const { timeZone, days, startDate: startDateParam } = req.query;
     const numDays = Math.min(Math.max(parseInt(days, 10) || 1, 1), 62);
 
     const allAccounts = await loadAllGcalAccounts(userId);
-    console.log(`[gcal] events: ${allAccounts.length} account(s) for ${userId}: ${allAccounts.map(a => a.googleEmail).join(', ')}`);
+    logger.info('gcal.events.fetching', { requestId: req.requestId, userId, accountCount: allAccounts.length });
     if (!allAccounts.length) return res.json([]);
 
     // Compute time boundaries
@@ -252,7 +253,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
         try {
           const existing = await loadGcalTokens(userId, acct.googleEmail);
           await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
-        } catch (e) { console.error(`[gcal] token refresh save failed for ${acct.googleEmail}:`, e.message); }
+        } catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
       });
 
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });
@@ -269,7 +270,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
       const { data } = await calendar.events.list(params);
       const items = data.items || [];
-      console.log(`[gcal] events: ${acct.googleEmail} returned ${items.length} event(s)`);
+      logger.info('gcal.events.accountResult', { userId, googleEmail: acct.googleEmail, eventCount: items.length });
       return items.map((ev) => ({
         id: `${acct.googleEmail}::${ev.id}`,
         title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
@@ -289,7 +290,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
           }
         }
       } else {
-        console.error('[gcal] events: account fetch rejected:', result.reason?.message || result.reason);
+        logger.error('gcal.events.accountFailed', { requestId: req.requestId, userId, error: result.reason?.message || String(result.reason) });
       }
     }
 
@@ -300,7 +301,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       return aStart < bStart ? -1 : aStart > bStart ? 1 : 0;
     });
 
-    console.log(`[gcal] events: returning ${allEvents.length} total event(s) from ${allAccounts.length} account(s)`);
+    logger.info('gcal.events.returning', { requestId: req.requestId, userId, totalEvents: allEvents.length, accountCount: allAccounts.length });
     res.json(allEvents);
   });
 
@@ -309,7 +310,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    * Create a new Google Calendar event on a specific account.
    * Body: { title, start, end, googleEmail, description?, entityTag? }
    */
-  router.post('/api/gcal/events', authenticateToken, async (req, res) => {
+  router.post('/api/gcal/events', authenticateToken, logger.tool('createEvent'), async (req, res) => {
     const userId = req.user.id;
     const { title, start, end, googleEmail, description, entityTag } = req.body;
     if (!title) return res.status(400).json({ error: 'title is required' });
@@ -326,7 +327,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       try {
         const existing = await loadGcalTokens(userId, googleEmail);
         await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
-      } catch (e) { console.error(`[gcal] token refresh save failed:`, e.message); }
+      } catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, error: e.message }); }
     });
 
     try {
@@ -350,10 +351,10 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       }
 
       const event = await calendar.events.insert({ calendarId: 'primary', requestBody });
-      console.log(`[gcal] Created event ${event.data.id} on ${googleEmail} for ${userId}`);
+      logger.info('gcal.event.created', { requestId: req.requestId, userId, eventId: event.data.id, googleEmail });
       res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
     } catch (err) {
-      console.error('[gcal] create event failed:', err.message);
+      logger.error('gcal.createEvent.failed', { requestId: req.requestId, userId, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
@@ -363,7 +364,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    * Delete an event from a specific Google account + clean up calendar_notes.
    * Body: { googleEmail }
    */
-  router.delete('/api/gcal/events/:eventId', authenticateToken, async (req, res) => {
+  router.delete('/api/gcal/events/:eventId', authenticateToken, logger.tool('deleteEvent'), async (req, res) => {
     const userId = req.user.id;
     const { eventId } = req.params;
     const { googleEmail } = req.body;
@@ -380,13 +381,13 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       try {
         const existing = await loadGcalTokens(userId, googleEmail);
         await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
-      } catch (e) { console.error(`[gcal] token refresh save failed:`, e.message); }
+      } catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, error: e.message }); }
     });
 
     try {
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });
       await calendar.events.delete({ calendarId: 'primary', eventId });
-      console.log(`[gcal] Deleted event ${eventId} from ${googleEmail} for ${userId}`);
+      logger.info('gcal.event.deleted', { requestId: req.requestId, userId, eventId, googleEmail });
 
       // Clean up calendar_notes
       try {
@@ -398,7 +399,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
       res.json({ success: true });
     } catch (err) {
-      console.error('[gcal] delete event failed:', err.message);
+      logger.error('gcal.deleteEvent.failed', { requestId: req.requestId, userId, eventId, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });

@@ -57,6 +57,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * Factory function that creates the AI router with all chat and proxy endpoints.
@@ -272,7 +273,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
           }
         }
       } catch (calErr) {
-        console.error('[chat/execute] calendar fetch failed:', calErr.message);
+        logger.error('chat.execute.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
       }
 
       let recentMemories = [];
@@ -352,7 +353,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       send('done', {});
       res.end();
     } catch (err) {
-      console.error('[chat/execute] Error:', err.message);
+      logger.error('chat.execute.failed', { requestId: req.requestId, userId, error: err.message });
       res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
       res.end();
     }

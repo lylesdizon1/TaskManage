@@ -2,6 +2,7 @@
 
 const express = require('express');
 const bcrypt  = require('bcryptjs');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * User routes extracted from proxy-server.cjs
@@ -36,7 +37,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       if (!updated) return res.status(404).json({ error: 'User not found' });
       return res.json(updated);
     } catch (err) {
-      console.error('[users] settings update failed:', err.message);
+      logger.error('users.settings.updateFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -50,7 +51,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       const safe = users.map(({ passwordHash, ...u }) => u);
       return res.json(safe);
     } catch (err) {
-      console.error('[users] read failed:', err.message);
+      logger.error('users.read.failed', { requestId: req.requestId, error: err.message });
       return res.json([]);
     }
   });
@@ -64,7 +65,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       await db.upsertUser({ id, username, displayName: displayName || username, passwordHash, email, role, entityIds });
       return res.json({ id, username, displayName: displayName || username, email, role, entityIds });
     } catch (err) {
-      console.error('[users] create failed:', err.message);
+      logger.error('users.create.failed', { requestId: req.requestId, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -81,7 +82,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       if (!updated) return res.status(404).json({ error: 'User not found' });
       return res.json(updated);
     } catch (err) {
-      console.error('[users] update failed:', err.message);
+      logger.error('users.update.failed', { requestId: req.requestId, userId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -94,7 +95,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       await db.deleteUser(req.params.id);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[users] delete failed:', err.message);
+      logger.error('users.delete.failed', { requestId: req.requestId, userId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

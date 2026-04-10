@@ -1,11 +1,12 @@
 'use strict';
 
 const express = require('express');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createTasksRouter({ authenticateToken, db }) {
   const router = express.Router();
 
-  router.get('/api/tasks', authenticateToken, async (req, res) => {
+  router.get('/api/tasks', authenticateToken, logger.tool('getTasks'), async (req, res) => {
     try {
       const { completed, entity, dateRange, search, limit } = req.query;
 
@@ -68,12 +69,12 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       const { rows } = await db.pool.query(sql, params);
       return res.json(rows);
     } catch (err) {
-      console.error('[tasks] read failed:', err.message);
+      logger.error('tasks.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
 
-  router.post('/api/tasks', authenticateToken, async (req, res) => {
+  router.post('/api/tasks', authenticateToken, logger.tool('createTask'), async (req, res) => {
     try {
       const tasks = req.body;
       if (!Array.isArray(tasks)) {
@@ -84,12 +85,12 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       );
       return res.json({ success: true, count: results.length });
     } catch (err) {
-      console.error('[tasks] write failed:', err.message);
+      logger.error('tasks.write.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
 
-  router.put('/api/tasks/:id', authenticateToken, async (req, res) => {
+  router.put('/api/tasks/:id', authenticateToken, logger.tool('updateTask'), async (req, res) => {
     try {
       const task = await db.getTaskById(req.params.id, req.user.id);
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
@@ -102,16 +103,16 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
             content: `Added completion note to task: "${task.title}"`,
             metadata: { task_id: req.params.id, completion_note: true },
           });
-        } catch (e) { console.error('[memory] log failed:', e.message); }
+        } catch (e) { logger.error('memory.log.failed', { requestId: req.requestId, userId: req.user?.id, error: e.message }); }
       }
       return res.json(updated);
     } catch (err) {
-      console.error('[tasks] update failed:', err.message);
+      logger.error('tasks.update.failed', { requestId: req.requestId, userId: req.user?.id, taskId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
 
-  router.patch('/api/tasks/:id/completion-note', authenticateToken, async (req, res) => {
+  router.patch('/api/tasks/:id/completion-note', authenticateToken, logger.tool('updateCompletionNote'), async (req, res) => {
     try {
       const task = await db.getTaskById(req.params.id, req.user.id);
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
@@ -123,10 +124,10 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
           content: `Added completion note to task: "${task.title}"`,
           metadata: { task_id: req.params.id, completion_note: true },
         });
-      } catch (e) { console.error('[memory] log failed:', e.message); }
+      } catch (e) { logger.error('memory.log.failed', { requestId: req.requestId, userId: req.user?.id, error: e.message }); }
       return res.json(updated);
     } catch (err) {
-      console.error('[tasks] completion-note update failed:', err.message);
+      logger.error('tasks.completionNote.failed', { requestId: req.requestId, userId: req.user?.id, taskId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

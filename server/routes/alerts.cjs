@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { getResendClient, getFromEmail } = require('../utils/email.cjs');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
@@ -56,7 +57,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
           }
         }
       } catch (calErr) {
-        console.error('[morning-brief] calendar fetch failed:', calErr.message);
+        logger.error('morningBrief.calendarFetch.failed', { requestId: req.requestId, userId: req.user?.id, error: calErr.message });
       }
 
       // Format date
@@ -118,12 +119,12 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const results = await Promise.allSettled(channels);
       const sent = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
       const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason.message);
-      failed.forEach((msg) => console.error('[morning-brief]', msg));
+      failed.forEach((msg) => logger.error('morningBrief.channelFailed', { requestId: req.requestId, userId: req.user?.id, error: msg }));
 
       if (sent.length === 0) return res.status(502).json({ error: `All channels failed: ${failed.join('; ')}` });
       return res.json({ success: true, message: `Morning brief sent to ${sent.join(', ')}${failed.length ? ` (failed: ${failed.join(', ')})` : ''}` });
     } catch (err) {
-      console.error('[morning-brief] failed:', err.message);
+      logger.error('morningBrief.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -185,7 +186,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
 
       const skipped = [];
       if (channels.sms) {
-        console.log('[SMS] not implemented — skipping');
+        logger.info('alerts.sms.skipped', { requestId: req.requestId, userId: req.user?.id });
         skipped.push('SMS');
       }
 
@@ -195,7 +196,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
 
       return res.json({ sent, failed, skipped });
     } catch (err) {
-      console.error('[alerts/fire]', err.message);
+      logger.error('alerts.fire.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -209,7 +210,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const fired = await db.checkFiredAlerts(req.user.id, keys);
       return res.json({ fired });
     } catch (err) {
-      console.error('[alerts/check-fired]', err.message);
+      logger.error('alerts.checkFired.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -221,7 +222,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       await db.markFiredAlert(req.user.id, key);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[alerts/mark-fired]', err.message);
+      logger.error('alerts.markFired.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -238,7 +239,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       }
       return res.json(configs);
     } catch (err) {
-      console.error('[alerts/cadence] GET failed:', err.message);
+      logger.error('alerts.cadence.getFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -257,7 +258,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       const configs = await db.getCadenceConfigForUser(req.user.id);
       return res.json(configs);
     } catch (err) {
-      console.error('[alerts/cadence] PUT failed:', err.message);
+      logger.error('alerts.cadence.putFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

@@ -4,6 +4,7 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createNotesRouter({ authenticateToken, requireOwnership, db, imageUpload }) {
   const router = express.Router();
@@ -16,7 +17,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       const cats = await db.getNoteCategories(req.user.id);
       return res.json(cats);
     } catch (err) {
-      console.error('[notes] categories read failed:', err.message);
+      logger.error('notes.categories.readFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -29,7 +30,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       const cat = await db.createNoteCategory({ id, userId: req.user.id, name, parentId, pillar, color });
       return res.json(cat);
     } catch (err) {
-      console.error('[notes] category create failed:', err.message);
+      logger.error('notes.category.createFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -41,7 +42,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       const results = await db.searchNotes(req.user.id, q);
       return res.json(results);
     } catch (err) {
-      console.error('[notes] search failed:', err.message);
+      logger.error('notes.search.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -108,7 +109,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       });
       return res.json(digest);
     } catch (err) {
-      console.error('[digest] generation failed:', err.message);
+      logger.error('notes.digest.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json({ digest: null });
     }
   });
@@ -126,7 +127,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       const notes = await db.getNotesForUser(req.user.id, filters);
       return res.json(notes);
     } catch (err) {
-      console.error('[notes] read failed:', err.message);
+      logger.error('notes.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -140,7 +141,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       });
       return res.json(note);
     } catch (err) {
-      console.error('[notes] create failed:', err.message);
+      logger.error('notes.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -156,7 +157,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       if (!updated) return res.status(404).json({ error: 'Note not found' });
       return res.json(updated);
     } catch (err) {
-      console.error('[notes] update failed:', err.message);
+      logger.error('notes.update.failed', { requestId: req.requestId, userId: req.user?.id, noteId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -171,7 +172,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       await db.deleteNote(req.params.id, req.user.id);
       return res.json({ success: true });
     } catch (err) {
-      console.error('[notes] delete failed:', err.message);
+      logger.error('notes.delete.failed', { requestId: req.requestId, userId: req.user?.id, noteId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -186,7 +187,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       const updated = await db.updateNote(req.params.id, req.user.id, { pinned: !note.pinned });
       return res.json(updated);
     } catch (err) {
-      console.error('[notes] pin toggle failed:', err.message);
+      logger.error('notes.pin.failed', { requestId: req.requestId, userId: req.user?.id, noteId: req.params.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -243,7 +244,7 @@ Respond in JSON only:
       }
       return res.json({ pillar: null, category: null, confidence: 0 });
     } catch (err) {
-      console.error('[notes] suggest-pillar failed:', err.message);
+      logger.error('notes.suggestPillar.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json({ pillar: null, category: null, confidence: 0 });
     }
   });
@@ -255,7 +256,7 @@ Respond in JSON only:
       const images = await db.getNoteImages(req.params.id, req.user.id);
       return res.json(images);
     } catch (err) {
-      console.error('[notes] images list failed:', err.message);
+      logger.error('notes.images.listFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
     }
   });
@@ -292,7 +293,7 @@ Respond in JSON only:
       });
       return res.json(image);
     } catch (err) {
-      console.error('[notes] image upload failed:', err.message);
+      logger.error('notes.image.uploadFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -307,7 +308,7 @@ Respond in JSON only:
       }
       return res.json({ success: true });
     } catch (err) {
-      console.error('[notes] image delete failed:', err.message);
+      logger.error('notes.image.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

@@ -47,6 +47,7 @@
 
 const express = require('express');
 const axios = require('axios');
+const logger = require('../../guardrails/logger.cjs');
 
 /**
  * Factory function that creates the dashboard router.
@@ -83,7 +84,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
       const messages = await db.getConversationMessages(conversation.id, req.user.id);
       return res.json({ conversation, messages });
     } catch (err) {
-      console.error('[command-center] session failed:', err.message);
+      logger.error('commandCenter.session.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -144,7 +145,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
 
       return res.json({ updates });
     } catch (err) {
-      console.error('[command-center] updates failed:', err.message);
+      logger.error('commandCenter.updates.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -226,7 +227,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
       const brief = response.data.content?.[0]?.text || '';
       return res.json({ brief });
     } catch (err) {
-      console.error('[aria-brief] failed:', err.message);
+      logger.error('ariaBrief.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json({ brief: '' });
     }
   });
@@ -277,7 +278,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db }) {
       const summary = response.data.content?.[0]?.text || '';
       return res.json({ summary });
     } catch (err) {
-      console.error('[timeline-summary] failed:', err.message);
+      logger.error('timelineSummary.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json({ summary: '' });
     }
   });
