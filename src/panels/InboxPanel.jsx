@@ -224,13 +224,67 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     try { toast.info('Email queued for sending — approve in Aria', 3000); } catch {}
   }
 
-  function draftWithAria() {
+  // Inline drafter used from the compose drawer. Replaces the body text
+  // above the quoted original with the model's output; leaves the
+  // quoted section untouched so the reply keeps its "On … wrote:" tail.
+  const [drafting, setDrafting] = useState(false);
+  async function draftReplyInPlace() {
+    if (!compose || drafting) return;
     const latest = thread?.messages?.[thread.messages.length - 1];
-    if (!latest) return;
-    const preview = (latest.body || '').slice(0, 200).replace(/\s+/g, ' ').trim();
-    const msg = `Draft a reply to ${senderName(latest.from) || 'the sender'} re: ${latest.subject || '(no subject)'}.\nContext: ${preview}`;
-    try { window.dispatchEvent(new CustomEvent('aria-prefill', { detail: { message: msg, focus: true } })); } catch {}
-    onNavigate?.('dashboard');
+    const preview = (latest?.body || '').slice(0, 300).replace(/\s+/g, ' ').trim();
+    const subject = compose.subject || latest?.subject || '(no subject)';
+    const msg = `Draft a reply email from ${compose.from || '(me)'} to ${compose.to || senderEmail(latest?.from || '') || '(recipient)'} re: ${subject}. Context: ${preview}. Return ONLY the email body text, no subject line, no explanation.`;
+
+    setDrafting(true);
+    try {
+      const res = await apiFetch('/api/chat/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          messages: [{ role: 'user', content: msg }],
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = null;
+      let draft = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const rawLine of lines) {
+          const em = rawLine.match(/^event: (.+)/);
+          const dm = rawLine.match(/^data: (.+)/);
+          if (em) currentEvent = em[1].trim();
+          if (dm && currentEvent === 'text') {
+            try { draft = JSON.parse(dm[1])?.content || draft; } catch {}
+          }
+          if (dm && currentEvent === 'done') break;
+          if (dm) currentEvent = null;
+        }
+      }
+      const cleaned = (draft || '').trim();
+      if (!cleaned) throw new Error('No draft returned');
+
+      // Preserve the quoted original if present — replace only the
+      // body above the "\n\n---\n" separator inserted by openCompose.
+      setCompose((c) => {
+        if (!c) return c;
+        const sep = '\n\n---\n';
+        const idx = (c.body || '').indexOf(sep);
+        const trailing = idx >= 0 ? (c.body || '').slice(idx) : '';
+        return { ...c, body: trailing ? `${cleaned}${trailing}` : cleaned };
+      });
+    } catch (err) {
+      try { toast.error(`Couldn't draft: ${err.message || 'failed'}`, 4000); } catch {}
+    } finally {
+      setDrafting(false);
+    }
   }
 
   return (
@@ -410,10 +464,9 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
             {thread && (
               <div className="border-t border-gray-100 px-4 py-2.5 flex items-center gap-2 flex-wrap" style={{ backgroundColor: '#fbf8fe' }}>
-                <ActionBtn icon="reply"        label="Reply"           onClick={() => openCompose('reply')} />
-                <ActionBtn icon="reply_all"    label="Reply All"       onClick={() => openCompose('replyAll')} />
-                <ActionBtn icon="forward"      label="Forward"         onClick={() => openCompose('forward')} />
-                <ActionBtn icon="auto_awesome" label="Draft with Aria" onClick={draftWithAria} primary />
+                <ActionBtn icon="reply"     label="Reply"     onClick={() => openCompose('reply')} />
+                <ActionBtn icon="reply_all" label="Reply All" onClick={() => openCompose('replyAll')} />
+                <ActionBtn icon="forward"   label="Forward"   onClick={() => openCompose('forward')} />
               </div>
             )}
 
@@ -421,9 +474,11 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               <ComposeDrawer
                 compose={compose}
                 accounts={accounts}
+                drafting={drafting}
                 onChange={(patch) => setCompose((c) => ({ ...c, ...patch }))}
                 onCancel={() => setCompose(null)}
                 onSend={sendCompose}
+                onDraftWithAria={draftReplyInPlace}
               />
             )}
           </>
@@ -449,7 +504,7 @@ function ActionBtn({ icon, label, onClick, primary }) {
   );
 }
 
-function ComposeDrawer({ compose, accounts, onChange, onCancel, onSend }) {
+function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend, onDraftWithAria }) {
   const canSend = !!(compose.from && compose.to && compose.subject);
   return (
     <div
@@ -498,6 +553,27 @@ function ComposeDrawer({ compose, accounts, onChange, onCancel, onSend }) {
           className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           style={{ fontFamily: 'Manrope, sans-serif', lineHeight: 1.55, resize: 'vertical', minHeight: 180 }}
         />
+        <div>
+          <button
+            type="button"
+            onClick={onDraftWithAria}
+            disabled={drafting}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
+            style={{ backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.3)' }}
+          >
+            {drafting ? (
+              <>
+                <span className="w-3 h-3 border-2 border-[#4f4dcf]/30 border-t-[#4f4dcf] rounded-full animate-spin" />
+                Drafting…
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>auto_awesome</span>
+                Draft with Aria
+              </>
+            )}
+          </button>
+        </div>
       </div>
       <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-end gap-2 flex-shrink-0">
         <button onClick={onCancel} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
