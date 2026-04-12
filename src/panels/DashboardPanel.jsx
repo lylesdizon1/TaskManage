@@ -204,6 +204,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [ccSending, setCcSending] = useState(false);
   const ccAbortRef   = useRef(null);   // active AbortController for chat stream
   const ccStoppedRef = useRef(false);  // set true on user Stop so late events are ignored
+  const ccSendRef    = useRef(null);   // holds latest handleCcSend for cross-surface triggers
   const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
   const lastCheckedRef = useRef(new Date().toISOString());
@@ -497,8 +498,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, [ccConvId, ccLoading, ccRefreshing, ccSending, ccMessages, handleFreshUpdate]);
 
   // Send user message + stream Aria response
-  const handleCcSend = useCallback(async () => {
-    const text = ccInput.trim();
+  const handleCcSend = useCallback(async (textOverride) => {
+    const text = (typeof textOverride === 'string' ? textOverride : ccInput).trim();
     if (!text || ccSending || !ccConvId) return;
     setCcInput('');
     setCcSending(true);
@@ -705,6 +706,34 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       setCcSending(false);
     }
   }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch, tasks, entities, notes, calendarEvents, chatCalendarEvents]);
+
+  // Keep a live ref to the latest send handler so window-event listeners
+  // can trigger a send without re-binding on every render.
+  useEffect(() => { ccSendRef.current = handleCcSend; }, [handleCcSend]);
+
+  // Cross-panel triggers: Inbox compose auto-submits here, Draft with Aria
+  // just prefills the input. Both are one-shot window events.
+  useEffect(() => {
+    const onAutosend = (e) => {
+      const msg = e?.detail?.message;
+      if (!msg) return;
+      setCcInput('');
+      // Pass the message directly into the send handler; no race with
+      // the state update cycle.
+      ccSendRef.current?.(msg);
+    };
+    const onPrefill = (e) => {
+      const msg = e?.detail?.message;
+      if (!msg) return;
+      setCcInput(msg);
+    };
+    window.addEventListener('aria-autosend', onAutosend);
+    window.addEventListener('aria-prefill', onPrefill);
+    return () => {
+      window.removeEventListener('aria-autosend', onAutosend);
+      window.removeEventListener('aria-prefill', onPrefill);
+    };
+  }, []);
 
   const handleCcStop = useCallback(() => {
     ccStoppedRef.current = true;

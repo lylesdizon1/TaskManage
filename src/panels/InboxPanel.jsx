@@ -1,250 +1,505 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useToast } from '../contexts/ToastContext';
-import SkeletonBlock from '../components/ui/SkeletonBlock.jsx';
-import { getTodayLocal } from '../utils/helpers.js';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-export default function InboxPanel({ tasks, authToken, currentUser, onToggleTask, onEditTask, addToast, apiFetch }) {
-  const [dismissed, setDismissed] = useState(new Set());
-  const [editingDue, setEditingDue] = useState(null);
-  const [dbItems, setDbItems] = useState([]);
-  const [openMenuId, setOpenMenuId] = useState(null);
-  const toast = useToast();
+// Deterministic color per account_email so each account gets a stable
+// badge tint across loads. Kept muted so it never competes with #4f4dcf.
+const ACCOUNT_TINTS = [
+  { bg: 'rgba(79,77,207,0.08)',  fg: '#4f4dcf' },
+  { bg: 'rgba(5,150,105,0.08)',  fg: '#059669' },
+  { bg: 'rgba(217,119,6,0.08)',  fg: '#b45309' },
+  { bg: 'rgba(219,39,119,0.08)', fg: '#be185d' },
+  { bg: 'rgba(14,165,233,0.08)', fg: '#0369a1' },
+  { bg: 'rgba(100,116,139,0.10)', fg: '#475569' },
+];
+function tintForAccount(email) {
+  if (!email) return ACCOUNT_TINTS[0];
+  let h = 0; for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) | 0;
+  return ACCOUNT_TINTS[Math.abs(h) % ACCOUNT_TINTS.length];
+}
+function shortAccount(email) {
+  if (!email) return '';
+  const at = email.indexOf('@');
+  return at > 0 ? email.slice(0, at) : email;
+}
+function senderName(raw) {
+  if (!raw) return '';
+  const m = raw.match(/^\s*"?([^"<]+?)"?\s*<.+>/);
+  return m ? m[1].trim() : raw.replace(/<[^>]+>/g, '').trim();
+}
+function senderEmail(raw) {
+  if (!raw) return '';
+  const m = raw.match(/<([^>]+)>/);
+  return m ? m[1].trim() : raw.trim();
+}
+function initials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
+}
+function relTime(iso) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  const diff = Date.now() - t;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d`;
+  return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function absTime(iso) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  return new Date(t).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
 
-  const userTZ = currentUser?.timezone || 'America/Los_Angeles';
-  const today = getTodayLocal(userTZ);
-  const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  const cutoff = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(sevenDaysAgo);
+export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCountChange }) {
+  const [accounts, setAccounts] = useState([]);
+  const [accountFilter, setAccountFilter] = useState('');  // '' = all
+  const [threads, setThreads] = useState([]);
+  const [threadsLoading, setThreadsLoading] = useState(true);
+  const [threadsError, setThreadsError] = useState(null);
+  const [activeThreadId, setActiveThreadId] = useState(null);
+  const [activeAccount, setActiveAccount] = useState(null);
+  const [thread, setThread] = useState(null);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [threadError, setThreadError] = useState(null);
+  const [expanded, setExpanded] = useState(new Set());
+  const [compose, setCompose] = useState(null);
+  const [mobileShowThread, setMobileShowThread] = useState(false);
 
-  const activeTasks = tasks.filter((t) => !t.completed);
-
-  // Fetch DB-backed inbox items (from gmail scan etc.)
-  useEffect(() => {
-    async function fetchDbItems() {
-      try {
-        const res = await apiFetch('/api/inbox/items', { headers: { Authorization: `Bearer ${authToken}` } });
-        if (res.ok) {
-          const data = await res.json();
-          setDbItems(data.filter((d) => !d.action_taken));
-        }
-      } catch {}
-    }
-    fetchDbItems();
-  }, [authToken]);
-
-  const inboxItems = useMemo(() => {
-    const items = [];
-    // Task-based items
-    activeTasks.forEach((t) => {
-      if (dismissed.has(t.id)) return;
-      if (t.dueDate && t.dueDate < cutoff) {
-        const days = Math.floor((new Date(today) - new Date(t.dueDate)) / 86400000);
-        items.push({ ...t, inboxType: 'MISSED', context: `${days} days overdue`, sort: 0, source: 'task' });
-      } else if (t.dueDate && t.dueDate < today) {
-        const days = Math.floor((new Date(today) - new Date(t.dueDate)) / 86400000);
-        items.push({ ...t, inboxType: 'OVERDUE', context: `${days} day${days !== 1 ? 's' : ''} overdue`, sort: 1, source: 'task' });
-      } else if (t.priority === 'high' && !t.dueDate) {
-        items.push({ ...t, inboxType: 'HIGH PRIORITY', context: 'No due date set', sort: 2, source: 'task' });
-      }
-    });
-    // DB-backed items (gmail scan)
-    const sortMap = { VIP: 0, KEYWORD: 1, COMMITMENT: 2 };
-    dbItems.forEach((d) => {
-      if (dismissed.has(d.id)) return;
-      items.push({
-        id: d.id,
-        title: d.title,
-        inboxType: d.type,
-        context: d.summary,
-        sort: sortMap[d.type] ?? 3,
-        source: 'gmail',
-        gmailLink: d.gmail_link,
-        gmailThreadId: d.gmail_thread_id,
-        sender: d.sender || null,
-      });
-    });
-    return items.sort((a, b) => a.sort - b.sort);
-  }, [activeTasks, dbItems, dismissed, today, cutoff]);
-
-  // Extract email from "Name <email@domain.com>" or plain "email@domain.com"
-  function extractEmail(sender) {
-    if (!sender) return null;
-    const match = sender.match(/<([^>]+)>/);
-    return match ? match[1].toLowerCase() : sender.trim().toLowerCase();
-  }
-
-  function extractDomain(sender) {
-    const email = extractEmail(sender);
-    if (!email) return null;
-    const at = email.indexOf('@');
-    return at >= 0 ? email.slice(at) : null;
-  }
-
-  async function handleDismiss(id, isDbItem) {
-    if (isDbItem) {
-      try {
-        await apiFetch(`/api/inbox/items/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ action: 'dismissed' }),
-        });
-      } catch {}
-    }
-    setDismissed((prev) => new Set(prev).add(id));
-    setOpenMenuId(null);
-    toast.info('Item dismissed from inbox');
-  }
-
-  async function handleExcludeSender(item, mode) {
-    const value = mode === 'domain' ? extractDomain(item.sender) : extractEmail(item.sender);
-    if (!value) return;
+  const loadAccounts = useCallback(async () => {
     try {
-      // Load current config, add exclusion, save
-      const cfgRes = await apiFetch('/api/gmail/config', { headers: { Authorization: `Bearer ${authToken}` } });
-      const cfg = await cfgRes.json();
-      const excluded = cfg.excludedSenders || [];
-      if (!excluded.some((e) => e.toLowerCase() === value)) {
-        excluded.push(value);
-        await apiFetch('/api/gmail/config', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ config: { ...cfg, excludedSenders: excluded } }),
-        });
-      }
-      // Dismiss the item too
-      await handleDismiss(item.id, item.source === 'gmail');
-      toast.success(`Excluded ${value}`);
+      const r = await apiFetch('/api/inbox/accounts', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await r.json();
+      setAccounts(Array.isArray(data) ? data : []);
     } catch {
-      toast.error('Failed to exclude sender');
+      setAccounts([]);
+    }
+  }, [apiFetch, authToken]);
+
+  const loadThreads = useCallback(async () => {
+    setThreadsLoading(true);
+    setThreadsError(null);
+    try {
+      const qs = new URLSearchParams();
+      if (accountFilter) qs.set('account_email', accountFilter);
+      qs.set('max_results', '20');
+      const r = await apiFetch(`/api/inbox/threads?${qs.toString()}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const list = Array.isArray(data?.threads) ? data.threads : [];
+      setThreads(list);
+      onUnreadCountChange?.(list.filter(t => !t.isRead).length);
+    } catch (err) {
+      setThreadsError(err.message || 'Failed');
+      setThreads([]);
+    } finally {
+      setThreadsLoading(false);
+    }
+  }, [accountFilter, apiFetch, authToken, onUnreadCountChange]);
+
+  const loadThread = useCallback(async (threadId, accountEmail) => {
+    setThreadLoading(true);
+    setThreadError(null);
+    setThread(null);
+    try {
+      const r = await apiFetch(`/api/inbox/threads/${encodeURIComponent(threadId)}?account_email=${encodeURIComponent(accountEmail)}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const t = data?.thread || null;
+      setThread(t);
+      if (t?.messages?.length) {
+        setExpanded(new Set([t.messages[t.messages.length - 1].id]));
+      } else {
+        setExpanded(new Set());
+      }
+      setThreads((prev) => prev.map(x => x.id === threadId ? { ...x, isRead: true } : x));
+    } catch (err) {
+      setThreadError(err.message || 'Failed');
+    } finally {
+      setThreadLoading(false);
+    }
+  }, [apiFetch, authToken]);
+
+  useEffect(() => { loadAccounts(); }, [loadAccounts]);
+  useEffect(() => { loadThreads(); }, [loadThreads]);
+
+  const unreadCount = useMemo(() => threads.filter(t => !t.isRead).length, [threads]);
+  useEffect(() => { onUnreadCountChange?.(unreadCount); }, [unreadCount, onUnreadCountChange]);
+
+  function openThread(t) {
+    setActiveThreadId(t.id);
+    setActiveAccount(t.accountEmail);
+    setMobileShowThread(true);
+    loadThread(t.id, t.accountEmail);
+  }
+
+  async function archiveCurrent() {
+    if (!thread || !thread.messages?.length) return;
+    const lastMsg = thread.messages[thread.messages.length - 1];
+    try {
+      await apiFetch('/api/inbox/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ account_email: activeAccount, message_id: lastMsg.id }),
+      });
+      setThreads((prev) => prev.filter(x => x.id !== thread.id));
+      setThread(null);
+      setActiveThreadId(null);
+      setMobileShowThread(false);
+    } catch {}
+  }
+
+  function openCompose(mode) {
+    const latest = thread?.messages?.[thread.messages.length - 1];
+    if (!latest && mode !== 'new') return;
+    const origSubject = latest?.subject || '';
+    const origFrom = senderEmail(latest?.from || '');
+    const quoted = latest?.body
+      ? `\n\n---\nOn ${absTime(latest.date)}, ${senderName(latest.from)} wrote:\n> ${latest.body.split('\n').join('\n> ')}`
+      : '';
+    if (mode === 'reply') {
+      setCompose({ mode, from: activeAccount || '', to: origFrom,
+        subject: origSubject.toLowerCase().startsWith('re:') ? origSubject : `Re: ${origSubject}`,
+        body: quoted });
+    } else if (mode === 'replyAll') {
+      const toList = new Set([origFrom]);
+      if (latest?.to) latest.to.split(',').map(s => senderEmail(s.trim())).filter(Boolean).forEach(e => toList.add(e));
+      toList.delete(activeAccount);
+      setCompose({ mode, from: activeAccount || '', to: Array.from(toList).filter(Boolean).join(', '),
+        subject: origSubject.toLowerCase().startsWith('re:') ? origSubject : `Re: ${origSubject}`,
+        body: quoted });
+    } else if (mode === 'forward') {
+      setCompose({ mode, from: activeAccount || '', to: '',
+        subject: origSubject.toLowerCase().startsWith('fwd:') ? origSubject : `Fwd: ${origSubject}`,
+        body: quoted });
+    } else {
+      setCompose({ mode: 'new', from: '', to: '', subject: '', body: '' });
     }
   }
 
-  function handleSetDue(id, date) {
-    onEditTask(id, { dueDate: date });
-    setEditingDue(null);
-    toast.success('Due date updated');
+  function sendCompose() {
+    if (!compose) return;
+    const { from, to, subject, body } = compose;
+    if (!from || !to || !subject) return;
+    const msg = `Send email from ${from} to ${to}\nsubject: ${subject}\nbody: ${body || ''}`;
+    try { window.dispatchEvent(new CustomEvent('aria-autosend', { detail: { message: msg } })); } catch {}
+    setCompose(null);
+    onNavigate?.('dashboard');
   }
 
-  const badgeStyle = {
-    'MISSED': 'bg-error/10 text-error',
-    'OVERDUE': 'bg-amber-100 text-amber-700',
-    'HIGH PRIORITY': 'bg-primary/10 text-primary',
-    'VIP': 'bg-purple-100 text-purple-700',
-    'KEYWORD': 'bg-amber-100 text-amber-700',
-    'COMMITMENT': 'bg-blue-100 text-blue-700',
-  };
-  const iconMap = {
-    'MISSED': 'event_busy',
-    'OVERDUE': 'schedule',
-    'HIGH PRIORITY': 'priority_high',
-    'VIP': 'star',
-    'KEYWORD': 'search',
-    'COMMITMENT': 'handshake',
-  };
+  function draftWithAria() {
+    const latest = thread?.messages?.[thread.messages.length - 1];
+    if (!latest) return;
+    const preview = (latest.body || '').slice(0, 200).replace(/\s+/g, ' ').trim();
+    const msg = `Draft a reply to ${senderName(latest.from) || 'the sender'} re: ${latest.subject || '(no subject)'}.\nContext: ${preview}`;
+    try { window.dispatchEvent(new CustomEvent('aria-prefill', { detail: { message: msg, focus: true } })); } catch {}
+    onNavigate?.('dashboard');
+  }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 md:p-10">
-      <div className="max-w-3xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-extrabold font-headline text-on-background">Inbox</h1>
-            <p className="text-sm text-on-surface-variant mt-1">{inboxItems.length} item{inboxItems.length !== 1 ? 's' : ''} need{inboxItems.length === 1 ? 's' : ''} attention</p>
+    <div className="flex-1 overflow-hidden flex" style={{ backgroundColor: '#fbf8fe', fontFamily: 'Manrope, sans-serif' }}>
+      {/* Left — thread list */}
+      <div
+        className={`border-r border-gray-100 flex-col h-full ${mobileShowThread ? 'hidden md:flex' : 'flex'}`}
+        style={{ width: 320, minWidth: 320, flexShrink: 0, backgroundColor: '#fbf8fe' }}
+      >
+        <div className="px-5 pt-5 pb-3">
+          <h1 className="text-xl font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
+          <div className="mt-3">
+            <select
+              value={accountFilter}
+              onChange={(e) => setAccountFilter(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="">All accounts</option>
+              {accounts.map(a => <option key={a.id} value={a.account_email}>{a.account_email}</option>)}
+            </select>
           </div>
         </div>
+        <div className="flex-1 overflow-y-auto px-2 pb-3">
+          {threadsLoading ? (
+            <ListSkeleton />
+          ) : threadsError ? (
+            <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 mx-1 text-center">
+              <p className="text-sm text-gray-600">Couldn&rsquo;t load inbox. Try again.</p>
+              <button onClick={loadThreads} className="mt-2 text-xs font-semibold" style={{ color: '#4f4dcf' }}>Retry</button>
+            </div>
+          ) : threads.length === 0 ? (
+            <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6 mx-1 text-center">
+              <span className="material-symbols-outlined text-gray-400" style={{ fontSize: '28px' }}>inbox</span>
+              <p className="text-sm text-gray-600 mt-1">Your inbox is empty</p>
+            </div>
+          ) : (
+            threads.map((t) => {
+              const tint = tintForAccount(t.accountEmail);
+              const active = t.id === activeThreadId;
+              return (
+                <button
+                  key={`${t.accountEmail}:${t.id}`}
+                  onClick={() => openThread(t)}
+                  className={`w-full text-left rounded-xl px-3 py-2.5 mb-1 transition-colors ${active ? 'bg-primary/5' : 'hover:bg-white'}`}
+                  style={active ? { borderLeft: '3px solid #4f4dcf' } : { borderLeft: '3px solid transparent' }}
+                >
+                  <div className="flex items-start gap-2">
+                    <span
+                      className="flex-shrink-0 mt-1.5 w-2 h-2 rounded-full"
+                      style={{ backgroundColor: t.isRead ? 'transparent' : '#4f4dcf', border: t.isRead ? '1px solid #d1d5db' : 'none' }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-sm truncate ${t.isRead ? 'text-gray-600' : 'text-gray-900 font-semibold'}`} style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                          {senderName(t.from) || shortAccount(t.accountEmail)}
+                        </span>
+                        <span className="text-[10px] text-gray-400 flex-shrink-0">{relTime(t.date)}</span>
+                      </div>
+                      <div className={`text-[13px] truncate mt-0.5 ${t.isRead ? 'text-gray-500' : 'text-gray-800 font-semibold'}`}>
+                        {t.subject || '(no subject)'}
+                      </div>
+                      <div className="text-xs text-gray-400 truncate mt-0.5">{t.snippet}</div>
+                      <div className="mt-1.5">
+                        <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>
+                          {shortAccount(t.accountEmail)}{t.messageCount > 1 ? ` · ${t.messageCount}` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
 
-        {inboxItems.length === 0 ? (
-          <div className="text-center py-16">
-            <span className="material-symbols-outlined text-5xl text-primary/30">inbox</span>
-            <p className="text-on-surface-variant font-medium mt-3">You're all caught up!</p>
-            <p className="text-sm text-outline mt-1">No overdue, missed, or unscheduled high-priority tasks.</p>
+      {/* Right — thread view */}
+      <div className={`flex-1 flex-col h-full ${mobileShowThread ? 'flex' : 'hidden md:flex'}`} style={{ backgroundColor: '#fbf8fe', position: 'relative' }}>
+        {!activeThreadId ? (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <span className="material-symbols-outlined text-gray-300" style={{ fontSize: '48px' }}>mail</span>
+              <p className="text-sm text-gray-500 mt-2">Select a thread to read</p>
+            </div>
           </div>
         ) : (
-          <div className="space-y-3">
-            {inboxItems.map((item) => (
-              <div key={item.id} className="bg-surface-container-lowest rounded-xl p-4 shadow-sm border border-outline-variant/30 flex items-start gap-4 group hover:shadow-md transition-shadow">
-                <div className="bg-surface-variant/50 p-2 rounded-full flex-shrink-0 mt-0.5">
-                  <span className="material-symbols-outlined text-lg text-on-surface-variant">{iconMap[item.inboxType] || 'mail'}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badgeStyle[item.inboxType] || 'bg-gray-100 text-gray-600'}`}>{item.inboxType}</span>
-                    {item.priority === 'high' && item.inboxType !== 'HIGH PRIORITY' && (
-                      <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-error/10 text-error">HIGH</span>
-                    )}
-                  </div>
-                  <h3 className="font-bold text-on-surface text-sm">{item.title}</h3>
-                  <p className="text-xs text-outline mt-0.5">{item.context}{item.dueDate ? ` · Due ${item.dueDate}` : ''}</p>
-                  {editingDue === item.id && item.source === 'task' && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <input type="date" defaultValue={today} className="text-xs border border-outline-variant rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 outline-none" autoFocus
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleSetDue(item.id, e.target.value); if (e.key === 'Escape') setEditingDue(null); }}
-                      />
-                      <button onClick={(e) => handleSetDue(item.id, e.target.closest('div').querySelector('input').value)} className="text-xs font-bold text-primary hover:underline">Save</button>
-                      <button onClick={() => setEditingDue(null)} className="text-xs text-outline hover:underline">Cancel</button>
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {item.source === 'gmail' && item.gmailLink && (
-                    <a href={item.gmailLink} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 text-xs font-bold rounded-lg bg-primary text-on-primary hover:opacity-90 transition-opacity" title="View in Gmail">
-                      <span className="material-symbols-outlined text-sm">open_in_new</span>
-                    </a>
-                  )}
-                  {item.source === 'task' && (
-                    <>
-                      <button onClick={() => onToggleTask(item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-primary text-on-primary hover:opacity-90 transition-opacity" title="Complete">
-                        <span className="material-symbols-outlined text-sm">check</span>
-                      </button>
-                      <button onClick={() => setEditingDue(editingDue === item.id ? null : item.id)} className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors" title="Edit due date">
-                        <span className="material-symbols-outlined text-sm">edit_calendar</span>
-                      </button>
-                    </>
-                  )}
-                  <div className="relative">
-                    <button
-                      onClick={() => setOpenMenuId(openMenuId === item.id ? null : item.id)}
-                      className="px-2 py-1.5 text-xs font-bold rounded-lg bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70 transition-colors"
-                      title="More actions"
-                    >
-                      <span className="material-symbols-outlined text-sm">more_horiz</span>
-                    </button>
-                    {openMenuId === item.id && (
-                      <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1">
-                        <button
-                          onClick={() => handleDismiss(item.id, item.source === 'gmail')}
-                          className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                        >
-                          <span className="material-symbols-outlined text-sm">visibility_off</span>
-                          Dismiss
-                        </button>
-                        {item.source === 'gmail' && item.sender && (
-                          <>
-                            <button
-                              onClick={() => handleExcludeSender(item, 'email')}
-                              className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                            >
-                              <span className="material-symbols-outlined text-sm">person_off</span>
-                              Exclude Sender
-                            </button>
-                            {extractDomain(item.sender) && (
-                              <button
-                                onClick={() => handleExcludeSender(item, 'domain')}
-                                className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                              >
-                                <span className="material-symbols-outlined text-sm">domain_disabled</span>
-                                Exclude {extractDomain(item.sender)}
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
+          <>
+            <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2 min-w-0">
+                <button onClick={() => setMobileShowThread(false)} className="md:hidden text-gray-400" title="Back">
+                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>arrow_back</span>
+                </button>
+                <h2 className="text-lg font-bold text-gray-900 truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                  {thread?.messages?.[0]?.subject || '(no subject)'}
+                </h2>
               </div>
-            ))}
-          </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {activeAccount && (() => { const tint = tintForAccount(activeAccount); return (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>{shortAccount(activeAccount)}</span>
+                ); })()}
+                <button onClick={archiveCurrent} disabled={!thread} title="Archive"
+                  className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-gray-100 disabled:opacity-30">
+                  <span className="material-symbols-outlined text-gray-500" style={{ fontSize: '18px' }}>archive</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+              {threadLoading ? (
+                <MessageSkeleton />
+              ) : threadError ? (
+                <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 text-center">
+                  <p className="text-sm text-gray-600">Couldn&rsquo;t load this thread. Try again.</p>
+                  <button onClick={() => loadThread(activeThreadId, activeAccount)} className="mt-2 text-xs font-semibold" style={{ color: '#4f4dcf' }}>Retry</button>
+                </div>
+              ) : thread?.messages?.length ? (
+                thread.messages.map((m) => {
+                  const open = expanded.has(m.id);
+                  return (
+                    <div key={m.id} className="bg-white border border-gray-100 rounded-xl shadow-sm">
+                      <button
+                        className="w-full flex items-start gap-3 px-4 py-3 text-left"
+                        onClick={() => setExpanded((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(m.id)) next.delete(m.id); else next.add(m.id);
+                          return next;
+                        })}
+                      >
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                             style={{ backgroundColor: 'rgba(79,77,207,0.08)', color: '#4f4dcf', fontSize: '12px', fontWeight: 700, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                          {initials(senderName(m.from))}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-gray-900 truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                              {senderName(m.from) || '(unknown)'}
+                            </span>
+                            <span className="text-[11px] text-gray-400 flex-shrink-0">{absTime(m.date)}</span>
+                          </div>
+                          {open && m.to && <div className="text-[11px] text-gray-400 mt-0.5 truncate">to {m.to}</div>}
+                          {!open && <div className="text-[12px] text-gray-500 truncate mt-0.5">{m.snippet}</div>}
+                        </div>
+                      </button>
+                      {open && (
+                        <div className="px-4 pb-4 pt-1" style={{ fontSize: '14px', lineHeight: '1.6', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {m.body || <span className="text-gray-400 italic">(empty body)</span>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : null}
+            </div>
+
+            {thread && (
+              <div className="border-t border-gray-100 px-4 py-2.5 flex items-center gap-2 flex-wrap" style={{ backgroundColor: '#fbf8fe' }}>
+                <ActionBtn icon="reply"        label="Reply"           onClick={() => openCompose('reply')} />
+                <ActionBtn icon="reply_all"    label="Reply All"       onClick={() => openCompose('replyAll')} />
+                <ActionBtn icon="forward"      label="Forward"         onClick={() => openCompose('forward')} />
+                <ActionBtn icon="auto_awesome" label="Draft with Aria" onClick={draftWithAria} primary />
+              </div>
+            )}
+
+            {compose && (
+              <ComposeDrawer
+                compose={compose}
+                accounts={accounts}
+                onChange={(patch) => setCompose((c) => ({ ...c, ...patch }))}
+                onCancel={() => setCompose(null)}
+                onSend={sendCompose}
+              />
+            )}
+          </>
         )}
       </div>
     </div>
+  );
+}
+
+function ActionBtn({ icon, label, onClick, primary }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+      style={primary
+        ? { backgroundColor: '#4f4dcf', color: '#fff' }
+        : { backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.2)' }
+      }
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>{icon}</span>
+      {label}
+    </button>
+  );
+}
+
+function ComposeDrawer({ compose, accounts, onChange, onCancel, onSend }) {
+  const canSend = !!(compose.from && compose.to && compose.subject);
+  return (
+    <div
+      className="absolute inset-x-0 bottom-0 bg-white border-t border-gray-200 shadow-lg"
+      style={{ maxHeight: '72%', display: 'flex', flexDirection: 'column', borderTopLeftRadius: 12, borderTopRightRadius: 12 }}
+    >
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
+        <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          {compose.mode === 'forward' ? 'Forward' : compose.mode === 'replyAll' ? 'Reply all' : compose.mode === 'new' ? 'New message' : 'Reply'}
+        </span>
+        <button onClick={onCancel} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
+        </button>
+      </div>
+      <div className="px-4 py-3 space-y-2 overflow-y-auto">
+        <Row label="From">
+          <select
+            value={compose.from}
+            onChange={(e) => onChange({ from: e.target.value })}
+            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="" disabled>Select account</option>
+            {accounts.map(a => <option key={a.id} value={a.account_email}>{a.account_email}</option>)}
+          </select>
+        </Row>
+        <Row label="To">
+          <input
+            type="text" value={compose.to}
+            onChange={(e) => onChange({ to: e.target.value })}
+            placeholder="name@example.com"
+            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </Row>
+        <Row label="Subject">
+          <input
+            type="text" value={compose.subject}
+            onChange={(e) => onChange({ subject: e.target.value })}
+            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </Row>
+        <textarea
+          value={compose.body}
+          onChange={(e) => onChange({ body: e.target.value })}
+          rows={10}
+          placeholder="Write your message…"
+          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          style={{ fontFamily: 'Manrope, sans-serif', lineHeight: 1.55, resize: 'vertical', minHeight: 180 }}
+        />
+      </div>
+      <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-end gap-2 flex-shrink-0">
+        <button onClick={onCancel} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+        <button
+          onClick={onSend}
+          disabled={!canSend}
+          className="px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-40"
+          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, children }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider w-16 flex-shrink-0" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{label}</div>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function ListSkeleton() {
+  return (
+    <div className="px-1">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="rounded-xl px-3 py-2.5 mb-1">
+          <div className="flex items-start gap-2">
+            <div className="w-2 h-2 rounded-full bg-gray-100 animate-pulse mt-1.5" />
+            <div className="flex-1 space-y-1.5">
+              <div className="h-3 w-32 bg-gray-100 rounded animate-pulse" />
+              <div className="h-3 w-48 bg-gray-100 rounded animate-pulse" />
+              <div className="h-3 w-56 bg-gray-100 rounded animate-pulse" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MessageSkeleton() {
+  return (
+    <>
+      {Array.from({ length: 2 }).map((_, i) => (
+        <div key={i} className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 flex gap-3">
+          <div className="w-8 h-8 rounded-full bg-gray-100 animate-pulse flex-shrink-0" />
+          <div className="flex-1 space-y-2">
+            <div className="h-3 w-40 bg-gray-100 rounded animate-pulse" />
+            <div className="h-3 w-64 bg-gray-100 rounded animate-pulse" />
+            <div className="h-3 w-56 bg-gray-100 rounded animate-pulse" />
+          </div>
+        </div>
+      ))}
+    </>
   );
 }

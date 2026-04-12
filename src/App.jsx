@@ -306,6 +306,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [taskFilter, setTaskFilter]             = useState('');
   const [showSettings, setShowSettings]         = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState(null);
+  const [inboxUnread, setInboxUnread]           = useState(0);
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
   const [showTaskModal, setShowTaskModal]       = useState(false);
   const [editingTask, setEditingTask]           = useState(null);
@@ -378,6 +379,26 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     window.addEventListener('popstate', handlePop);
     return () => window.removeEventListener('popstate', handlePop);
   }, []);
+
+  // Inbox unread badge: fetch once on mount and whenever the user
+  // opens the Inbox tab (the panel itself reports back via
+  // onUnreadCountChange on every list load). No polling — keeps it
+  // cheap; the badge is eventually consistent.
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/inbox/threads?max_results=50', { headers: { Authorization: `Bearer ${authToken}` } });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        const list = Array.isArray(data?.threads) ? data.threads : [];
+        setInboxUnread(list.filter(t => !t.isRead).length);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser?.id, authToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // After Gmail OAuth redirect (?gmail=connected), reopen Settings on
   // the Email Intelligence tab and strip the param from the URL.
@@ -952,7 +973,17 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   : 'text-slate-500 font-medium hover:bg-primary/5'
               }`}
             >
-              <span className="material-symbols-outlined text-lg">{icon}</span>
+              <span className="relative inline-flex">
+                <span className="material-symbols-outlined text-lg">{icon}</span>
+                {key === 'inbox' && inboxUnread > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center"
+                    style={{ lineHeight: 1 }}
+                  >
+                    {inboxUnread > 99 ? '99+' : inboxUnread}
+                  </span>
+                )}
+              </span>
               <span className="text-[11px]">{label}</span>
             </button>
           ))}
@@ -1065,7 +1096,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'activity' ? (
             <ActivityPanel authToken={authToken} currentUser={currentUser} apiFetch={apiFetch} />
           ) : activeView === 'inbox' ? (
-            <InboxPanel tasks={tasks} authToken={authToken} currentUser={currentUser} onToggleTask={(id) => { toggleTask(id); }} onEditTask={(id, fields) => { editTask(id, fields); }} addToast={addToast} apiFetch={apiFetch} />
+            <InboxPanel authToken={authToken} apiFetch={apiFetch} onNavigate={setActiveView} onUnreadCountChange={setInboxUnread} />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} authToken={authToken} addToast={addToast} apiFetch={apiFetch} />
           ) : activeView === 'notes' ? (

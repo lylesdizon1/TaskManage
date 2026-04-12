@@ -2,6 +2,20 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const googleProvider = require('../lib/providers/googleEmailProvider.cjs');
+
+// Resolve the provider implementation for a given integration row.
+// Single-provider today — Gmail. Future-ready lookup table.
+function providerFor(integration) {
+  const p = integration?.provider || 'google';
+  if (p === 'google') return googleProvider;
+  return null;
+}
+
+function parseDate(s) {
+  const t = Date.parse(s || '');
+  return Number.isFinite(t) ? t : 0;
+}
 
 module.exports = function createInboxRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -37,6 +51,127 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('inbox.actionUpdate.failed', { requestId: req.requestId, userId: req.user?.id, itemId: req.params.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Provider-backed thread routes (no DB persistence) ──────────────────
+
+  router.get('/api/inbox/accounts', authenticateToken, async (req, res) => {
+    try {
+      const rows = await db.getUserIntegrationsByType(req.user.id, 'gmail');
+      const accounts = rows.map((r) => ({
+        id: r.id,
+        account_email: r.accountEmail || '',
+        provider: r.provider || 'google',
+        created_at: r.createdAt,
+      }));
+      res.json(accounts);
+    } catch (err) {
+      logger.error('inbox.accounts.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/api/inbox/threads', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { account_email: accountEmail, query } = req.query;
+      const maxResults = Math.min(parseInt(req.query.max_results, 10) || 20, 50);
+
+      const allRows = await db.getUserIntegrationsByType(userId, 'gmail');
+      const targets = accountEmail
+        ? allRows.filter(r => (r.accountEmail || '').toLowerCase() === String(accountEmail).toLowerCase())
+        : allRows;
+      if (!targets.length) return res.json({ threads: [] });
+
+      const results = await Promise.allSettled(targets.map(async (row) => {
+        const provider = providerFor(row);
+        if (!provider) return { threads: [] };
+        const perAccountMax = accountEmail ? maxResults : Math.min(maxResults, 20);
+        const r = await provider.listThreads({
+          db, userId,
+          accountEmail: row.accountEmail,
+          maxResults: perAccountMax,
+          query,
+        });
+        return (r.threads || []).map(t => ({
+          ...t,
+          accountEmail: row.accountEmail,
+          provider: row.provider || 'google',
+        }));
+      }));
+
+      const merged = [];
+      for (const r of results) {
+        if (r.status === 'fulfilled' && Array.isArray(r.value)) merged.push(...r.value);
+        else if (r.status === 'rejected') {
+          logger.error('inbox.listThreads.accountFailed', { requestId: req.requestId, userId, error: r.reason?.message });
+        }
+      }
+      merged.sort((a, b) => parseDate(b.date) - parseDate(a.date));
+      res.json({ threads: merged.slice(0, maxResults) });
+    } catch (err) {
+      logger.error('inbox.threads.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/api/inbox/threads/:threadId', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { account_email: accountEmail } = req.query;
+      if (!accountEmail) return res.status(400).json({ error: 'account_email required' });
+
+      const row = await db.getGmailIntegrationByEmail(userId, accountEmail);
+      if (!row) return res.status(404).json({ error: 'Account not found' });
+      const provider = providerFor(row);
+      if (!provider) return res.status(400).json({ error: 'Unsupported provider' });
+
+      const thread = await provider.getThread({ db, userId, accountEmail: row.accountEmail, threadId: req.params.threadId });
+
+      // Mark latest unread message as read (best-effort).
+      const lastUnread = [...(thread.messages || [])].reverse().find(m => !m.isRead);
+      if (lastUnread) {
+        provider.markRead({ db, userId, accountEmail: row.accountEmail, messageId: lastUnread.id })
+          .catch((err) => logger.error('inbox.autoMarkRead.failed', { requestId: req.requestId, userId, threadId: req.params.threadId, error: err.message }));
+      }
+
+      res.json({ thread: { ...thread, accountEmail: row.accountEmail, provider: row.provider || 'google' } });
+    } catch (err) {
+      logger.error('inbox.thread.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/inbox/archive', authenticateToken, async (req, res) => {
+    try {
+      const { account_email, message_id } = req.body || {};
+      if (!account_email || !message_id) return res.status(400).json({ error: 'account_email and message_id required' });
+      const row = await db.getGmailIntegrationByEmail(req.user.id, account_email);
+      if (!row) return res.status(404).json({ error: 'Account not found' });
+      const provider = providerFor(row);
+      if (!provider) return res.status(400).json({ error: 'Unsupported provider' });
+      await provider.archiveMessage({ db, userId: req.user.id, accountEmail: row.accountEmail, messageId: message_id });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.archive.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/inbox/mark-read', authenticateToken, async (req, res) => {
+    try {
+      const { account_email, message_id } = req.body || {};
+      if (!account_email || !message_id) return res.status(400).json({ error: 'account_email and message_id required' });
+      const row = await db.getGmailIntegrationByEmail(req.user.id, account_email);
+      if (!row) return res.status(404).json({ error: 'Account not found' });
+      const provider = providerFor(row);
+      if (!provider) return res.status(400).json({ error: 'Unsupported provider' });
+      await provider.markRead({ db, userId: req.user.id, accountEmail: row.accountEmail, messageId: message_id });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.markRead.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
