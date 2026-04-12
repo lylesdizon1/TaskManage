@@ -5,7 +5,11 @@ const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('../utils/crypto.cjs');
 
-const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+const GMAIL_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.modify',
+];
 
 // Wrap raw tokens for storage (encrypt if key is set).
 function wrapTokens(tokens) {

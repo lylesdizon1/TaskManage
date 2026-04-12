@@ -54,10 +54,17 @@
 const express   = require('express');
 const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
-const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
+const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
+const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const logger = require('../../guardrails/logger.cjs');
+
+// In-memory registry of pending web-channel confirmations awaiting user action.
+// Maps confirm_id → { resolve, timeout } so POST /api/chat/confirm can wake up
+// the paused agentic loop. Not persisted: if the server restarts, pending
+// rows are marked expired by the 2-minute TTL on the DB row.
+const webConfirmWaiters = new Map();
 
 /**
  * Factory function that creates the AI router with all chat and proxy endpoints.
@@ -252,102 +259,20 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
     const apiKey = process.env.CLAUDE_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
 
-    const { messages, systemPrompt, model: reqModel, timeZone } = req.body;
+    const { messages, systemPrompt: clientPrompt, model: reqModel, timeZone } = req.body;
     const model = reqModel || 'claude-sonnet-4-20250514';
 
     try {
-      // Load user context — independent queries run in parallel
       const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
-      const gcalPromise = (async () => {
-        try {
-          const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
-          if (!allAccounts.length) return [];
-          // Convert local midnight to UTC ISO string GCal accepts
-          const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-          const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
-          const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
-          const offsetMs = noonUtc.getTime() - noonLocal.getTime();
-          const timeMin = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs).toISOString();
-          const timeMax = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs + 7 * 86400000).toISOString();
-
-          const results = await Promise.allSettled(allAccounts.map(async (acct) => {
-            const oauth2 = makeOAuth2Client();
-            if (!oauth2) return [];
-            oauth2.setCredentials(acct.tokens);
-            oauth2.on('tokens', async (newTokens) => {
-              try {
-                const existing = await loadGcalTokens(userId, acct.googleEmail);
-                await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
-              } catch (e) { logger.error('chat.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
-            });
-            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-            const { data } = await calendar.events.list({
-              calendarId: 'primary', timeMin, timeMax, timeZone: userTz,
-              singleEvents: true, orderBy: 'startTime', maxResults: 20,
-            });
-            return (data.items || []).map(ev => ({
-              title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
-              start: ev.start?.dateTime || ev.start?.date || '',
-            }));
-          }));
-
-          const allEvents = [];
-          const seen = new Set();
-          for (const r of results) {
-            if (r.status === 'fulfilled') {
-              for (const ev of r.value) {
-                const key = `${ev.title}::${ev.start}`;
-                if (!seen.has(key)) { seen.add(key); allEvents.push(ev); }
-              }
-            }
-          }
-          return allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-        } catch (calErr) {
-          gcalTokenCache.delete(userId);
-          logger.error('chat.execute.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
-          return [];
-        }
-      })();
-
-      // Only load user's OWN tasks for AI context — never include shared/entity tasks
-      // to prevent cross-user data leak (superadmin entityIds = all entities)
-      const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents] = await Promise.all([
-        db.getUserById(userId),
-        db.getTasksForUser(userId, []),
-        db.getPrivateNotesForAI(userId),
-        db.getRecentMemories(userId, 20).catch(() => []),
-        db.getCalendarNotesForAI(userId).catch(() => []),
-        gcalPromise,
-      ]);
-
-      const tz = userTz;
-      const todayStr = getTodayLocal(tz);
-      const todayDate = todayStr.split(', ')[1];
-      const currentTime = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date());
-      const activeTasks = tasks.filter(t => !t.completed);
-      const recentCompleted = tasks.filter(t => t.completed && t.completionNote);
-      const contextAppend = `\n\nCurrent time: ${currentTime} (${tz}). When setting due times, use the user's local timezone — NOT UTC.\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
-        activeTasks.slice(0, 30).map(t =>
-          `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
-        ).join('; ') || 'none'
-      }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
-      }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
-      }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? new Date(cn.eventStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
-      }\nRecent Aria actions (last 10): ${
-        recentMemories.length
-          ? recentMemories.slice(0, 10).map(m =>
-              `[${new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}] ${m.content}`
-            ).join('; ')
-          : 'none yet'
-      }`;
-      const profileParts = [];
-      if (user.profileName)       profileParts.push(`You are helping ${user.profileName}.`);
-      if (user.profileBusinesses) profileParts.push(`Businesses: ${user.profileBusinesses}.`);
-      if (user.profileHousehold)  profileParts.push(`Household context: ${user.profileHousehold}.`);
-      if (user.profileLocation)   profileParts.push(`Based in: ${user.profileLocation}.`);
-      if (user.profileNotes)      profileParts.push(`Additional context: ${user.profileNotes}.`);
-      const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
-      const fullSystem = profileContext + (systemPrompt || '') + contextAppend;
+      const ctx = await buildAgenticContext({
+        userId, entityIds, db, tz: userTz,
+        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens,
+        makeOAuth2Client, google, logger, requestId: req.requestId,
+      });
+      const tz = ctx.tz;
+      const fullSystem = clientPrompt
+        ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + ctx.contextBlock
+        : ctx.systemPrompt;
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');
@@ -355,9 +280,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
 
-      const send = (event, data) => {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      };
+      const send = (event, data) => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
 
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz);
@@ -368,32 +291,99 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         if (type === 'tool_error')    send('tool_error',    { tool, error });
       };
 
+      const logAction = async (event) => {
+        await db.logAgentAction({
+          userId,
+          eventType: event.eventType,
+          toolName: event.toolName || null,
+          input: event.input,
+          output: event.output,
+          status: event.status,
+          errorMsg: event.errorMsg,
+          confidence: event.decision?.confidence,
+          risk: event.decision?.risk,
+          confirmId: event.confirmId,
+        });
+      };
+
+      const gateToolExecution = async ({ tool, input, decision }) => {
+        if (!requiresConfirmation(tool, decision)) return { action: 'allow' };
+
+        const pending = await db.createPendingConfirmation({ userId, toolName: tool, params: input, channel: 'web' });
+        send('tool_confirm', { tool, params: input, confirm_id: pending.id, risk: getToolByName(tool)?.risk || 'high' });
+        await logAction({ eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id, decision });
+
+        return new Promise((resolve) => {
+          const timeout = setTimeout(async () => {
+            webConfirmWaiters.delete(pending.id);
+            await db.updatePendingConfirmationStatus(pending.id, userId, 'expired').catch(() => {});
+            await logAction({ eventType: 'tool_cancelled', toolName: tool, input, errorMsg: 'expired', confirmId: pending.id });
+            resolve({ action: 'deny', reason: 'expired', message: `Confirmation for ${tool} timed out.` });
+          }, 2 * 60 * 1000);
+
+          webConfirmWaiters.set(pending.id, { userId, resolve, timeout, tool, input });
+        });
+      };
+
       const { text, toolSummaries, maxIterationsReached } = await runAgenticLoop({
         messages,
         system: fullSystem,
-        tools: ARIA_TOOLS,
+        tools: getToolSchemasForApi(),
         userId,
         executeTool: boundExecuteTool,
         onProgress,
+        gateToolExecution,
+        logAction,
         model,
       });
 
       send('text', { content: text });
-
-      if (toolSummaries.length > 0) {
-        send('tools_executed', { tools: toolSummaries.map(s => s.tool), summaries: toolSummaries });
-      }
-
-      if (maxIterationsReached) {
-        send('warning', { message: 'Step limit reached' });
-      }
-
+      if (toolSummaries.length > 0) send('tools_executed', { tools: toolSummaries.map(s => s.tool), summaries: toolSummaries });
+      if (maxIterationsReached) send('warning', { message: 'Step limit reached' });
       send('done', {});
-      res.end();
+      return res.end();
     } catch (err) {
       logger.error('chat.execute.failed', { requestId: req.requestId, userId, error: err.message });
-      res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
-      res.end();
+      try { res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`); } catch {}
+      return res.end();
+    }
+  });
+
+  // ── User-facing confirmation endpoint (resumes a paused agentic loop) ────
+  router.post('/api/chat/confirm', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { confirm_id, approved } = req.body || {};
+      if (!confirm_id) return res.status(400).json({ error: 'confirm_id required' });
+
+      const pending = await db.getPendingConfirmation(confirm_id, userId);
+      if (!pending) return res.status(404).json({ error: 'Confirmation not found' });
+      if (pending.status !== 'pending') return res.status(409).json({ error: `Already ${pending.status}` });
+      if (pending.expiresAt && new Date(pending.expiresAt) < new Date()) {
+        await db.updatePendingConfirmationStatus(confirm_id, userId, 'expired').catch(() => {});
+        return res.status(410).json({ error: 'Confirmation expired' });
+      }
+
+      const waiter = webConfirmWaiters.get(confirm_id);
+      const nextStatus = approved ? 'approved' : 'rejected';
+      await db.updatePendingConfirmationStatus(confirm_id, userId, nextStatus).catch(() => {});
+      await db.logAgentAction({
+        userId,
+        eventType: approved ? 'confirmation_approved' : 'confirmation_rejected',
+        toolName: pending.toolName,
+        input: pending.params,
+        confirmId: confirm_id,
+      });
+
+      if (waiter) {
+        clearTimeout(waiter.timeout);
+        webConfirmWaiters.delete(confirm_id);
+        waiter.resolve(approved ? { action: 'allow' } : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` });
+      }
+      return res.json({ success: true, status: nextStatus });
+    } catch (err) {
+      logger.error('chat.confirm.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: err.message });
     }
   });
 

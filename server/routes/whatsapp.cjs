@@ -44,11 +44,24 @@
  */
 
 const express   = require('express');
-const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
+const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
+const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
 const logger = require('../../guardrails/logger.cjs');
+
+/** Derive a short user-facing code from a confirmation ID. */
+function codeFromConfirmId(id) {
+  return String(id).replace(/-/g, '').slice(0, 4).toUpperCase();
+}
+function summarizeParams(tool, params) {
+  if (tool === 'send_email')   return `email to ${params.to} — "${params.subject || ''}"`;
+  if (tool === 'reply_email')  return `reply on thread ${params.thread_id}`;
+  if (tool === 'delete_task')  return `delete task ${params.task_id}`;
+  if (tool === 'delete_event') return `delete event ${params.event_id}`;
+  return `${tool}`;
+}
 
 /**
  * Factory function that creates the WhatsApp webhook router.
@@ -131,6 +144,52 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       const userId = user.id;
       const entityIds = user.entityIds || [];
+      const tzForUser = user.timezone || 'America/Los_Angeles';
+
+      // ── Check for YES/NO confirmation reply to a prior high-risk prompt ──
+      const confirmMatch = (msgBody || '').trim().match(/^(YES|NO)\s+([A-Z0-9]{4})\s*$/i);
+      if (confirmMatch) {
+        const approved = confirmMatch[1].toUpperCase() === 'YES';
+        const code = confirmMatch[2].toUpperCase();
+        try {
+          const pending = await db.findLatestPendingConfirmation(userId, 'whatsapp');
+          if (pending && codeFromConfirmId(pending.id) === code) {
+            const nextStatus = approved ? 'approved' : 'rejected';
+            await db.updatePendingConfirmationStatus(pending.id, userId, nextStatus).catch(() => {});
+            await db.logAgentAction({
+              userId,
+              eventType: approved ? 'confirmation_approved' : 'confirmation_rejected',
+              toolName: pending.toolName,
+              input: pending.params,
+              confirmId: pending.id,
+            });
+            if (approved) {
+              const result = await executeTool(pending.toolName, pending.params, userId, entityIds, db, tzForUser);
+              await db.logAgentAction({
+                userId,
+                eventType: result?.success === false ? 'tool_failed' : 'tool_executed',
+                toolName: pending.toolName,
+                input: pending.params,
+                output: result,
+                status: result?.success === false ? 'failure' : 'success',
+                errorMsg: result?.success === false ? (result.error || 'failed') : null,
+                confirmId: pending.id,
+              });
+              const reply = result?.success === false
+                ? `Couldn't complete ${pending.toolName}: ${result.error || 'unknown error'}`
+                : `Done — ${pending.toolName} executed.`;
+              await sendWhatsApp(db, userId, reply, fromRaw).catch(() => {});
+            } else {
+              await db.logAgentAction({ userId, eventType: 'tool_cancelled', toolName: pending.toolName, input: pending.params, confirmId: pending.id });
+              await sendWhatsApp(db, userId, `Cancelled.`, fromRaw).catch(() => {});
+            }
+            return res.json({ ok: true, confirmed: approved });
+          }
+        } catch (e) {
+          logger.error('whatsapp.confirm.failed', { requestId: req.requestId, userId, error: e.message });
+        }
+        // fall through if no matching pending row
+      }
 
       // ── Image download (if media present) ─────────────────────────────
       let imageData = null; // { mimeType, data (base64) }
@@ -214,100 +273,62 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         }
       }
 
-      // ── Load full context (same pattern as /api/chat/execute) ───────────
-      // Only load user's OWN tasks for AI context — never include shared/entity tasks
-      // to prevent cross-user data leak (superadmin entityIds = all entities)
-      const tasks = await db.getTasksForUser(userId, []);
-      const notes = await db.getPrivateNotesForAI(userId);
+      // ── Load full context via shared builder ──────────────────────────
+      const ctx = await buildAgenticContext({
+        userId, entityIds, db, tz: tzForUser,
+        loadGcalTokens, makeOAuth2Client, google,
+        logger, requestId: req.requestId,
+      });
+      const tz = ctx.tz;
 
-      let calendarEvents = [];
-      try {
-        const tokens = await loadGcalTokens(userId);
-        if (tokens) {
-          const oauth2 = makeOAuth2Client();
-          if (oauth2) {
-            oauth2.setCredentials(tokens);
-            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-            const now = new Date();
-            const weekOut = new Date(now);
-            weekOut.setDate(weekOut.getDate() + 7);
-            const { data: calData } = await calendar.events.list({
-              calendarId: 'primary',
-              timeMin: now.toISOString(),
-              timeMax: weekOut.toISOString(),
-              singleEvents: true,
-              orderBy: 'startTime',
-              maxResults: 20,
-            });
-            calendarEvents = (calData.items || []).map(ev => ({
-              title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
-              start: ev.start?.dateTime || ev.start?.date || '',
-            }));
-          }
-        }
-      } catch (calErr) {
-        logger.error('whatsapp.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
-      }
-
-      let recentMemories = [];
-      try { recentMemories = await db.getRecentMemories(userId, 20); } catch {}
-
-      let calendarNotes = [];
-      try { calendarNotes = await db.getCalendarNotesForAI(userId); } catch {}
-
-      const tz = user.timezone;
-      const todayStr = getTodayLocal(tz);
-      const todayDate = todayStr.split(', ')[1];
-      // Build explicit weekday→date map so the model never has to compute relative dates
-      const weekMapParts = [];
-      for (let i = 0; i < 7; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        const dayAbbr = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(d);
-        const monthDay = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'short', day: 'numeric' }).format(d);
-        weekMapParts.push(`${dayAbbr}=${monthDay}`);
-      }
-      const weekMapStr = `This week: ${weekMapParts.join(', ')}.`;
-      const activeTasks = tasks.filter(t => !t.completed);
-      const recentCompleted = tasks.filter(t => t.completed && t.completionNote);
-      const contextAppend = `\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
-        activeTasks.slice(0, 30).map(t =>
-          `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
-        ).join('; ') || 'none'
-      }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
-      }\nRecent notes: ${notes.slice(0, 10).map(n => n.title).join(', ') || 'none'
-      }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? new Date(cn.eventStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
-      }\nCalendar next 7 days: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
-      }\nRecent Aria actions (last 10): ${
-        recentMemories.length
-          ? recentMemories.slice(0, 10).map(m =>
-              `[${new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}] ${m.content}`
-            ).join('; ')
-          : 'none yet'
-      }`;
-
-      const profileParts = [];
-      if (user.profileName)       profileParts.push(`You are helping ${user.profileName}.`);
-      if (user.profileBusinesses) profileParts.push(`Businesses: ${user.profileBusinesses}.`);
-      if (user.profileHousehold)  profileParts.push(`Household context: ${user.profileHousehold}.`);
-      if (user.profileLocation)   profileParts.push(`Based in: ${user.profileLocation}.`);
-      if (user.profileNotes)      profileParts.push(`Additional context: ${user.profileNotes}.`);
-      const profileContext = profileParts.length ? profileParts.join(' ') + '\n\n' : '';
-
-      const assistantName = user.assistantName || 'Aria';
-      const userName = user.profileName || user.displayName || 'the user';
-      const currentTime = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date());
       const entityContext = matchedEntity
         ? `\nThe user's message references entity: "${matchedEntity.name}" (id: ${matchedEntity.id}). Apply this entity to any task created in this conversation by passing entity_name="${matchedEntity.name}" to create_task.`
         : '';
       const imageInstructions = imageData
         ? `\nIf the user sends an image with no message, describe what you see clearly and concisely, then recommend one specific action (create a task, log an expense, save a note). If the user sends an image with a message, use the message as context to interpret the image and act on it. If intent is unclear, ask one clarifying question only.`
         : '';
-      const systemPrompt = `${profileContext}You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You also have tools to create tasks, notes, and calendar events. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}\nWhen setting due times, use the user's local timezone — NOT UTC.\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${imageInstructions}${entityContext}${contextAppend}`;
+      const whatsappSuffix = `\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${imageInstructions}${entityContext}`;
+      const systemPrompt = ctx.systemPrompt + whatsappSuffix;
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz);
+
+      // WhatsApp confirmation gate: for high-risk tools, stash the request,
+      // send YES/NO prompt, and deny execution so the loop ends cleanly.
+      // A later inbound message resolves the pending row.
+      let waSentConfirmation = false;
+      const gateToolExecution = async ({ tool, input, decision }) => {
+        if (!requiresConfirmation(tool, decision)) return { action: 'allow' };
+        try {
+          const pending = await db.createPendingConfirmation({ userId, toolName: tool, params: input, channel: 'whatsapp' });
+          const code = codeFromConfirmId(pending.id);
+          const preview = summarizeParams(tool, input);
+          const prompt = `Confirm: ${preview}.\nReply YES ${code} or NO ${code} within 2 minutes.`;
+          await sendWhatsApp(db, userId, prompt, fromRaw).catch(() => {});
+          waSentConfirmation = true;
+          await db.logAgentAction({ userId, eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id });
+          return { action: 'deny', reason: 'awaiting_whatsapp_confirmation', message: `Awaiting user confirmation via WhatsApp (code ${code}).` };
+        } catch (err) {
+          logger.error('whatsapp.gate.failed', { userId, tool, error: err.message });
+          return { action: 'deny', reason: 'gate_error', message: `Could not request confirmation.` };
+        }
+      };
+
+      const logAction = async (event) => {
+        await db.logAgentAction({
+          userId,
+          eventType: event.eventType,
+          toolName: event.toolName || null,
+          input: event.input,
+          output: event.output,
+          status: event.status,
+          errorMsg: event.errorMsg,
+          confidence: event.decision?.confidence,
+          risk: event.decision?.risk,
+          confirmId: event.confirmId,
+        });
+      };
 
       // ── Load conversation history (last 3 exchanges = 6 messages) ────
       let priorMessages = [];
@@ -331,13 +352,17 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const { text, toolSummaries } = await runAgenticLoop({
         messages: [...priorMessages, { role: 'user', content: userMessageContent }],
         system: systemPrompt,
-        tools: ARIA_TOOLS,
+        tools: getToolSchemasForApi(),
         userId,
         executeTool: boundExecuteTool,
+        gateToolExecution,
+        logAction,
         // no onProgress — WhatsApp is fire-and-reply
       });
 
-      const reply = text;
+      // If we sent a confirmation prompt mid-loop, skip the model's
+      // post-tool text so we don't double-message the user.
+      const reply = waSentConfirmation ? '' : text;
 
       // ── Persist conversation (best-effort) ─────────────────────────────
       try {

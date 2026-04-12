@@ -498,6 +498,40 @@ async function initTables() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_settings_user ON user_settings(user_id)`).catch(() => {});
 
+  // ── agent_actions (audit log for agentic loop) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_actions (
+      id          SERIAL PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_type  TEXT NOT NULL,
+      tool_name   TEXT,
+      input_json  JSONB NOT NULL DEFAULT '{}',
+      output_json JSONB NOT NULL DEFAULT '{}',
+      status      TEXT NOT NULL DEFAULT 'success',
+      error_msg   TEXT,
+      confidence  NUMERIC(4,3),
+      risk        TEXT,
+      confirm_id  TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id)`).catch(() => {});
+
+  // ── pending_confirmations (high-risk tool gate) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_confirmations (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tool_name   TEXT NOT NULL,
+      params_json JSONB NOT NULL DEFAULT '{}',
+      channel     TEXT NOT NULL DEFAULT 'web',
+      status      TEXT NOT NULL DEFAULT 'pending',
+      expires_at  TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '2 minutes',
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_id)`).catch(() => {});
+
   // ── user_integrations table (per-user outbound notification routing) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_integrations (
@@ -768,6 +802,74 @@ async function backfillSuperadminSettingsFromGlobal() {
     }
   }
   if (seeded) console.log(`[migration] Backfilled ${seeded} user_settings row(s) for superadmins`);
+}
+
+// ── Agent actions (audit log) + pending_confirmations ────────────────────────
+
+/**
+ * Append one row to agent_actions. Swallows errors — logging must never
+ * crash the agentic loop.
+ */
+async function logAgentAction({ userId, eventType, toolName, input, output, status, errorMsg, confidence, risk, confirmId }) {
+  try {
+    await pool.query(
+      `INSERT INTO agent_actions (user_id, event_type, tool_name, input_json, output_json, status, error_msg, confidence, risk, confirm_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10)`,
+      [
+        userId, eventType, toolName || null,
+        JSON.stringify(input || {}), JSON.stringify(output || {}),
+        status || 'success', errorMsg || null,
+        confidence ?? null, risk || null, confirmId || null,
+      ],
+    );
+  } catch (err) {
+    console.error('[agent_actions] log failed:', err.message);
+  }
+}
+
+async function createPendingConfirmation({ userId, toolName, params, channel }) {
+  const { rows } = await pool.query(
+    `INSERT INTO pending_confirmations (user_id, tool_name, params_json, channel)
+     VALUES ($1, $2, $3::jsonb, $4)
+     RETURNING id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
+               channel, status, expires_at AS "expiresAt", created_at AS "createdAt"`,
+    [userId, toolName, JSON.stringify(params || {}), channel || 'web'],
+  );
+  return rows[0];
+}
+
+async function getPendingConfirmation(id, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
+            channel, status, expires_at AS "expiresAt", created_at AS "createdAt"
+     FROM pending_confirmations WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rows[0] || null;
+}
+
+async function updatePendingConfirmationStatus(id, userId, status) {
+  const { rows } = await pool.query(
+    `UPDATE pending_confirmations SET status = $3
+     WHERE id = $1 AND user_id = $2
+     RETURNING id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
+               channel, status, expires_at AS "expiresAt"`,
+    [id, userId, status],
+  );
+  return rows[0] || null;
+}
+
+/** Find the most recent pending row for a user on a given channel (for WhatsApp YES/NO matching). */
+async function findLatestPendingConfirmation(userId, channel) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
+            channel, status, expires_at AS "expiresAt", created_at AS "createdAt"
+     FROM pending_confirmations
+     WHERE user_id = $1 AND channel = $2 AND status = 'pending' AND expires_at > NOW()
+     ORDER BY created_at DESC LIMIT 1`,
+    [userId, channel],
+  );
+  return rows[0] || null;
 }
 
 // ── Users ────────────────────────────────────────────────────────────────────
@@ -3997,4 +4099,9 @@ module.exports = {
   upsertUserSetting,
   deleteUserSetting,
   backfillSuperadminSettingsFromGlobal,
+  logAgentAction,
+  createPendingConfirmation,
+  getPendingConfirmation,
+  updatePendingConfirmationStatus,
+  findLatestPendingConfirmation,
 };

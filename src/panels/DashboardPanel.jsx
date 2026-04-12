@@ -566,6 +566,24 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 if (tools.some(t => ['create_note', 'update_note', 'delete_note'].includes(t))) {
                   onReloadNotes?.();
                 }
+              } else if (currentEvent === 'tool_confirm') {
+                // Inject an inline confirmation card BEFORE the (empty) assistant placeholder
+                setCcMessages((prev) => {
+                  const updated = [...prev];
+                  const placeholder = updated.pop();
+                  updated.push({
+                    role: 'confirm',
+                    confirmId: parsed.confirm_id,
+                    tool: parsed.tool,
+                    params: parsed.params || {},
+                    risk: parsed.risk || 'high',
+                    status: 'pending',
+                    createdAt: new Date().toISOString(),
+                    ts: Date.now(),
+                  });
+                  if (placeholder) updated.push(placeholder);
+                  return updated;
+                });
               } else if (currentEvent === 'done') {
                 // finalize — stream complete
               } else if (currentEvent === 'error') {
@@ -733,19 +751,75 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>No messages yet.</p>
           ) : (
             <>
-              {ccMessages.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`max-w-[85%] ${msg.role === 'user' ? 'text-white' : ''}`}
-                    style={msg.role === 'user'
-                      ? { backgroundColor: '#4f4dcf', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
-                      : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+              {ccMessages.map((msg, i) => {
+                if (msg.role === 'confirm') {
+                  const p = msg.params || {};
+                  const preview = p.body ? String(p.body).slice(0, 100) : p.subject || JSON.stringify(p).slice(0, 100);
+                  const handleConfirm = async (approved) => {
+                    try {
+                      await apiFetch('/api/chat/confirm', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                        body: JSON.stringify({ confirm_id: msg.confirmId, approved }),
+                      });
+                      setCcMessages((prev) => prev.map((m, j) => j === i ? { ...m, status: approved ? 'approved' : 'rejected' } : m));
+                      onReloadTasks?.(); onReloadNotes?.();
+                    } catch (err) {
+                      setCcMessages((prev) => prev.map((m, j) => j === i ? { ...m, status: 'error' } : m));
                     }
-                  >
-                    {msg.content || <span className="animate-pulse" style={{ color: '#6b7280' }}>{THINKING_MESSAGES[thinkingIdx]}</span>}
+                  };
+                  return (
+                    <div key={i} className="flex justify-start">
+                      <div
+                        className="max-w-[85%] border"
+                        style={{ backgroundColor: '#fbf8fe', borderColor: 'rgba(79,77,207,0.2)', fontFamily: 'Manrope, sans-serif', fontSize: '14px', lineHeight: '1.5', borderRadius: '12px', padding: '12px 14px' }}
+                      >
+                        <div style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '13px', color: '#4f4dcf', marginBottom: '6px' }}>
+                          <span className="material-symbols-outlined" style={{ fontSize: '16px', verticalAlign: 'text-bottom', marginRight: '4px' }}>priority_high</span>
+                          Approval required
+                        </div>
+                        <div style={{ color: '#1f2937', marginBottom: '4px' }}>
+                          {msg.tool === 'send_email' && <>Send email to <b>{p.to}</b>?</>}
+                          {msg.tool === 'reply_email' && <>Reply on thread <b>{p.thread_id}</b>?</>}
+                          {msg.tool === 'delete_task' && <>Delete task <b>{p.task_id}</b>?</>}
+                          {msg.tool === 'delete_event' && <>Delete event <b>{p.event_id}</b>?</>}
+                          {!['send_email','reply_email','delete_task','delete_event'].includes(msg.tool) && <>Confirm {msg.tool}?</>}
+                        </div>
+                        {p.subject && <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px' }}>Subject: {p.subject}</div>}
+                        {preview && <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px', whiteSpace: 'pre-wrap' }}>{preview}{p.body && p.body.length > 100 ? '…' : ''}</div>}
+                        {msg.status === 'pending' && (
+                          <div className="flex gap-2 mt-2">
+                            <button onClick={() => handleConfirm(true)}
+                              style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '12px', fontWeight: 600, background: '#4f4dcf', color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer' }}>
+                              ✓ Send
+                            </button>
+                            <button onClick={() => handleConfirm(false)}
+                              style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '12px', fontWeight: 600, background: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.3)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer' }}>
+                              ✗ Cancel
+                            </button>
+                          </div>
+                        )}
+                        {msg.status === 'approved' && <div style={{ fontSize: '12px', color: '#059669', fontWeight: 600 }}>Sent ✓</div>}
+                        {msg.status === 'rejected' && <div style={{ fontSize: '12px', color: '#6b7280' }}>Cancelled</div>}
+                        {msg.status === 'error' && <div style={{ fontSize: '12px', color: '#dc2626' }}>Confirmation failed</div>}
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[85%] ${msg.role === 'user' ? 'text-white' : ''}`}
+                      style={msg.role === 'user'
+                        ? { backgroundColor: '#4f4dcf', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+                        : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+                      }
+                    >
+                      {msg.content || <span className="animate-pulse" style={{ color: '#6b7280' }}>{THINKING_MESSAGES[thinkingIdx]}</span>}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {ccRefreshing && (
                 <div className="flex justify-start">
                   <div style={{ backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }}>
