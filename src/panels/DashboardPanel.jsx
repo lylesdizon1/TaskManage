@@ -596,6 +596,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 if (tools.some(t => ['create_note', 'update_note', 'delete_note'].includes(t))) {
                   onReloadNotes?.();
                 }
+              } else if (currentEvent === 'email_draft') {
+                // Full draft preview — shown ABOVE the approval card.
+                setCcMessages((prev) => {
+                  const updated = [...prev];
+                  const placeholder = updated.pop();
+                  updated.push({
+                    role: 'email_draft',
+                    draft: parsed.draft || {},
+                    createdAt: new Date().toISOString(),
+                    ts: Date.now(),
+                  });
+                  if (placeholder) updated.push(placeholder);
+                  return updated;
+                });
               } else if (currentEvent === 'tool_confirm') {
                 // Inject an inline confirmation card BEFORE the (empty) assistant placeholder
                 setCcMessages((prev) => {
@@ -615,9 +629,25 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   return updated;
                 });
               } else if (currentEvent === 'done') {
-                // finalize — stream complete
+                // Terminal state: if the trailing placeholder never received
+                // real text, drop it so the rotating "Thinking…" / "Almost
+                // there…" status can't linger on screen.
+                if (!fullResponse) {
+                  setCcMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last && last.role === 'assistant' && !last.content) updated.pop();
+                    return updated;
+                  });
+                }
               } else if (currentEvent === 'error') {
                 console.error('[SSE] error:', parsed.message);
+                setCcMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last && last.role === 'assistant' && !last.content) updated.pop();
+                  return updated;
+                });
               }
             } catch (e) {
               // malformed data line, skip
@@ -625,6 +655,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             currentEvent = null;
           }
         }
+      }
+
+      // Post-stream cleanup: if the placeholder never received text (e.g.
+      // the backend emitted `done` with empty text, or the stream closed
+      // without a `done` event), drop the empty bubble so the rotating
+      // thinking status can't linger.
+      if (!fullResponse) {
+        setCcMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last && last.role === 'assistant' && !last.content) updated.pop();
+          return updated;
+        });
       }
 
       // Save assistant response (skip if user stopped mid-stream)
@@ -805,9 +848,49 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           ) : (
             <>
               {ccMessages.map((msg, i) => {
+                if (msg.role === 'email_draft') {
+                  const d = msg.draft || {};
+                  return (
+                    <div key={i} className="flex justify-start">
+                      <div
+                        className="max-w-[92%] w-full bg-white border border-gray-200 rounded-xl shadow-sm"
+                        style={{ fontFamily: 'Manrope, sans-serif' }}
+                      >
+                        <div style={{ padding: '12px 14px', fontSize: '13px', color: '#374151' }}>
+                          <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
+                            Email draft
+                          </div>
+                          <div className="grid grid-cols-[56px_1fr] gap-y-1 gap-x-2">
+                            <div className="text-gray-400">From</div><div className="text-gray-800 truncate">{d.from || '—'}</div>
+                            <div className="text-gray-400">To</div><div className="text-gray-800 truncate">{d.to || '—'}</div>
+                            <div className="text-gray-400">Subject</div><div className="text-gray-800" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
+                          </div>
+                        </div>
+                        <div style={{ borderTop: '1px solid #e5e7eb' }} />
+                        <div
+                          style={{
+                            padding: '12px 14px',
+                            fontSize: '14px',
+                            lineHeight: '1.55',
+                            color: '#1f2937',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            maxHeight: '220px',
+                            overflowY: 'auto',
+                          }}
+                        >
+                          {d.body || ''}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
                 if (msg.role === 'confirm') {
                   const p = msg.params || {};
-                  const preview = p.body ? String(p.body).slice(0, 100) : p.subject || JSON.stringify(p).slice(0, 100);
+                  const bodyStr = p.body ? String(p.body) : '';
+                  const preview = bodyStr
+                    ? (bodyStr.length > 300 ? bodyStr.slice(0, 300) + '…' : bodyStr)
+                    : (p.subject || '');
                   const handleConfirm = async (approved) => {
                     try {
                       await apiFetch('/api/chat/confirm', {
@@ -838,8 +921,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           {msg.tool === 'delete_event' && <>Delete event <b>{p.event_id}</b>?</>}
                           {!['send_email','reply_email','delete_task','delete_event'].includes(msg.tool) && <>Confirm {msg.tool}?</>}
                         </div>
-                        {p.subject && <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px' }}>Subject: {p.subject}</div>}
-                        {preview && <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px', whiteSpace: 'pre-wrap' }}>{preview}{p.body && p.body.length > 100 ? '…' : ''}</div>}
+                        {p.subject && (
+                          <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                            Subject: {p.subject}
+                          </div>
+                        )}
+                        {preview && (
+                          <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px', whiteSpace: 'pre-wrap' }}>
+                            {preview}
+                          </div>
+                        )}
                         {msg.status === 'pending' && (
                           <div className="flex gap-2 mt-2">
                             <button onClick={() => handleConfirm(true)}

@@ -292,6 +292,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       const finalizeStream = (payload = {}) => {
         if (streamFinalized) return;
         streamFinalized = true;
+        logger.info('chat.stream.finalized', { requestId: req.requestId, userId, hasError: !!payload.error, hasText: !!(payload.text && payload.text.length) });
         try {
           if (payload.error) {
             res.write(`event: error\ndata: ${JSON.stringify({ message: payload.error })}\n\n`);
@@ -336,8 +337,30 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       const gateToolExecution = async ({ tool, input, decision }) => {
         if (!requiresConfirmation(tool, decision)) return { action: 'allow' };
 
-        const pending = await db.createPendingConfirmation({ userId, toolName: tool, params: input, channel: 'web' });
+        let pending;
+        try {
+          pending = await db.createPendingConfirmation({ userId, toolName: tool, params: input, channel: 'web' });
+        } catch (err) {
+          logger.error('chat.gate.pendingCreate.failed', { requestId: req.requestId, userId, tool, error: err.message });
+          // Fail closed: deny execution so the loop resumes and finalizes.
+          return { action: 'deny', reason: 'pending_create_failed', message: `Could not request confirmation for ${tool}.` };
+        }
+
+        // For email-composition tools, emit the full draft before the
+        // approval card so the thread shows the complete message.
+        if (tool === 'send_email') {
+          send('email_draft', {
+            draft: {
+              from: input.account_email || '',
+              to: input.to || '',
+              subject: input.subject || '',
+              body: input.body || '',
+            },
+          });
+        }
+
         send('tool_confirm', { tool, params: input, confirm_id: pending.id, risk: getToolByName(tool)?.risk || 'high' });
+        logger.info('chat.gate.waiter.created', { requestId: req.requestId, userId, tool, confirmId: pending.id });
         await logAction({ eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id, decision });
 
         return new Promise((resolve) => {
@@ -345,10 +368,15 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
             webConfirmWaiters.delete(pending.id);
             await db.updatePendingConfirmationStatus(pending.id, userId, 'expired').catch(() => {});
             await logAction({ eventType: 'tool_cancelled', toolName: tool, input, errorMsg: 'expired', confirmId: pending.id });
+            logger.info('chat.gate.waiter.expired', { requestId: req.requestId, userId, tool, confirmId: pending.id });
             resolve({ action: 'deny', reason: 'expired', message: `Confirmation for ${tool} timed out.` });
           }, 2 * 60 * 1000);
 
-          webConfirmWaiters.set(pending.id, { userId, resolve, timeout, tool, input });
+          const wrappedResolve = (value) => {
+            logger.info('chat.gate.waiter.resolved', { requestId: req.requestId, userId, tool, confirmId: pending.id, action: value?.action });
+            resolve(value || { action: 'deny', reason: 'undefined_resolve', message: `Confirmation for ${tool} was not acknowledged.` });
+          };
+          webConfirmWaiters.set(pending.id, { userId, resolve: wrappedResolve, timeout, tool, input });
         });
       };
 
