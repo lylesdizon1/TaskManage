@@ -101,6 +101,16 @@ const SUPPRESS_PILL = new Set(['general', 'newsletter']);
 export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCountChange }) {
   const toast = useToast();
   const [classifications, setClassifications] = useState({});
+  // Zone placement state — all grow-only Sets so we never demote a
+  // thread the user has already seen in a zone. Interaction also
+  // freezes a thread's position for the current session.
+  const [interactedIds, setInteractedIds] = useState(() => new Set());
+  const [needsAttentionIds, setNeedsAttentionIds] = useState(() => new Set());
+  const [lowPriorityIds, setLowPriorityIds] = useState(() => new Set());
+  const [pillFilter, setPillFilter] = useState('all'); // 'all' | 'unread' | 'action'
+  const [expandedZones, setExpandedZones] = useState({ attn: true, review: true, low: false, read: false });
+  const [touchedZones, setTouchedZones] = useState(() => new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [accountFilter, setAccountFilter] = useState('');  // '' = all
   const [threads, setThreads] = useState([]);
@@ -179,14 +189,18 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   // fire-and-forget trigger after the threads response.
   useEffect(() => {
     if (!threads.length) { setClassifications({}); return; }
-    const ids = threads.map(t => t.id);
+    const messageIds = threads
+      .map(t => t.latestMessageId)
+      .filter(Boolean)
+      .slice(0, 50);
+    if (!messageIds.length) { setClassifications({}); return; }
     let cancelled = false;
     const fetchOnce = async () => {
       try {
         const r = await apiFetch('/api/classification/batch-lookup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ message_ids: ids }),
+          body: JSON.stringify({ message_ids: messageIds }),
         });
         if (!r.ok) return;
         const data = await r.json();
@@ -199,13 +213,65 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     return () => { cancelled = true; clearTimeout(t1); clearTimeout(t2); };
   }, [threads, apiFetch, authToken]);
 
+  // Zone placement: grow-only Sets. A thread moves into Needs Attention
+  // or Low Priority at most once; user-interacted threads are frozen.
+  useEffect(() => {
+    if (!threads.length || !Object.keys(classifications).length) return;
+    const candAttn = new Set();
+    const candLow = new Set();
+    for (const t of threads) {
+      if (t.isRead) continue;
+      if (interactedIds.has(t.id)) continue;
+      const mid = t.latestMessageId || t.id;
+      const cls = classifications[mid];
+      if (!cls) continue;
+      if (cls.importanceRank >= 3 || cls.actionRequired) candAttn.add(t.id);
+      else if (cls.importanceRank === 1 || cls.category === 'newsletter' || cls.category === 'general') candLow.add(t.id);
+    }
+    setNeedsAttentionIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of candAttn) if (!next.has(id)) { next.add(id); changed = true; }
+      return changed ? next : prev;
+    });
+    setLowPriorityIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of candLow) {
+        if (candAttn.has(id)) continue;           // promotion beats demotion
+        if (!next.has(id)) { next.add(id); changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [classifications, threads, interactedIds]);
+
+  // Auto-collapse For Your Review when Needs Attention has items, unless
+  // the user has manually toggled the Review zone already.
+  useEffect(() => {
+    if (touchedZones.has('review')) return;
+    setExpandedZones((prev) => {
+      const shouldExpand = needsAttentionIds.size === 0;
+      return prev.review === shouldExpand ? prev : { ...prev, review: shouldExpand };
+    });
+  }, [needsAttentionIds.size, touchedZones]);
+
   const unreadCount = useMemo(() => threads.filter(t => !t.isRead).length, [threads]);
   useEffect(() => { onUnreadCountChange?.(unreadCount); }, [unreadCount, onUnreadCountChange]);
+
+  function markInteracted(threadId) {
+    setInteractedIds((prev) => prev.has(threadId) ? prev : new Set([...prev, threadId]));
+  }
+
+  function removeThreadFromZones(threadId) {
+    setNeedsAttentionIds((prev) => { if (!prev.has(threadId)) return prev; const n = new Set(prev); n.delete(threadId); return n; });
+    setLowPriorityIds((prev)  => { if (!prev.has(threadId)) return prev; const n = new Set(prev); n.delete(threadId); return n; });
+  }
 
   function openThread(t) {
     setActiveThreadId(t.id);
     setActiveAccount(t.accountEmail);
     setMobileShowThread(true);
+    markInteracted(t.id);
     loadThread(t.id, t.accountEmail);
   }
 
@@ -218,12 +284,99 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ account_email: activeAccount, message_id: lastMsg.id }),
       });
+      removeThreadFromZones(thread.id);
       setThreads((prev) => prev.filter(x => x.id !== thread.id));
       setThread(null);
       setActiveThreadId(null);
       setMobileShowThread(false);
     } catch {}
   }
+
+  async function archiveSingle(t) {
+    const messageId = t.latestMessageId || t.id;
+    if (!messageId) return;
+    markInteracted(t.id);
+    try {
+      await apiFetch('/api/inbox/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ account_email: t.accountEmail, message_id: messageId }),
+      });
+      removeThreadFromZones(t.id);
+      setThreads((prev) => prev.filter(x => x.id !== t.id));
+      if (activeThreadId === t.id) {
+        setActiveThreadId(null); setActiveAccount(null); setThread(null); setMobileShowThread(false);
+      }
+    } catch {}
+  }
+
+  async function markThreadRead(t) {
+    const messageId = t.latestMessageId || t.id;
+    if (!messageId) return;
+    markInteracted(t.id);
+    removeThreadFromZones(t.id);
+    setThreads((prev) => prev.map(x => x.id === t.id ? { ...x, isRead: true } : x));
+    try {
+      await apiFetch('/api/inbox/mark-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ account_email: t.accountEmail, message_id: messageId }),
+      });
+    } catch {}
+  }
+
+  async function bulkArchiveLowPriority(lowThreads) {
+    if (!lowThreads.length) { setBulkConfirmOpen(false); return; }
+    const jobs = lowThreads.map(t => ({ account_email: t.accountEmail, message_id: t.latestMessageId || t.id })).filter(j => j.message_id);
+    try {
+      const r = await apiFetch('/api/inbox/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ threads: jobs }),
+      });
+      const data = await r.json().catch(() => ({}));
+      const archivedIds = new Set(lowThreads.map(t => t.id));
+      for (const id of archivedIds) { markInteracted(id); removeThreadFromZones(id); }
+      setThreads((prev) => prev.filter(x => !archivedIds.has(x.id)));
+      try { toast.info(`Archived ${data?.archived ?? lowThreads.length} emails`, 3000); } catch {}
+    } catch {}
+    finally { setBulkConfirmOpen(false); }
+  }
+
+  function toggleZone(key) {
+    setTouchedZones((prev) => prev.has(key) ? prev : new Set([...prev, key]));
+    setExpandedZones((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  // Derived zones (apply account + pill filter, then bucket).
+  const zones = useMemo(() => {
+    const base = threads.filter(t => !accountFilter || t.accountEmail === accountFilter);
+    const filtered = base.filter(t => {
+      if (pillFilter === 'unread') return !t.isRead;
+      if (pillFilter === 'action') {
+        const mid = t.latestMessageId || t.id;
+        const cls = classifications[mid];
+        return !!cls?.actionRequired;
+      }
+      return true;
+    });
+    const attn = [], review = [], low = [], read = [];
+    for (const t of filtered) {
+      if (t.isRead) { read.push(t); continue; }
+      if (needsAttentionIds.has(t.id)) { attn.push(t); continue; }
+      if (lowPriorityIds.has(t.id)) { low.push(t); continue; }
+      review.push(t);
+    }
+    return { attn, review, low, read };
+  }, [threads, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds]);
+
+  const needsAttentionThreads = useMemo(() => threads.filter(t => {
+    if (t.isRead) return false;
+    const mid = t.latestMessageId || t.id;
+    const cls = classifications[mid];
+    if (!cls) return false;
+    return cls.importanceRank >= 3 || cls.actionRequired;
+  }), [threads, classifications]);
 
   function openCompose(mode) {
     const latest = thread?.messages?.[thread.messages.length - 1];
@@ -291,10 +444,10 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         .email-html-body table { max-width: 100%; }
         .email-html-body pre { white-space: pre-wrap; }
       `}</style>
-      {/* Left — thread list */}
+      {/* Left — zoned thread list */}
       <div
         className={`border-r border-gray-100 flex-col h-full ${mobileShowThread ? 'hidden md:flex' : 'flex'}`}
-        style={{ width: 320, minWidth: 320, flexShrink: 0, backgroundColor: '#fbf8fe' }}
+        style={{ width: 320, minWidth: 320, flexShrink: 0, backgroundColor: '#fbf8fe', position: 'relative' }}
       >
         <div className="px-5 pt-5 pb-3">
           <h1 className="text-xl font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
@@ -308,76 +461,148 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               {accounts.map(a => <option key={a.id} value={a.account_email}>{a.account_email}</option>)}
             </select>
           </div>
+          <div className="mt-2 flex items-center gap-1">
+            {[
+              { key: 'all',    label: 'All' },
+              { key: 'unread', label: 'Unread' },
+              { key: 'action', label: 'Action Required' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setPillFilter(key)}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-full transition-colors`}
+                style={pillFilter === key
+                  ? { backgroundColor: '#4f4dcf', color: '#fff' }
+                  : { backgroundColor: 'transparent', color: '#6b7280', border: '1px solid #e5e7eb' }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto px-2 pb-3">
           {threadsLoading ? (
-            <ListSkeleton />
+            <ZonedSkeleton />
           ) : threadsError ? (
             <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 mx-1 text-center">
               <p className="text-sm text-gray-600">Couldn&rsquo;t load inbox. Try again.</p>
               <button onClick={loadThreads} className="mt-2 text-xs font-semibold" style={{ color: '#4f4dcf' }}>Retry</button>
             </div>
-          ) : threads.length === 0 ? (
-            <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6 mx-1 text-center">
-              <span className="material-symbols-outlined text-gray-400" style={{ fontSize: '28px' }}>inbox</span>
-              <p className="text-sm text-gray-600 mt-1">Your inbox is empty</p>
-            </div>
           ) : (
-            threads.map((t) => {
-              const tint = tintForAccount(t.accountEmail);
-              const active = t.id === activeThreadId;
-              const cls = classifications[t.id];
-              const impStyle = cls ? IMPORTANCE_STYLES[cls.importance] : null;
-              // Dot color: high-importance classification wins; else existing unread behavior.
-              const useImpDot = impStyle && (cls.importance === 'critical' || cls.importance === 'high');
-              const dotBg = useImpDot
-                ? impStyle.dot
-                : (t.isRead ? 'transparent' : '#4f4dcf');
-              const dotBorder = !useImpDot && t.isRead ? '1px solid #d1d5db' : 'none';
-              const showPill = cls && cls.importanceRank >= 3 && !SUPPRESS_PILL.has(cls.category);
-              return (
-                <button
-                  key={`${t.accountEmail}:${t.id}`}
-                  onClick={() => openThread(t)}
-                  className={`w-full text-left rounded-xl px-3 py-2.5 mb-1 transition-colors ${active ? 'bg-primary/5' : 'hover:bg-white'}`}
-                  style={active ? { borderLeft: '3px solid #4f4dcf' } : { borderLeft: '3px solid transparent' }}
-                >
-                  <div className="flex items-start gap-2">
-                    <span
-                      className="flex-shrink-0 mt-1.5 w-2 h-2 rounded-full"
-                      style={{ backgroundColor: dotBg, border: dotBorder }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className={`text-sm truncate ${t.isRead ? 'text-gray-600' : 'text-gray-900 font-semibold'}`} style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                          {senderName(t.from) || shortAccount(t.accountEmail)}
-                        </span>
-                        <span className="text-[10px] text-gray-400 flex-shrink-0">{relTime(t.date)}</span>
-                      </div>
-                      <div className={`text-[13px] truncate mt-0.5 ${t.isRead ? 'text-gray-500' : 'text-gray-800 font-semibold'}`}>
-                        {t.subject || '(no subject)'}
-                      </div>
-                      <div className="text-xs text-gray-400 truncate mt-0.5">{t.snippet}</div>
-                      <div className="mt-1.5 flex items-center gap-1.5">
-                        <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>
-                          {shortAccount(t.accountEmail)}{t.messageCount > 1 ? ` · ${t.messageCount}` : ''}
-                        </span>
-                        {showPill && (
-                          <span
-                            className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full truncate"
-                            style={{ backgroundColor: impStyle.bg, color: impStyle.fg, maxWidth: 120 }}
-                          >
-                            {CATEGORY_LABELS[cls.category] || cls.category}
-                          </span>
-                        )}
-                      </div>
+            <>
+              {/* Aria summary card */}
+              <AriaSummaryCard items={needsAttentionThreads.slice(0, 3)} total={needsAttentionThreads.length} />
+
+              {/* Inbox Zero — zones 1+2+3 empty */}
+              {zones.attn.length === 0 && zones.review.length === 0 && zones.low.length === 0 ? (
+                <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6 mx-1 my-3 text-center">
+                  <span className="material-symbols-outlined" style={{ color: '#22c55e', fontSize: '36px' }}>task_alt</span>
+                  <p className="text-sm font-semibold text-gray-800 mt-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox zero. Aria&rsquo;s got your back.</p>
+                  <p className="text-xs text-gray-500 mt-1">New emails will be prioritized automatically.</p>
+                </div>
+              ) : null}
+
+              {/* Zone 1 — Needs Your Attention */}
+              <Zone
+                icon="priority_high" iconColor="#ef4444"
+                label="Needs Your Attention"
+                badgeClass="bg-red-50 text-red-700 border-red-200"
+                count={zones.attn.length}
+                expanded={expandedZones.attn}
+                onToggle={() => toggleZone('attn')}
+                emptyText="Nothing urgent right now."
+                showCountSuffix
+              >
+                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+              </Zone>
+
+              {/* Zone 2 — For Your Review */}
+              <Zone
+                icon="mail" iconColor="#4f4dcf"
+                label="For Your Review"
+                badgeClass="bg-indigo-50 text-indigo-700 border-indigo-200"
+                count={zones.review.length}
+                expanded={expandedZones.review}
+                onToggle={() => toggleZone('review')}
+                emptyText="No emails to review."
+                showCountSuffix
+              >
+                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+              </Zone>
+
+              {/* Zone 3 — Low Priority */}
+              <Zone
+                icon="low_priority" iconColor="#6b7280"
+                label="Low Priority"
+                badgeClass="bg-gray-50 text-gray-600 border-gray-200"
+                count={zones.low.length}
+                expanded={expandedZones.low}
+                onToggle={() => toggleZone('low')}
+                emptyText="No low priority emails."
+                showCountSuffix
+                footer={
+                  zones.low.length > 0 && (
+                    <div className="mt-1 px-1">
+                      <button
+                        onClick={() => setBulkConfirmOpen(true)}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg"
+                        style={{ backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.25)' }}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>archive</span>
+                        Archive All Low Priority
+                      </button>
                     </div>
-                  </div>
-                </button>
-              );
-            })
+                  )
+                }
+              >
+                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+              </Zone>
+
+              {/* Zone 4 — Read */}
+              <Zone
+                icon="drafts" iconColor="#9ca3af"
+                label="Read"
+                count={zones.read.length}
+                hideBadge
+                expanded={expandedZones.read}
+                onToggle={() => toggleZone('read')}
+                emptyText="No read threads."
+              >
+                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+              </Zone>
+            </>
           )}
         </div>
+
+        {/* Bulk archive confirmation */}
+        {bulkConfirmOpen && (
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center"
+            style={{ background: 'rgba(0,0,0,0.15)' }}
+            onClick={() => setBulkConfirmOpen(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white border border-gray-200 rounded-xl shadow-lg p-4 w-[280px]"
+              style={{ fontFamily: 'Manrope, sans-serif' }}
+            >
+              <p className="text-sm font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                Archive {zones.low.length} low priority emails?
+              </p>
+              <p className="text-xs text-gray-500 mt-1">This will remove them from your inbox.</p>
+              <div className="flex justify-end gap-2 mt-3">
+                <button onClick={() => setBulkConfirmOpen(false)} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+                <button
+                  onClick={() => bulkArchiveLowPriority(zones.low)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg"
+                  style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+                >
+                  Archive All
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Right — thread view */}
@@ -625,6 +850,194 @@ function Row({ label, children }) {
     <div className="flex items-center gap-2">
       <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider w-16 flex-shrink-0" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{label}</div>
       <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// ── Zoned-layout helpers ──────────────────────────────────────────────────
+
+function AriaSummaryCard({ items, total }) {
+  const empty = total === 0;
+  return (
+    <div
+      className="rounded-xl p-3 mx-1 mb-2 border"
+      style={{ backgroundColor: 'rgba(79,77,207,0.05)', borderColor: 'rgba(79,77,207,0.2)' }}
+    >
+      <div className="flex items-start gap-2">
+        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '18px' }}>auto_awesome</span>
+        <div className="flex-1 min-w-0">
+          {empty ? (
+            <p className="text-[13px] text-gray-700" style={{ fontFamily: 'Manrope, sans-serif' }}>
+              You&rsquo;re all caught up. Nothing urgent right now.
+            </p>
+          ) : (
+            <>
+              <p className="text-[13px] font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                {total} email{total === 1 ? '' : 's'} need{total === 1 ? 's' : ''} your attention
+              </p>
+              <ul className="mt-1.5 space-y-0.5">
+                {items.map((t) => {
+                  const line = `${senderName(t.from) || shortAccount(t.accountEmail)}: ${t.subject || '(no subject)'}`;
+                  return (
+                    <li key={t.id} className="text-[12px] text-gray-500 truncate">
+                      <span style={{ color: '#ef4444' }}>● </span>
+                      {line.length > 50 ? line.slice(0, 50) + '…' : line}
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Zone({ icon, iconColor, label, count, badgeClass, expanded, onToggle, children, emptyText, hideBadge, showCountSuffix, footer }) {
+  const hasChildren = Array.isArray(children) ? children.length > 0 : !!children;
+  return (
+    <div className="mb-2 px-1">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white transition-colors"
+      >
+        <span className="material-symbols-outlined" style={{ color: iconColor, fontSize: '16px' }}>{icon}</span>
+        <span
+          className="text-[10px] font-bold uppercase tracking-[0.14em] text-gray-500 flex-1 text-left"
+          style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+        >
+          {label}{hideBadge && showCountSuffix ? ` (${count})` : ''}
+        </span>
+        {!hideBadge && (
+          <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${badgeClass || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+            {count}
+          </span>
+        )}
+        <span
+          className="material-symbols-outlined text-gray-400"
+          style={{ fontSize: '16px', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 150ms ease' }}
+        >
+          expand_more
+        </span>
+      </button>
+      {expanded && (
+        hasChildren ? (
+          <div className="mt-0.5">{children}</div>
+        ) : (
+          <p className="text-[12px] text-gray-400 italic px-3 py-2">{emptyText}</p>
+        )
+      )}
+      {expanded && footer}
+    </div>
+  );
+}
+
+function ZonedSkeleton() {
+  const row = (k) => (
+    <div key={k} className="px-3 py-2.5 mb-1">
+      <div className="flex items-start gap-2">
+        <div className="w-2 h-2 rounded-full bg-gray-100 animate-pulse mt-1.5" />
+        <div className="flex-1 space-y-1.5">
+          <div className="h-3 w-32 bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 w-48 bg-gray-100 rounded animate-pulse" />
+        </div>
+      </div>
+    </div>
+  );
+  return (
+    <div>
+      <div className="mb-2 px-1">
+        <div className="h-6 w-44 bg-gray-100 rounded animate-pulse mx-2 mb-1" />
+        {[0,1,2].map(row)}
+      </div>
+      <div className="mb-2 px-1">
+        <div className="h-6 w-44 bg-gray-100 rounded animate-pulse mx-2 mb-1" />
+        {[0,1].map(row)}
+      </div>
+    </div>
+  );
+}
+
+function renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }) {
+  const tint = tintForAccount(t.accountEmail);
+  const active = t.id === activeThreadId;
+  const mid = t.latestMessageId || t.id;
+  const cls = classifications[mid];
+  const impStyle = cls ? IMPORTANCE_STYLES[cls.importance] : null;
+
+  // Dot: critical=red, high=amber, unclassified unread=blue, read=none.
+  let dotBg = 'transparent';
+  let dotBorder = 'none';
+  if (!t.isRead) {
+    if (impStyle && cls.importance === 'critical') dotBg = '#ef4444';
+    else if (impStyle && cls.importance === 'high') dotBg = '#f59e0b';
+    else dotBg = '#4f4dcf';
+  }
+
+  const showPill = cls && cls.importanceRank >= 3 && !SUPPRESS_PILL.has(cls.category);
+
+  return (
+    <div
+      key={`${t.accountEmail}:${t.id}`}
+      className={`group relative rounded-xl mb-1 transition-colors ${active ? 'bg-primary/5' : 'hover:bg-white'}`}
+      style={active ? { borderLeft: '3px solid #4f4dcf' } : { borderLeft: '3px solid transparent' }}
+    >
+      <button
+        onClick={() => openThread(t)}
+        className="w-full text-left px-3 py-2.5"
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="flex-shrink-0 mt-1.5 w-2 h-2 rounded-full"
+            style={{ backgroundColor: dotBg, border: dotBorder }}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <span className={`text-sm truncate ${t.isRead ? 'text-gray-600' : 'text-gray-900 font-semibold'}`} style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                {senderName(t.from) || shortAccount(t.accountEmail)}
+              </span>
+              <span className="text-[10px] text-gray-400 flex-shrink-0">{relTime(t.date)}</span>
+            </div>
+            <div className={`text-[13px] truncate mt-0.5 ${t.isRead ? 'text-gray-500' : 'text-gray-800 font-semibold'}`}>
+              {t.subject || '(no subject)'}
+            </div>
+            <div className="text-xs text-gray-400 truncate mt-0.5">{t.snippet}</div>
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>
+                {shortAccount(t.accountEmail)}{t.messageCount > 1 ? ` · ${t.messageCount}` : ''}
+              </span>
+              {showPill && (
+                <span
+                  className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full truncate"
+                  style={{ backgroundColor: impStyle.bg, color: impStyle.fg, maxWidth: 120 }}
+                >
+                  {CATEGORY_LABELS[cls.category] || cls.category}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </button>
+      {/* Hover actions — desktop only */}
+      <div className="hidden md:flex absolute top-1 right-1 gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={(e) => { e.stopPropagation(); archiveSingle(t); }}
+          title="Archive"
+          className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+        >
+          <span className="material-symbols-outlined text-gray-500" style={{ fontSize: '15px' }}>archive</span>
+        </button>
+        {!t.isRead && (
+          <button
+            onClick={(e) => { e.stopPropagation(); markThreadRead(t); }}
+            title="Mark read"
+            className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+          >
+            <span className="material-symbols-outlined text-gray-500" style={{ fontSize: '15px' }}>mark_email_read</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -74,28 +74,25 @@ async function listThreads({ db, userId, accountEmail, maxResults, pageToken, qu
 
   const threads = await Promise.all(threadRefs.map(async (t) => {
     try {
-      const { data: msg } = await gmail.users.messages.get({
-        userId: 'me',
-        id: t.id,                // thread id = first message id in gmail
-        format: 'metadata',
+      // Single threads.get gets us count + the last message id + the
+      // latest message's headers/labels — no separate messages.get needed.
+      const t2 = await gmail.users.threads.get({
+        userId: 'me', id: t.id, format: 'metadata',
         metadataHeaders: ['From', 'Subject', 'Date'],
       });
-      const labelIds = msg.labelIds || [];
-      // threads.get is cheaper for count but metadata-only — do a second
-      // call only when we need the count. Use threads.get for the count.
-      let messageCount = 1;
-      try {
-        const t2 = await gmail.users.threads.get({ userId: 'me', id: t.id, format: 'metadata', metadataHeaders: ['From'] });
-        messageCount = t2.data.messages?.length || 1;
-      } catch { /* fall back to 1 */ }
+      const msgs = t2.data?.messages || [];
+      if (!msgs.length) return null;
+      const last = msgs[msgs.length - 1];
+      const labelIds = last.labelIds || [];
       return {
         id: t.id,
-        subject: _headerVal(msg.payload?.headers, 'Subject') || '(no subject)',
-        snippet: msg.snippet || '',
-        from: _headerVal(msg.payload?.headers, 'From') || '',
-        date: _headerVal(msg.payload?.headers, 'Date') || '',
+        latestMessageId: last.id,
+        subject: _headerVal(last.payload?.headers, 'Subject') || '(no subject)',
+        snippet: last.snippet || '',
+        from: _headerVal(last.payload?.headers, 'From') || '',
+        date: _headerVal(last.payload?.headers, 'Date') || '',
         isRead: !labelIds.includes('UNREAD'),
-        messageCount,
+        messageCount: msgs.length,
       };
     } catch {
       return null;

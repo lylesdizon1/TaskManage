@@ -115,15 +115,17 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json({ threads: finalThreads });
 
       // Fire-and-forget: classify any thread we don't already have a
-      // classification for. Uses snippet as body source.
+      // classification for. Uses snippet as body source and keys off
+      // latestMessageId (falls back to thread id if missing).
       (async () => {
         try {
-          const ids = finalThreads.map(t => t.id);
+          const ids = finalThreads.map(t => t.latestMessageId || t.id).filter(Boolean);
           const existing = await db.batchGetClassifications(userId, ids).catch(() => ({}));
           for (const t of finalThreads) {
-            if (existing[t.id]) continue;
+            const mid = t.latestMessageId || t.id;
+            if (!mid || existing[mid]) continue;
             classifyEmail({
-              userId, messageId: t.id, threadId: t.id,
+              userId, messageId: mid, threadId: t.id,
               accountEmail: t.accountEmail,
               from: t.from, subject: t.subject, body: t.snippet,
               isRead: !!t.isRead, db,
@@ -178,13 +180,30 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
 
   router.post('/api/inbox/archive', authenticateToken, async (req, res) => {
     try {
+      const userId = req.user.id;
+      // Bulk shape: { threads: [{ account_email, message_id }, ...] }
+      if (Array.isArray(req.body?.threads)) {
+        const jobs = req.body.threads.filter(t => t?.account_email && t?.message_id);
+        if (!jobs.length) return res.json({ archived: 0 });
+        const results = await Promise.allSettled(jobs.map(async (j) => {
+          const row = await db.getGmailIntegrationByEmail(userId, j.account_email);
+          if (!row) throw new Error('Account not found');
+          const provider = providerFor(row);
+          if (!provider) throw new Error('Unsupported provider');
+          await provider.archiveMessage({ db, userId, accountEmail: row.accountEmail, messageId: j.message_id });
+        }));
+        const archived = results.filter(r => r.status === 'fulfilled').length;
+        return res.json({ archived });
+      }
+
+      // Single-thread shape (backward compat).
       const { account_email, message_id } = req.body || {};
       if (!account_email || !message_id) return res.status(400).json({ error: 'account_email and message_id required' });
-      const row = await db.getGmailIntegrationByEmail(req.user.id, account_email);
+      const row = await db.getGmailIntegrationByEmail(userId, account_email);
       if (!row) return res.status(404).json({ error: 'Account not found' });
       const provider = providerFor(row);
       if (!provider) return res.status(400).json({ error: 'Unsupported provider' });
-      await provider.archiveMessage({ db, userId: req.user.id, accountEmail: row.accountEmail, messageId: message_id });
+      await provider.archiveMessage({ db, userId, accountEmail: row.accountEmail, messageId: message_id });
       res.json({ success: true });
     } catch (err) {
       logger.error('inbox.archive.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
