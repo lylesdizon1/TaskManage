@@ -31,6 +31,11 @@ function _headerVal(headers, name) {
 // Markdown-style link pattern that some mail clients leak into text/plain
 // alternates — when it shows up, the HTML alternate renders cleaner.
 const MD_LINK_RE = /\[[^\]]+\]\(https?:\/\/[^)]+\)/;
+// Long, often tracking-heavy URLs that clutter plain text (Zillow, Amazon
+// Music, etc.). Threshold: any http(s) URL longer than 60 chars.
+const LONG_URL_RE = /https?:\/\/\S{60,}/;
+// Separator lines of 3+ consecutive '=' characters on their own line.
+const HEAVY_SEPARATOR_RE = /^\s*={3,}\s*$/m;
 
 function _extractBody(payload) {
   if (!payload) return '';
@@ -50,12 +55,17 @@ function _extractBody(payload) {
   const plainB64 = walk(payload, 'text/plain');
   const htmlB64  = walk(payload, 'text/html');
 
-  // Prefer plain ONLY when it looks like real plain text. If it carries
-  // markdown-link syntax (a common alternate-part quirk) the HTML version
-  // renders much cleaner downstream.
+  // Prefer plain ONLY when it looks like real plain text. Marketing /
+  // system emails (Zillow, Amazon Music, …) often ship plain-text
+  // alternates that are really link dumps or separator-line noise —
+  // fall back to HTML whenever any of these show up.
   if (plainB64) {
     const plain = decode(plainB64);
-    if (!MD_LINK_RE.test(plain) || !htmlB64) return plain;
+    const looksNoisy =
+         MD_LINK_RE.test(plain)
+      || LONG_URL_RE.test(plain)
+      || HEAVY_SEPARATOR_RE.test(plain);
+    if (!looksNoisy || !htmlB64) return plain;
   }
   if (htmlB64) return decode(htmlB64);
   if (payload.body?.data) return decode(payload.body.data);

@@ -7,6 +7,40 @@ function isHtmlBody(body) {
   return /<\/?[a-z][\s\S]*?>/i.test(body);
 }
 
+// Clean plain-text email bodies before rendering.
+// Removes separator lines (=== / --- / ___), collapses 3+ blank lines to
+// one, and trims excessive leading/trailing blank lines. Applies only to
+// the plain-text render path; HTML bodies are left alone.
+function cleanPlainText(body) {
+  if (!body || typeof body !== 'string') return body || '';
+  const lines = body.split(/\r?\n/);
+  const kept = [];
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    const stripped = line.trim();
+    if (/^={3,}$/.test(stripped)) continue;
+    if (/^-{3,}$/.test(stripped)) continue;
+    if (/^_{3,}$/.test(stripped)) continue;
+    kept.push(line);
+  }
+  // Collapse 3+ consecutive blank lines into a single blank line.
+  const collapsed = [];
+  let blankRun = 0;
+  for (const l of kept) {
+    if (l.trim() === '') {
+      blankRun++;
+      if (blankRun <= 1) collapsed.push('');
+    } else {
+      blankRun = 0;
+      collapsed.push(l);
+    }
+  }
+  // Trim leading / trailing blank lines.
+  while (collapsed.length && collapsed[0].trim() === '') collapsed.shift();
+  while (collapsed.length && collapsed[collapsed.length - 1].trim() === '') collapsed.pop();
+  return collapsed.join('\n');
+}
+
 // Strip dangerous tags + their contents before we hand HTML to the DOM.
 // Keeps formatting/layout tags. Also strips inline event handlers and
 // javascript: URLs as a cheap second layer.
@@ -687,7 +721,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                                   className="px-4 pb-4 pt-1"
                                   style={{ fontSize: '14px', lineHeight: '1.6', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                                 >
-                                  {m.body}
+                                  {cleanPlainText(m.body)}
                                 </div>
                               ))
                           : (
