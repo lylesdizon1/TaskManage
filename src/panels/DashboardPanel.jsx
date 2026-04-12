@@ -1,7 +1,28 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { useToast } from '../contexts/ToastContext';
 import buildSystemPrompt from '../utils/systemPrompt';
 import { getTodayLocal } from '../utils/helpers.js';
+
+// Inline-styled markdown components so assistant bubbles keep the
+// current typography (Manrope 15px / 1.6 line-height) and don't
+// introduce backgrounds, borders, or default margin pollution.
+const MD_COMPONENTS = {
+  p: ({ node, ...p }) => <p style={{ margin: '0 0 0.5em 0' }} {...p} />,
+  ul: ({ node, ordered, ...p }) => <ul style={{ margin: '0.25em 0 0.5em 1.25em', padding: 0, listStyleType: 'disc' }} {...p} />,
+  ol: ({ node, ordered, ...p }) => <ol style={{ margin: '0.25em 0 0.5em 1.5em', padding: 0, listStyleType: 'decimal' }} {...p} />,
+  li: ({ node, ordered, ...p }) => <li style={{ margin: '0.15em 0' }} {...p} />,
+  strong: ({ node, ...p }) => <strong style={{ fontWeight: 700 }} {...p} />,
+  em: ({ node, ...p }) => <em style={{ fontStyle: 'italic' }} {...p} />,
+  a: ({ node, ...p }) => <a style={{ color: '#4f4dcf', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
+  code: ({ node, inline, ...p }) =>
+    inline
+      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', background: 'rgba(79,77,207,0.06)', padding: '0 4px', borderRadius: '4px' }} {...p} />
+      : <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', whiteSpace: 'pre-wrap' }} {...p} />,
+  h1: ({ node, ...p }) => <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '16px', margin: '0.25em 0 0.4em 0' }} {...p} />,
+  h2: ({ node, ...p }) => <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '15px', margin: '0.25em 0 0.35em 0' }} {...p} />,
+  h3: ({ node, ...p }) => <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '14px', margin: '0.25em 0 0.3em 0' }} {...p} />,
+};
 
 const API_BASE = '';
 
@@ -806,16 +827,21 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     </div>
                   );
                 }
+                const isUser = msg.role === 'user';
                 return (
-                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                     <div
-                      className={`max-w-[85%] ${msg.role === 'user' ? 'text-white' : ''}`}
-                      style={msg.role === 'user'
+                      className={`max-w-[85%] ${isUser ? 'text-white' : ''}`}
+                      style={isUser
                         ? { backgroundColor: '#4f4dcf', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
                         : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
                       }
                     >
-                      {msg.content || <span className="animate-pulse" style={{ color: '#6b7280' }}>{THINKING_MESSAGES[thinkingIdx]}</span>}
+                      {msg.content
+                        ? (isUser
+                            ? msg.content
+                            : <ReactMarkdown components={MD_COMPONENTS}>{msg.content}</ReactMarkdown>)
+                        : <span className="animate-pulse" style={{ color: '#6b7280' }}>{THINKING_MESSAGES[thinkingIdx]}</span>}
                     </div>
                   </div>
                 );
