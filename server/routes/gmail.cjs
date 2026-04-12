@@ -115,6 +115,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       const accounts = rows.map((r) => ({
         id: r.id,
         account_email: r.accountEmail || '',
+        provider: r.provider || 'google',
         created_at: r.createdAt,
       }));
       res.json(accounts);

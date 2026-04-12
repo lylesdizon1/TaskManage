@@ -531,7 +531,7 @@ async function initTables() {
 async function getUserIntegration(userId, type, accountEmail = '') {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", integration_type AS "type",
-            account_email AS "accountEmail",
+            account_email AS "accountEmail", provider,
             config_json AS "config", is_enabled AS "isEnabled",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM user_integrations
@@ -545,7 +545,7 @@ async function getUserIntegration(userId, type, accountEmail = '') {
 async function getUserIntegrations(userId) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", integration_type AS "type",
-            account_email AS "accountEmail",
+            account_email AS "accountEmail", provider,
             config_json AS "config", is_enabled AS "isEnabled",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM user_integrations WHERE user_id = $1
@@ -559,7 +559,7 @@ async function getUserIntegrations(userId) {
 async function getUserIntegrationsByType(userId, type) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", integration_type AS "type",
-            account_email AS "accountEmail",
+            account_email AS "accountEmail", provider,
             config_json AS "config", is_enabled AS "isEnabled",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM user_integrations WHERE user_id = $1 AND integration_type = $2
@@ -573,7 +573,7 @@ async function getUserIntegrationsByType(userId, type) {
 async function getUserIntegrationById(id, userId) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", integration_type AS "type",
-            account_email AS "accountEmail",
+            account_email AS "accountEmail", provider,
             config_json AS "config", is_enabled AS "isEnabled",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM user_integrations WHERE id = $1 AND user_id = $2`,
@@ -593,18 +593,19 @@ async function getUserIntegrationById(id, userId) {
  * @param {boolean} [isEnabled=true]
  * @param {string} [accountEmail='']
  */
-async function upsertUserIntegration(userId, type, config, isEnabled = true, accountEmail = '') {
+async function upsertUserIntegration(userId, type, config, isEnabled = true, accountEmail = '', provider = 'google') {
   const { rows } = await pool.query(
-    `INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
-     VALUES ($1, $2, $3, $4::jsonb, $5)
+    `INSERT INTO user_integrations (user_id, integration_type, account_email, provider, config_json, is_enabled)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6)
      ON CONFLICT (user_id, integration_type, account_email) DO UPDATE SET
+       provider = EXCLUDED.provider,
        config_json = user_integrations.config_json || EXCLUDED.config_json,
        is_enabled = EXCLUDED.is_enabled,
        updated_at = NOW()
      RETURNING id, user_id AS "userId", integration_type AS "type",
-               account_email AS "accountEmail",
+               account_email AS "accountEmail", provider,
                config_json AS "config", is_enabled AS "isEnabled"`,
-    [userId, type, accountEmail, JSON.stringify(config || {}), isEnabled !== false],
+    [userId, type, accountEmail, provider, JSON.stringify(config || {}), isEnabled !== false],
   );
   return rows[0];
 }
@@ -2540,6 +2541,12 @@ async function runMigrations() {
         UNIQUE (user_id, integration_type, account_email);
     EXCEPTION WHEN duplicate_object THEN NULL; END $$;
   `).catch((err) => console.warn('[migration] user_integrations UNIQUE:', err.message));
+
+  // ── user_integrations: provider column (for future multi-provider routing) ──
+  await pool.query(`ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'google'`)
+    .catch((err) => console.warn('[migration] user_integrations.provider:', err.message));
+  // Explicit backfill — no-op under the default but makes intent clear.
+  await pool.query(`UPDATE user_integrations SET provider = 'google' WHERE integration_type = 'gmail' AND provider = 'google'`).catch(() => {});
 
   // ── Migrate legacy gmail_tokens rows into user_integrations ──
   // Each legacy row lands with account_email='' (placeholder). The real
