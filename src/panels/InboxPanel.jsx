@@ -1,4 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useToast } from '../contexts/ToastContext';
+
+// Minimal HTML detection — good enough to pick a render mode.
+function isHtmlBody(body) {
+  if (!body || typeof body !== 'string') return false;
+  return /<\/?[a-z][\s\S]*?>/i.test(body);
+}
+
+// Strip dangerous tags + their contents before we hand HTML to the DOM.
+// Keeps formatting/layout tags. Also strips inline event handlers and
+// javascript: URLs as a cheap second layer.
+function sanitizeHtml(raw) {
+  if (!raw) return '';
+  let out = String(raw);
+  out = out.replace(/<script\b[\s\S]*?<\/script>/gi, '');
+  out = out.replace(/<style\b[\s\S]*?<\/style>/gi, '');
+  out = out.replace(/<iframe\b[\s\S]*?<\/iframe>/gi, '');
+  out = out.replace(/<object\b[\s\S]*?<\/object>/gi, '');
+  out = out.replace(/<embed\b[\s\S]*?\/?>/gi, '');
+  out = out.replace(/<link\b[^>]*>/gi, '');
+  out = out.replace(/<meta\b[^>]*>/gi, '');
+  // Strip on* event handlers (onclick, onload, …).
+  out = out.replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '');
+  out = out.replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '');
+  out = out.replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '');
+  // Neutralize javascript: in href/src.
+  out = out.replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"');
+  return out;
+}
 
 // Deterministic color per account_email so each account gets a stable
 // badge tint across loads. Kept muted so it never competes with #4f4dcf.
@@ -55,6 +84,7 @@ function absTime(iso) {
 }
 
 export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCountChange }) {
+  const toast = useToast();
   const [accounts, setAccounts] = useState([]);
   const [accountFilter, setAccountFilter] = useState('');  // '' = all
   const [threads, setThreads] = useState([]);
@@ -189,7 +219,9 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     const msg = `Send email from ${from} to ${to}\nsubject: ${subject}\nbody: ${body || ''}`;
     try { window.dispatchEvent(new CustomEvent('aria-autosend', { detail: { message: msg } })); } catch {}
     setCompose(null);
-    onNavigate?.('dashboard');
+    // Stay in Inbox — the approval card lives in Aria's chat; user
+    // will see it next time they open the Dashboard.
+    try { toast.info('Email queued for sending — approve in Aria', 3000); } catch {}
   }
 
   function draftWithAria() {
@@ -203,6 +235,12 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
   return (
     <div className="flex-1 overflow-hidden flex" style={{ backgroundColor: '#fbf8fe', fontFamily: 'Manrope, sans-serif' }}>
+      <style>{`
+        .email-html-body img { max-width: 100%; height: auto; }
+        .email-html-body a { color: #4f4dcf; text-decoration: underline; }
+        .email-html-body table { max-width: 100%; }
+        .email-html-body pre { white-space: pre-wrap; }
+      `}</style>
       {/* Left — thread list */}
       <div
         className={`border-r border-gray-100 flex-col h-full ${mobileShowThread ? 'hidden md:flex' : 'flex'}`}
@@ -343,9 +381,26 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                         </div>
                       </button>
                       {open && (
-                        <div className="px-4 pb-4 pt-1" style={{ fontSize: '14px', lineHeight: '1.6', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                          {m.body || <span className="text-gray-400 italic">(empty body)</span>}
-                        </div>
+                        m.body
+                          ? (isHtmlBody(m.body)
+                              ? (
+                                <div
+                                  className="px-4 pb-4 pt-1 email-html-body"
+                                  style={{ fontSize: '14px', lineHeight: '1.6', color: '#1f2937', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+                                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(m.body) }}
+                                />
+                              )
+                              : (
+                                <div
+                                  className="px-4 pb-4 pt-1"
+                                  style={{ fontSize: '14px', lineHeight: '1.6', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                                >
+                                  {m.body}
+                                </div>
+                              ))
+                          : (
+                            <div className="px-4 pb-4 pt-1" style={{ fontSize: '14px', color: '#9ca3af', fontStyle: 'italic' }}>(empty body)</div>
+                          )
                       )}
                     </div>
                   );

@@ -28,9 +28,12 @@ function _headerVal(headers, name) {
   return h ? (h.value || '') : '';
 }
 
+// Markdown-style link pattern that some mail clients leak into text/plain
+// alternates — when it shows up, the HTML alternate renders cleaner.
+const MD_LINK_RE = /\[[^\]]+\]\(https?:\/\/[^)]+\)/;
+
 function _extractBody(payload) {
   if (!payload) return '';
-  // Prefer text/plain; fall back to text/html with tags stripped.
   const walk = (node, mime) => {
     if (!node) return null;
     if (node.mimeType === mime && node.body?.data) return node.body.data;
@@ -44,25 +47,17 @@ function _extractBody(payload) {
   };
   const decode = (b64) => Buffer.from(b64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
 
-  const plain = walk(payload, 'text/plain');
-  if (plain) return decode(plain);
-  const htmlRaw = walk(payload, 'text/html');
-  if (htmlRaw) {
-    return decode(htmlRaw)
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+  const plainB64 = walk(payload, 'text/plain');
+  const htmlB64  = walk(payload, 'text/html');
+
+  // Prefer plain ONLY when it looks like real plain text. If it carries
+  // markdown-link syntax (a common alternate-part quirk) the HTML version
+  // renders much cleaner downstream.
+  if (plainB64) {
+    const plain = decode(plainB64);
+    if (!MD_LINK_RE.test(plain) || !htmlB64) return plain;
   }
-  // Single-part with inline body
+  if (htmlB64) return decode(htmlB64);
   if (payload.body?.data) return decode(payload.body.data);
   return '';
 }
