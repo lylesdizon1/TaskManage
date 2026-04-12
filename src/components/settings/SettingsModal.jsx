@@ -603,6 +603,33 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   const [personaName, setPersonaName] = useState(currentUser?.assistantName || 'Aria');
   const [personaType, setPersonaType] = useState(currentUser?.persona || 'executive_assistant');
   const [personaSaving, setPersonaSaving] = useState(false);
+
+  // Aria Learnings (Profile tab — bottom section)
+  const [learnings, setLearnings] = useState([]);
+  const [learningsLoading, setLearningsLoading] = useState(false);
+  const [showAllLearnings, setShowAllLearnings] = useState(false);
+  const [confirmDeleteLearning, setConfirmDeleteLearning] = useState(null);
+  async function loadLearnings() {
+    setLearningsLoading(true);
+    try {
+      const res = await apiFetch('/api/learnings', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      setLearnings(Array.isArray(data?.learnings) ? data.learnings : []);
+    } catch {
+      setLearnings([]);
+    } finally {
+      setLearningsLoading(false);
+    }
+  }
+  async function deleteLearning(id) {
+    try {
+      await apiFetch(`/api/learnings/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+      setLearnings((prev) => prev.filter((l) => l.id !== id));
+    } finally {
+      setConfirmDeleteLearning(null);
+    }
+  }
+  useEffect(() => { if (tab === 'assistant') loadLearnings(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   const [personaStatus, setPersonaStatus] = useState(null);
 
   // WhatsApp phone state
@@ -1086,6 +1113,62 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
               >
                 {personaSaving ? 'Saving\u2026' : 'Save Assistant Settings'}
               </button>
+
+              <div className="border-t border-gray-100 pt-4 mt-6">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Aria Learnings</h3>
+                {learningsLoading ? (
+                  <div className="space-y-2">
+                    {[0,1,2].map(i => <div key={i} className="h-9 bg-gray-50 rounded-lg animate-pulse" />)}
+                  </div>
+                ) : learnings.length === 0 ? (
+                  <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-5 text-center">
+                    <p className="text-sm text-gray-600">Aria hasn&rsquo;t learned any preferences yet.</p>
+                    <p className="text-xs text-gray-400 mt-1">Correct her or give her an instruction and she&rsquo;ll remember it here.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-gray-500">{learnings.filter(l => showAllLearnings || l.confidence !== 'one-off').length} shown</span>
+                      <label className="inline-flex items-center gap-2 cursor-pointer text-xs text-gray-600">
+                        <input type="checkbox" checked={showAllLearnings} onChange={(e) => setShowAllLearnings(e.target.checked)} className="w-3.5 h-3.5 accent-indigo-600" />
+                        Show all
+                      </label>
+                    </div>
+                    <div className="space-y-1.5">
+                      {learnings.filter(l => showAllLearnings || l.confidence !== 'one-off').map((l) => {
+                        const badgeCls = l.confidence === 'rule'
+                          ? 'text-white'
+                          : l.confidence === 'pattern'
+                            ? 'text-indigo-700 border border-indigo-300'
+                            : 'text-gray-500 border border-gray-200';
+                        const badgeStyle = l.confidence === 'rule' ? { backgroundColor: '#4f4dcf' } : {};
+                        return (
+                          <div key={l.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-100 bg-white">
+                            <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${badgeCls}`} style={badgeStyle}>
+                              {l.confidence}
+                            </span>
+                            <span className="flex-1 text-sm text-gray-800 truncate">{l.ruleText}</span>
+                            {l.scope && l.scope !== 'global' && (
+                              <span className="text-[10px] text-gray-400 truncate">{l.scope}{l.scopeValue ? `: ${l.scopeValue}` : ''}</span>
+                            )}
+                            {confirmDeleteLearning === l.id ? (
+                              <>
+                                <span className="text-[11px] text-gray-500">Remove?</span>
+                                <button onClick={() => deleteLearning(l.id)} className="text-[11px] font-semibold text-red-600 hover:text-red-700 px-1">Yes</button>
+                                <button onClick={() => setConfirmDeleteLearning(null)} className="text-[11px] text-gray-400 hover:text-gray-600 px-1">Cancel</button>
+                              </>
+                            ) : (
+                              <button onClick={() => setConfirmDeleteLearning(l.id)} className="text-gray-300 hover:text-red-500 transition-colors" title="Remove">
+                                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>close</span>
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           )}
 

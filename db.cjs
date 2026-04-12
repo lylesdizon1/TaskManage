@@ -517,6 +517,27 @@ async function initTables() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id)`).catch(() => {});
 
+  // ── user_learnings (Correction Learning Loop) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_learnings (
+      id                   TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id              TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rule_text            TEXT NOT NULL,
+      normalized_rule_text TEXT NOT NULL,
+      rule_type            TEXT NOT NULL,
+      scope                TEXT NOT NULL DEFAULT 'global',
+      scope_value          TEXT,
+      confidence           TEXT NOT NULL DEFAULT 'one-off',
+      occurrence           INTEGER NOT NULL DEFAULT 1,
+      active               BOOLEAN NOT NULL DEFAULT true,
+      source_msg           TEXT,
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_learnings_user ON user_learnings(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_learnings_active ON user_learnings(user_id, active)`).catch(() => {});
+
   // ── pending_confirmations (high-risk tool gate) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pending_confirmations (
@@ -879,6 +900,121 @@ async function updatePendingConfirmationStatus(id, userId, status) {
     [id, userId, status],
   );
   return rows[0] || null;
+}
+
+// ── User learnings (correction loop) ───────────────────────────────────────
+
+const LEARNING_CAP = 100;
+
+function _normalizeLearning(s) {
+  return String(s || '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function _confidenceForCount(n) {
+  if (n >= 4) return 'rule';
+  if (n >= 2) return 'pattern';
+  return 'one-off';
+}
+
+/**
+ * Upsert a learning. Returns { learning, isNew, confidenceUpgraded }.
+ * Enforces LEARNING_CAP by evicting the oldest one-off when creating a
+ * non-one-off row at capacity; blocks new one-offs at capacity.
+ */
+async function createOrUpdateLearning(userId, ruleText, ruleType, scope, scopeValue, sourceMsg, isExplicitRule) {
+  const normalized = _normalizeLearning(ruleText);
+  const scopeVal = scopeValue || null;
+
+  const existingRes = await pool.query(
+    `SELECT id, occurrence, confidence FROM user_learnings
+     WHERE user_id = $1 AND rule_type = $2 AND scope = $3
+       AND COALESCE(scope_value, '') = COALESCE($4, '')
+       AND normalized_rule_text = $5
+       AND active = TRUE
+     LIMIT 1`,
+    [userId, ruleType, scope, scopeVal, normalized],
+  );
+
+  if (existingRes.rows[0]) {
+    const prev = existingRes.rows[0];
+    const nextOcc = prev.occurrence + 1;
+    const fromCount = _confidenceForCount(nextOcc);
+    const nextConf = isExplicitRule ? 'rule' : fromCount;
+    const upgraded = nextConf !== prev.confidence;
+    const { rows } = await pool.query(
+      `UPDATE user_learnings
+       SET occurrence = $2, confidence = $3, source_msg = COALESCE($4, source_msg), updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, user_id AS "userId", rule_text AS "ruleText", normalized_rule_text AS "normalizedRuleText",
+                 rule_type AS "ruleType", scope, scope_value AS "scopeValue",
+                 confidence, occurrence, active, source_msg AS "sourceMsg",
+                 created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [prev.id, nextOcc, nextConf, sourceMsg || null],
+    );
+    return { learning: rows[0], isNew: false, confidenceUpgraded: upgraded };
+  }
+
+  // Capacity enforcement
+  const activeCountRes = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM user_learnings WHERE user_id = $1 AND active = TRUE`,
+    [userId],
+  );
+  const activeCount = activeCountRes.rows[0].c;
+
+  const wantConfidence = isExplicitRule ? 'rule' : 'one-off';
+  if (activeCount >= LEARNING_CAP) {
+    if (wantConfidence === 'one-off') {
+      return { learning: null, isNew: false, confidenceUpgraded: false, skippedReason: 'cap_reached' };
+    }
+    // Evict oldest active one-off, if any.
+    await pool.query(
+      `UPDATE user_learnings SET active = FALSE, updated_at = NOW()
+       WHERE id = (
+         SELECT id FROM user_learnings
+         WHERE user_id = $1 AND active = TRUE AND confidence = 'one-off'
+         ORDER BY updated_at ASC LIMIT 1
+       )`,
+      [userId],
+    );
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO user_learnings
+       (user_id, rule_text, normalized_rule_text, rule_type, scope, scope_value, confidence, occurrence, source_msg)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)
+     RETURNING id, user_id AS "userId", rule_text AS "ruleText", normalized_rule_text AS "normalizedRuleText",
+               rule_type AS "ruleType", scope, scope_value AS "scopeValue",
+               confidence, occurrence, active, source_msg AS "sourceMsg",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [userId, ruleText, normalized, ruleType, scope, scopeVal, wantConfidence, sourceMsg || null],
+  );
+  return { learning: rows[0], isNew: true, confidenceUpgraded: wantConfidence !== 'one-off' };
+}
+
+async function getUserLearnings(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", rule_text AS "ruleText", normalized_rule_text AS "normalizedRuleText",
+            rule_type AS "ruleType", scope, scope_value AS "scopeValue",
+            confidence, occurrence, active, source_msg AS "sourceMsg",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM user_learnings
+     WHERE user_id = $1 AND active = TRUE
+     ORDER BY CASE confidence
+                WHEN 'rule' THEN 1 WHEN 'pattern' THEN 2 ELSE 3
+              END ASC,
+              updated_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function deactivateLearning(id, userId) {
+  const { rowCount } = await pool.query(
+    `UPDATE user_learnings SET active = FALSE, updated_at = NOW()
+     WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rowCount > 0;
 }
 
 /** Find the most recent pending row for a user on a given channel (for WhatsApp YES/NO matching). */
@@ -4127,4 +4263,7 @@ module.exports = {
   getPendingConfirmation,
   updatePendingConfirmationStatus,
   findLatestPendingConfirmation,
+  createOrUpdateLearning,
+  getUserLearnings,
+  deactivateLearning,
 };

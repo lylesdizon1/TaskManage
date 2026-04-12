@@ -58,6 +58,7 @@ const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresCo
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
+const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 // In-memory registry of pending web-channel confirmations awaiting user action.
@@ -325,7 +326,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         });
       };
 
-      const { text, toolSummaries, maxIterationsReached } = await runAgenticLoop({
+      const loopResult = await runAgenticLoop({
         messages,
         system: fullSystem,
         tools: getToolSchemasForApi(),
@@ -336,6 +337,25 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         logAction,
         model,
       });
+      let { text, toolSummaries, maxIterationsReached } = loopResult;
+
+      // ── Correction learning: detect → extract → persist → ack ──
+      try {
+        const lastUserContent = [...messages].reverse().find(m => m.role === 'user')?.content;
+        const lastUserMsg = typeof lastUserContent === 'string'
+          ? lastUserContent
+          : Array.isArray(lastUserContent)
+            ? (lastUserContent.find(b => b?.type === 'text')?.text || '')
+            : '';
+        if (lastUserMsg) {
+          const { acknowledgment } = await handlePossibleCorrection({
+            userId, userMessage: lastUserMsg, lastAssistantMessage: text || null, db,
+          });
+          if (acknowledgment) text = (text || '') + acknowledgment;
+        }
+      } catch (err) {
+        logger.error('chat.learning.failed', { requestId: req.requestId, userId, error: err.message });
+      }
 
       send('text', { content: text });
       if (toolSummaries.length > 0) send('tools_executed', { tools: toolSummaries.map(s => s.tool), summaries: toolSummaries });

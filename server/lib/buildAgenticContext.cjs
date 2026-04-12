@@ -99,13 +99,14 @@ async function buildAgenticContext(opts) {
   const { userId, db } = opts;
   const tz = opts.tz || 'America/Los_Angeles';
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents] = await Promise.all([
+  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
     db.getRecentMemories(userId, 20).catch(() => []),
     db.getCalendarNotesForAI(userId).catch(() => []),
     fetchCalendarWindow(opts),
+    db.getUserLearnings ? db.getUserLearnings(userId).catch(() => []) : Promise.resolve([]),
   ]);
 
   const todayStr = getTodayLocal(tz);
@@ -152,14 +153,32 @@ async function buildAgenticContext(opts) {
   const userName = user?.profileName || user?.displayName || 'the user';
   const basePrompt = `You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You have tools to create, update, search, and delete tasks/notes/events, and to send, reply to, or archive emails. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}`;
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + contextBlock;
+  // Learnings: inject rules (cap 15) + patterns (cap 10); never one-offs.
+  const rulesList = (learnings || []).filter(l => l.confidence === 'rule').slice(0, 15);
+  const patternsList = (learnings || []).filter(l => l.confidence === 'pattern').slice(0, 10);
+  const learningsBlock = buildLearningsBlock(rulesList, patternsList);
+
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + contextBlock;
 
   return {
-    user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents,
+    user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
     tz, todayStr, todayDate, currentTime, weekMapStr,
-    profileContext, contextBlock, decisionInstructions: DECISION_INSTRUCTIONS,
+    profileContext, contextBlock, learningsBlock, decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };
+}
+
+function buildLearningsBlock(rules, patterns) {
+  if (!rules.length && !patterns.length) return '';
+  const fmt = (l) => `• ${l.ruleText}${l.scope && l.scope !== 'global' ? ` (${l.scope}${l.scopeValue ? `: ${l.scopeValue}` : ''})` : ''}`;
+  let out = '';
+  if (rules.length) {
+    out += `\n\nUSER RULES (hard enforce — confirmation/boundary/routing types must always be followed; style/timing/preference = apply by default):\n${rules.map(fmt).join('\n')}`;
+  }
+  if (patterns.length) {
+    out += `\n\nUSER PATTERNS (apply by default, user may override in context):\n${patterns.map(fmt).join('\n')}`;
+  }
+  return out;
 }
 
 module.exports = { buildAgenticContext, DECISION_INSTRUCTIONS };

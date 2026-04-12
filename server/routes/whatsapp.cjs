@@ -48,6 +48,7 @@ const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresCo
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
+const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
@@ -362,7 +363,19 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       // If we sent a confirmation prompt mid-loop, skip the model's
       // post-tool text so we don't double-message the user.
-      const reply = waSentConfirmation ? '' : text;
+      let reply = waSentConfirmation ? '' : text;
+
+      // ── Correction learning: detect → extract → persist → ack ──
+      try {
+        if (reply && msgBody) {
+          const { acknowledgment } = await handlePossibleCorrection({
+            userId, userMessage: msgBody, lastAssistantMessage: reply, db,
+          });
+          if (acknowledgment) reply = reply + acknowledgment;
+        }
+      } catch (err) {
+        logger.error('whatsapp.learning.failed', { requestId: req.requestId, userId, error: err.message });
+      }
 
       // ── Persist conversation (best-effort) ─────────────────────────────
       try {
