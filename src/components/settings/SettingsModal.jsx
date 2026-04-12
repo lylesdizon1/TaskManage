@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import { GearIcon, XIcon } from '../icons/Icons.jsx';
 import { getRuleScope, conditionDescription, uid } from '../../utils/helpers.js';
