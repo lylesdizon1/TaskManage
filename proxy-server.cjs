@@ -73,6 +73,7 @@ app.use('/', require('./server/routes/alerts.cjs')({ authenticateToken, db, load
 app.use('/', require('./server/routes/calendar-notes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/admin.cjs')({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }));
+app.use('/', require('./server/routes/agentActions.cjs')({ authenticateToken, db }));
 
 // ── Sentry error handler ────────────────────────────────────────────────────
 const Sentry = require('./guardrails/instrument.cjs');
