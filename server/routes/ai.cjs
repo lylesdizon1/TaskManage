@@ -280,7 +280,34 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
 
-      const send = (event, data) => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+      // Idempotent SSE writer + single-shot finalizer. Every terminal path
+      // (happy return, gate-cancel resume, extractor failure, thrown error,
+      // timeout) funnels through finalizeStream so `done` + res.end() fire
+      // exactly once regardless of how control leaves the handler.
+      let streamFinalized = false;
+      const send = (event, data) => {
+        if (streamFinalized) return;
+        try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
+      };
+      const finalizeStream = (payload = {}) => {
+        if (streamFinalized) return;
+        streamFinalized = true;
+        try {
+          if (payload.error) {
+            res.write(`event: error\ndata: ${JSON.stringify({ message: payload.error })}\n\n`);
+          } else {
+            res.write(`event: text\ndata: ${JSON.stringify({ content: payload.text || '' })}\n\n`);
+            if (payload.toolSummaries?.length) {
+              res.write(`event: tools_executed\ndata: ${JSON.stringify({ tools: payload.toolSummaries.map(s => s.tool), summaries: payload.toolSummaries })}\n\n`);
+            }
+            if (payload.maxIterationsReached) {
+              res.write(`event: warning\ndata: ${JSON.stringify({ message: 'Step limit reached' })}\n\n`);
+            }
+          }
+          res.write(`event: done\ndata: {}\n\n`);
+        } catch {}
+        try { res.end(); } catch {}
+      };
 
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz);
@@ -356,15 +383,17 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         logger.error('chat.learning.failed', { requestId: req.requestId, userId, error: err.message });
       }
 
-      send('text', { content: text });
-      if (toolSummaries.length > 0) send('tools_executed', { tools: toolSummaries.map(s => s.tool), summaries: toolSummaries });
-      if (maxIterationsReached) send('warning', { message: 'Step limit reached' });
-      send('done', {});
-      return res.end();
+      finalizeStream({ text, toolSummaries, maxIterationsReached });
+      return;
     } catch (err) {
       logger.error('chat.execute.failed', { requestId: req.requestId, userId, error: err.message });
-      try { res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`); } catch {}
-      return res.end();
+      // If headers never flushed, fall back to a JSON error. Otherwise
+      // route through finalizeStream so `done` + res.end fire once.
+      if (!res.headersSent) {
+        try { return res.status(500).json({ error: err.message }); } catch { /* fallthrough */ }
+      }
+      finalizeStream({ error: err.message });
+      return;
     }
   });
 

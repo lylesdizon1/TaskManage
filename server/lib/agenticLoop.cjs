@@ -97,7 +97,10 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         toolSummaries.push({ tool: toolUse.name, success: false, cancelled: true, reason: gateDecision.reason || 'cancelled' });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: resultContent });
         try { await logAction?.({ eventType: 'tool_cancelled', toolName: toolUse.name, input: toolUse.input, reason: gateDecision.reason }); } catch {}
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent, is_error: true });
+        // Cancellation is a terminal but non-error result — without is_error,
+        // Aria treats the cancelled tool as complete and produces a normal
+        // follow-up acknowledgment instead of retrying.
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent });
         continue;
       }
 
