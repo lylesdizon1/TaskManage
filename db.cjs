@@ -131,13 +131,8 @@ async function initTables() {
     );
   `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS gmail_tokens (
-      user_id    TEXT PRIMARY KEY,
-      tokens     JSONB NOT NULL,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
+  // gmail_tokens table removed — Gmail OAuth tokens live in user_integrations
+  // (integration_type='gmail'). The legacy table is dropped by runMigrations().
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS gmail_config (
@@ -1705,58 +1700,7 @@ async function setGcalPrimaryAccount(userId, googleEmail) {
   );
 }
 
-// ── Gmail tokens & config ─────────────────────────────────────────────────────
-
-/**
- * Load raw Gmail token data for a user. Same encryption pattern as GCal —
- * use loadGmailTokens() from server/utils/google.cjs for transparent decryption.
- *
- * @note This helper intentionally does not encrypt or decrypt tokens.
- * Encryption is the sole responsibility of server/utils/google.cjs.
- *
- * @param {string} userId - User ID.
- * @returns {Promise<Object|string|null>} Raw token data or null.
- * @throws {Error} If the database query fails.
- */
-async function getGmailTokensForUser(userId) {
-  const { rows } = await pool.query(
-    'SELECT tokens FROM gmail_tokens WHERE user_id = $1',
-    [userId],
-  );
-  return rows.length ? rows[0].tokens : null;
-}
-
-/**
- * Store Gmail tokens for a user, upserting on user_id conflict.
- * Use saveGmailTokens() from server/utils/google.cjs which encrypts first.
- *
- * @note This helper intentionally does not encrypt or decrypt tokens.
- * Encryption is the sole responsibility of server/utils/google.cjs.
- *
- * @param {string} userId - User ID.
- * @param {Object} tokens - Token data (plain or { _enc } wrapper).
- * @returns {Promise<void>}
- * @throws {Error} If the database query fails.
- */
-async function setGmailTokensForUser(userId, tokens) {
-  await pool.query(
-    `INSERT INTO gmail_tokens (user_id, tokens, updated_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (user_id) DO UPDATE SET tokens = $2, updated_at = NOW()`,
-    [userId, JSON.stringify(tokens)],
-  );
-}
-
-/**
- * Remove Gmail tokens for a user. Called on Gmail disconnect.
- *
- * @param {string} userId - User ID.
- * @returns {Promise<void>}
- * @throws {Error} If the database query fails.
- */
-async function deleteGmailTokensForUser(userId) {
-  await pool.query('DELETE FROM gmail_tokens WHERE user_id = $1', [userId]);
-}
+// ── Gmail config (tokens moved to user_integrations) ────────────────────────
 
 /**
  * Load Gmail sync configuration for a user (label filters, sync frequency, etc.).
@@ -2808,18 +2752,11 @@ async function runMigrations() {
   // Explicit backfill — no-op under the default but makes intent clear.
   await pool.query(`UPDATE user_integrations SET provider = 'google' WHERE integration_type = 'gmail' AND provider = 'google'`).catch(() => {});
 
-  // ── Migrate legacy gmail_tokens rows into user_integrations ──
-  // Each legacy row lands with account_email='' (placeholder). The real
-  // email is populated on next /api/gmail/status call.
-  await pool.query(`
-    INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
-    SELECT user_id, 'gmail', '', jsonb_build_object('tokens', tokens), TRUE
-    FROM gmail_tokens gt
-    WHERE NOT EXISTS (
-      SELECT 1 FROM user_integrations ui
-      WHERE ui.user_id = gt.user_id AND ui.integration_type = 'gmail'
-    )
-  `).catch((err) => console.warn('[migration] gmail_tokens→user_integrations:', err.message));
+  // ── Drop legacy gmail_tokens table (tokens now live in user_integrations) ──
+  // Any rows were copied into user_integrations by a prior deploy's migration.
+  await pool.query(`DROP TABLE IF EXISTS gmail_tokens`).catch((err) =>
+    console.warn('[migration] drop gmail_tokens:', err.message),
+  );
 
   await backfillSuperadminIntegrationsFromEnv()
     .catch((err) => console.warn('[migration] backfill integrations:', err.message));
@@ -4201,9 +4138,6 @@ module.exports = {
   deleteTransaction,
   updateTransaction,
   getFinancialSummary,
-  getGmailTokensForUser,
-  setGmailTokensForUser,
-  deleteGmailTokensForUser,
   getGmailConfigForUser,
   setGmailConfigForUser,
   getInboxItemsForUser,

@@ -61,10 +61,9 @@ const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
-// In-memory registry of pending web-channel confirmations awaiting user action.
-// Maps confirm_id → { resolve, timeout } so POST /api/chat/confirm can wake up
-// the paused agentic loop. Not persisted: if the server restarts, pending
-// rows are marked expired by the 2-minute TTL on the DB row.
+// NOTE: in-memory — server restart during a pending confirmation orphans
+// the loop. TTL handles cleanup on the DB side. Upgrade to pub/sub if this
+// becomes common.
 const webConfirmWaiters = new Map();
 
 /**

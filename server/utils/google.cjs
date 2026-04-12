@@ -108,35 +108,7 @@ const loadAllGcalAccounts = async (userId, db) => {
   });
 };
 
-/**
- * Persist Gmail OAuth tokens for a user, encrypting if ENCRYPTION_KEY is set.
- *
- * @param {string} userId
- * @param {Object} tokens - OAuth2 credentials from Google.
- * @param {Object} db - Database helper module.
- */
-const saveGmailTokens = async (userId, tokens, db) => {
-  if (ENCRYPTION_KEY) {
-    const encrypted = encryptTokens(tokens);
-    await db.setGmailTokensForUser(userId, { _enc: encrypted });
-  } else {
-    await db.setGmailTokensForUser(userId, tokens);
-  }
-};
+// Gmail token helpers removed — tokens now live in user_integrations and are
+// read/written directly by server/routes/gmail.cjs and server/tools.cjs.
 
-/**
- * Load and decrypt Gmail OAuth tokens for a user.
- * Returns null if the user has not connected Gmail.
- *
- * @param {string} userId
- * @param {Object} db - Database helper module.
- * @returns {Promise<Object|null>} Decrypted token credentials or null.
- */
-const loadGmailTokens = async (userId, db) => {
-  const stored = await db.getGmailTokensForUser(userId);
-  if (!stored) return null;
-  if (stored._enc) return decryptTokens(stored._enc);
-  return stored;
-};
-
-module.exports = { getAppUrl, makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, saveGmailTokens, loadGmailTokens };
+module.exports = { getAppUrl, makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts };

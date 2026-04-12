@@ -292,13 +292,10 @@ function requiresConfirmation(toolName, llmDecision) {
  * lookup. No dependency on the legacy gmail_tokens table or
  * loadGmailTokens helper — those paths are ignored here.
  */
-async function loadGmailTokensForAccount(db, userId, accountEmail, toolTag) {
-  const tag = toolTag || 'gmail_tool';
-  console.log(`[${tag}] looking up:`, { userId, accountEmail });
+async function loadGmailTokensForAccount(db, userId, accountEmail /* , toolTag */) {
   const row = await db.getGmailIntegrationByEmail(userId, accountEmail);
   const stored = row?.config?.tokens || null;
   const tokens = stored ? (stored._enc ? decryptTokens(stored._enc) : stored) : null;
-  console.log(`[${tag}] row found:`, !!row, 'has tokens:', !!tokens);
   return { row, tokens };
 }
 
