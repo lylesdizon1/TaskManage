@@ -4,42 +4,45 @@ const express = require('express');
 const { getResendClient, getFromEmail } = require('../utils/email.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
-module.exports = function createEmailRouter({ authenticateToken }) {
+module.exports = function createEmailRouter({ authenticateToken, db }) {
   const router = express.Router();
 
   /**
    * POST /api/email/test
-   * Sends a test email to verify Resend is working.
-   * Body: { to? } — defaults to ALERT_RECIPIENT_EMAIL env var.
+   * Sends a test email using the authenticated user's email_alerts integration.
+   * Body: { to? } — optional override; otherwise uses the user's configured
+   * recipientEmail. Never falls back to any system env var.
    */
   router.post('/api/email/test', authenticateToken, async (req, res) => {
-    logger.info('email.test.configured', { requestId: req.requestId, configured: !!process.env.RESEND_API_KEY });
-
+    const userId = req.user.id;
     const resend = getResendClient();
     if (!resend) {
-      logger.info('email.test.notConfigured', { requestId: req.requestId });
-      return res.status(400).json({ error: 'Email sending is not configured' });
+      return res.status(400).json({ error: 'Email sending is not configured (RESEND_API_KEY missing on server)' });
     }
 
-    const to = req.body.to || req.body.recipientEmail || process.env.ALERT_RECIPIENT_EMAIL;
-    logger.info('email.test.recipient', { requestId: req.requestId, to });
-    logger.info('email.test.from', { requestId: req.requestId, from: getFromEmail() });
+    let to = req.body.to || req.body.recipientEmail || null;
+    let from = getFromEmail();
 
     if (!to) {
-      return res.status(400).json({ error: 'No recipient email provided' });
+      const row = await db.getUserIntegration(userId, 'email_alerts');
+      if (!row || !row.isEnabled || !row.config?.recipientEmail) {
+        return res.status(400).json({ error: 'No recipient email configured. Save an alert email in Settings first.' });
+      }
+      to = row.config.recipientEmail;
+      if (row.config.fromEmail) from = row.config.fromEmail;
     }
 
     try {
       const response = await resend.emails.send({
-        from: getFromEmail(),
+        from,
         to,
         subject: '[Dizon.ai] Connection Test',
         html: '<p>Your Resend email integration is working.</p>',
       });
-      logger.info('email.test.success', { requestId: req.requestId, responseId: response?.data?.id });
+      logger.info('email.test.success', { requestId: req.requestId, userId, responseId: response?.data?.id });
       return res.json({ success: true, message: 'Test email sent via Resend', response });
     } catch (err) {
-      logger.error('email.test.failed', { requestId: req.requestId, error: err.message });
+      logger.error('email.test.failed', { requestId: req.requestId, userId, error: err.message });
       return res.status(500).json({ error: err.message });
     }
   });

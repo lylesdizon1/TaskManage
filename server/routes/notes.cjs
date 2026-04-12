@@ -201,18 +201,26 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.CLAUDE_API_KEY;
       if (!apiKey) return res.status(401).json({ error: 'Missing API key' });
 
+      // Build the category list from the user's own note categories so
+      // the classifier never suggests another user's categories.
+      const userCats = await db.getNoteCategories(req.user.id).catch(() => []);
+      const byPillar = { hustle: [], home: [], move: [], grow: [] };
+      for (const c of userCats) {
+        if (c.parentId && byPillar[c.pillar]) byPillar[c.pillar].push(c.name);
+      }
+      const catLines = Object.entries(byPillar)
+        .map(([p, names]) => `  ${p} → ${names.length ? names.join(', ') : '(none yet)'}`)
+        .join('\n');
+
       const prompt = `Based on this note content, suggest the most appropriate pillar and category.
 Pillars: hustle, home, move, grow
 Categories:
-  hustle → Careific, Rose Motors, Buyflip, Care Homes, AutoVision, General Business
-  home → Family, Liz, Kids, Personal
-  move → Workouts, Health, Nutrition, Recovery
-  grow → Ideas, Journal, Learnings, Goals, Braindump
+${catLines}
 
 Note content: ${content.slice(0, 500)}
 
 Respond in JSON only:
-{"pillar": "hustle", "category": "Careific", "confidence": 0.95, "reason": "Mentions MVP and TestFlight"}`;
+{"pillar": "hustle", "category": "<category-name>", "confidence": 0.95, "reason": "<brief reason>"}`;
 
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',

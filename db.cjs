@@ -484,23 +484,142 @@ async function initTables() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calendar_notes_user ON calendar_notes(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calendar_notes_start ON calendar_notes(event_start)`).catch(() => {});
 
-  // ── Seed default org ──
-  const { rows: orgRows } = await pool.query('SELECT COUNT(*)::int AS count FROM organizations');
-  if (orgRows[0].count === 0) {
-    await pool.query(
-      `INSERT INTO organizations (id, name, type, created_by) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (id) DO NOTHING`,
-      ['org-dizon-household', 'Dizon Household', 'household', 'user-lyle']
+  // ── user_integrations table (per-user outbound notification routing) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_integrations (
+      id                SERIAL PRIMARY KEY,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      integration_type  TEXT NOT NULL,
+      config_json       JSONB NOT NULL DEFAULT '{}',
+      is_enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, integration_type)
     );
-    await pool.query(
-      `INSERT INTO org_members (org_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (org_id, user_id) DO NOTHING`,
-      ['org-dizon-household', 'user-lyle', 'admin', 'user-lyle']
-    );
-    console.log('[seed] Created default org');
-  }
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_integrations_user ON user_integrations(user_id)`).catch(() => {});
+
+  // Legacy "Dizon Household" seed org intentionally removed — founder-specific.
+  // Production org_members rows remain intact; new deployments start with
+  // no default org.
 
   console.log('[db] Tables initialised');
+}
+
+// ── User integrations (per-user outbound notification routing) ───────────────
+
+/**
+ * Load a single integration row for a user. Returns null if not configured.
+ * @param {string} userId
+ * @param {string} type - 'email_alerts' | 'slack_webhook' | 'ultramsg_whatsapp' | ...
+ * @returns {Promise<{id:number,userId:string,type:string,config:Object,isEnabled:boolean}|null>}
+ */
+async function getUserIntegration(userId, type) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", integration_type AS "type",
+            config_json AS "config", is_enabled AS "isEnabled",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM user_integrations WHERE user_id = $1 AND integration_type = $2`,
+    [userId, type],
+  );
+  return rows[0] || null;
+}
+
+/** Return all integrations for a user. */
+async function getUserIntegrations(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", integration_type AS "type",
+            config_json AS "config", is_enabled AS "isEnabled",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM user_integrations WHERE user_id = $1 ORDER BY integration_type`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * Upsert an integration row for a user. Merges new config into existing.
+ * @param {string} userId
+ * @param {string} type
+ * @param {Object} config - JSON config (merged into existing on conflict).
+ * @param {boolean} [isEnabled=true]
+ */
+async function upsertUserIntegration(userId, type, config, isEnabled = true) {
+  const { rows } = await pool.query(
+    `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
+     VALUES ($1, $2, $3::jsonb, $4)
+     ON CONFLICT (user_id, integration_type) DO UPDATE SET
+       config_json = user_integrations.config_json || EXCLUDED.config_json,
+       is_enabled = EXCLUDED.is_enabled,
+       updated_at = NOW()
+     RETURNING id, user_id AS "userId", integration_type AS "type",
+               config_json AS "config", is_enabled AS "isEnabled"`,
+    [userId, type, JSON.stringify(config || {}), isEnabled !== false],
+  );
+  return rows[0];
+}
+
+/** Delete a user's integration row. */
+async function deleteUserIntegration(userId, type) {
+  await pool.query(
+    `DELETE FROM user_integrations WHERE user_id = $1 AND integration_type = $2`,
+    [userId, type],
+  );
+}
+
+/**
+ * One-time backfill: copy env-based notification settings into the
+ * user_integrations rows of existing superadmin users so their alerts
+ * keep working after the cutover. Idempotent — ON CONFLICT DO NOTHING
+ * never overwrites a row a user has already configured.
+ *
+ * Intentionally scoped to superadmin only. Regular users must configure
+ * their own integrations — no env fallback.
+ */
+async function backfillSuperadminIntegrationsFromEnv() {
+  const { rows: admins } = await pool.query(
+    `SELECT id, whatsapp_phone AS "whatsappPhone" FROM users WHERE role = 'superadmin'`,
+  );
+  if (!admins.length) return;
+
+  for (const u of admins) {
+    if (process.env.ALERT_RECIPIENT_EMAIL) {
+      const cfg = { recipientEmail: process.env.ALERT_RECIPIENT_EMAIL };
+      if (process.env.RESEND_FROM_EMAIL) cfg.fromEmail = process.env.RESEND_FROM_EMAIL;
+      await pool.query(
+        `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
+         VALUES ($1, 'email_alerts', $2::jsonb, TRUE)
+         ON CONFLICT (user_id, integration_type) DO NOTHING`,
+        [u.id, JSON.stringify(cfg)],
+      );
+    }
+    if (process.env.SLACK_WEBHOOK_URL) {
+      await pool.query(
+        `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
+         VALUES ($1, 'slack_webhook', $2::jsonb, TRUE)
+         ON CONFLICT (user_id, integration_type) DO NOTHING`,
+        [u.id, JSON.stringify({ webhookUrl: process.env.SLACK_WEBHOOK_URL })],
+      );
+    }
+    if (process.env.ULTRAMSG_INSTANCE && process.env.ULTRAMSG_TOKEN) {
+      const phone = u.whatsappPhone || process.env.ULTRAMSG_PHONE || null;
+      await pool.query(
+        `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
+         VALUES ($1, 'ultramsg_whatsapp', $2::jsonb, $3)
+         ON CONFLICT (user_id, integration_type) DO NOTHING`,
+        [
+          u.id,
+          JSON.stringify({
+            instance: process.env.ULTRAMSG_INSTANCE,
+            token: process.env.ULTRAMSG_TOKEN,
+            phone,
+          }),
+          !!phone,
+        ],
+      );
+    }
+  }
+  console.log(`[migration] Backfilled integrations for ${admins.length} superadmin user(s)`);
 }
 
 // ── Users ────────────────────────────────────────────────────────────────────
@@ -803,34 +922,16 @@ async function deleteEntity(id, userId) {
 }
 
 /**
- * Seed default entities on first boot if the table is empty.
- * Uses ON CONFLICT DO NOTHING for idempotency. Only runs when
- * count is zero — subsequent calls are no-ops.
+ * No-op placeholder preserved for backward compatibility with callers
+ * that still invoke it during boot/migration.
  *
- * @note These defaults are Lyle's original business entities.
- * New users do NOT inherit these — they create their own via the UI.
- *
- * @returns {Promise<void>}
+ * Previously seeded founder-specific business entities (Careific, Rose,
+ * Buyflip, Care Home, Personal) globally — that seed is now removed to
+ * keep new deployments clean and multi-tenant. Users create their own
+ * entities via the UI; existing production rows are untouched.
  */
 async function seedEntitiesIfEmpty() {
-  const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM entities');
-  if (rows[0].count > 0) return;
-
-  const defaults = [
-    { id: 'entity-careific', name: 'Careific', color: 'indigo' },
-    { id: 'entity-rose', name: 'Rose', color: 'pink' },
-    { id: 'entity-buyflip', name: 'Buyflip', color: 'amber' },
-    { id: 'entity-carehome', name: 'Care Home', color: 'teal' },
-    { id: 'entity-personal', name: 'Personal', color: 'slate' },
-  ];
-
-  for (const e of defaults) {
-    await pool.query(
-      'INSERT INTO entities (id, name, color) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-      [e.id, e.name, e.color],
-    );
-  }
-  console.log('[db] Seeded 5 default entities');
+  return;
 }
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
@@ -1698,8 +1799,8 @@ async function seedNoteCategoriesIfEmpty(userId) {
   if (existing.length > 0) return;
 
   const tree = {
-    hustle: ['Careific', 'Rose Motors', 'Buyflip', 'Care Homes', 'AutoVision', 'General Business'],
-    home: ['Family', 'Liz', 'Kids', 'Personal'],
+    hustle: ['Work', 'Projects', 'Clients', 'Finance'],
+    home: ['Family', 'Household', 'Personal'],
     move: ['Workouts', 'Health', 'Nutrition', 'Recovery'],
     grow: ['Ideas', 'Journal', 'Learnings', 'Goals', 'Braindump'],
   };
@@ -2229,9 +2330,9 @@ async function seedUsersIfEmpty() {
  * IF NOT EXISTS, ON CONFLICT DO NOTHING, or .catch() to be safe on
  * re-runs.
  *
- * @note This function also promotes the seed user (user-lyle) to
- * superadmin and assigns all entities. This is intentional — the seed
- * user is the platform operator and needs full access.
+ * @note Founder-specific migration steps (seeding Lyle's entities,
+ * promoting user-lyle to superadmin, creating Dizon Household org)
+ * have been removed. Existing production rows are untouched.
  *
  * @note Errors in individual migration steps are caught and logged
  * rather than thrown, so one failing step doesn't block the rest.
@@ -2270,48 +2371,16 @@ async function runMigrations() {
       AND (type IS NULL OR type = 'business')
   `).catch(() => {});
 
-  // 1. Seed default entities if the table is empty
-  await seedEntitiesIfEmpty().catch((err) => console.warn('[migration] seedEntitiesIfEmpty:', err.message));
+  // Founder-specific seed/promotion blocks intentionally removed.
+  // seedEntitiesIfEmpty() is now a no-op; user-lyle admin/superadmin
+  // promotion is no longer performed in migrations. The existing
+  // production user row is untouched — role is whatever is stored in DB.
 
-  // 2. Get all entity names (now safe — columns exist)
-  let allEntityNames = [];
-  try {
-    const entities = await getEntities();
-    allEntityNames = entities.map((e) => e.name);
-  } catch (err) {
-    console.warn('[migration] getEntities:', err.message);
-  }
-
-  // 3. Find lyle — always ensure admin + all entities
-  let lyle = null;
-  try {
-    lyle = await getUserById('user-lyle');
-  } catch (err) {
-    console.warn('[migration] getUserById:', err.message);
-  }
-  if (lyle) {
-    const needsUpdate =
-      (lyle.role !== 'admin' && lyle.role !== 'superadmin') ||
-      !Array.isArray(lyle.entityIds) ||
-      lyle.entityIds.length !== allEntityNames.length ||
-      !allEntityNames.every((n) => lyle.entityIds.includes(n));
-
-    if (needsUpdate) {
-      await updateUser('user-lyle', { role: 'admin', entityIds: allEntityNames })
-        .catch((err) => console.warn('[migration] updateUser admin:', err.message));
-      console.log('[db] Migration: set seed user as admin with all entities');
-    }
-  }
-
-  // 3b. Promote lyle to superadmin (idempotent)
-  if (lyle && lyle.role !== 'superadmin') {
-    await updateUser('user-lyle', { role: 'superadmin' })
-      .catch((err) => console.warn('[migration] updateUser superadmin:', err.message));
-    console.log('[db] Migration: promoted seed user to superadmin');
-  }
-
-  // 4. Legacy: only assign all entities to Lyle (superadmin)
-  // New users start with empty entityIds and own only their created entities
+  // Backfill per-user integration rows for superadmins from env vars
+  // (one-time safety net so the cutover doesn't drop alerts for
+  // existing operators). Idempotent — never overwrites a configured row.
+  await backfillSuperadminIntegrationsFromEnv()
+    .catch((err) => console.warn('[migration] backfill integrations:', err.message));
 
   // 5. Add new columns to notes table (idempotent)
   const noteCols = [
@@ -3727,4 +3796,9 @@ module.exports = {
   markCalendarNoteAlertSent,
   getWhatsAppHistory,
   saveWhatsAppMessage,
+  getUserIntegration,
+  getUserIntegrations,
+  upsertUserIntegration,
+  deleteUserIntegration,
+  backfillSuperadminIntegrationsFromEnv,
 };

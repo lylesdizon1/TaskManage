@@ -47,6 +47,7 @@ const express   = require('express');
 const { ARIA_TOOLS, executeTool } = require('../tools.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
+const { sendWhatsApp } = require('../utils/integrations.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 /**
@@ -141,16 +142,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
           const mimeType = supportedTypes.find(t => contentType.includes(t));
           if (!mimeType) {
-            // Unsupported media type — reply and bail
-            const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-            const ultraToken = process.env.ULTRAMSG_TOKEN;
-            if (ultraInstance && ultraToken) {
-              await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token: ultraToken, to: fromRaw, body: 'I can only read photos and documents — try sending a JPG or PNG.' }),
-              }).catch(() => {});
-            }
+            await sendWhatsApp(db, user.id, 'I can only read photos and documents — try sending a JPG or PNG.', fromRaw).catch(() => {});
             return res.json({ ok: true, skipped: 'unsupported media type' });
           }
           const arrayBuf = await imgRes.arrayBuffer();
@@ -158,15 +150,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           logger.info('whatsapp.image.downloaded', { requestId: req.requestId, mimeType, sizeKB: Math.round(arrayBuf.byteLength / 1024) });
         } catch (imgErr) {
           logger.error('whatsapp.image.downloadFailed', { requestId: req.requestId, error: imgErr.message });
-          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-          const ultraToken = process.env.ULTRAMSG_TOKEN;
-          if (ultraInstance && ultraToken) {
-            await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: ultraToken, to: fromRaw, body: "I couldn't load that image — can you try sending it again?" }),
-            }).catch(() => {});
-          }
+          await sendWhatsApp(db, user.id, "I couldn't load that image — can you try sending it again?", fromRaw).catch(() => {});
           return res.json({ ok: true, skipped: 'image download failed' });
         }
       }
@@ -184,16 +168,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             content: `Added completion note to "${pending.taskTitle}": ${msgBody}`,
             metadata: { task_id: pending.taskId, completion_note: true, source: 'whatsapp' },
           }).catch(() => {});
-          // Reply confirming the note was saved
-          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-          const ultraToken = process.env.ULTRAMSG_TOKEN;
-          if (ultraInstance && ultraToken) {
-            await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: ultraToken, to: fromRaw, body: `Got it — saved your note on "${pending.taskTitle}".` }),
-            }).catch(() => {});
-          }
+          await sendWhatsApp(db, userId, `Got it — saved your note on "${pending.taskTitle}".`, fromRaw).catch(() => {});
           return res.json({ ok: true, completionNote: true });
         } catch (err) {
           logger.error('whatsapp.completionNote.saveFailed', { requestId: req.requestId, userId, error: err.message });
@@ -370,41 +345,24 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         if (reply) await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply);
       } catch (e) { logger.error('whatsapp.history.saveFailed', { requestId: req.requestId, userId, error: e.message }); }
 
-      // ── Reply via UltraMsg ──────────────────────────────────────────────
-      const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-      const ultraToken = process.env.ULTRAMSG_TOKEN;
-      if (ultraInstance && ultraToken && reply) {
-        try {
-          await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: ultraToken, to: fromRaw, body: reply }),
-          });
-        } catch (replyErr) {
-          logger.error('whatsapp.reply.failed', { requestId: req.requestId, userId, error: replyErr.message });
-        }
+      // ── Reply via user's UltraMsg integration ──────────────────────────
+      if (reply) {
+        const r = await sendWhatsApp(db, userId, reply, fromRaw);
+        if (!r.ok) logger.error('whatsapp.reply.failed', { requestId: req.requestId, userId, reason: r.reason });
       }
 
       // ── Completion note follow-up prompt ────────────────────────────────
-      // If a task was completed, send one follow-up asking for a note.
       const completedTool = (toolSummaries || []).find(s => s.tool === 'complete_task' && s.success);
-      if (completedTool && ultraInstance && ultraToken) {
+      if (completedTool) {
         const taskId = completedTool.result?.task_id;
         const taskTitle = completedTool.result?.title;
         if (taskId && taskTitle && !completedTool.result?.completion_note) {
           pendingCompletionNotes.set(userId, {
             taskId, taskTitle,
-            expiresAt: Date.now() + 5 * 60 * 1000, // 5-minute TTL
+            expiresAt: Date.now() + 5 * 60 * 1000,
           });
-          try {
-            await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: ultraToken, to: fromRaw, body: 'Any notes on how it went? Reply with a note or just ignore this.' }),
-            });
-          } catch (promptErr) {
-            logger.error('whatsapp.completionPrompt.failed', { requestId: req.requestId, userId, error: promptErr.message });
-          }
+          const r = await sendWhatsApp(db, userId, 'Any notes on how it went? Reply with a note or just ignore this.', fromRaw);
+          if (!r.ok) logger.error('whatsapp.completionPrompt.failed', { requestId: req.requestId, userId, reason: r.reason });
         }
       }
 

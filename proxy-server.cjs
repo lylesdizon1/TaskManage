@@ -58,7 +58,7 @@ app.use('/', require('./server/routes/auth.cjs')({ authenticateToken, JWT_SECRET
 app.use('/', require('./server/routes/users.cjs')({ authenticateToken, requireAdmin, db }));
 app.use('/', require('./server/routes/entities.cjs')({ authenticateToken, requireAdmin, db }));
 app.use('/', require('./server/routes/ai.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }));
-app.use('/', require('./server/routes/email.cjs')({ authenticateToken }));
+app.use('/', require('./server/routes/email.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/settings.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/gcal.cjs')({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, google }));
 app.use('/', require('./server/routes/gmail.cjs')({ authenticateToken, db, makeGmailOAuth2Client, saveGmailTokens, loadGmailTokens, google }));
@@ -100,7 +100,7 @@ start().catch((err) => { console.error('[startup] Fatal:', err.message); process
 
 // ── Server-side alert cron — runs every minute ──────────────────────────────
 const cron = require('node-cron');
-const { getResendClient: _getResendClient, getFromEmail: _getFromEmail } = require('./server/utils/email.cjs');
+const { sendWhatsApp: _sendWhatsApp, sendAlertEmail: _sendAlertEmail } = require('./server/utils/integrations.cjs');
 
 cron.schedule('* * * * *', async () => {
   try {
@@ -113,35 +113,19 @@ cron.schedule('* * * * *', async () => {
         const sent = [];
         const failed = [];
 
-        if (channels.includes('whatsapp') && alert.whatsappPhone) {
-          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-          const ultraToken = process.env.ULTRAMSG_TOKEN;
-          if (ultraInstance && ultraToken) {
-            try {
-              const waRes = await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({ token: ultraToken, to: alert.whatsappPhone, body: alert.message }),
-              });
-              if (waRes.ok) sent.push('WhatsApp');
-              else failed.push('WhatsApp');
-            } catch { failed.push('WhatsApp'); }
-          }
+        if (channels.includes('whatsapp')) {
+          const r = await _sendWhatsApp(db, alert.user_id, alert.message);
+          if (r.ok) sent.push('WhatsApp');
+          else failed.push(`WhatsApp:${r.reason}`);
         }
 
-        if (channels.includes('email') && alert.email) {
-          const resend = _getResendClient();
-          if (resend) {
-            try {
-              await resend.emails.send({
-                from: _getFromEmail(),
-                to: alert.email,
-                subject: 'Reminder from Aria',
-                text: alert.message,
-              });
-              sent.push('Email');
-            } catch { failed.push('Email'); }
-          }
+        if (channels.includes('email')) {
+          const r = await _sendAlertEmail(db, alert.user_id, {
+            subject: 'Reminder from Aria',
+            text: alert.message,
+          });
+          if (r.ok) sent.push('Email');
+          else failed.push(`Email:${r.reason}`);
         }
 
         await db.markScheduledAlertFired(alert.id);
@@ -168,37 +152,15 @@ cron.schedule('* * * * *', async () => {
         const msg = `Your meeting "${ev.eventTitle || 'Untitled'}" just ended. Reply with your outcomes & decisions — Aria will save them for you.`;
         let sent = false;
 
-        // WhatsApp
-        if (ev.whatsappPhone) {
-          const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-          const ultraToken = process.env.ULTRAMSG_TOKEN;
-          if (ultraInstance && ultraToken) {
-            try {
-              const waRes = await fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({ token: ultraToken, to: ev.whatsappPhone, body: msg }),
-              });
-              if (waRes.ok) { sent = true; console.log(`[cron] Post-meeting alert sent (WhatsApp) for event "${ev.eventTitle}"`); }
-            } catch { /* silent */ }
-          }
-        }
+        const wa = await _sendWhatsApp(db, ev.userId, msg);
+        if (wa.ok) { sent = true; console.log(`[cron] Post-meeting alert sent (WhatsApp) for event "${ev.eventTitle}"`); }
 
-        // Email fallback
-        if (!sent && ev.email) {
-          const resend = _getResendClient();
-          if (resend) {
-            try {
-              await resend.emails.send({
-                from: _getFromEmail(),
-                to: ev.email,
-                subject: `Meeting ended: ${ev.eventTitle || 'Untitled'}`,
-                text: msg,
-              });
-              sent = true;
-              console.log(`[cron] Post-meeting alert sent (Email) for event "${ev.eventTitle}"`);
-            } catch { /* silent */ }
-          }
+        if (!sent) {
+          const em = await _sendAlertEmail(db, ev.userId, {
+            subject: `Meeting ended: ${ev.eventTitle || 'Untitled'}`,
+            text: msg,
+          });
+          if (em.ok) { sent = true; console.log(`[cron] Post-meeting alert sent (Email) for event "${ev.eventTitle}"`); }
         }
 
         await db.markCalendarNoteAlertSent(ev.userId, ev.eventId);

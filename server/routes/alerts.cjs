@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { getResendClient, getFromEmail } = require('../utils/email.cjs');
+const { sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus } = require('../utils/integrations.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
@@ -9,16 +9,15 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
 
   router.post('/api/alerts/morning', authenticateToken, async (req, res) => {
     try {
-      const webhookUrl = process.env.SLACK_WEBHOOK_URL;
-      const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-      const ultraToken = process.env.ULTRAMSG_TOKEN;
-      if (!webhookUrl && !ultraInstance) return res.status(500).json({ error: 'No messaging channels configured (SLACK_WEBHOOK_URL or ULTRAMSG_INSTANCE)' });
+      const userId = req.user.id;
+      const status = await getIntegrationStatus(db, userId);
+      if (!status.slack && !status.whatsapp) {
+        return res.status(400).json({ error: 'No messaging channels configured. Configure Slack or WhatsApp in Settings.' });
+      }
 
-      const user = await db.getUserById(req.user.id);
-      const ultraPhone = user?.whatsappPhone ||
-        (req.user.role === 'superadmin' ? process.env.ULTRAMSG_PHONE : null);
+      const user = await db.getUserById(userId);
       const userEntities = (user?.entityIds || []);
-      const tasks = await db.getTasksForUser(req.user.id, userEntities);
+      const tasks = await db.getTasksForUser(userId, userEntities);
 
       const tz = user?.timezone || req.user.timezone;
       const todayStr = new Intl.DateTimeFormat('en-CA', {
@@ -32,10 +31,9 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       // Fetch calendar events for today from ALL connected accounts
       let calendarEvents = [];
       try {
-        const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(req.user.id) : [];
+        const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
         if (allAccounts.length > 0 && makeOAuth2Client && google) {
           const userTz = tz || 'America/Los_Angeles';
-          // Convert local midnight to UTC ISO string GCal accepts
           const todayLocal = new Intl.DateTimeFormat('en-CA', {
             timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
           }).format(new Date());
@@ -51,9 +49,9 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
             oauth2.setCredentials(acct.tokens);
             oauth2.on('tokens', async (newTokens) => {
               try {
-                const existing = await loadGcalTokens(req.user.id, acct.googleEmail);
-                await saveGcalTokens(req.user.id, { ...existing, ...newTokens }, acct.googleEmail);
-              } catch (e) { logger.error('morningBrief.tokenRefresh.failed', { userId: req.user.id, googleEmail: acct.googleEmail, error: e.message }); }
+                const existing = await loadGcalTokens(userId, acct.googleEmail);
+                await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+              } catch (e) { logger.error('morningBrief.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
             });
             const calendar = google.calendar({ version: 'v3', auth: oauth2 });
             const { data } = await calendar.events.list({
@@ -83,14 +81,12 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
           calendarEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
         }
       } catch (calErr) {
-        logger.error('morningBrief.calendarFetch.failed', { requestId: req.requestId, userId: req.user?.id, error: calErr.message });
+        logger.error('morningBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
       }
 
-      // Format date
       const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: tz });
-
-      // Build message
-      const lines = [`☀️ Good morning ${user?.displayName || 'Lyle'} — ${dateLabel}\n`];
+      const greetingName = user?.displayName || user?.username || 'there';
+      const lines = [`☀️ Good morning ${greetingName} — ${dateLabel}\n`];
 
       lines.push(`📋 *OVERDUE (${overdue.length})*`);
       if (overdue.length === 0) lines.push('- None! You\'re all caught up');
@@ -113,39 +109,14 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
 
       const text = lines.join('\n');
 
-      // Fire Slack + WhatsApp in parallel
       const channels = [];
+      if (status.slack) channels.push(sendSlack(db, userId, text).then(r => ({ name: 'Slack', ...r })));
+      if (status.whatsapp) channels.push(sendWhatsApp(db, userId, text).then(r => ({ name: 'WhatsApp', ...r })));
 
-      if (webhookUrl) {
-        channels.push(
-          fetch(webhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
-          }).then(async (r) => {
-            if (!r.ok) throw new Error(`Slack ${r.status}: ${await r.text()}`);
-            return 'Slack';
-          })
-        );
-      }
-
-      if (ultraInstance && ultraToken && ultraPhone) {
-        channels.push(
-          fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({ token: ultraToken, to: ultraPhone, body: text }),
-          }).then(async (r) => {
-            if (!r.ok) throw new Error(`WhatsApp ${r.status}: ${await r.text()}`);
-            return 'WhatsApp';
-          })
-        );
-      }
-
-      const results = await Promise.allSettled(channels);
-      const sent = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-      const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason.message);
-      failed.forEach((msg) => logger.error('morningBrief.channelFailed', { requestId: req.requestId, userId: req.user?.id, error: msg }));
+      const results = await Promise.all(channels);
+      const sent = results.filter(r => r.ok).map(r => r.name);
+      const failed = results.filter(r => !r.ok).map(r => `${r.name}:${r.reason}`);
+      failed.forEach((msg) => logger.error('morningBrief.channelFailed', { requestId: req.requestId, userId, error: msg }));
 
       if (sent.length === 0) return res.status(502).json({ error: `All channels failed: ${failed.join('; ')}` });
       return res.json({ success: true, message: `Morning brief sent to ${sent.join(', ')}${failed.length ? ` (failed: ${failed.join(', ')})` : ''}` });
@@ -157,68 +128,30 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
 
   router.post('/api/alerts/fire', authenticateToken, async (req, res) => {
     try {
+      const userId = req.user.id;
       const { message, channels = {}, recipientEmail } = req.body;
       if (!message) return res.status(400).json({ error: 'message required' });
 
-      const webhookUrl    = process.env.SLACK_WEBHOOK_URL;
-      const ultraInstance = process.env.ULTRAMSG_INSTANCE;
-      const ultraToken    = process.env.ULTRAMSG_TOKEN;
-
-      const user = await db.getUserById(req.user.id);
-      const ultraPhone = user?.whatsappPhone ||
-        (req.user.role === 'superadmin' ? process.env.ULTRAMSG_PHONE : null);
-
       const sends = [];
-
-      if (channels.slack && webhookUrl) {
-        sends.push(
-          fetch(webhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: message }),
-          }).then(async (r) => {
-            if (!r.ok) throw new Error(`Slack ${r.status}`);
-            return 'Slack';
-          })
-        );
-      }
-
-      if (channels.whatsapp && ultraInstance && ultraToken && ultraPhone) {
-        sends.push(
-          fetch(`https://api.ultramsg.com/${ultraInstance}/messages/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({ token: ultraToken, to: ultraPhone, body: message }),
-          }).then(async (r) => {
-            if (!r.ok) throw new Error(`WhatsApp ${r.status}`);
-            return 'WhatsApp';
-          })
-        );
-      }
-
-      if (channels.email && recipientEmail) {
-        const resend = getResendClient();
-        if (resend) {
-          sends.push(
-            resend.emails.send({
-              from: getFromEmail(),
-              to: recipientEmail,
-              subject: '[Dizon.ai] Alert',
-              text: message,
-            }).then(() => 'Email')
-          );
-        }
+      if (channels.slack) sends.push(sendSlack(db, userId, message).then(r => ({ name: 'Slack', ...r })));
+      if (channels.whatsapp) sends.push(sendWhatsApp(db, userId, message).then(r => ({ name: 'WhatsApp', ...r })));
+      if (channels.email) {
+        sends.push(sendAlertEmail(db, userId, {
+          subject: '[Dizon.ai] Alert',
+          text: message,
+          toOverride: recipientEmail || null,
+        }).then(r => ({ name: 'Email', ...r })));
       }
 
       const skipped = [];
       if (channels.sms) {
-        logger.info('alerts.sms.skipped', { requestId: req.requestId, userId: req.user?.id });
+        logger.info('alerts.sms.skipped', { requestId: req.requestId, userId });
         skipped.push('SMS');
       }
 
-      const results = await Promise.allSettled(sends);
-      const sent   = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-      const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason.message);
+      const results = await Promise.all(sends);
+      const sent = results.filter(r => r.ok).map(r => r.name);
+      const failed = results.filter(r => !r.ok).map(r => `${r.name}:${r.reason}`);
 
       return res.json({ sent, failed, skipped });
     } catch (err) {
@@ -259,7 +192,6 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     try {
       let configs = await db.getCadenceConfigForUser(req.user.id);
       if (!configs.length) {
-        // Seed defaults on first access
         await db.seedDefaultCadenceConfig(req.user.id);
         configs = await db.getCadenceConfigForUser(req.user.id);
       }
@@ -289,13 +221,14 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     }
   });
 
-  router.get('/api/config/status', authenticateToken, (req, res) => {
-    res.json({
-      slack:    !!process.env.SLACK_WEBHOOK_URL,
-      whatsapp: !!(process.env.ULTRAMSG_INSTANCE && process.env.ULTRAMSG_TOKEN && process.env.ULTRAMSG_PHONE),
-      sms:      false,
-      email:    !!process.env.RESEND_API_KEY,
-    });
+  router.get('/api/config/status', authenticateToken, async (req, res) => {
+    try {
+      const status = await getIntegrationStatus(db, req.user.id);
+      res.json(status);
+    } catch (err) {
+      logger.error('config.status.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: err.message });
+    }
   });
 
   return router;

@@ -971,7 +971,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                       type="text"
                       value={profileName}
                       onChange={(e) => setProfileName(e.target.value)}
-                      placeholder="Lyle"
+                      placeholder="Your name"
                       className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
                     />
                   </div>
@@ -982,7 +982,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                       type="text"
                       value={profileBusinesses}
                       onChange={(e) => setProfileBusinesses(e.target.value)}
-                      placeholder="Careific, BuyFlip, Rose Motor Cars"
+                      placeholder="Comma-separated list of businesses"
                       className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
                     />
                   </div>
@@ -993,7 +993,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                       type="text"
                       value={profileHousehold}
                       onChange={(e) => setProfileHousehold(e.target.value)}
-                      placeholder="Wife Liz, co-operator"
+                      placeholder="e.g. partner, kids, co-operator"
                       className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
                     />
                     <p className="text-xs text-gray-400 mt-1">For Aria&rsquo;s context only — not a system connection</p>
