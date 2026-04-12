@@ -202,6 +202,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [ccLoading, setCcLoading] = useState(true);
   const [ccInput, setCcInput] = useState('');
   const [ccSending, setCcSending] = useState(false);
+  const ccAbortRef   = useRef(null);   // active AbortController for chat stream
+  const ccStoppedRef = useRef(false);  // set true on user Stop so late events are ignored
   const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
   const lastCheckedRef = useRef(new Date().toISOString());
@@ -500,6 +502,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (!text || ccSending || !ccConvId) return;
     setCcInput('');
     setCcSending(true);
+    ccStoppedRef.current = false;
+    const controller = new AbortController();
+    ccAbortRef.current = controller;
 
     const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString(), ts: Date.now() };
     setCcMessages((prev) => [...prev, userMsg]);
@@ -547,6 +552,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           messages: recentMsgs,
           timeZone: userTZ,
         }),
+        signal: controller.signal,
       });
 
       const reader = res.body.getReader();
@@ -555,12 +561,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       let currentEvent = null;
 
       while (true) {
+        if (ccStoppedRef.current) { try { await reader.cancel(); } catch {} break; }
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
         for (const rawLine of lines) {
+          if (ccStoppedRef.current) break;
           const eventMatch = rawLine.match(/^event: (.+)/);
           const dataMatch  = rawLine.match(/^data: (.+)/);
 
@@ -573,6 +581,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               const parsed = JSON.parse(dataMatch[1]);
 
               if (currentEvent === 'text') {
+                if (ccStoppedRef.current) { currentEvent = null; continue; }
                 fullResponse = parsed.content || '';
                 setCcMessages((prev) => {
                   const updated = [...prev];
@@ -618,8 +627,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         }
       }
 
-      // Save assistant response
-      if (fullResponse) {
+      // Save assistant response (skip if user stopped mid-stream)
+      if (fullResponse && !ccStoppedRef.current) {
         await apiFetch(`/api/conversations/${ccConvId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
@@ -627,15 +636,38 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         });
       }
     } catch (err) {
-      setCcMessages((prev) => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { ...updated[updated.length - 1], content: `Error: ${err.message}` };
-        return updated;
-      });
+      const aborted = err?.name === 'AbortError' || ccStoppedRef.current;
+      if (aborted) {
+        // Leave any partial text already in the placeholder alone. If the
+        // placeholder is still empty, drop it so the thread isn't littered
+        // with a blank bubble. A system row is added below.
+        setCcMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last && last.role === 'assistant' && !last.content) updated.pop();
+          return updated;
+        });
+      } else {
+        setCcMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { ...updated[updated.length - 1], content: `Error: ${err.message}` };
+          return updated;
+        });
+      }
     } finally {
+      if (ccStoppedRef.current) {
+        setCcMessages((prev) => [...prev, { role: 'system', content: 'Generation stopped', createdAt: new Date().toISOString(), ts: Date.now() }]);
+      }
+      ccAbortRef.current = null;
       setCcSending(false);
     }
   }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch, tasks, entities, notes, calendarEvents, chatCalendarEvents]);
+
+  const handleCcStop = useCallback(() => {
+    ccStoppedRef.current = true;
+    try { ccAbortRef.current?.abort(); } catch {}
+    setCcSending(false);
+  }, []);
 
   const fetchDigest = (force = false) => {
     const cacheKey = `digest_${today}`;
@@ -827,6 +859,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     </div>
                   );
                 }
+                if (msg.role === 'system') {
+                  return (
+                    <div key={i} className="flex justify-center my-1">
+                      <span
+                        className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-3 py-1"
+                        style={{ fontFamily: 'Manrope, sans-serif' }}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>info</span>
+                        {msg.content}
+                      </span>
+                    </div>
+                  );
+                }
                 const isUser = msg.role === 'user';
                 return (
                   <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -879,16 +924,27 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', border: '1px solid #4f4dcf', borderRadius: '8px', padding: '8px 12px' }}
             disabled={ccSending}
           />
-          <button
-            onClick={handleCcSend}
-            disabled={!ccInput.trim() || ccSending}
-            className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
-            style={{ backgroundColor: ccInput.trim() ? '#4f4dcf' : 'transparent' }}
-          >
-            <span className={`material-symbols-outlined text-base ${ccInput.trim() ? 'text-white' : 'text-slate-400'}`}>
-              {ccSending ? 'hourglass_empty' : 'send'}
-            </span>
-          </button>
+          {ccSending ? (
+            <button
+              onClick={handleCcStop}
+              aria-label="Stop generating"
+              title="Stop generating"
+              className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all hover:brightness-110"
+              style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca' }}
+            >
+              <span className="material-symbols-outlined text-base" style={{ color: '#dc2626' }}>stop_circle</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleCcSend}
+              disabled={!ccInput.trim()}
+              aria-label="Send message"
+              className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
+              style={{ backgroundColor: ccInput.trim() ? '#4f4dcf' : 'transparent' }}
+            >
+              <span className={`material-symbols-outlined text-base ${ccInput.trim() ? 'text-white' : 'text-slate-400'}`}>send</span>
+            </button>
+          )}
         </div>}
       </div>
 
