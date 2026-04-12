@@ -168,22 +168,6 @@ function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAle
 
   return (
     <div className="space-y-3">
-      {/* Channel status bar */}
-      <div className="text-xs flex items-center gap-2 flex-wrap p-2.5 rounded-lg bg-gray-50 border border-gray-100 text-gray-600">
-        {[
-          { key: 'whatsapp', label: 'WhatsApp' },
-          { key: 'slack',    label: 'Slack' },
-          { key: 'sms',      label: 'SMS' },
-          { key: 'email',    label: 'Email' },
-        ].map(({ key, label }) => (
-          <span key={key} className="flex items-center gap-1">
-            <span className={`inline-block w-2 h-2 rounded-full ${env[key] ? 'bg-green-500' : 'bg-gray-300'}`} />
-            {label}
-          </span>
-        ))}
-        <span className="text-gray-400 ml-auto">Rules fire every 60s</span>
-      </div>
-
       {/* Evaluate + Test buttons */}
       <div className="flex gap-2">
         <button onClick={handleEvaluateNow} disabled={evaluating}
@@ -774,10 +758,10 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
         {/* Tabs */}
         <div className="flex flex-nowrap border-b border-gray-100 mx-6 overflow-x-auto">
           {[
-            { key: 'keys',  label: 'API Keys' },
+            { key: 'keys',  label: 'Models' },
             { key: 'alerts', label: 'Alerts' },
-            { key: 'email', label: 'Email' },
-            { key: 'assistant', label: 'AI Assistant' },
+            { key: 'integrations', label: 'Integrations' },
+            { key: 'assistant', label: 'Profile' },
             { key: 'entities', label: 'Entities' },
             { key: 'password', label: 'Password' },
             { key: 'cadence', label: 'Alert Cadence' },
@@ -870,95 +854,98 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
             EntitySelectOptions={EntitySelectOptions}
           />}
 
-          {/* Email tab */}
-          {tab === 'email' && (
-            <div className="space-y-4">
-              {/* Resend status */}
-              <div className={`text-xs px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
-                envConfigured.resendApiKey
-                  ? 'bg-green-50 text-green-700 border border-green-200'
-                  : 'bg-amber-50 text-amber-700 border border-amber-100'
-              }`}>
-                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${envConfigured.resendApiKey ? 'bg-green-500' : 'bg-amber-400'}`} />
-                {envConfigured.resendApiKey
-                  ? 'Resend API key configured via environment variable'
-                  : 'Set RESEND_API_KEY in Railway environment variables to enable email'}
-              </div>
+          {/* Integrations tab */}
+          {tab === 'integrations' && (
+            <div className="space-y-6">
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Email</h3>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Default Alert Recipient
-                  {envConfigured.recipientEmail && <EnvBadge />}
-                </label>
-                <input
-                  type="email"
-                  value={draftEmail.recipientEmail}
-                  onChange={(e) => setDraftEmail((s) => ({ ...s, recipientEmail: e.target.value }))}
-                  placeholder="alerts@example.com"
-                  autoComplete="off"
-                  disabled={envConfigured.recipientEmail}
-                  className={envConfigured.recipientEmail ? disabledCls : inputCls}
-                />
-                <p className="text-xs text-gray-400 mt-1">Alerts are sent to this address by default</p>
-              </div>
-
-              {testResult && (
-                <div
-                  className={`text-xs px-3 py-2 rounded-lg font-medium ${
-                    testResult.ok
-                      ? 'bg-green-50 text-green-700 border border-green-200'
-                      : 'bg-red-50 text-red-700 border border-red-200'
-                  }`}
-                >
-                  {testResult.ok ? '\u2713 ' : '\u2717 '}{testResult.msg}
+                {/* Resend status */}
+                <div className={`text-xs px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
+                  envConfigured.resendApiKey
+                    ? 'bg-green-50 text-green-700 border border-green-200'
+                    : 'bg-amber-50 text-amber-700 border border-amber-100'
+                }`}>
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${envConfigured.resendApiKey ? 'bg-green-500' : 'bg-amber-400'}`} />
+                  {envConfigured.resendApiKey
+                    ? 'Resend API key configured via environment variable'
+                    : 'Set RESEND_API_KEY in Railway environment variables to enable email'}
                 </div>
-              )}
 
-              <div className="flex gap-2">
-                <button
-                  onClick={handleTestConnection}
-                  disabled={testing || !envConfigured.resendApiKey}
-                  className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors disabled:opacity-50"
-                >
-                  {testing ? 'Sending\u2026' : 'Send Test Email'}
-                </button>
-                <button
-                  onClick={() => { onSaveEmail(draftEmail); onClose(); }}
-                  className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm"
-                >
-                  Save Email Settings
-                </button>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Default Alert Recipient
+                    {envConfigured.recipientEmail && <EnvBadge />}
+                  </label>
+                  <input
+                    type="email"
+                    value={draftEmail.recipientEmail}
+                    onChange={(e) => setDraftEmail((s) => ({ ...s, recipientEmail: e.target.value }))}
+                    placeholder="alerts@example.com"
+                    autoComplete="off"
+                    disabled={envConfigured.recipientEmail}
+                    className={envConfigured.recipientEmail ? disabledCls : inputCls}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Alerts are sent to this address by default</p>
+                </div>
+
+                {testResult && (
+                  <div
+                    className={`text-xs px-3 py-2 rounded-lg font-medium ${
+                      testResult.ok
+                        ? 'bg-green-50 text-green-700 border border-green-200'
+                        : 'bg-red-50 text-red-700 border border-red-200'
+                    }`}
+                  >
+                    {testResult.ok ? '\u2713 ' : '\u2717 '}{testResult.msg}
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={testing || !envConfigured.resendApiKey}
+                    className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors disabled:opacity-50"
+                  >
+                    {testing ? 'Sending\u2026' : 'Send Test Email'}
+                  </button>
+                  <button
+                    onClick={() => { onSaveEmail(draftEmail); onClose(); }}
+                    className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors shadow-sm"
+                  >
+                    Save Email Settings
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-gray-100">
+                <div className="px-3 py-3 rounded-xl bg-gray-50 border border-gray-200 text-sm text-gray-400 select-none">
+                  WhatsApp &middot; Slack &middot; Google Calendar &middot; Gmail &mdash; coming soon
+                </div>
               </div>
             </div>
           )}
 
-          {/* AI Assistant tab */}
+          {/* Profile tab */}
           {tab === 'assistant' && (
-            <div className="space-y-5">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Assistant Name</label>
-                <input
-                  type="text"
-                  value={personaName}
-                  onChange={(e) => setPersonaName(e.target.value)}
-                  placeholder="Aria"
-                  maxLength={30}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-                />
-                <p className="text-xs text-gray-400 mt-1">Your AI assistant&rsquo;s name — used in briefs and greetings.</p>
-              </div>
-              <PersonaSettings />
+            <div className="space-y-6">
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Assistant</h3>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">WhatsApp Phone Number</label>
-                <input
-                  type="tel"
-                  value={whatsappPhone}
-                  onChange={(e) => setWhatsappPhone(e.target.value)}
-                  placeholder="+1 555 123 4567"
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-                />
-                <p className="text-xs text-gray-400 mt-1">Your WhatsApp number — enables two-way messaging with Aria.</p>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Assistant Name</label>
+                  <input
+                    type="text"
+                    value={personaName}
+                    onChange={(e) => setPersonaName(e.target.value)}
+                    placeholder="Aria"
+                    maxLength={30}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Your AI assistant&rsquo;s name — used in briefs and greetings.</p>
+                </div>
+
+                <PersonaSettings />
               </div>
 
               <div className="border-t border-gray-100 pt-4 mt-2">
@@ -1019,6 +1006,18 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                       rows={3}
                       className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">WhatsApp Phone Number</label>
+                    <input
+                      type="tel"
+                      value={whatsappPhone}
+                      onChange={(e) => setWhatsappPhone(e.target.value)}
+                      placeholder="+1 555 123 4567"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Your WhatsApp number — enables two-way messaging with Aria.</p>
                   </div>
                 </div>
               </div>

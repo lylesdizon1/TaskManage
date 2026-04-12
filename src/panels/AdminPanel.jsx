@@ -312,10 +312,17 @@ export default function AdminPanel({ authToken }) {
                 <th className="px-4 py-3 text-left">Role</th>
                 <th className="px-4 py-3 text-left">Org</th>
                 <th className="px-4 py-3 text-center">Status</th>
+                <th className="px-4 py-3 text-left">Last Active</th>
+                <th className="px-4 py-3 text-left">Joined</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr></thead>
               <tbody>
-                {users.map((u) => (
+                {users.map((u) => {
+                  const lastActiveRaw = u.lastLogin || u.last_login || u.updatedAt || u.updated_at;
+                  const lastActive = lastActiveRaw ? new Date(lastActiveRaw).toLocaleDateString('en-US') : '\u2014';
+                  const joined = u.createdAt || u.created_at;
+                  const joinedStr = joined ? new Date(joined).toLocaleDateString('en-US') : '\u2014';
+                  return (
                   <>
                     <tr key={u.id} className="border-t border-gray-100">
                       <td className="px-4 py-3 font-medium text-gray-900">{u.displayName || u.username}</td>
@@ -327,6 +334,8 @@ export default function AdminPanel({ authToken }) {
                           {u.active ? 'Active' : 'Suspended'}
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-gray-600">{lastActive}</td>
+                      <td className="px-4 py-3 text-gray-600">{joinedStr}</td>
                       <td className="px-4 py-3 text-right space-x-2">
                         <button onClick={() => setEditingUser({ id: u.id, field: 'email', value: u.email || '' })} className="text-xs text-gray-500 hover:text-gray-700 font-medium">Email</button>
                         <button onClick={() => setEditingUser({ id: u.id, field: 'password', value: '' })} className="text-xs text-gray-500 hover:text-gray-700 font-medium">Password</button>
@@ -342,7 +351,7 @@ export default function AdminPanel({ authToken }) {
                     </tr>
                     {editingUser?.id === u.id && (
                       <tr key={`${u.id}-edit`} className="bg-gray-50">
-                        <td colSpan={6} className="px-4 py-3">
+                        <td colSpan={8} className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             <span className="text-xs font-medium text-gray-500 uppercase w-16">
                               {editingUser.field === 'password' ? 'New pw' : editingUser.field === 'email' ? 'Email' : 'Org'}
@@ -377,8 +386,9 @@ export default function AdminPanel({ authToken }) {
                       </tr>
                     )}
                   </>
-                ))}
-                {users.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No users</td></tr>}
+                  );
+                })}
+                {users.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">No users</td></tr>}
               </tbody>
             </table>
           </div>
