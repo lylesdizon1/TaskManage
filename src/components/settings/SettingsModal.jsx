@@ -616,8 +616,12 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   const [profileNotes, setProfileNotes] = useState(currentUser?.profileNotes || '');
 
   // ── Gmail / Email Intelligence state ──
-  const [gmailStatus, setGmailStatus] = useState({ connected: false, email: '' });
-  const [gmailConfig, setGmailConfig] = useState({ vipSenders: [], triggerKeywords: [], commitmentDetection: true });
+  const [gmailAccounts, setGmailAccounts] = useState([]);
+  const [gmailConfig, setGmailConfig] = useState({
+    vipSenders: [], triggerKeywords: [], commitmentDetection: true,
+    excludedSenders: [], autoExcludeNoreply: true,
+    scanFrequency: '1h', scanWindow: '24h',
+  });
   const [gmailLoading, setGmailLoading] = useState(false);
   const [newVip, setNewVip] = useState('');
   const [newKeyword, setNewKeyword] = useState('');
@@ -631,16 +635,31 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     if (tab === 'gmail') loadGmailData();
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  async function loadGmailAccounts() {
+    try {
+      const res = await apiFetch('/api/gmail/accounts', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      setGmailAccounts(Array.isArray(data) ? data : []);
+    } catch {
+      setGmailAccounts([]);
+    }
+  }
+
   async function loadGmailData() {
     try {
-      const [statusRes, configRes] = await Promise.all([
-        apiFetch('/api/gmail/status', { headers: { Authorization: `Bearer ${authToken}` } }),
+      const [accountsRes, configRes] = await Promise.all([
+        apiFetch('/api/gmail/accounts', { headers: { Authorization: `Bearer ${authToken}` } }),
         apiFetch('/api/gmail/config', { headers: { Authorization: `Bearer ${authToken}` } }),
       ]);
-      const statusData = await statusRes.json();
+      const accountsData = await accountsRes.json();
       const configData = await configRes.json();
-      setGmailStatus(statusData);
-      setGmailConfig({ excludedSenders: [], autoExcludeNoreply: true, ...configData });
+      setGmailAccounts(Array.isArray(accountsData) ? accountsData : []);
+      setGmailConfig({
+        vipSenders: [], triggerKeywords: [], commitmentDetection: true,
+        excludedSenders: [], autoExcludeNoreply: true,
+        scanFrequency: '1h', scanWindow: '24h',
+        ...(configData || {}),
+      });
     } catch {}
   }
 
@@ -655,11 +674,11 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     }
   }
 
-  async function handleGmailDisconnect() {
+  async function handleDisconnectAccount(id) {
     setGmailLoading(true);
     try {
-      await apiFetch('/api/gmail/disconnect', { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
-      setGmailStatus({ connected: false, email: '' });
+      await apiFetch(`/api/gmail/accounts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+      await loadGmailAccounts();
     } catch {} finally {
       setGmailLoading(false);
     }
@@ -1246,34 +1265,68 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
 
           {/* Email Intelligence tab */}
           {tab === 'gmail' && (
-            <div className="space-y-5">
-              {/* Connection status */}
-              <div>
-                <h3 className="text-sm font-semibold text-gray-700 mb-2">Gmail Connection</h3>
-                <div className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${gmailStatus.connected ? 'bg-green-500' : 'bg-gray-300'}`} />
-                    <span className="text-sm text-gray-600">
-                      {gmailStatus.connected ? `Connected to ${gmailStatus.email}` : 'Not connected'}
-                    </span>
-                  </div>
-                  {gmailStatus.connected ? (
-                    <button
-                      onClick={handleGmailDisconnect}
-                      disabled={gmailLoading}
-                      className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
-                    >
-                      {gmailLoading ? 'Disconnecting...' : 'Disconnect'}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleGmailConnect}
-                      disabled={gmailLoading}
-                      className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                    >
-                      {gmailLoading ? 'Connecting...' : 'Connect Gmail'}
-                    </button>
+            <div className="space-y-6">
+              {/* Gmail Accounts */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Gmail Accounts</h3>
+                <div className="space-y-2">
+                  {gmailAccounts.length === 0 && (
+                    <div className="text-xs text-gray-400 italic px-3 py-2">No accounts connected yet.</div>
                   )}
+                  {gmailAccounts.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                        <span className="text-sm text-gray-700 truncate">{a.account_email || '(unknown email — reconnect to refresh)'}</span>
+                      </div>
+                      <button
+                        onClick={() => handleDisconnectAccount(a.id)}
+                        disabled={gmailLoading}
+                        className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                      >Disconnect</button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={handleGmailConnect}
+                    disabled={gmailLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-dashed border-gray-200 rounded-xl text-gray-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/20 transition-all text-sm font-medium disabled:opacity-50"
+                  >
+                    <span className="text-base leading-none">+</span>
+                    {gmailLoading ? 'Connecting\u2026' : 'Add Account'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Scan Settings */}
+              <div className="space-y-3 pt-4 border-t border-gray-100">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Scan Settings</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Scan Frequency</label>
+                    <select
+                      value={gmailConfig.scanFrequency || '1h'}
+                      onChange={(e) => setGmailConfig((c) => ({ ...c, scanFrequency: e.target.value }))}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    >
+                      <option value="15m">Every 15 min</option>
+                      <option value="30m">Every 30 min</option>
+                      <option value="1h">Every hour</option>
+                      <option value="4h">Every 4 hours</option>
+                      <option value="manual">Manual only</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Scan Window</label>
+                    <select
+                      value={gmailConfig.scanWindow || '24h'}
+                      onChange={(e) => setGmailConfig((c) => ({ ...c, scanWindow: e.target.value }))}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    >
+                      <option value="6h">Last 6 hours</option>
+                      <option value="24h">Last 24 hours</option>
+                      <option value="48h">Last 48 hours</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -1438,7 +1491,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                 </button>
                 <button
                   onClick={handleGmailScan}
-                  disabled={!gmailStatus.connected || scanning}
+                  disabled={gmailAccounts.length === 0 || scanning}
                   className="w-full py-2 text-sm font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {scanning ? (
@@ -1448,8 +1501,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                     </>
                   ) : 'Scan Now'}
                 </button>
-                {!gmailStatus.connected && (
-                  <p className="text-xs text-gray-400 text-center">Connect Gmail above to enable scanning</p>
+                {gmailAccounts.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center">Connect a Gmail account above to enable scanning</p>
                 )}
               </div>
             </div>

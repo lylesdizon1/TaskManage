@@ -528,52 +528,97 @@ async function initTables() {
  * @param {string} type - 'email_alerts' | 'slack_webhook' | 'ultramsg_whatsapp' | ...
  * @returns {Promise<{id:number,userId:string,type:string,config:Object,isEnabled:boolean}|null>}
  */
-async function getUserIntegration(userId, type) {
+async function getUserIntegration(userId, type, accountEmail = '') {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", integration_type AS "type",
+            account_email AS "accountEmail",
             config_json AS "config", is_enabled AS "isEnabled",
             created_at AS "createdAt", updated_at AS "updatedAt"
-     FROM user_integrations WHERE user_id = $1 AND integration_type = $2`,
-    [userId, type],
+     FROM user_integrations
+     WHERE user_id = $1 AND integration_type = $2 AND account_email = $3`,
+    [userId, type, accountEmail],
   );
   return rows[0] || null;
 }
 
-/** Return all integrations for a user. */
+/** Return all integrations for a user (all account variants). */
 async function getUserIntegrations(userId) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", integration_type AS "type",
+            account_email AS "accountEmail",
             config_json AS "config", is_enabled AS "isEnabled",
             created_at AS "createdAt", updated_at AS "updatedAt"
-     FROM user_integrations WHERE user_id = $1 ORDER BY integration_type`,
+     FROM user_integrations WHERE user_id = $1
+     ORDER BY integration_type, account_email`,
     [userId],
   );
   return rows;
 }
 
+/** All rows of a given integration_type for a user (multi-account aware). */
+async function getUserIntegrationsByType(userId, type) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", integration_type AS "type",
+            account_email AS "accountEmail",
+            config_json AS "config", is_enabled AS "isEnabled",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM user_integrations WHERE user_id = $1 AND integration_type = $2
+     ORDER BY created_at ASC`,
+    [userId, type],
+  );
+  return rows;
+}
+
+/** Fetch a single row by id, scoped to userId for authorization. */
+async function getUserIntegrationById(id, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", integration_type AS "type",
+            account_email AS "accountEmail",
+            config_json AS "config", is_enabled AS "isEnabled",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM user_integrations WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rows[0] || null;
+}
+
 /**
  * Upsert an integration row for a user. Merges new config into existing.
+ * accountEmail defaults to '' so singleton integrations (email_alerts,
+ * slack_webhook, ultramsg_whatsapp) continue to have exactly one row per user.
+ *
  * @param {string} userId
  * @param {string} type
  * @param {Object} config - JSON config (merged into existing on conflict).
  * @param {boolean} [isEnabled=true]
+ * @param {string} [accountEmail='']
  */
-async function upsertUserIntegration(userId, type, config, isEnabled = true) {
+async function upsertUserIntegration(userId, type, config, isEnabled = true, accountEmail = '') {
   const { rows } = await pool.query(
-    `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
-     VALUES ($1, $2, $3::jsonb, $4)
-     ON CONFLICT (user_id, integration_type) DO UPDATE SET
+    `INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
+     VALUES ($1, $2, $3, $4::jsonb, $5)
+     ON CONFLICT (user_id, integration_type, account_email) DO UPDATE SET
        config_json = user_integrations.config_json || EXCLUDED.config_json,
        is_enabled = EXCLUDED.is_enabled,
        updated_at = NOW()
      RETURNING id, user_id AS "userId", integration_type AS "type",
+               account_email AS "accountEmail",
                config_json AS "config", is_enabled AS "isEnabled"`,
-    [userId, type, JSON.stringify(config || {}), isEnabled !== false],
+    [userId, type, accountEmail, JSON.stringify(config || {}), isEnabled !== false],
   );
   return rows[0];
 }
 
-/** Delete a user's integration row. */
+/** Delete a user's integration row by id (scoped to userId). */
+async function deleteUserIntegrationById(id, userId) {
+  const result = await pool.query(
+    `DELETE FROM user_integrations WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return result.rowCount > 0;
+}
+
+/** Delete a user's integration row by type (singleton default). */
 async function deleteUserIntegration(userId, type) {
   await pool.query(
     `DELETE FROM user_integrations WHERE user_id = $1 AND integration_type = $2`,
@@ -2481,6 +2526,34 @@ async function runMigrations() {
   // Backfill per-user integration rows for superadmins from env vars
   // (one-time safety net so the cutover doesn't drop alerts for
   // existing operators). Idempotent — never overwrites a configured row.
+  // ── user_integrations: add account_email + composite UNIQUE (multi-account) ──
+  await pool.query(`ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS account_email TEXT DEFAULT ''`)
+    .catch((err) => console.warn('[migration] user_integrations.account_email:', err.message));
+  await pool.query(`UPDATE user_integrations SET account_email = '' WHERE account_email IS NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE user_integrations ALTER COLUMN account_email SET NOT NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE user_integrations ALTER COLUMN account_email SET DEFAULT ''`).catch(() => {});
+  await pool.query(`ALTER TABLE user_integrations DROP CONSTRAINT IF EXISTS user_integrations_user_id_integration_type_key`).catch(() => {});
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE user_integrations
+        ADD CONSTRAINT user_integrations_user_id_type_email_key
+        UNIQUE (user_id, integration_type, account_email);
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+  `).catch((err) => console.warn('[migration] user_integrations UNIQUE:', err.message));
+
+  // ── Migrate legacy gmail_tokens rows into user_integrations ──
+  // Each legacy row lands with account_email='' (placeholder). The real
+  // email is populated on next /api/gmail/status call.
+  await pool.query(`
+    INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
+    SELECT user_id, 'gmail', '', jsonb_build_object('tokens', tokens), TRUE
+    FROM gmail_tokens gt
+    WHERE NOT EXISTS (
+      SELECT 1 FROM user_integrations ui
+      WHERE ui.user_id = gt.user_id AND ui.integration_type = 'gmail'
+    )
+  `).catch((err) => console.warn('[migration] gmail_tokens→user_integrations:', err.message));
+
   await backfillSuperadminIntegrationsFromEnv()
     .catch((err) => console.warn('[migration] backfill integrations:', err.message));
 
@@ -3906,8 +3979,11 @@ module.exports = {
   saveWhatsAppMessage,
   getUserIntegration,
   getUserIntegrations,
+  getUserIntegrationsByType,
+  getUserIntegrationById,
   upsertUserIntegration,
   deleteUserIntegration,
+  deleteUserIntegrationById,
   backfillSuperadminIntegrationsFromEnv,
   getUserSetting,
   getUserSettings,

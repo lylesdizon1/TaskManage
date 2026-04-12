@@ -687,7 +687,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       .catch(() => {});
   }, [currentUser?.id]);
 
-  // Auto-scan email inbox on mount + every 15 minutes
+  // Auto-scan email inbox on mount; cadence follows gmail_config.scanFrequency.
   const emailScanInProgressRef = useRef(false);
   useEffect(() => {
     if (!currentUser?.id) return;
@@ -705,9 +705,28 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         emailScanInProgressRef.current = false;
       }
     }
-    scanInbox();
-    const scanInterval = setInterval(scanInbox, 15 * 60 * 1000);
-    return () => clearInterval(scanInterval);
+
+    const SCAN_INTERVAL_MS = {
+      '15m': 15 * 60 * 1000,
+      '30m': 30 * 60 * 1000,
+      '1h':  60 * 60 * 1000,
+      '4h':  4 * 60 * 60 * 1000,
+    };
+    let scanInterval = null;
+    (async () => {
+      let frequency = '1h';
+      try {
+        const r = await apiFetch('/api/gmail/config', { headers: { Authorization: `Bearer ${authToken}` } });
+        const cfg = await r.json();
+        if (cfg?.scanFrequency) frequency = cfg.scanFrequency;
+      } catch {}
+      scanInbox();
+      if (frequency !== 'manual') {
+        const ms = SCAN_INTERVAL_MS[frequency] ?? SCAN_INTERVAL_MS['1h'];
+        scanInterval = setInterval(scanInbox, ms);
+      }
+    })();
+    return () => { if (scanInterval) clearInterval(scanInterval); };
   }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save tasks whenever they change (skip initial hydration)
