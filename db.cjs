@@ -603,6 +603,28 @@ async function getUserIntegrationsByType(userId, type) {
   return rows;
 }
 
+/**
+ * Case-insensitive, whitespace-tolerant lookup for a Gmail integration
+ * row by user and account_email. Used by the communication tools when
+ * the LLM may echo the email with different casing or stray whitespace
+ * than what was stored at OAuth callback time.
+ */
+async function getGmailIntegrationByEmail(userId, accountEmail) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", integration_type AS "type",
+            account_email AS "accountEmail", provider,
+            config_json AS "config", is_enabled AS "isEnabled",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM user_integrations
+     WHERE user_id = $1
+       AND integration_type = 'gmail'
+       AND LOWER(TRIM(account_email)) = LOWER(TRIM($2))
+     LIMIT 1`,
+    [userId, accountEmail || ''],
+  );
+  return rows[0] || null;
+}
+
 /** Fetch a single row by id, scoped to userId for authorization. */
 async function getUserIntegrationById(id, userId) {
   const { rows } = await pool.query(
@@ -4090,6 +4112,7 @@ module.exports = {
   getUserIntegrations,
   getUserIntegrationsByType,
   getUserIntegrationById,
+  getGmailIntegrationByEmail,
   upsertUserIntegration,
   deleteUserIntegration,
   deleteUserIntegrationById,

@@ -286,12 +286,20 @@ function requiresConfirmation(toolName, llmDecision) {
 
 // ── Gmail tokens (via user_integrations) ───────────────────────────────────
 
-async function loadGmailTokensForAccount(db, userId, accountEmail) {
-  const row = await db.getUserIntegration(userId, 'gmail', accountEmail || '');
-  if (!row) return null;
-  const stored = row.config?.tokens;
-  if (!stored) return null;
-  return stored._enc ? decryptTokens(stored._enc) : stored;
+/**
+ * Load Gmail OAuth tokens for a (user, account_email) pair directly
+ * from user_integrations using a case- and whitespace-insensitive
+ * lookup. No dependency on the legacy gmail_tokens table or
+ * loadGmailTokens helper — those paths are ignored here.
+ */
+async function loadGmailTokensForAccount(db, userId, accountEmail, toolTag) {
+  const tag = toolTag || 'gmail_tool';
+  console.log(`[${tag}] looking up:`, { userId, accountEmail });
+  const row = await db.getGmailIntegrationByEmail(userId, accountEmail);
+  const stored = row?.config?.tokens || null;
+  const tokens = stored ? (stored._enc ? decryptTokens(stored._enc) : stored) : null;
+  console.log(`[${tag}] row found:`, !!row, 'has tokens:', !!tokens);
+  return { row, tokens };
 }
 
 async function saveGmailTokensForAccount(db, userId, accountEmail, tokens) {
@@ -588,7 +596,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       // ── COMMUNICATION ──────────────────────────────────────────────────
       case 'send_email': {
         const { to, subject, body, account_email } = toolInput || {};
-        const tokens = await loadGmailTokensForAccount(db, userId, account_email);
+        const { tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'send_email');
         if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}. Reconnect in Settings.` };
         const oauth2 = makeGmailOAuth2Client();
         if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
@@ -610,7 +618,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
 
       case 'reply_email': {
         const { message_id, thread_id, body, account_email } = toolInput || {};
-        const tokens = await loadGmailTokensForAccount(db, userId, account_email);
+        const { tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'reply_email');
         if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}.` };
         const oauth2 = makeGmailOAuth2Client(); if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
@@ -644,7 +652,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
 
       case 'archive_email': {
         const { message_id, account_email } = toolInput || {};
-        const tokens = await loadGmailTokensForAccount(db, userId, account_email);
+        const { tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'archive_email');
         if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}.` };
         const oauth2 = makeGmailOAuth2Client(); if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
