@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '../contexts/ToastContext';
 
 // Minimal HTML detection — good enough to pick a render mode.
@@ -224,67 +224,22 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     try { toast.info('Email queued for sending — approve in Aria', 3000); } catch {}
   }
 
-  // Inline drafter used from the compose drawer. Replaces the body text
-  // above the quoted original with the model's output; leaves the
-  // quoted section untouched so the reply keeps its "On … wrote:" tail.
-  const [drafting, setDrafting] = useState(false);
-  async function draftReplyInPlace() {
-    if (!compose || drafting) return;
-    const latest = thread?.messages?.[thread.messages.length - 1];
-    const preview = (latest?.body || '').slice(0, 300).replace(/\s+/g, ' ').trim();
-    const subject = compose.subject || latest?.subject || '(no subject)';
-    const msg = `Draft a reply email from ${compose.from || '(me)'} to ${compose.to || senderEmail(latest?.from || '') || '(recipient)'} re: ${subject}. Context: ${preview}. Return ONLY the email body text, no subject line, no explanation.`;
-
-    setDrafting(true);
-    try {
-      const res = await apiFetch('/api/chat/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          messages: [{ role: 'user', content: msg }],
-        }),
-      });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let currentEvent = null;
-      let draft = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const rawLine of lines) {
-          const em = rawLine.match(/^event: (.+)/);
-          const dm = rawLine.match(/^data: (.+)/);
-          if (em) currentEvent = em[1].trim();
-          if (dm && currentEvent === 'text') {
-            try { draft = JSON.parse(dm[1])?.content || draft; } catch {}
-          }
-          if (dm && currentEvent === 'done') break;
-          if (dm) currentEvent = null;
-        }
-      }
-      const cleaned = (draft || '').trim();
-      if (!cleaned) throw new Error('No draft returned');
-
-      // Preserve the quoted original if present — replace only the
-      // body above the "\n\n---\n" separator inserted by openCompose.
-      setCompose((c) => {
-        if (!c) return c;
-        const sep = '\n\n---\n';
-        const idx = (c.body || '').indexOf(sep);
-        const trailing = idx >= 0 ? (c.body || '').slice(idx) : '';
-        return { ...c, body: trailing ? `${cleaned}${trailing}` : cleaned };
-      });
-    } catch (err) {
-      try { toast.error(`Couldn't draft: ${err.message || 'failed'}`, 4000); } catch {}
-    } finally {
-      setDrafting(false);
-    }
+  // "Draft with Aria" now opens a slide-in conversational panel instead
+  // of calling the API directly. The panel pushes the final draft back
+  // into the compose body above the quoted-original separator.
+  const [ariaOpen, setAriaOpen] = useState(false);
+  function openAriaDraft() { if (compose) setAriaOpen(true); }
+  function handleAriaInsert(draftText) {
+    const cleaned = (draftText || '').trim();
+    if (!cleaned) { setAriaOpen(false); return; }
+    setCompose((c) => {
+      if (!c) return c;
+      const sep = '\n\n---\n';
+      const idx = (c.body || '').indexOf(sep);
+      const trailing = idx >= 0 ? (c.body || '').slice(idx) : '';
+      return { ...c, body: trailing ? `${cleaned}${trailing}` : cleaned };
+    });
+    setAriaOpen(false);
   }
 
   return (
@@ -474,11 +429,28 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               <ComposeDrawer
                 compose={compose}
                 accounts={accounts}
-                drafting={drafting}
+                drafting={false}
                 onChange={(patch) => setCompose((c) => ({ ...c, ...patch }))}
                 onCancel={() => setCompose(null)}
                 onSend={sendCompose}
-                onDraftWithAria={draftReplyInPlace}
+                onDraftWithAria={openAriaDraft}
+              />
+            )}
+
+            {ariaOpen && compose && (
+              <InboxAriaPanel
+                apiFetch={apiFetch}
+                authToken={authToken}
+                context={{
+                  from: compose.from,
+                  to: compose.to,
+                  subject: compose.subject,
+                  originalFrom: thread?.messages?.[thread.messages.length - 1]?.from || '',
+                  originalSubject: thread?.messages?.[0]?.subject || compose.subject,
+                  originalBody: (thread?.messages?.[thread.messages.length - 1]?.body || '').slice(0, 500),
+                }}
+                onInsert={handleAriaInsert}
+                onClose={() => setAriaOpen(false)}
               />
             )}
           </>
@@ -616,6 +588,240 @@ function ListSkeleton() {
       ))}
     </div>
   );
+}
+
+// ── Aria slide-in panel — drafts an email reply through a short chat ──
+function InboxAriaPanel({ apiFetch, authToken, context, onInsert, onClose }) {
+  const [visible, setVisible] = useState(false);       // drives slide-in transform
+  const [messages, setMessages] = useState([]);        // [{role, content}]
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const listRef = useRef(null);
+
+  const sender = useMemo(() => senderName(context.originalFrom) || 'the sender', [context.originalFrom]);
+
+  const systemPrompt = useMemo(() => (
+`You are helping the user draft an email reply.
+Thread context:
+From: ${context.originalFrom || '(unknown)'}
+Subject: ${context.originalSubject || '(no subject)'}
+Original message: ${context.originalBody || '(empty)'}
+
+The user is composing a reply from ${context.from || '(their account)'}.
+Have a brief conversation to understand their intent, then draft the reply.
+When you have enough info, write the final draft and end your message with:
+[DRAFT_READY]
+---DRAFT---
+[the email body text only, no subject]
+---END---`
+  ), [context]);
+
+  // Mount animation + initial greeting (local only, not sent to API).
+  useEffect(() => {
+    const t = setTimeout(() => setVisible(true), 10);
+    setMessages([{
+      role: 'assistant',
+      content: `I can help you draft this reply. What would you like to say to ${sender}?`,
+    }]);
+    return () => clearTimeout(t);
+  }, [sender]);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, draft]);
+
+  function handleClose() {
+    setVisible(false);
+    setTimeout(() => onClose?.(), 300);
+  }
+
+  async function send() {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput('');
+    const nextMsgs = [...messages, { role: 'user', content: text }, { role: 'assistant', content: '' }];
+    setMessages(nextMsgs);
+    setSending(true);
+    try {
+      // Strip the local seed greeting — it was never sent to the API.
+      const apiMessages = nextMsgs.slice(0, -1).filter((m, i) => !(i === 0 && m.role === 'assistant'));
+      const res = await apiFetch('/api/chat/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt,
+          messages: apiMessages,
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = null;
+      let fullText = '';
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const raw of lines) {
+          const em = raw.match(/^event: (.+)/);
+          const dm = raw.match(/^data: (.+)/);
+          if (em) currentEvent = em[1].trim();
+          if (dm && currentEvent === 'text') {
+            try { fullText = JSON.parse(dm[1])?.content || fullText; } catch {}
+            const display = stripDraftMarkers(fullText);
+            setMessages((prev) => {
+              const u = [...prev];
+              u[u.length - 1] = { ...u[u.length - 1], content: display };
+              return u;
+            });
+          }
+          if (dm && currentEvent === 'done') break outer;
+          if (dm) currentEvent = null;
+        }
+      }
+
+      const extracted = extractDraft(fullText);
+      if (extracted) setDraft(extracted);
+    } catch (err) {
+      setMessages((prev) => {
+        const u = [...prev];
+        u[u.length - 1] = { role: 'assistant', content: `Couldn't draft right now — ${err.message}` };
+        return u;
+      });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const slideStyle = {
+    transform: visible ? 'translateX(0)' : 'translateX(100%)',
+    transition: 'transform 300ms ease',
+  };
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={handleClose}
+        style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.15)', zIndex: 40, opacity: visible ? 1 : 0, transition: 'opacity 300ms ease' }}
+      />
+      {/* Panel */}
+      <aside
+        style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0, width: 380,
+          maxWidth: '100%', backgroundColor: '#fbf8fe', borderLeft: '1px solid #e5e7eb',
+          boxShadow: '-8px 0 24px rgba(15,15,40,0.08)', zIndex: 50,
+          display: 'flex', flexDirection: 'column',
+          fontFamily: 'Manrope, sans-serif',
+          ...slideStyle,
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-4 pt-4 pb-3 border-b border-gray-100">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '18px' }}>auto_awesome</span>
+              <h3 className="text-sm font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Draft with Aria</h3>
+            </div>
+            <p className="text-[11px] text-gray-500 mt-0.5">Chat with Aria to craft your reply</p>
+          </div>
+          <button onClick={handleClose} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
+          </button>
+        </div>
+
+        {/* Messages */}
+        <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
+          {messages.map((m, i) => {
+            const isUser = m.role === 'user';
+            return (
+              <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`max-w-[88%] ${isUser ? 'text-white' : ''}`}
+                  style={isUser
+                    ? { backgroundColor: '#4f4dcf', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '10px 12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                    : { backgroundColor: '#f5f2fa', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '10px 12px', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                  }
+                >
+                  {m.content || <span className="animate-pulse text-gray-500">Thinking…</span>}
+                </div>
+              </div>
+            );
+          })}
+
+          {draft && (
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-3">
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '16px' }}>edit_note</span>
+                <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                  Draft ready
+                </span>
+              </div>
+              <div style={{ borderTop: '1px solid #e5e7eb', margin: '4px 0 8px 0' }} />
+              <div
+                style={{ fontSize: '13px', lineHeight: '1.55', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '220px', overflowY: 'auto', marginBottom: '10px' }}
+              >
+                {draft}
+              </div>
+              <button
+                onClick={() => onInsert?.(draft)}
+                className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold"
+                style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>check</span>
+                Insert into reply
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <div className="px-3 py-2 border-t border-gray-100 flex items-center gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder="Tell Aria what you want to say…"
+            className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            disabled={sending}
+            style={{ fontFamily: 'Manrope, sans-serif' }}
+          />
+          <button
+            onClick={send}
+            disabled={!input.trim() || sending}
+            className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-40"
+            style={{ backgroundColor: input.trim() ? '#4f4dcf' : 'transparent' }}
+            aria-label="Send"
+          >
+            <span className={`material-symbols-outlined text-base ${input.trim() ? 'text-white' : 'text-slate-400'}`}>
+              {sending ? 'hourglass_empty' : 'send'}
+            </span>
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function extractDraft(text) {
+  if (!text || !text.includes('[DRAFT_READY]')) return null;
+  const m = text.match(/---DRAFT---\s*([\s\S]*?)\s*---END---/);
+  return m ? m[1].trim() : null;
+}
+function stripDraftMarkers(text) {
+  if (!text) return text;
+  return text
+    .replace(/\[DRAFT_READY\]/g, '')
+    .replace(/---DRAFT---[\s\S]*?---END---/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function MessageSkeleton() {
