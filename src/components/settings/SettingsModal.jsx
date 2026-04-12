@@ -1306,16 +1306,16 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                   >Add</button>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {gmailConfig.vipSenders.map((s, i) => (
+                  {(gmailConfig.vipSenders ?? []).map((s, i) => (
                     <span key={i} className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
                       {s}
                       <button
-                        onClick={() => setGmailConfig((c) => ({ ...c, vipSenders: c.vipSenders.filter((_, j) => j !== i) }))}
+                        onClick={() => setGmailConfig((c) => ({ ...c, vipSenders: (c.vipSenders ?? []).filter((_, j) => j !== i) }))}
                         className="text-indigo-400 hover:text-indigo-600 ml-0.5"
                       >&times;</button>
                     </span>
                   ))}
-                  {gmailConfig.vipSenders.length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
+                  {(gmailConfig.vipSenders ?? []).length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
                 </div>
               </div>
 
@@ -1348,16 +1348,16 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                   >Add</button>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {gmailConfig.triggerKeywords.map((k, i) => (
+                  {(gmailConfig.triggerKeywords ?? []).map((k, i) => (
                     <span key={i} className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
                       {k}
                       <button
-                        onClick={() => setGmailConfig((c) => ({ ...c, triggerKeywords: c.triggerKeywords.filter((_, j) => j !== i) }))}
+                        onClick={() => setGmailConfig((c) => ({ ...c, triggerKeywords: (c.triggerKeywords ?? []).filter((_, j) => j !== i) }))}
                         className="text-amber-400 hover:text-amber-600 ml-0.5"
                       >&times;</button>
                     </span>
                   ))}
-                  {gmailConfig.triggerKeywords.length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
+                  {(gmailConfig.triggerKeywords ?? []).length === 0 && <span className="text-xs text-gray-300 italic">None added yet</span>}
                 </div>
               </div>
 
