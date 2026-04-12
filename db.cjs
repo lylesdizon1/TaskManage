@@ -484,6 +484,20 @@ async function initTables() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calendar_notes_user ON calendar_notes(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calendar_notes_start ON calendar_notes(event_start)`).catch(() => {});
 
+  // ── user_settings table (per-user owned config) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_settings (
+      id          SERIAL PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      setting_key TEXT NOT NULL,
+      value_json  JSONB NOT NULL DEFAULT '{}',
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, setting_key)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_settings_user ON user_settings(user_id)`).catch(() => {});
+
   // ── user_integrations table (per-user outbound notification routing) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_integrations (
@@ -620,6 +634,94 @@ async function backfillSuperadminIntegrationsFromEnv() {
     }
   }
   console.log(`[migration] Backfilled integrations for ${admins.length} superadmin user(s)`);
+}
+
+// ── User settings (per-user owned config) ────────────────────────────────────
+
+/**
+ * Return a single user-scoped setting by key, or null if not set.
+ * @param {string} userId
+ * @param {string} key - e.g. 'apiKeys', 'alertRules'
+ * @returns {Promise<*|null>} Parsed JSON value.
+ */
+async function getUserSetting(userId, key) {
+  const { rows } = await pool.query(
+    `SELECT value_json FROM user_settings WHERE user_id = $1 AND setting_key = $2`,
+    [userId, key],
+  );
+  return rows[0] ? rows[0].value_json : null;
+}
+
+/** Return all settings for a user as a { key: value } map. */
+async function getUserSettings(userId) {
+  const { rows } = await pool.query(
+    `SELECT setting_key, value_json FROM user_settings WHERE user_id = $1`,
+    [userId],
+  );
+  const out = {};
+  for (const r of rows) out[r.setting_key] = r.value_json;
+  return out;
+}
+
+/**
+ * Upsert a user setting. REPLACE semantics — the new value fully
+ * overwrites the existing value_json (no JSON merge).
+ */
+async function upsertUserSetting(userId, key, value) {
+  await pool.query(
+    `INSERT INTO user_settings (user_id, setting_key, value_json)
+     VALUES ($1, $2, $3::jsonb)
+     ON CONFLICT (user_id, setting_key) DO UPDATE SET
+       value_json = EXCLUDED.value_json,
+       updated_at = NOW()`,
+    [userId, key, JSON.stringify(value ?? null)],
+  );
+}
+
+/** Delete a user's setting row. */
+async function deleteUserSetting(userId, key) {
+  await pool.query(
+    `DELETE FROM user_settings WHERE user_id = $1 AND setting_key = $2`,
+    [userId, key],
+  );
+}
+
+/**
+ * One-time backfill: seed each existing superadmin's user_settings rows
+ * from the legacy global `settings` table. Idempotent — ON CONFLICT DO
+ * NOTHING preserves any per-user row the user has already written.
+ *
+ * Scope: only user-owned keys (apiKeys, alertRules). Platform-owned
+ * settings keys (if any exist in production) stay in the legacy table.
+ */
+async function backfillSuperadminSettingsFromGlobal() {
+  const { rows: globals } = await pool.query(`SELECT key, value FROM settings`);
+  if (!globals.length) return;
+
+  const globalMap = {};
+  for (const g of globals) globalMap[g.key] = g.value;
+
+  const USER_OWNED_KEYS = ['apiKeys', 'alertRules', 'emailSettings'];
+
+  const { rows: admins } = await pool.query(
+    `SELECT id FROM users WHERE role = 'superadmin'`,
+  );
+  if (!admins.length) return;
+
+  let seeded = 0;
+  for (const u of admins) {
+    for (const key of USER_OWNED_KEYS) {
+      if (globalMap[key] === undefined) continue;
+      const result = await pool.query(
+        `INSERT INTO user_settings (user_id, setting_key, value_json)
+         VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (user_id, setting_key) DO NOTHING`,
+        [u.id, key, JSON.stringify(globalMap[key])],
+      );
+      if (result.rowCount) seeded++;
+    }
+  }
+  if (seeded) console.log(`[migration] Backfilled ${seeded} user_settings row(s) for superadmins`);
 }
 
 // ── Users ────────────────────────────────────────────────────────────────────
@@ -2382,6 +2484,12 @@ async function runMigrations() {
   await backfillSuperadminIntegrationsFromEnv()
     .catch((err) => console.warn('[migration] backfill integrations:', err.message));
 
+  // Backfill per-user settings (apiKeys, alertRules) for superadmins from
+  // the legacy global `settings` table. Safe to run repeatedly — never
+  // overwrites a per-user row the user has already written.
+  await backfillSuperadminSettingsFromGlobal()
+    .catch((err) => console.warn('[migration] backfill user_settings:', err.message));
+
   // 5. Add new columns to notes table (idempotent)
   const noteCols = [
     `ALTER TABLE notes ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'quick'`,
@@ -3801,4 +3909,9 @@ module.exports = {
   upsertUserIntegration,
   deleteUserIntegration,
   backfillSuperadminIntegrationsFromEnv,
+  getUserSetting,
+  getUserSettings,
+  upsertUserSetting,
+  deleteUserSetting,
+  backfillSuperadminSettingsFromGlobal,
 };

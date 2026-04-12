@@ -38,9 +38,11 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
   router.get('/api/settings', authenticateToken, async (req, res) => {
     try {
       const userId = req.user.id;
-      const file = await db.getSettings();
-      const status = await getIntegrationStatus(db, userId);
-      const emailRow = await db.getUserIntegration(userId, 'email_alerts');
+      const [userSettings, status, emailRow] = await Promise.all([
+        db.getUserSettings(userId),
+        getIntegrationStatus(db, userId),
+        db.getUserIntegration(userId, 'email_alerts'),
+      ]);
 
       // Which fields are provided by env vars (server-side Resend key is
       // the only true env-backed secret exposed to the UI).
@@ -48,7 +50,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
         claudeKey:    !!process.env.CLAUDE_API_KEY,
         openaiKey:    !!process.env.OPENAI_API_KEY,
         resendApiKey: !!process.env.RESEND_API_KEY,
-        // Channel routing is now user-scoped — reflect per-user status:
+        // Channel routing is user-scoped — reflect per-user status:
         recipientEmail:  status.email,
         channelSlack:    status.slack,
         channelWhatsapp: status.whatsapp,
@@ -56,13 +58,16 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
         channelEmail:    status.email,
       };
 
+      // API keys: env takes precedence (platform key); otherwise use this
+      // user's saved override. Both forms are masked before returning.
+      const userApiKeys = userSettings.apiKeys || {};
       const apiKeys = {
         claude: process.env.CLAUDE_API_KEY
           ? maskSecret(process.env.CLAUDE_API_KEY)
-          : (file.apiKeys?.claude || ''),
+          : (userApiKeys.claude ? maskSecret(userApiKeys.claude) : ''),
         openai: process.env.OPENAI_API_KEY
           ? maskSecret(process.env.OPENAI_API_KEY)
-          : (file.apiKeys?.openai || ''),
+          : (userApiKeys.openai ? maskSecret(userApiKeys.openai) : ''),
       };
 
       const emailSettings = {
@@ -73,24 +78,60 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       res.json({
         apiKeys,
         emailSettings,
-        alertRules: file.alertRules || null,
+        alertRules: userSettings.alertRules || null,
         envConfigured,
         integrations: status,
       });
     } catch (err) {
-      logger.error('settings.read.failed', { requestId: req.requestId, error: err.message });
+      logger.error('settings.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
 
+  /**
+   * POST /api/settings — per-user write. Any subset of { apiKeys,
+   * alertRules, emailSettings } may be provided. REPLACE semantics for
+   * each top-level key — missing keys leave existing rows untouched.
+   * Masked values ("abcd****wxyz") are discarded so real secrets are
+   * never clobbered by a GET→POST round trip.
+   */
   router.post('/api/settings', authenticateToken, async (req, res) => {
     try {
-      const current = await db.getSettings();
-      const merged  = { ...current, ...req.body };
-      await db.saveSettings(merged);
+      const userId = req.user.id;
+      const body = req.body || {};
+
+      if (body.apiKeys && typeof body.apiKeys === 'object') {
+        const existing = (await db.getUserSetting(userId, 'apiKeys')) || {};
+        const next = { ...existing };
+        for (const [k, v] of Object.entries(body.apiKeys)) {
+          if (typeof v !== 'string') continue;
+          if (v.includes('****')) continue;   // masked — leave existing value
+          if (v === '') { delete next[k]; continue; } // explicit clear
+          next[k] = v;
+        }
+        await db.upsertUserSetting(userId, 'apiKeys', next);
+      }
+
+      if (Array.isArray(body.alertRules)) {
+        await db.upsertUserSetting(userId, 'alertRules', body.alertRules);
+      }
+
+      // emailSettings.recipientEmail is now owned by the email_alerts
+      // integration — accept it here for backward compatibility with the
+      // current frontend, writing through to the integration row.
+      if (body.emailSettings && typeof body.emailSettings === 'object') {
+        const { recipientEmail } = body.emailSettings;
+        if (typeof recipientEmail === 'string') {
+          const existing = await db.getUserIntegration(userId, 'email_alerts');
+          const existingCfg = existing?.config || {};
+          const nextCfg = { ...existingCfg, recipientEmail };
+          await db.upsertUserIntegration(userId, 'email_alerts', nextCfg, existing?.isEnabled !== false);
+        }
+      }
+
       res.json({ success: true });
     } catch (err) {
-      logger.error('settings.write.failed', { requestId: req.requestId, error: err.message });
+      logger.error('settings.write.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
