@@ -266,6 +266,349 @@ function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAle
   );
 }
 
+// ── Email Classification section (Integrations tab) ───────────────────────
+const CATEGORIES = ['invoice','receipt','purchase','contract','alert','newsletter','personal','meeting','financial','general'];
+const IMPORTANCES = ['critical','high','normal','low'];
+const IMPORTANCE_PILL = {
+  critical: 'bg-red-50 text-red-700 border-red-200',
+  high:     'bg-amber-50 text-amber-700 border-amber-200',
+  normal:   'bg-gray-50 text-gray-600 border-gray-200',
+  low:      'bg-gray-50 text-gray-400 border-gray-200',
+};
+
+const EMPTY_RULE = () => ({
+  ruleName: '',
+  conditions: { from_domains: [], from_emails: [], subject_contains: [], body_contains: [], any_of: false },
+  entityId: null, category: 'general', importance: 'normal', extractAmount: false,
+});
+
+function EmailClassificationSection({ apiFetch, authToken, entities }) {
+  const [rules, setRules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);       // full rule form state or null
+  const [editId, setEditId] = useState(null);         // id if editing, null if adding
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState(null);
+
+  const entityById = useMemo(() => {
+    const m = new Map();
+    for (const e of (entities || [])) m.set(e.id, e);
+    return m;
+  }, [entities]);
+
+  async function loadRules() {
+    setLoading(true);
+    try {
+      const r = await apiFetch('/api/classification/rules', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await r.json();
+      setRules(Array.isArray(data?.rules) ? data.rules : []);
+    } catch { setRules([]); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadRules(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveRule() {
+    if (!editing) return;
+    const body = {
+      ruleName: editing.ruleName,
+      conditions: editing.conditions,
+      entityId: editing.entityId || null,
+      category: editing.category, importance: editing.importance,
+      extractAmount: !!editing.extractAmount,
+    };
+    try {
+      if (editId) {
+        await apiFetch(`/api/classification/rules/${editId}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify(body),
+        });
+      } else {
+        await apiFetch('/api/classification/rules', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify(body),
+        });
+      }
+      setEditing(null); setEditId(null);
+      loadRules();
+    } catch {}
+  }
+
+  async function removeRule(id) {
+    try {
+      await apiFetch(`/api/classification/rules/${id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` },
+      });
+      setRules(prev => prev.filter(r => r.id !== id));
+    } finally { setConfirmDel(null); }
+  }
+
+  async function requestSuggestions() {
+    setSuggestLoading(true);
+    setSuggestions(null);
+    try {
+      const r = await apiFetch('/api/classification/suggest', {
+        method: 'POST', headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await r.json();
+      setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []);
+    } catch { setSuggestions([]); }
+    finally { setSuggestLoading(false); }
+  }
+
+  async function acceptSuggestion(s) {
+    try {
+      await apiFetch('/api/classification/rules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          ruleName: s.rule_name,
+          conditions: s.conditions || {},
+          entityId: s.entity_id || null,
+          category: s.category, importance: s.importance,
+          extractAmount: !!s.extract_amount,
+          source: 'ai_suggested', confirmed: true,
+        }),
+      });
+      setSuggestions(prev => (prev || []).filter(x => x !== s));
+      loadRules();
+    } catch {}
+  }
+
+  return (
+    <div className="pt-5 mt-2 border-t border-gray-100">
+      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Email Classification</h3>
+
+      {/* Rules list */}
+      {loading ? (
+        <div className="space-y-2">{[0,1].map(i => <div key={i} className="h-14 bg-gray-50 rounded-xl animate-pulse" />)}</div>
+      ) : rules.length === 0 ? (
+        <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-5 text-center">
+          <p className="text-sm text-gray-600">No rules yet. Add one or get AI suggestions.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {rules.map(r => (
+            <div key={r.id} className="bg-white border border-gray-100 rounded-xl shadow-sm px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                {r.entityId && entityById.get(r.entityId)?.color && (
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: entityById.get(r.entityId).color || '#9ca3af' }} />
+                )}
+                <span className="text-sm font-semibold text-gray-900 truncate flex-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{r.ruleName}</span>
+                {r.source === 'ai_suggested' && (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full border" style={{ color: '#4f4dcf', borderColor: '#4f4dcf' }}>✨ AI</span>
+                )}
+                {r.source === 'ai_learned' && (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full text-white" style={{ backgroundColor: '#4f4dcf' }}>✨ AI</span>
+                )}
+                <button onClick={() => { setEditing({ ruleName: r.ruleName, conditions: { from_domains: [], from_emails: [], subject_contains: [], body_contains: [], any_of: false, ...(r.conditions || {}) }, entityId: r.entityId, category: r.category, importance: r.importance, extractAmount: !!r.extractAmount }); setEditId(r.id); }} className="text-[11px] text-gray-500 hover:text-gray-700 font-semibold">Edit</button>
+                {confirmDel === r.id ? (
+                  <>
+                    <span className="text-[11px] text-gray-500">Delete?</span>
+                    <button onClick={() => removeRule(r.id)} className="text-[11px] font-semibold text-red-600 hover:text-red-700">Yes</button>
+                    <button onClick={() => setConfirmDel(null)} className="text-[11px] text-gray-400 hover:text-gray-600">Cancel</button>
+                  </>
+                ) : (
+                  <button onClick={() => setConfirmDel(r.id)} className="text-[11px] text-red-500 hover:text-red-700 font-semibold">Delete</button>
+                )}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-50 text-gray-600 border border-gray-200 capitalize">{r.category}</span>
+                <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full border capitalize ${IMPORTANCE_PILL[r.importance] || IMPORTANCE_PILL.normal}`}>{r.importance}</span>
+                <span className="text-[11px] text-gray-400 truncate">{summarizeConditions(r.conditions)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add / edit form */}
+      {editing ? (
+        <div className="mt-3 bg-white border border-indigo-200 rounded-xl px-3 py-3">
+          <RuleForm
+            value={editing}
+            entities={entities || []}
+            onChange={(patch) => setEditing(e => ({ ...e, ...patch }))}
+            onCancel={() => { setEditing(null); setEditId(null); }}
+            onSave={saveRule}
+          />
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={() => { setEditing(EMPTY_RULE()); setEditId(null); }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg"
+            style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>add</span>
+            Add rule
+          </button>
+          <button
+            onClick={requestSuggestions}
+            disabled={suggestLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-50"
+            style={{ backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.3)' }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>auto_awesome</span>
+            {suggestLoading ? 'Aria is analyzing your recent emails…' : 'Get AI Suggestions'}
+          </button>
+        </div>
+      )}
+
+      {/* Suggestions list */}
+      {suggestions && suggestions.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {suggestions.map((s, i) => (
+            <div key={i} className="bg-white border border-gray-100 rounded-xl shadow-sm px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '16px' }}>auto_awesome</span>
+                <span className="text-sm font-semibold text-gray-900 flex-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{s.rule_name}</span>
+                <button onClick={() => acceptSuggestion(s)} className="text-[11px] font-semibold" style={{ color: '#4f4dcf' }}>✓ Add Rule</button>
+                <button onClick={() => setSuggestions(prev => (prev || []).filter(x => x !== s))} className="text-[11px] text-gray-400 hover:text-gray-600">✗ Skip</button>
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                {s.entity_name && <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-50 text-gray-600 border border-gray-200">{s.entity_name}</span>}
+                <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-50 text-gray-600 border border-gray-200 capitalize">{s.category}</span>
+                <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full border capitalize ${IMPORTANCE_PILL[s.importance] || IMPORTANCE_PILL.normal}`}>{s.importance}</span>
+              </div>
+              {s.reasoning && <p className="mt-1 text-[11px] text-gray-500">{s.reasoning}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      {suggestions && suggestions.length === 0 && (
+        <p className="mt-2 text-[11px] text-gray-400">No suggestions right now.</p>
+      )}
+    </div>
+  );
+}
+
+function summarizeConditions(c) {
+  if (!c) return '';
+  const parts = [];
+  if (c.from_domains?.length) parts.push(`From: ${c.from_domains.join(', ')}`);
+  if (c.from_emails?.length)  parts.push(`Sender: ${c.from_emails.join(', ')}`);
+  if (c.subject_contains?.length) parts.push(`Subject: ${c.subject_contains.join(', ')}`);
+  if (c.body_contains?.length)    parts.push(`Body: ${c.body_contains.join(', ')}`);
+  return parts.join(' • ');
+}
+
+function ChipInput({ label, values, onChange, placeholder }) {
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const v = draft.trim();
+    if (!v) return;
+    onChange([...(values || []), v]);
+    setDraft('');
+  };
+  return (
+    <div>
+      <label className="block text-[11px] font-medium text-gray-600 mb-1">{label}</label>
+      <div className="flex flex-wrap gap-1 items-center bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
+        {(values || []).map((v, i) => (
+          <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+            {v}
+            <button onClick={() => onChange(values.filter((_, j) => j !== i))} className="text-indigo-400 hover:text-indigo-600">&times;</button>
+          </span>
+        ))}
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          onBlur={add}
+          placeholder={placeholder}
+          className="flex-1 min-w-[80px] bg-transparent text-[12px] focus:outline-none py-1"
+        />
+      </div>
+    </div>
+  );
+}
+
+function RuleForm({ value, entities, onChange, onCancel, onSave }) {
+  const c = value.conditions || {};
+  const setCond = (patch) => onChange({ conditions: { ...c, ...patch } });
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-[11px] font-medium text-gray-600 mb-1">Rule name</label>
+        <input
+          type="text"
+          value={value.ruleName}
+          onChange={(e) => onChange({ ruleName: e.target.value })}
+          placeholder="e.g. Chase statements"
+          className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+      </div>
+
+      <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Conditions</div>
+      <ChipInput label="From domain"      values={c.from_domains}     onChange={(v) => setCond({ from_domains: v })}     placeholder="@chase.com" />
+      <ChipInput label="From email"       values={c.from_emails}      onChange={(v) => setCond({ from_emails: v })}      placeholder="person@domain.com" />
+      <ChipInput label="Subject contains" values={c.subject_contains} onChange={(v) => setCond({ subject_contains: v })} placeholder="invoice" />
+      <ChipInput label="Body contains"    values={c.body_contains}    onChange={(v) => setCond({ body_contains: v })}    placeholder="amount due" />
+      <div className="flex items-center gap-4 text-[12px]">
+        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" checked={!!c.any_of} onChange={() => setCond({ any_of: true })} className="accent-indigo-600" />
+          <span className="text-gray-700">Match ANY</span>
+        </label>
+        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" checked={!c.any_of} onChange={() => setCond({ any_of: false })} className="accent-indigo-600" />
+          <span className="text-gray-700">Match ALL</span>
+        </label>
+      </div>
+
+      <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Classification</div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="block text-[11px] font-medium text-gray-600 mb-1">Entity</label>
+          <select
+            value={value.entityId || ''}
+            onChange={(e) => onChange({ entityId: e.target.value || null })}
+            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm"
+          >
+            <option value="">None</option>
+            {entities.map(en => <option key={en.id} value={en.id}>{en.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-gray-600 mb-1">Category</label>
+          <select
+            value={value.category}
+            onChange={(e) => onChange({ category: e.target.value })}
+            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm capitalize"
+          >
+            {CATEGORIES.map(cc => <option key={cc} value={cc}>{cc}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-gray-600 mb-1">Importance</label>
+          <select
+            value={value.importance}
+            onChange={(e) => onChange({ importance: e.target.value })}
+            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm capitalize"
+          >
+            {IMPORTANCES.map(im => <option key={im} value={im}>{im}</option>)}
+          </select>
+        </div>
+        <label className="inline-flex items-end gap-2 cursor-pointer pb-1">
+          <input type="checkbox" checked={!!value.extractAmount} onChange={(e) => onChange({ extractAmount: e.target.checked })} className="accent-indigo-600" />
+          <span className="text-[12px] text-gray-700">Extract amount</span>
+        </label>
+      </div>
+
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <button onClick={onCancel} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+        <button
+          onClick={onSave}
+          disabled={!value.ruleName?.trim()}
+          className="px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-40"
+          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+        >
+          Save Rule
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EnvBadge() {
   return (
     <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full ml-2">
@@ -969,6 +1312,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                   WhatsApp &middot; Slack &middot; Google Calendar &middot; Gmail &mdash; coming soon
                 </div>
               </div>
+
+              <EmailClassificationSection apiFetch={apiFetch} authToken={authToken} entities={entities} />
             </div>
           )}
 

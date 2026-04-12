@@ -3,6 +3,7 @@
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const googleProvider = require('../lib/providers/googleEmailProvider.cjs');
+const { classifyEmail } = require('../lib/classificationEngine.cjs');
 
 // Resolve the provider implementation for a given integration row.
 // Single-provider today — Gmail. Future-ready lookup table.
@@ -110,7 +111,26 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
         }
       }
       merged.sort((a, b) => parseDate(b.date) - parseDate(a.date));
-      res.json({ threads: merged.slice(0, maxResults) });
+      const finalThreads = merged.slice(0, maxResults);
+      res.json({ threads: finalThreads });
+
+      // Fire-and-forget: classify any thread we don't already have a
+      // classification for. Uses snippet as body source.
+      (async () => {
+        try {
+          const ids = finalThreads.map(t => t.id);
+          const existing = await db.batchGetClassifications(userId, ids).catch(() => ({}));
+          for (const t of finalThreads) {
+            if (existing[t.id]) continue;
+            classifyEmail({
+              userId, messageId: t.id, threadId: t.id,
+              accountEmail: t.accountEmail,
+              from: t.from, subject: t.subject, body: t.snippet,
+              isRead: !!t.isRead, db,
+            }).catch(() => {});
+          }
+        } catch { /* swallow */ }
+      })();
     } catch (err) {
       logger.error('inbox.threads.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: err.message });
@@ -138,6 +158,18 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       }
 
       res.json({ thread: { ...thread, accountEmail: row.accountEmail, provider: row.provider || 'google' } });
+
+      // Fire-and-forget: upgrade snippet-based classification using full
+      // body of the latest message.
+      const latest = thread.messages?.[thread.messages.length - 1];
+      if (latest) {
+        classifyEmail({
+          userId, messageId: latest.id, threadId: thread.id,
+          accountEmail: row.accountEmail,
+          from: latest.from, subject: latest.subject, body: latest.body,
+          isRead: !!latest.isRead, db,
+        }).catch(() => {});
+      }
     } catch (err) {
       logger.error('inbox.thread.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: err.message });

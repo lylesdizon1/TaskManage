@@ -512,6 +512,53 @@ async function initTables() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id)`).catch(() => {});
 
+  // ── Email classification rules + classifications ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_classification_rules (
+      id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rule_name       TEXT NOT NULL,
+      conditions      JSONB NOT NULL DEFAULT '{}',
+      entity_id       TEXT REFERENCES entities(id) ON DELETE SET NULL,
+      category        TEXT NOT NULL DEFAULT 'general',
+      importance      TEXT NOT NULL DEFAULT 'normal',
+      importance_rank INTEGER NOT NULL DEFAULT 2,
+      extract_amount  BOOLEAN NOT NULL DEFAULT false,
+      source          TEXT NOT NULL DEFAULT 'user_defined',
+      confirmed       BOOLEAN NOT NULL DEFAULT true,
+      active          BOOLEAN NOT NULL DEFAULT true,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ecr_user ON email_classification_rules(user_id)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_classifications (
+      id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      message_id      TEXT NOT NULL,
+      thread_id       TEXT NOT NULL,
+      account_email   TEXT NOT NULL,
+      entity_id       TEXT REFERENCES entities(id) ON DELETE SET NULL,
+      category        TEXT NOT NULL DEFAULT 'general',
+      importance      TEXT NOT NULL DEFAULT 'normal',
+      importance_rank INTEGER NOT NULL DEFAULT 2,
+      action_required BOOLEAN NOT NULL DEFAULT false,
+      is_read         BOOLEAN NOT NULL DEFAULT false,
+      amount          NUMERIC(12,2),
+      currency        TEXT DEFAULT 'USD',
+      vendor          TEXT,
+      summary         TEXT,
+      source          TEXT NOT NULL DEFAULT 'rule',
+      classified_at   TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, message_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_user ON email_classifications(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_entity ON email_classifications(user_id, entity_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_importance ON email_classifications(user_id, importance_rank DESC)`).catch(() => {});
+
   // ── user_learnings (Correction Learning Loop) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_learnings (
@@ -1010,6 +1057,201 @@ async function deactivateLearning(id, userId) {
     [id, userId],
   );
   return rowCount > 0;
+}
+
+// ── Email classification rules + classifications ────────────────────────────
+
+const IMPORTANCE_RANK = { critical: 4, high: 3, normal: 2, low: 1 };
+function _importanceRank(imp) { return IMPORTANCE_RANK[String(imp || 'normal').toLowerCase()] ?? 2; }
+
+async function getRules(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", rule_name AS "ruleName", conditions,
+            entity_id AS "entityId", category, importance, importance_rank AS "importanceRank",
+            extract_amount AS "extractAmount", source, confirmed, active,
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM email_classification_rules
+     WHERE user_id = $1 AND active = TRUE
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function createRule(userId, r) {
+  const rank = _importanceRank(r.importance);
+  const { rows } = await pool.query(
+    `INSERT INTO email_classification_rules
+       (user_id, rule_name, conditions, entity_id, category, importance, importance_rank, extract_amount, source, confirmed)
+     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, user_id AS "userId", rule_name AS "ruleName", conditions,
+               entity_id AS "entityId", category, importance, importance_rank AS "importanceRank",
+               extract_amount AS "extractAmount", source, confirmed, active,
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [
+      userId, r.ruleName || r.rule_name || 'Untitled rule',
+      JSON.stringify(r.conditions || {}),
+      r.entityId || r.entity_id || null,
+      r.category || 'general',
+      r.importance || 'normal',
+      rank,
+      !!(r.extractAmount ?? r.extract_amount),
+      r.source || 'user_defined',
+      r.confirmed === false ? false : true,
+    ],
+  );
+  return rows[0];
+}
+
+async function updateRule(id, userId, r) {
+  const rank = r.importance !== undefined ? _importanceRank(r.importance) : undefined;
+  const sets = [];
+  const vals = [id, userId];
+  let i = 3;
+  const push = (col, val) => { sets.push(`${col} = $${i++}`); vals.push(val); };
+  if (r.ruleName !== undefined || r.rule_name !== undefined) push('rule_name', r.ruleName ?? r.rule_name);
+  if (r.conditions !== undefined) { sets.push(`conditions = $${i++}::jsonb`); vals.push(JSON.stringify(r.conditions || {})); }
+  if (r.entityId !== undefined || r.entity_id !== undefined) push('entity_id', r.entityId ?? r.entity_id);
+  if (r.category !== undefined) push('category', r.category);
+  if (r.importance !== undefined) { push('importance', r.importance); push('importance_rank', rank); }
+  if (r.extractAmount !== undefined || r.extract_amount !== undefined) push('extract_amount', !!(r.extractAmount ?? r.extract_amount));
+  if (r.source !== undefined) push('source', r.source);
+  if (r.confirmed !== undefined) push('confirmed', !!r.confirmed);
+  if (!sets.length) return null;
+  sets.push(`updated_at = NOW()`);
+  const { rows } = await pool.query(
+    `UPDATE email_classification_rules SET ${sets.join(', ')}
+     WHERE id = $1 AND user_id = $2
+     RETURNING id, user_id AS "userId", rule_name AS "ruleName", conditions,
+               entity_id AS "entityId", category, importance, importance_rank AS "importanceRank",
+               extract_amount AS "extractAmount", source, confirmed, active,
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    vals,
+  );
+  return rows[0] || null;
+}
+
+async function deleteRule(id, userId) {
+  const { rowCount } = await pool.query(
+    `UPDATE email_classification_rules SET active = FALSE, updated_at = NOW()
+     WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rowCount > 0;
+}
+
+async function getClassification(userId, messageId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
+            account_email AS "accountEmail", entity_id AS "entityId",
+            category, importance, importance_rank AS "importanceRank",
+            action_required AS "actionRequired", is_read AS "isRead",
+            amount, currency, vendor, summary, source,
+            classified_at AS "classifiedAt"
+     FROM email_classifications
+     WHERE user_id = $1 AND message_id = $2`,
+    [userId, messageId],
+  );
+  return rows[0] || null;
+}
+
+async function upsertClassification(userId, d) {
+  const rank = _importanceRank(d.importance);
+  const { rows } = await pool.query(
+    `INSERT INTO email_classifications
+       (user_id, message_id, thread_id, account_email, entity_id,
+        category, importance, importance_rank, action_required, is_read,
+        amount, currency, vendor, summary, source, classified_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+     ON CONFLICT (user_id, message_id) DO UPDATE SET
+       thread_id = EXCLUDED.thread_id,
+       account_email = EXCLUDED.account_email,
+       entity_id = EXCLUDED.entity_id,
+       category = EXCLUDED.category,
+       importance = EXCLUDED.importance,
+       importance_rank = EXCLUDED.importance_rank,
+       action_required = EXCLUDED.action_required,
+       is_read = EXCLUDED.is_read,
+       amount = EXCLUDED.amount,
+       currency = EXCLUDED.currency,
+       vendor = EXCLUDED.vendor,
+       summary = EXCLUDED.summary,
+       source = EXCLUDED.source,
+       classified_at = NOW()
+     RETURNING id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
+               account_email AS "accountEmail", entity_id AS "entityId",
+               category, importance, importance_rank AS "importanceRank",
+               action_required AS "actionRequired", is_read AS "isRead",
+               amount, currency, vendor, summary, source,
+               classified_at AS "classifiedAt"`,
+    [
+      userId, d.messageId, d.threadId, d.accountEmail,
+      d.entityId || null,
+      d.category || 'general',
+      d.importance || 'normal',
+      rank,
+      !!d.actionRequired,
+      !!d.isRead,
+      d.amount ?? null,
+      d.currency || 'USD',
+      d.vendor || null,
+      d.summary || null,
+      d.source || 'rule',
+    ],
+  );
+  return rows[0];
+}
+
+async function batchGetClassifications(userId, messageIds) {
+  if (!Array.isArray(messageIds) || !messageIds.length) return {};
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
+            account_email AS "accountEmail", entity_id AS "entityId",
+            category, importance, importance_rank AS "importanceRank",
+            action_required AS "actionRequired", is_read AS "isRead",
+            amount, currency, vendor, summary, source,
+            classified_at AS "classifiedAt"
+     FROM email_classifications
+     WHERE user_id = $1 AND message_id = ANY($2::text[])`,
+    [userId, messageIds],
+  );
+  const out = {};
+  for (const r of rows) out[r.messageId] = r;
+  return out;
+}
+
+async function getClassificationsByEntity(userId, entityId, limit = 50) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
+            account_email AS "accountEmail", entity_id AS "entityId",
+            category, importance, importance_rank AS "importanceRank",
+            action_required AS "actionRequired", is_read AS "isRead",
+            amount, currency, vendor, summary, source,
+            classified_at AS "classifiedAt"
+     FROM email_classifications
+     WHERE user_id = $1 AND entity_id = $2
+     ORDER BY classified_at DESC
+     LIMIT $3`,
+    [userId, entityId, Math.min(Math.max(1, limit), 200)],
+  );
+  return rows;
+}
+
+async function getImportantUnread(userId, minRank = 3) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
+            account_email AS "accountEmail", entity_id AS "entityId",
+            category, importance, importance_rank AS "importanceRank",
+            action_required AS "actionRequired", is_read AS "isRead",
+            amount, currency, vendor, summary, source,
+            classified_at AS "classifiedAt"
+     FROM email_classifications
+     WHERE user_id = $1 AND importance_rank >= $2 AND is_read = FALSE
+       AND classified_at >= NOW() - INTERVAL '7 days'
+     ORDER BY importance_rank DESC, classified_at DESC`,
+    [userId, minRank],
+  );
+  return rows;
 }
 
 /** Find the most recent pending row for a user on a given channel (for WhatsApp YES/NO matching). */
@@ -4200,4 +4442,13 @@ module.exports = {
   createOrUpdateLearning,
   getUserLearnings,
   deactivateLearning,
+  getRules,
+  createRule,
+  updateRule,
+  deleteRule,
+  getClassification,
+  upsertClassification,
+  batchGetClassifications,
+  getClassificationsByEntity,
+  getImportantUnread,
 };

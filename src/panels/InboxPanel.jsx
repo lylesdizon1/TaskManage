@@ -83,8 +83,24 @@ function absTime(iso) {
   return new Date(t).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+// ── Classification display helpers ────────────────────────────────────────
+const CATEGORY_LABELS = {
+  invoice: 'Invoice', receipt: 'Receipt', purchase: 'Purchase',
+  contract: 'Contract', alert: 'Alert', newsletter: 'Newsletter',
+  personal: 'Personal', meeting: 'Meeting', financial: 'Financial',
+  general: 'General',
+};
+const IMPORTANCE_STYLES = {
+  critical: { dot: '#dc2626', bg: 'rgba(220,38,38,0.08)', fg: '#b91c1c' },
+  high:     { dot: '#d97706', bg: 'rgba(217,119,6,0.08)', fg: '#b45309' },
+  normal:   { dot: '#4f4dcf', bg: 'rgba(79,77,207,0.08)', fg: '#4f4dcf' },
+  low:      { dot: '#9ca3af', bg: 'rgba(156,163,175,0.10)', fg: '#6b7280' },
+};
+const SUPPRESS_PILL = new Set(['general', 'newsletter']);
+
 export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCountChange }) {
   const toast = useToast();
+  const [classifications, setClassifications] = useState({});
   const [accounts, setAccounts] = useState([]);
   const [accountFilter, setAccountFilter] = useState('');  // '' = all
   const [threads, setThreads] = useState([]);
@@ -157,6 +173,31 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { loadThreads(); }, [loadThreads]);
+
+  // Batch-lookup classifications once the thread list lands, then poll a
+  // couple of times to catch classifications produced by the server's
+  // fire-and-forget trigger after the threads response.
+  useEffect(() => {
+    if (!threads.length) { setClassifications({}); return; }
+    const ids = threads.map(t => t.id);
+    let cancelled = false;
+    const fetchOnce = async () => {
+      try {
+        const r = await apiFetch('/api/classification/batch-lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ message_ids: ids }),
+        });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!cancelled) setClassifications(data?.classifications || {});
+      } catch {}
+    };
+    fetchOnce();
+    const t1 = setTimeout(fetchOnce, 2500);
+    const t2 = setTimeout(fetchOnce, 6000);
+    return () => { cancelled = true; clearTimeout(t1); clearTimeout(t2); };
+  }, [threads, apiFetch, authToken]);
 
   const unreadCount = useMemo(() => threads.filter(t => !t.isRead).length, [threads]);
   useEffect(() => { onUnreadCountChange?.(unreadCount); }, [unreadCount, onUnreadCountChange]);
@@ -285,6 +326,15 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
             threads.map((t) => {
               const tint = tintForAccount(t.accountEmail);
               const active = t.id === activeThreadId;
+              const cls = classifications[t.id];
+              const impStyle = cls ? IMPORTANCE_STYLES[cls.importance] : null;
+              // Dot color: high-importance classification wins; else existing unread behavior.
+              const useImpDot = impStyle && (cls.importance === 'critical' || cls.importance === 'high');
+              const dotBg = useImpDot
+                ? impStyle.dot
+                : (t.isRead ? 'transparent' : '#4f4dcf');
+              const dotBorder = !useImpDot && t.isRead ? '1px solid #d1d5db' : 'none';
+              const showPill = cls && cls.importanceRank >= 3 && !SUPPRESS_PILL.has(cls.category);
               return (
                 <button
                   key={`${t.accountEmail}:${t.id}`}
@@ -295,7 +345,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   <div className="flex items-start gap-2">
                     <span
                       className="flex-shrink-0 mt-1.5 w-2 h-2 rounded-full"
-                      style={{ backgroundColor: t.isRead ? 'transparent' : '#4f4dcf', border: t.isRead ? '1px solid #d1d5db' : 'none' }}
+                      style={{ backgroundColor: dotBg, border: dotBorder }}
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
@@ -308,10 +358,18 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                         {t.subject || '(no subject)'}
                       </div>
                       <div className="text-xs text-gray-400 truncate mt-0.5">{t.snippet}</div>
-                      <div className="mt-1.5">
+                      <div className="mt-1.5 flex items-center gap-1.5">
                         <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>
                           {shortAccount(t.accountEmail)}{t.messageCount > 1 ? ` · ${t.messageCount}` : ''}
                         </span>
+                        {showPill && (
+                          <span
+                            className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full truncate"
+                            style={{ backgroundColor: impStyle.bg, color: impStyle.fg, maxWidth: 120 }}
+                          >
+                            {CATEGORY_LABELS[cls.category] || cls.category}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
