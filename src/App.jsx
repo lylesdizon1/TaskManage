@@ -304,6 +304,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [statusFilter, setStatusFilter]         = useState('all');
   const [taskFilter, setTaskFilter]             = useState('');
   const [showSettings, setShowSettings]         = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState(null);
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
   const [showTaskModal, setShowTaskModal]       = useState(false);
   const [editingTask, setEditingTask]           = useState(null);
@@ -376,6 +377,20 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     window.addEventListener('popstate', handlePop);
     return () => window.removeEventListener('popstate', handlePop);
   }, []);
+
+  // After Gmail OAuth redirect (?gmail=connected), reopen Settings on
+  // the Email Intelligence tab and strip the param from the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('gmail') === 'connected') {
+      setSettingsInitialTab('gmail');
+      setShowSettings(true);
+      params.delete('gmail');
+      const qs = params.toString();
+      const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+      window.history.replaceState({ view: activeView }, '', newUrl);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep chatInput ref in sync for session-expired handler
   useEffect(() => { chatInputRef.current = chatInput; }, [chatInput]);
@@ -1552,7 +1567,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           onSave={(keys) => { setApiKeys(keys); saveSettings(keys, emailSettingsRef.current, alertRulesRef.current); }}
           emailSettings={emailSettings}
           onSaveEmail={(email) => { setEmailSettings(email); saveSettings(apiKeysRef.current, email, alertRulesRef.current); }}
-          onClose={() => setShowSettings(false)}
+          onClose={() => { setShowSettings(false); setSettingsInitialTab(null); }}
+          initialTab={settingsInitialTab}
           envConfigured={envConfigured}
           authToken={authToken}
           currentUser={currentUser}

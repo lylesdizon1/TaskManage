@@ -504,8 +504,8 @@ function AlertCadenceTab({ apiFetch, authToken }) {
   );
 }
 
-export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged, onUserUpdated, apiFetch, alertRules, onUpdateAlertRules, tasks, firedAlertsRef, envStatus, addToast: addToastProp, EntitySelectOptions }) {
-  const [tab, setTab]               = useState('keys');
+export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged, onUserUpdated, apiFetch, alertRules, onUpdateAlertRules, tasks, firedAlertsRef, envStatus, addToast: addToastProp, EntitySelectOptions, initialTab }) {
+  const [tab, setTab]               = useState(initialTab || 'keys');
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
   const [draftEmail, setDraftEmail] = useState({ ...emailSettings });
   const [testing, setTesting]       = useState(false);
