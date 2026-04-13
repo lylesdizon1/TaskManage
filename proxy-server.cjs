@@ -67,7 +67,8 @@ app.use('/', require('./server/routes/preferences.cjs')({ authenticateToken, db 
 app.use('/', require('./server/routes/chat.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/financial.cjs')({ authenticateToken, requireOwnership, db }));
 app.use('/', require('./server/routes/dashboard.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }));
-app.use('/', require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }));
+const { router: alertsRouter, buildAndSendMorningBrief } = require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google });
+app.use('/', alertsRouter);
 app.use('/', require('./server/routes/calendar-notes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/admin.cjs')({ authenticateToken, requireSuperAdmin, JWT_SECRET, db }));
@@ -102,7 +103,8 @@ start().catch((err) => { console.error('[startup] Fatal:', err.message); process
 
 // ── Server-side alert cron — runs every minute ──────────────────────────────
 const cron = require('node-cron');
-const { sendWhatsApp: _sendWhatsApp, sendAlertEmail: _sendAlertEmail } = require('./server/utils/integrations.cjs');
+const { sendSlack: _sendSlack, sendWhatsApp: _sendWhatsApp, sendAlertEmail: _sendAlertEmail } = require('./server/utils/integrations.cjs');
+const cronLogger = require('./guardrails/logger.cjs');
 
 cron.schedule('* * * * *', async () => {
   try {
@@ -175,3 +177,47 @@ cron.schedule('* * * * *', async () => {
   }
 });
 console.log('[cron] Post-meeting alert scheduler started');
+
+// ── Morning brief cron — runs every minute, fires per-user at HH:MM in their tz ──
+function getLocalHHMM(tz) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const h = parts.find(p => p.type === 'hour').value.padStart(2, '0');
+    const m = parts.find(p => p.type === 'minute').value.padStart(2, '0');
+    return `${h}:${m}`;
+  } catch { return null; }
+}
+
+function getLocalDateKey(tz) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+  } catch { return new Date().toISOString().slice(0, 10); }
+}
+
+cron.schedule('* * * * *', async () => {
+  try {
+    const users = await db.getUsersWithMorningBriefEnabled();
+    for (const user of users) {
+      try {
+        const localTime = getLocalHHMM(user.timezone);
+        if (!localTime || localTime !== user.briefTime) continue;
+
+        const dateKey = getLocalDateKey(user.timezone);
+        const alreadySent = await db.checkAndLockMorningBriefSent(user.id, dateKey);
+        if (alreadySent) continue;
+
+        await buildAndSendMorningBrief(user.id, {
+          requestId: `cron-morning-brief-${user.id}`,
+        });
+        cronLogger.info('morning-brief-cron.sent', { userId: user.id });
+      } catch (e) {
+        cronLogger.error('morning-brief-cron.user-failed', { userId: user.id, error: e.message });
+      }
+    }
+  } catch (e) {
+    cronLogger.error('morning-brief-cron.failed', { error: e.message });
+  }
+});
+console.log('[cron] Morning brief scheduler started');

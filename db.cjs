@@ -3152,6 +3152,15 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_user_id ON inbox_items(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_scheduled_alerts_user_id ON scheduled_alerts(user_id)`).catch(() => {});
 
+  // Morning brief idempotency lock. Scoped to the morning-brief:* key
+  // prefix so the index can be added safely even if other alert_keys
+  // carry duplicates elsewhere in the table.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS scheduled_alerts_morning_brief_unique
+      ON scheduled_alerts(user_id, alert_key)
+      WHERE alert_key LIKE 'morning-brief:%'
+  `).catch((err) => console.warn('[migration] scheduled_alerts morning-brief unique index:', err.message));
+
   // 11. Entity dedup: "Buyflip" → "BuyFlip" (canonical brand casing)
   await pool.query(`
     UPDATE tasks
@@ -4190,6 +4199,60 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
  * @returns {Promise<Array<Object>>} Unfired alerts with user contact info.
  * @throws {Error} If the database query fails.
  */
+/**
+ * Return users who have at least one enabled "morning-brief" rule in
+ * their user_settings.alertRules. Reads the canonical per-user alertRules
+ * JSON and extracts the brief time ('HH:MM').
+ */
+async function getUsersWithMorningBriefEnabled() {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.timezone, u.display_name AS "displayName", u.username,
+            s.value_json AS "alertRules"
+     FROM users u
+     JOIN user_settings s ON s.user_id = u.id AND s.setting_key = 'alertRules'
+     WHERE s.value_json IS NOT NULL`
+  );
+  return rows
+    .filter((u) => {
+      const rules = Array.isArray(u.alertRules) ? u.alertRules : [];
+      return rules.some((r) => r?.condition?.type === 'morning-brief' && r?.enabled !== false);
+    })
+    .map((u) => {
+      const rules = u.alertRules;
+      const rule = rules.find((r) => r?.condition?.type === 'morning-brief');
+      return {
+        id: u.id,
+        timezone: u.timezone || 'America/Los_Angeles',
+        displayName: u.displayName,
+        username: u.username,
+        briefTime: rule?.condition?.time || '08:00',
+      };
+    });
+}
+
+/**
+ * Atomically claim the right to send today's morning brief for a user.
+ * Returns true iff this call is the one that locked it (and should send);
+ * false means another run already sent (or locked) for this local-day.
+ * Uses a scheduled_alerts row with alert_key 'morning-brief:{userId}:{YYYY-MM-DD}'
+ * and relies on a partial unique index scoped to this key prefix.
+ */
+async function checkAndLockMorningBriefSent(userId, dateKey) {
+  const alertKey = `morning-brief:${userId}:${dateKey}`;
+  const { rows } = await pool.query(
+    `INSERT INTO scheduled_alerts (user_id, alert_key, message, channels, fire_at, fired, fired_at)
+     VALUES ($1, $2, 'morning-brief', '[]'::jsonb, NOW(), TRUE, NOW())
+     ON CONFLICT (user_id, alert_key)
+     WHERE alert_key LIKE 'morning-brief:%'
+     DO NOTHING
+     RETURNING id`,
+    [userId, alertKey]
+  );
+  // rows.length === 1 → we just locked it, caller should send.
+  // rows.length === 0 → another run already locked it, caller should skip.
+  return rows.length === 0;
+}
+
 async function getUnfiredAlerts() {
   // Per-user DND check: compute each user's local time via AT TIME ZONE
   const { rows } = await pool.query(
@@ -4506,6 +4569,8 @@ module.exports = {
   updateDndPreferences,
   scheduleTaskAlerts,
   getUnfiredAlerts,
+  getUsersWithMorningBriefEnabled,
+  checkAndLockMorningBriefSent,
   markScheduledAlertFired,
   DEFAULT_CADENCE_CONFIGS,
   getCalendarNote,
