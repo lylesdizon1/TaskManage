@@ -262,11 +262,6 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
     const { messages, systemPrompt: clientPrompt, model: reqModel, timeZone, context_hint } = req.body;
     const model = reqModel || 'claude-sonnet-4-20250514';
 
-    // finalizeStream is defined inside the try (so SSE headers are set
-    // before it writes). Hoisted here with `let` so the catch block can
-    // still route errors through it after assignment.
-    let finalizeStream = () => {};
-
     try {
       const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
       const ctx = await buildAgenticContext({
@@ -297,7 +292,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         if (streamFinalized) return;
         try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
       };
-      finalizeStream = (payload = {}) => {
+      const finalizeStream = (payload = {}) => {
         if (streamFinalized) return;
         streamFinalized = true;
         logger.info('chat.stream.finalized', { requestId: req.requestId, userId, hasError: !!payload.error, hasText: !!(payload.text && payload.text.length) });
