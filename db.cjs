@@ -512,6 +512,25 @@ async function initTables() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id)`).catch(() => {});
 
+  // ── Email auto-clean policy (Session 1: safe manual clean only) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_clean_policies (
+      id                       TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id                  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      archive_promos           BOOLEAN NOT NULL DEFAULT false,
+      promos_older_than_h      INTEGER NOT NULL DEFAULT 24,
+      archive_newsletters      BOOLEAN NOT NULL DEFAULT false,
+      newsletters_older_than_h INTEGER NOT NULL DEFAULT 48,
+      archive_social           BOOLEAN NOT NULL DEFAULT false,
+      social_older_than_h      INTEGER NOT NULL DEFAULT 24,
+      confirmation_threshold   INTEGER NOT NULL DEFAULT 20,
+      active                   BOOLEAN NOT NULL DEFAULT true,
+      created_at               TIMESTAMPTZ DEFAULT NOW(),
+      updated_at               TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id)
+    );
+  `);
+
   // ── Email classification rules + classifications ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS email_classification_rules (
@@ -1235,6 +1254,58 @@ async function getClassificationsByEntity(userId, entityId, limit = 50) {
     [userId, entityId, Math.min(Math.max(1, limit), 200)],
   );
   return rows;
+}
+
+// ── Email auto-clean policy ─────────────────────────────────────────────────
+
+async function getEmailCleanPolicy(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId",
+            archive_promos AS "archivePromos", promos_older_than_h AS "promosOlderThanH",
+            archive_newsletters AS "archiveNewsletters", newsletters_older_than_h AS "newslettersOlderThanH",
+            archive_social AS "archiveSocial", social_older_than_h AS "socialOlderThanH",
+            confirmation_threshold AS "confirmationThreshold",
+            active, created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM email_clean_policies WHERE user_id = $1`,
+    [userId],
+  );
+  return rows[0] || null;
+}
+
+async function upsertEmailCleanPolicy(userId, p = {}) {
+  const { rows } = await pool.query(
+    `INSERT INTO email_clean_policies
+       (user_id, archive_promos, promos_older_than_h,
+        archive_newsletters, newsletters_older_than_h,
+        archive_social, social_older_than_h,
+        confirmation_threshold, active)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (user_id) DO UPDATE SET
+       archive_promos = EXCLUDED.archive_promos,
+       promos_older_than_h = EXCLUDED.promos_older_than_h,
+       archive_newsletters = EXCLUDED.archive_newsletters,
+       newsletters_older_than_h = EXCLUDED.newsletters_older_than_h,
+       archive_social = EXCLUDED.archive_social,
+       social_older_than_h = EXCLUDED.social_older_than_h,
+       confirmation_threshold = EXCLUDED.confirmation_threshold,
+       active = EXCLUDED.active,
+       updated_at = NOW()
+     RETURNING id, user_id AS "userId",
+               archive_promos AS "archivePromos", promos_older_than_h AS "promosOlderThanH",
+               archive_newsletters AS "archiveNewsletters", newsletters_older_than_h AS "newslettersOlderThanH",
+               archive_social AS "archiveSocial", social_older_than_h AS "socialOlderThanH",
+               confirmation_threshold AS "confirmationThreshold",
+               active, created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [
+      userId,
+      !!p.archivePromos, parseInt(p.promosOlderThanH, 10) || 24,
+      !!p.archiveNewsletters, parseInt(p.newslettersOlderThanH, 10) || 48,
+      !!p.archiveSocial, parseInt(p.socialOlderThanH, 10) || 24,
+      parseInt(p.confirmationThreshold, 10) || 20,
+      p.active === false ? false : true,
+    ],
+  );
+  return rows[0];
 }
 
 async function getImportantUnread(userId, minRank = 3) {
@@ -4451,4 +4522,6 @@ module.exports = {
   batchGetClassifications,
   getClassificationsByEntity,
   getImportantUnread,
+  getEmailCleanPolicy,
+  upsertEmailCleanPolicy,
 };

@@ -609,6 +609,222 @@ function RuleForm({ value, entities, onChange, onCancel, onSave }) {
   );
 }
 
+// ── Email Auto-Clean section (Integrations tab) ──────────────────────────
+const AGE_OPTIONS  = [1, 6, 24, 48, 72];
+const THRESHOLDS   = [5, 10, 20, 50, 100];
+
+function EmailAutoCleanSection({ apiFetch, authToken }) {
+  const toast = useToast();
+  const [policy, setPolicy] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scan, setScan] = useState(null);       // { would_archive, breakdown, accounts }
+  const [archiving, setArchiving] = useState(false);
+
+  async function loadPolicy() {
+    setLoading(true);
+    try {
+      const r = await apiFetch('/api/email-clean-policy', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await r.json();
+      setPolicy(data?.policy || null);
+    } catch { setPolicy(null); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadPolicy(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function savePolicy() {
+    if (!policy) return;
+    setSaving(true);
+    try {
+      const r = await apiFetch('/api/email-clean-policy', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(policy),
+      });
+      const data = await r.json();
+      if (data?.policy) setPolicy(data.policy);
+      try { toast.success('Settings saved', 2500); } catch {}
+    } catch {
+      try { toast.error('Failed to save settings', 4000); } catch {}
+    } finally { setSaving(false); }
+  }
+
+  async function runClean() {
+    setScan(null);
+    setScanning(true);
+    try {
+      const r = await apiFetch('/api/email-clean-policy/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ confirmed: false }),
+      });
+      const data = await r.json();
+      if (!data || data.would_archive === 0) {
+        try { toast.info('Nothing to clean right now.', 3000); } catch {}
+        setScan(null);
+      } else {
+        setScan(data);
+      }
+    } catch {
+      try { toast.error('Scan failed', 4000); } catch {}
+    } finally { setScanning(false); }
+  }
+
+  async function confirmArchive() {
+    setArchiving(true);
+    try {
+      const r = await apiFetch('/api/email-clean-policy/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      const data = await r.json();
+      const n = data?.archived ?? 0;
+      try { toast.success(`Archived ${n} emails from your inbox.`, 3500); } catch {}
+      setScan(null);
+    } catch {
+      try { toast.error('Archive failed', 4000); } catch {}
+    } finally { setArchiving(false); }
+  }
+
+  if (loading) {
+    return (
+      <div className="pt-5 mt-2 border-t border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Email Auto-Clean</h3>
+        <div className="space-y-2">{[0,1,2].map(i => <div key={i} className="h-12 bg-gray-50 rounded-xl animate-pulse" />)}</div>
+      </div>
+    );
+  }
+  if (!policy) return null;
+
+  const threshold = policy.confirmationThreshold || 20;
+  const showWarn = scan && scan.would_archive >= threshold;
+
+  return (
+    <div className="pt-5 mt-2 border-t border-gray-100">
+      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Email Auto-Clean</h3>
+
+      <CleanToggleRow
+        label="Archive promotions"
+        enabled={!!policy.archivePromos}
+        onToggle={(v) => setPolicy({ ...policy, archivePromos: v })}
+        age={policy.promosOlderThanH || 24}
+        onAgeChange={(v) => setPolicy({ ...policy, promosOlderThanH: v })}
+      />
+      <CleanToggleRow
+        label="Archive newsletters"
+        enabled={!!policy.archiveNewsletters}
+        onToggle={(v) => setPolicy({ ...policy, archiveNewsletters: v })}
+        age={policy.newslettersOlderThanH || 48}
+        onAgeChange={(v) => setPolicy({ ...policy, newslettersOlderThanH: v })}
+      />
+      <CleanToggleRow
+        label="Archive social notifications"
+        enabled={!!policy.archiveSocial}
+        onToggle={(v) => setPolicy({ ...policy, archiveSocial: v })}
+        age={policy.socialOlderThanH || 24}
+        onAgeChange={(v) => setPolicy({ ...policy, socialOlderThanH: v })}
+      />
+
+      <div className="flex items-center gap-2 mt-3">
+        <span className="text-[12px] text-gray-600">Show confirmation when archiving more than</span>
+        <select
+          value={threshold}
+          onChange={(e) => setPolicy({ ...policy, confirmationThreshold: parseInt(e.target.value, 10) || 20 })}
+          className="px-2 py-1 bg-gray-50 border border-gray-200 rounded-lg text-[12px]"
+        >
+          {THRESHOLDS.map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <span className="text-[12px] text-gray-600">emails</span>
+      </div>
+      <p className="text-[11px] text-gray-400 mt-1">Affects messaging only, not execution.</p>
+
+      <div className="flex items-center gap-2 mt-3">
+        <button
+          onClick={savePolicy}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-50"
+          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+        >
+          {saving ? 'Saving…' : 'Save Auto-Clean Settings'}
+        </button>
+        <button
+          onClick={runClean}
+          disabled={scanning}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-50"
+          style={{ backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.3)' }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>play_arrow</span>
+          {scanning ? 'Scanning…' : 'Run Clean Now'}
+        </button>
+      </div>
+
+      {scan && scan.would_archive > 0 && (
+        <div className="mt-3 bg-white border border-gray-200 rounded-xl shadow-sm p-3">
+          <div className="flex items-center gap-2">
+            {showWarn ? (
+              <>
+                <span className="material-symbols-outlined" style={{ color: '#d97706', fontSize: '18px' }}>warning</span>
+                <p className="text-[13px] font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                  About to archive {scan.would_archive} emails — this is a lot. Review the breakdown before confirming.
+                </p>
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined" style={{ color: '#22c55e', fontSize: '18px' }}>check_circle</span>
+                <p className="text-[13px] font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                  Ready to archive {scan.would_archive} emails:
+                </p>
+              </>
+            )}
+          </div>
+          <ul className="mt-1.5 ml-6 space-y-0.5 text-[12px] text-gray-600">
+            <li>• {scan.breakdown?.promos || 0} promotions</li>
+            <li>• {scan.breakdown?.newsletters || 0} newsletters</li>
+            <li>• {scan.breakdown?.social || 0} social notifications</li>
+          </ul>
+          <div className="flex items-center justify-end gap-2 mt-2">
+            <button onClick={() => setScan(null)} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+            <button
+              onClick={confirmArchive}
+              disabled={archiving}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-50"
+              style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+            >
+              {archiving ? 'Archiving…' : 'Archive Now'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CleanToggleRow({ label, enabled, onToggle, age, onAgeChange }) {
+  return (
+    <div className="flex items-center gap-3 py-1.5">
+      <label className="inline-flex items-center gap-2 cursor-pointer flex-1">
+        <div
+          className={`relative w-9 h-5 rounded-full transition-colors ${enabled ? 'bg-indigo-600' : 'bg-gray-300'}`}
+          onClick={() => onToggle(!enabled)}
+        >
+          <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${enabled ? 'translate-x-4' : ''}`} />
+        </div>
+        <span className="text-sm text-gray-800" style={{ fontFamily: 'Manrope, sans-serif' }}>{label}</span>
+      </label>
+      <div className="flex items-center gap-1 text-[12px] text-gray-500">
+        <span>older than</span>
+        <select
+          value={age}
+          onChange={(e) => onAgeChange(parseInt(e.target.value, 10))}
+          disabled={!enabled}
+          className="px-2 py-1 bg-gray-50 border border-gray-200 rounded-lg text-[12px] disabled:opacity-50"
+        >
+          {AGE_OPTIONS.map(h => <option key={h} value={h}>{h}h</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 function EnvBadge() {
   return (
     <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full ml-2">
@@ -1314,6 +1530,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
               </div>
 
               <EmailClassificationSection apiFetch={apiFetch} authToken={authToken} entities={entities} />
+              <EmailAutoCleanSection apiFetch={apiFetch} authToken={authToken} />
             </div>
           )}
 

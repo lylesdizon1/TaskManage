@@ -259,6 +259,30 @@ const ARIA_TOOLS = [
       required: ['message_id', 'account_email'],
     },
   },
+  {
+    name: 'bulk_archive_emails',
+    group: 'communication',
+    risk: 'high',
+    requires_confirmation: true,
+    description: 'Archive low-priority emails matching criteria (promotions / newsletters / social) for a single account. Always dry-run first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        account_email: { type: 'string' },
+        criteria: {
+          type: 'object',
+          properties: {
+            include_promos:      { type: 'boolean' },
+            include_newsletters: { type: 'boolean' },
+            include_social:      { type: 'boolean' },
+            older_than_hours:    { type: 'number' },
+          },
+        },
+        dry_run: { type: 'boolean' },
+      },
+      required: ['account_email', 'criteria'],
+    },
+  },
 ];
 
 const ALWAYS_CONFIRM = new Set(['send_email', 'reply_email', 'delete_task', 'delete_event']);
@@ -665,6 +689,19 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           }
           return { success: false, error: err.message };
         }
+      }
+
+      case 'bulk_archive_emails': {
+        const { account_email, criteria, dry_run } = toolInput || {};
+        if (!account_email || !criteria) return { success: false, error: 'account_email and criteria required' };
+        const row = await db.getGmailIntegrationByEmail(userId, account_email);
+        if (!row) return { success: false, error: `No Gmail tokens for ${account_email}. Reconnect in Settings.` };
+        const { scanAndArchiveForAccount } = require('./lib/emailCleanRunner.cjs');
+        const result = await scanAndArchiveForAccount({
+          db, userId, accountEmail: account_email, criteria,
+          dryRun: dry_run !== false, // default true
+        });
+        return { success: true, ...result };
       }
 
       default:

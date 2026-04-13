@@ -359,22 +359,70 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     } catch {}
   }
 
-  async function bulkArchiveLowPriority(lowThreads) {
-    if (!lowThreads.length) { setBulkConfirmOpen(false); return; }
-    const jobs = lowThreads.map(t => ({ account_email: t.accountEmail, message_id: t.latestMessageId || t.id })).filter(j => j.message_id);
+  // Auto-clean runner: dry-run scan first, show confirmation, then execute.
+  const DEFAULT_CLEAN_POLICY = {
+    archivePromos: true,      promosOlderThanH: 24,
+    archiveNewsletters: true, newslettersOlderThanH: 24,
+    archiveSocial: true,      socialOlderThanH: 24,
+    confirmationThreshold: 20,
+    active: true,
+  };
+  const [cleanScan, setCleanScan] = useState(null);        // { would_archive, breakdown, threshold }
+  const [cleanArchiving, setCleanArchiving] = useState(false);
+
+  async function startBulkClean() {
+    setBulkConfirmOpen(false);
+    setCleanScan(null);
+    let policy = DEFAULT_CLEAN_POLICY;
     try {
-      const r = await apiFetch('/api/inbox/archive', {
+      const pr = await apiFetch('/api/email-clean-policy', { headers: { Authorization: `Bearer ${authToken}` } });
+      const pdata = await pr.json().catch(() => null);
+      if (pdata?.policy) policy = pdata.policy;
+    } catch {}
+    const effective = {
+      ...policy,
+      // Inbox button always wants all three types on by default.
+      archivePromos: true, archiveNewsletters: true, archiveSocial: true,
+    };
+    try {
+      const r = await apiFetch('/api/email-clean-policy/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ threads: jobs }),
+        body: JSON.stringify({ confirmed: false, policy: effective }),
       });
-      const data = await r.json().catch(() => ({}));
-      const archivedIds = new Set(lowThreads.map(t => t.id));
-      for (const id of archivedIds) { markInteracted(id); removeThreadFromZones(id); }
-      setThreads((prev) => prev.filter(x => !archivedIds.has(x.id)));
-      try { toast.info(`Archived ${data?.archived ?? lowThreads.length} emails`, 3000); } catch {}
+      const data = await r.json();
+      if (!data || data.would_archive === 0) {
+        try { toast.info('Nothing to clean right now.', 3000); } catch {}
+        return;
+      }
+      setCleanScan({ ...data, threshold: effective.confirmationThreshold || 20 });
+    } catch {
+      try { toast.error('Scan failed', 4000); } catch {}
+    }
+  }
+
+  async function confirmBulkClean() {
+    setCleanArchiving(true);
+    try {
+      const r = await apiFetch('/api/email-clean-policy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ confirmed: true, policy: {
+          ...DEFAULT_CLEAN_POLICY,
+          archivePromos: true, archiveNewsletters: true, archiveSocial: true,
+        } }),
+      });
+      const data = await r.json();
+      const n = data?.archived ?? 0;
+      // Optimistically drop Low Priority threads from the local zone.
+      setThreads((prev) => prev.filter(t => !lowPriorityIds.has(t.id)));
+      setLowPriorityIds(new Set());
+      try { toast.info(`Archived ${n} low priority emails.`, 3000); } catch {}
     } catch {}
-    finally { setBulkConfirmOpen(false); }
+    finally {
+      setCleanArchiving(false);
+      setCleanScan(null);
+    }
   }
 
   function toggleZone(key) {
@@ -578,7 +626,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   zones.low.length > 0 && (
                     <div className="mt-1 px-1">
                       <button
-                        onClick={() => setBulkConfirmOpen(true)}
+                        onClick={startBulkClean}
                         className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg"
                         style={{ backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.25)' }}
                       >
@@ -608,30 +656,49 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
           )}
         </div>
 
-        {/* Bulk archive confirmation */}
-        {bulkConfirmOpen && (
+        {/* Bulk auto-clean confirmation — dry-run result shown here */}
+        {cleanScan && (
           <div
             className="absolute inset-0 z-40 flex items-center justify-center"
             style={{ background: 'rgba(0,0,0,0.15)' }}
-            onClick={() => setBulkConfirmOpen(false)}
+            onClick={() => !cleanArchiving && setCleanScan(null)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="bg-white border border-gray-200 rounded-xl shadow-lg p-4 w-[280px]"
+              className="bg-white border border-gray-200 rounded-xl shadow-lg p-4 w-[300px]"
               style={{ fontFamily: 'Manrope, sans-serif' }}
             >
-              <p className="text-sm font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                Archive {zones.low.length} low priority emails?
-              </p>
-              <p className="text-xs text-gray-500 mt-1">This will remove them from your inbox.</p>
-              <div className="flex justify-end gap-2 mt-3">
-                <button onClick={() => setBulkConfirmOpen(false)} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+              <div className="flex items-center gap-2">
+                {cleanScan.would_archive >= (cleanScan.threshold || 20) ? (
+                  <>
+                    <span className="material-symbols-outlined" style={{ color: '#d97706', fontSize: '18px' }}>warning</span>
+                    <p className="text-sm font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                      About to archive {cleanScan.would_archive} emails — this is a lot.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined" style={{ color: '#22c55e', fontSize: '18px' }}>check_circle</span>
+                    <p className="text-sm font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                      Ready to archive {cleanScan.would_archive} emails:
+                    </p>
+                  </>
+                )}
+              </div>
+              <ul className="mt-1.5 ml-6 space-y-0.5 text-[12px] text-gray-600">
+                <li>• {cleanScan.breakdown?.promos || 0} promotions</li>
+                <li>• {cleanScan.breakdown?.newsletters || 0} newsletters</li>
+                <li>• {cleanScan.breakdown?.social || 0} social notifications</li>
+              </ul>
+              <div className="flex items-center justify-end gap-2 mt-3">
+                <button onClick={() => !cleanArchiving && setCleanScan(null)} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
                 <button
-                  onClick={() => bulkArchiveLowPriority(zones.low)}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg"
+                  onClick={confirmBulkClean}
+                  disabled={cleanArchiving}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-50"
                   style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
                 >
-                  Archive All
+                  {cleanArchiving ? 'Archiving…' : 'Archive Now'}
                 </button>
               </div>
             </div>
