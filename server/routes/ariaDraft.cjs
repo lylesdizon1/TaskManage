@@ -69,6 +69,8 @@ Classify the user message into exactly one of three buckets:
    Output: {"type":"default_chat"}
 
 Rules:
+- If the request is about sending, writing, or replying to an email or message, always return {"type": "default_chat"} — never classify as task or event.
+- Requests containing "remind me" or "don't let me forget" are always tasks, never events.
 - Infer a reasonable draft. Never ask questions. Never return empty fields on task/event.
 - Dates are in the user's local timezone. "tomorrow" = ${today} + 1 day.
 - If no time given for an event, default start_time to 09:00 local and duration 60.
