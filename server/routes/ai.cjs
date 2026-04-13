@@ -432,7 +432,7 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
   router.post('/api/chat/confirm', authenticateToken, async (req, res) => {
     try {
       const userId = req.user.id;
-      const { confirm_id, approved } = req.body || {};
+      const { confirm_id, approved, account_email } = req.body || {};
       if (!confirm_id) return res.status(400).json({ error: 'confirm_id required' });
 
       const pending = await db.getPendingConfirmation(confirm_id, userId);
@@ -457,7 +457,11 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       if (waiter) {
         clearTimeout(waiter.timeout);
         webConfirmWaiters.delete(confirm_id);
-        waiter.resolve(approved ? { action: 'allow' } : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` });
+        waiter.resolve(
+          approved
+            ? { action: 'allow', overrides: account_email ? { account_email } : {} }
+            : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` }
+        );
       }
       return res.json({ success: true, status: nextStatus });
     } catch (err) {

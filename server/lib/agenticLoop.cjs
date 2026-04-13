@@ -104,12 +104,18 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         continue;
       }
 
+      // Merge any overrides the confirmation gate attached (e.g. the user
+      // picking a different From account on an email draft).
+      const effectiveInput = (gateDecision?.overrides && Object.keys(gateDecision.overrides).length)
+        ? { ...toolUse.input, ...gateDecision.overrides }
+        : toolUse.input;
+
       try {
-        const result = await executeTool(toolUse.name, toolUse.input, userId);
+        const result = await executeTool(toolUse.name, effectiveInput, userId);
         resultContent = typeof result === 'string' ? result : JSON.stringify(result);
         toolSummaries.push({ tool: toolUse.name, success: true, result });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result });
-        try { await logAction?.({ eventType: 'tool_executed', toolName: toolUse.name, input: toolUse.input, output: result, status: result?.success === false ? 'failure' : 'success' }); } catch {}
+        try { await logAction?.({ eventType: 'tool_executed', toolName: toolUse.name, input: effectiveInput, output: result, status: result?.success === false ? 'failure' : 'success' }); } catch {}
       } catch (err) {
         success = false;
         resultContent = `Error executing ${toolUse.name}: ${err.message}`;
