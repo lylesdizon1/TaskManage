@@ -264,7 +264,7 @@ const ARIA_TOOLS = [
     group: 'communication',
     risk: 'low',
     requires_confirmation: false,
-    description: 'Search classified emails by summary, vendor, category, entity, importance, or receiving account. Read-only.',
+    description: 'Search for specific emails when the answer is not already visible in the current inbox state. Use for targeted lookups by sender, category, entity, or keyword. Do not use if the inbox state already contains the answer.',
     input_schema: {
       type: 'object',
       properties: {

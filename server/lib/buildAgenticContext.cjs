@@ -160,7 +160,7 @@ async function buildAgenticContext(opts) {
 
   const assistantName = user?.assistantName || 'Aria';
   const userName = user?.profileName || user?.displayName || 'the user';
-  const basePrompt = `You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You have tools to create, update, search, and delete tasks/notes/events, and to send, reply to, or archive emails. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}`;
+  const basePrompt = `You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You have tools to create, update, search, and delete tasks/notes/events, and to send, reply to, or archive emails. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}\nFor inbox questions: answer from CURRENT INBOX STATE first. Use search_inbox only for specific lookups not covered by the inbox state.`;
 
   // Learnings: inject rules (cap 15) + patterns (cap 10); never one-offs.
   const rulesList = (learnings || []).filter(l => l.confidence === 'rule').slice(0, 15);
@@ -204,10 +204,10 @@ function buildEmailContextBlock({ importantUnread, recentClassified, importantUn
     `- ${r.importance} | ${r.vendor || 'Unknown'} | ${r.summary || ''} | ${fmtDate(r.classifiedAt)}`;
 
   const build = (u, r) => {
-    let out = '\n\nEMAIL INBOX CONTEXT:\nYou have access to the user\'s classified email data. Use this to answer questions about their inbox.';
+    let out = '\n\nCURRENT INBOX STATE (available to you):\nThis is your current view of the inbox. Answer inbox questions directly from this data.';
     if (u.length) out += `\n\nEMAILS NEEDING ATTENTION:\n${u.map(fmtUnread).join('\n')}`;
     if (r.length) out += `\n\nRECENT INBOX:\n${r.map(fmtRecent).join('\n')}`;
-    out += '\n\nIf the user asks about emails, senders, confirmations, invoices, receipts, unread items, or anything inbox-related, answer from this context. Use search_inbox for specific lookups.';
+    out += '\n\nAnswer inbox questions from the data above first. Use search_inbox only when you need to find something more specific than what is shown here.';
     return out;
   };
 
