@@ -264,7 +264,7 @@ const ARIA_TOOLS = [
     group: 'communication',
     risk: 'low',
     requires_confirmation: false,
-    description: 'Search for specific emails when the answer is not already visible in the current inbox state. Use for targeted lookups by sender, category, entity, or keyword. Do not use if the inbox state already contains the answer.',
+    description: 'Search classified emails by sender, category, entity, or keyword. Supports date ranges: today, last_week, last_month, last_3_months, last_year, all. Default is last 7 days. Returns has_more=true if more results may exist beyond the limit. When results are sparse or has_more is true, ask the user if they want to search further back.',
     input_schema: {
       type: 'object',
       properties: {
@@ -275,6 +275,8 @@ const ARIA_TOOLS = [
         importance:    { type: 'string', enum: ['critical', 'high', 'normal', 'low'] },
         account_email: { type: 'string', description: 'Receiving inbox account.' },
         limit:         { type: 'number' },
+        date_from:     { type: 'string', description: "ISO date YYYY-MM-DD or one of: today, last_week, last_month, last_3_months, last_year, all. Default: last 7 days." },
+        date_to:       { type: 'string', description: 'ISO date YYYY-MM-DD. Optional upper bound.' },
       },
     },
   },
@@ -345,6 +347,68 @@ async function loadGmailTokensForAccount(db, userId, accountEmail /* , toolTag *
 async function saveGmailTokensForAccount(db, userId, accountEmail, tokens) {
   const wrapped = ENCRYPTION_KEY ? { _enc: encryptTokens(tokens) } : tokens;
   await db.upsertUserIntegration(userId, 'gmail', { tokens: wrapped }, true, accountEmail || '');
+}
+
+// ── search_inbox date range resolver ───────────────────────────────────────
+// Accepts: ISO 'YYYY-MM-DD', or one of
+//   'today' | 'last_week' | 'last_month' | 'last_3_months' | 'last_year' | 'all'
+// omitted → 'last_week' (7 days) per spec default.
+// Returns { sinceIso, untilIso, label, wide }
+function _resolveDateRange(dateFrom, dateTo) {
+  const now = new Date();
+  const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysAgo = (n) => new Date(todayMid.getTime() - n * 86400000);
+
+  let sinceIso = null;
+  let label = 'last 7 days';
+  let rangeKey = 'last_week';
+
+  if (!dateFrom || dateFrom === 'last_week') {
+    sinceIso = daysAgo(7).toISOString(); label = 'last 7 days'; rangeKey = 'last_week';
+  } else if (dateFrom === 'today') {
+    sinceIso = todayMid.toISOString(); label = 'today'; rangeKey = 'today';
+  } else if (dateFrom === 'last_month') {
+    sinceIso = daysAgo(30).toISOString(); label = 'last 30 days'; rangeKey = 'last_month';
+  } else if (dateFrom === 'last_3_months') {
+    sinceIso = daysAgo(90).toISOString(); label = 'last 3 months'; rangeKey = 'last_3_months';
+  } else if (dateFrom === 'last_year') {
+    sinceIso = daysAgo(365).toISOString(); label = 'last year'; rangeKey = 'last_year';
+  } else if (dateFrom === 'all') {
+    sinceIso = null; label = 'all time'; rangeKey = 'all';
+  } else {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateFrom).trim());
+    if (m) {
+      const d = new Date(`${dateFrom}T00:00:00`);
+      if (!isNaN(d.getTime())) { sinceIso = d.toISOString(); label = `since ${dateFrom}`; rangeKey = 'custom'; }
+    }
+  }
+
+  let untilIso = null;
+  if (dateTo) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateTo).trim());
+    if (m) {
+      const d = new Date(`${dateTo}T23:59:59`);
+      if (!isNaN(d.getTime())) { untilIso = d.toISOString(); }
+    }
+  }
+
+  const wide = rangeKey === 'last_3_months' || rangeKey === 'last_year' || rangeKey === 'all';
+  const fromLabel = sinceIso ? sinceIso.slice(0, 10) : null;
+  const toLabel = untilIso ? untilIso.slice(0, 10) : null;
+  return { sinceIso, untilIso, label, rangeKey, wide, fromLabel, toLabel };
+}
+
+function _gmailDate(iso) {
+  return iso ? iso.slice(0, 10).replace(/-/g, '/') : null;
+}
+
+function _buildGmailSearchQuery({ query, sender, dateFromIso, dateToIso }) {
+  const parts = ['in:inbox'];
+  if (sender) parts.push(`from:${sender}`);
+  if (query && query.trim()) parts.push(query.trim());
+  if (dateFromIso) parts.push(`after:${_gmailDate(dateFromIso)}`);
+  if (dateToIso)   parts.push(`before:${_gmailDate(dateToIso)}`);
+  return parts.join(' ');
 }
 
 function buildRawMime({ to, from, subject, body, inReplyTo, references }) {
@@ -711,8 +775,10 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       }
 
       case 'search_inbox': {
-        const { query, sender, category, entity, importance, account_email, limit } = toolInput || {};
+        const { query, sender, category, entity, importance, account_email, limit, date_from, date_to } = toolInput || {};
         const cap = Math.min(Math.max(1, parseInt(limit, 10) || 10), 50);
+        const range = _resolveDateRange(date_from, date_to);
+
         const where = ['ec.user_id = $1'];
         const vals = [userId];
         let i = 2;
@@ -735,12 +801,17 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (typeof account_email === 'string' && account_email.trim()) {
           pushLike(`LOWER(ec.account_email) LIKE $${i}`, account_email.trim());
         }
+        if (range.sinceIso) { where.push(`ec.classified_at >= $${i}`); vals.push(range.sinceIso); i++; }
+        if (range.untilIso) { where.push(`ec.classified_at <= $${i}`); vals.push(range.untilIso); i++; }
         vals.push(cap);
+
+        let dbRows = [];
         try {
           const { rows } = await db.pool.query(
-            `SELECT ec.message_id, ec.summary, ec.category, ec.importance,
+            `SELECT ec.message_id, ec.thread_id, ec.summary, ec.category, ec.importance,
                     e.name AS entity_name, ec.amount, ec.vendor,
-                    ec.account_email, ec.action_required, ec.classified_at
+                    ec.account_email, ec.action_required, ec.classified_at,
+                    ec.source
              FROM email_classifications ec
              LEFT JOIN entities e ON ec.entity_id = e.id
              WHERE ${where.join(' AND ')}
@@ -748,10 +819,75 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
              LIMIT $${i}`,
             vals,
           );
-          return { success: true, count: rows.length, results: rows };
+          dbRows = rows;
         } catch (err) {
           return { success: false, error: err.message };
         }
+
+        let results = dbRows.map(r => ({ ...r, source: r.source || 'db' }));
+        let hasMore = results.length >= cap;
+
+        // Gmail live fallback for wide ranges when the DB is sparse.
+        // email_classifications only covers threads we've lazily loaded,
+        // so older mail may not be indexed yet.
+        if (results.length < 5 && range.wide) {
+          try {
+            const knownIds = new Set(results.map(r => r.message_id));
+            const accounts = account_email
+              ? [{ accountEmail: account_email }]
+              : (await db.getUserIntegrationsByType(userId, 'gmail').catch(() => []));
+            const q = _buildGmailSearchQuery({ query, sender, dateFromIso: range.sinceIso, dateToIso: range.untilIso });
+            const perAccountMax = Math.max(3, Math.floor(10 / Math.max(1, accounts.length)));
+            const liveByAccount = await Promise.allSettled(accounts.map(async (a) => {
+              const tokens = await loadGmailTokensForAccount(db, userId, a.accountEmail).then(x => x?.tokens).catch(() => null);
+              if (!tokens) return [];
+              const oauth2 = makeGmailOAuth2Client(); if (!oauth2) return [];
+              oauth2.setCredentials(tokens);
+              const gmail = google.gmail({ version: 'v1', auth: oauth2 });
+              const list = await gmail.users.messages.list({ userId: 'me', q, maxResults: perAccountMax }).catch(() => null);
+              const ids = (list?.data?.messages || []).map(m => m.id).filter(id => !knownIds.has(id));
+              const metas = await Promise.allSettled(ids.map((id) =>
+                gmail.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] })
+                  .then(r => r.data)
+              ));
+              return metas.filter(m => m.status === 'fulfilled').map(m => {
+                const d = m.value;
+                const headers = d.payload?.headers || [];
+                const h = (n) => headers.find(x => String(x.name || '').toLowerCase() === n.toLowerCase())?.value || '';
+                const dateIso = (() => { const t = Date.parse(h('Date')); return Number.isFinite(t) ? new Date(t).toISOString() : null; })();
+                return {
+                  message_id: d.id,
+                  thread_id: d.threadId,
+                  summary: h('Subject') || (d.snippet || '').slice(0, 140),
+                  category: null,
+                  importance: null,
+                  entity_name: null,
+                  amount: null,
+                  vendor: h('From'),
+                  account_email: a.accountEmail,
+                  action_required: null,
+                  classified_at: dateIso,
+                  source: 'gmail_live',
+                  note: 'not yet classified',
+                };
+              });
+            }));
+            const live = [];
+            for (const r of liveByAccount) if (r.status === 'fulfilled') live.push(...r.value);
+            if (live.length) {
+              results = results.concat(live).slice(0, cap);
+              hasMore = true; // likely more exist
+            }
+          } catch { /* Gmail fallback is best-effort; never block. */ }
+        }
+
+        return {
+          success: true,
+          count: results.length,
+          results,
+          date_range: { from: range.fromLabel, to: range.toLabel, label: range.label },
+          has_more: hasMore,
+        };
       }
 
       case 'bulk_archive_emails': {

@@ -160,7 +160,13 @@ async function buildAgenticContext(opts) {
 
   const assistantName = user?.assistantName || 'Aria';
   const userName = user?.profileName || user?.displayName || 'the user';
-  const basePrompt = `You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You have tools to create, update, search, and delete tasks/notes/events, and to send, reply to, or archive emails. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}\nFor inbox questions: answer from CURRENT INBOX STATE first. Use search_inbox only for specific lookups not covered by the inbox state.`;
+  const basePrompt = `You are ${assistantName}, ${userName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything. You have tools to create, update, search, and delete tasks/notes/events, and to send, reply to, or archive emails. Use tools when taking action. For everything else, respond naturally. Be warm and concise. Today is ${todayStr}. Current time: ${currentTime} (${tz}). The user's timezone is ${tz}.\n${weekMapStr}
+
+For inbox questions: answer from CURRENT INBOX STATE first. Use search_inbox for specific lookups.
+
+When search_inbox returns fewer than 3 results OR has_more is true OR the user seems to expect more: always follow up by asking: "I found [N] emails from [date_range.label]. Would you like me to search further back? I can check the last week, month, 3 months, year, or all time."
+
+When the user specifies a time range in their query (e.g. "last month", "this year", "since January"): map it to the appropriate date_from value and call search_inbox directly without asking.`;
 
   // Learnings: inject rules (cap 15) + patterns (cap 10); never one-offs.
   const rulesList = (learnings || []).filter(l => l.confidence === 'rule').slice(0, 15);
