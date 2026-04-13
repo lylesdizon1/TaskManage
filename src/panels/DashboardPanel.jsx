@@ -38,6 +38,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [gmailAccounts, setGmailAccounts] = useState([]);
   const draftFromRef = useRef({});
+  const draftToRef = useRef({});
   const toast = useToast();
 
   useEffect(() => {
@@ -1119,7 +1120,27 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                             ) : (
                               <div className="text-gray-800 truncate">{currentFrom || '—'}</div>
                             )}
-                            <div className="text-gray-400">To</div><div className="text-gray-800 truncate">{d.to || '—'}</div>
+                            <div className="text-gray-400">To</div>
+                            <input
+                              type="text"
+                              defaultValue={d.to || ''}
+                              onChange={(e) => { draftToRef.current[msg.ts] = e.target.value; }}
+                              placeholder="recipient@email.com"
+                              style={{
+                                fontFamily: 'Manrope, sans-serif',
+                                fontSize: '13px',
+                                color: '#1f2937',
+                                background: 'transparent',
+                                border: 'none',
+                                borderBottom: '1px solid transparent',
+                                padding: '1px 0',
+                                margin: 0,
+                                outline: 'none',
+                                width: '100%',
+                              }}
+                              onFocus={(e) => { e.target.style.borderBottom = '1px solid rgba(79,77,207,0.4)'; }}
+                              onBlur={(e) => { e.target.style.borderBottom = '1px solid transparent'; }}
+                            />
                             <div className="text-gray-400">Subject</div><div className="text-gray-800" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
                           </div>
                         </div>
@@ -1149,13 +1170,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     ? (bodyStr.length > 300 ? bodyStr.slice(0, 300) + '…' : bodyStr)
                     : (p.subject || '');
                   // For send_email, look back for the paired email_draft row and
-                  // pull the user's chosen From account (if any) off the ref.
+                  // pull the user's edits (From account + To address) off the refs.
                   let accountOverride = null;
+                  let toOverride = null;
                   if (msg.tool === 'send_email') {
                     for (let k = i - 1; k >= 0; k--) {
                       const prev = ccMessages[k];
                       if (prev?.role === 'email_draft') {
                         accountOverride = draftFromRef.current[prev.ts] || null;
+                        const editedTo = draftToRef.current[prev.ts];
+                        const originalTo = prev.draft?.to || '';
+                        if (typeof editedTo === 'string' && editedTo.trim() && editedTo.trim() !== originalTo) {
+                          toOverride = editedTo.trim();
+                        }
                         break;
                       }
                     }
@@ -1169,6 +1196,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           confirm_id: msg.confirmId,
                           approved,
                           ...(approved && accountOverride ? { account_email: accountOverride } : {}),
+                          ...(approved && toOverride ? { to_override: toOverride } : {}),
                         }),
                       });
                       setCcMessages((prev) => prev.map((m, j) => j === i ? { ...m, status: approved ? 'approved' : 'rejected' } : m));
