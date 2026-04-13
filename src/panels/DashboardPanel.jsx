@@ -213,14 +213,29 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const lastCheckedRef = useRef(new Date().toISOString());
   const ccAutoRefreshedRef = useRef(false);
 
-  // Rotating thinking messages
-  const THINKING_MESSAGES = ['Thinking...', 'Checking your calendar...', 'Reviewing your tasks...', 'Pulling context...', 'Almost there...'];
+  // Rotating thinking messages — intent-aware. Each set is a small
+  // sequence rotated every 1.8s while loading. Intent is set in
+  // handleCcSend from a quick keyword check on the user message.
+  const THINKING_MESSAGES = {
+    email:   ['Thinking...', 'Accessing your Gmail...', 'Checking contacts...', 'Almost there...'],
+    task:    ['Thinking...', 'Checking your tasks...', 'Almost there...'],
+    event:   ['Thinking...', 'Checking your calendar...', 'Almost there...'],
+    default: ['Thinking...', 'Working on it...', 'Almost there...'],
+  };
   const [thinkingIdx, setThinkingIdx] = useState(0);
+  const [thinkingIntent, setThinkingIntent] = useState('default');
+  const thinkingMessagesForIntent = THINKING_MESSAGES[thinkingIntent] || THINKING_MESSAGES.default;
   useEffect(() => {
-    if (!ccLoading && !ccSending) return;
-    const timer = setInterval(() => setThinkingIdx((i) => (i + 1) % THINKING_MESSAGES.length), 1800);
+    if (!ccLoading && !ccSending) {
+      // Reset for the next turn so the placeholder doesn't carry stale intent.
+      setThinkingIntent('default');
+      return;
+    }
+    const set = THINKING_MESSAGES[thinkingIntent] || THINKING_MESSAGES.default;
+    setThinkingIdx(0);
+    const timer = setInterval(() => setThinkingIdx((i) => (i + 1) % set.length), 1800);
     return () => clearInterval(timer);
-  }, [ccLoading, ccSending]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ccLoading, ccSending, thinkingIntent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -510,6 +525,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const controller = new AbortController();
     ccAbortRef.current = controller;
 
+    // Lightweight intent detection — drives the rotating placeholder copy
+    // and decides whether to inject the user's connected Gmail accounts.
+    const lower = text.toLowerCase();
+    const emailIntent = /email|send|reply|message|gmail/.test(lower);
+    const taskIntent  = /task|remind|todo|follow.?up/.test(lower);
+    const eventIntent = /schedul|meeting|calendar|event|block/.test(lower);
+    if (emailIntent)      setThinkingIntent('email');
+    else if (taskIntent)  setThinkingIntent('task');
+    else if (eventIntent) setThinkingIntent('event');
+    else                  setThinkingIntent('default');
+
     const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString(), ts: Date.now() };
     setCcMessages((prev) => [...prev, userMsg]);
 
@@ -566,6 +592,28 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
     // Build context: last 10 messages + full Aria system prompt with live data
     const recentMsgs = [...ccMessages.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
+
+    // Email-intent: inject the list of connected Gmail accounts inline so
+    // Aria doesn't ask "which account?". Best-effort — silent fall-through
+    // on failure so non-email turns and offline cases proceed normally.
+    if (emailIntent) {
+      try {
+        const accountsRes = await apiFetch('/api/gmail/accounts', { headers: { Authorization: `Bearer ${authToken}` } });
+        if (accountsRes.ok) {
+          const accounts = await accountsRes.json();
+          if (Array.isArray(accounts) && accounts.length > 0) {
+            const accountList = accounts.map(a => a.account_email).filter(Boolean).join(', ');
+            if (accountList) {
+              const last = recentMsgs[recentMsgs.length - 1];
+              if (last && last.role === 'user' && typeof last.content === 'string') {
+                last.content = `${last.content}\n\n[User's connected Gmail accounts: ${accountList}. Use the most appropriate one or the first if unclear. Do not ask the user which account to use.]`;
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
     const aName = currentUser?.assistantName || 'Aria';
     const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents);
     const sysPrompt = `You are ${aName}, ${firstName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything asked: advice, research, cooking, ideas, business, personal, anything. You also have action tools available to create tasks, notes, and calendar events. Use your tools when the user is asking you to take an action. For everything else, just respond naturally and conversationally. Be warm, direct, and concise. No sign-off.\n\n${fullContext}`;
@@ -1012,7 +1060,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
               <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
-              <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', color: '#6b7280', transition: 'opacity 0.3s' }}>{THINKING_MESSAGES[thinkingIdx]}</span>
+              <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', color: '#6b7280', transition: 'opacity 0.3s' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>
             </div>
           ) : ccMessages.length === 0 ? (
             <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>No messages yet.</p>
@@ -1166,7 +1214,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                         ? (isUser
                             ? msg.content
                             : <ReactMarkdown components={MD_COMPONENTS}>{msg.content}</ReactMarkdown>)
-                        : <span className="animate-pulse" style={{ color: '#6b7280' }}>{THINKING_MESSAGES[thinkingIdx]}</span>}
+                        : <span className="animate-pulse" style={{ color: '#6b7280' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>}
                     </div>
                   </div>
                 );
