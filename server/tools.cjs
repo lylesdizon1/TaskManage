@@ -260,6 +260,25 @@ const ARIA_TOOLS = [
     },
   },
   {
+    name: 'search_inbox',
+    group: 'communication',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Search classified emails by summary, vendor, category, entity, importance, or receiving account. Read-only.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:         { type: 'string', description: 'Substring matched against vendor + summary.' },
+        sender:        { type: 'string', description: 'Substring matched against vendor + summary (not account_email).' },
+        category:      { type: 'string' },
+        entity:        { type: 'string' },
+        importance:    { type: 'string', enum: ['critical', 'high', 'normal', 'low'] },
+        account_email: { type: 'string', description: 'Receiving inbox account.' },
+        limit:         { type: 'number' },
+      },
+    },
+  },
+  {
     name: 'bulk_archive_emails',
     group: 'communication',
     risk: 'high',
@@ -687,6 +706,50 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           if (err.code === 403 || err.message?.includes('insufficient')) {
             return { success: false, error: 'Gmail account is missing modify permission. Reconnect in Settings.' };
           }
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'search_inbox': {
+        const { query, sender, category, entity, importance, account_email, limit } = toolInput || {};
+        const cap = Math.min(Math.max(1, parseInt(limit, 10) || 10), 50);
+        const where = ['ec.user_id = $1'];
+        const vals = [userId];
+        let i = 2;
+        const pushLike = (clause, str) => { where.push(clause); vals.push(`%${String(str).toLowerCase()}%`); i++; };
+        if (typeof query === 'string' && query.trim()) {
+          pushLike(`(LOWER(COALESCE(ec.vendor, '')) LIKE $${i} OR LOWER(COALESCE(ec.summary, '')) LIKE $${i})`, query.trim());
+        }
+        if (typeof sender === 'string' && sender.trim()) {
+          pushLike(`(LOWER(COALESCE(ec.vendor, '')) LIKE $${i} OR LOWER(COALESCE(ec.summary, '')) LIKE $${i})`, sender.trim());
+        }
+        if (typeof category === 'string' && category.trim()) {
+          where.push(`ec.category = $${i}`); vals.push(category.trim()); i++;
+        }
+        if (typeof entity === 'string' && entity.trim()) {
+          pushLike(`LOWER(COALESCE(e.name, '')) LIKE $${i}`, entity.trim());
+        }
+        if (typeof importance === 'string' && importance.trim()) {
+          where.push(`ec.importance = $${i}`); vals.push(importance.trim()); i++;
+        }
+        if (typeof account_email === 'string' && account_email.trim()) {
+          pushLike(`LOWER(ec.account_email) LIKE $${i}`, account_email.trim());
+        }
+        vals.push(cap);
+        try {
+          const { rows } = await db.pool.query(
+            `SELECT ec.message_id, ec.summary, ec.category, ec.importance,
+                    e.name AS entity_name, ec.amount, ec.vendor,
+                    ec.account_email, ec.action_required, ec.classified_at
+             FROM email_classifications ec
+             LEFT JOIN entities e ON ec.entity_id = e.id
+             WHERE ${where.join(' AND ')}
+             ORDER BY ec.classified_at DESC
+             LIMIT $${i}`,
+            vals,
+          );
+          return { success: true, count: rows.length, results: rows };
+        } catch (err) {
           return { success: false, error: err.message };
         }
       }

@@ -93,6 +93,20 @@ function senderEmail(raw) {
   const m = raw.match(/<([^>]+)>/);
   return m ? m[1].trim() : raw.trim();
 }
+// Decode common HTML entities so Gmail subjects/snippets with things
+// like &amp; or &#39; don't render as literal text in the list rows.
+// Applied to row display only — full message bodies are left untouched.
+function decodeHtmlEntities(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)));
+}
+
 function initials(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return '?';
@@ -978,7 +992,7 @@ function AriaSummaryCard({ items, total }) {
               </p>
               <ul className="mt-1.5 space-y-0.5">
                 {items.map((t) => {
-                  const line = `${senderName(t.from) || shortAccount(t.accountEmail)}: ${t.subject || '(no subject)'}`;
+                  const line = `${senderName(t.from) || shortAccount(t.accountEmail)}: ${decodeHtmlEntities(t.subject) || '(no subject)'}`;
                   return (
                     <li key={t.id} className="text-[12px] text-gray-500 truncate">
                       <span style={{ color: '#ef4444' }}>● </span>
@@ -1101,9 +1115,9 @@ function renderThreadRow({ t, activeThreadId, classifications, openThread, archi
               <span className="text-[10px] text-gray-400 flex-shrink-0">{relTime(t.date)}</span>
             </div>
             <div className={`text-[13px] truncate mt-0.5 ${t.isRead ? 'text-gray-500' : 'text-gray-800 font-semibold'}`}>
-              {t.subject || '(no subject)'}
+              {decodeHtmlEntities(t.subject) || '(no subject)'}
             </div>
-            <div className="text-xs text-gray-400 truncate mt-0.5">{t.snippet}</div>
+            <div className="text-xs text-gray-400 truncate mt-0.5">{decodeHtmlEntities(t.snippet)}</div>
             <div className="mt-1.5 flex items-center gap-1.5">
               <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>
                 {shortAccount(t.accountEmail)}{t.messageCount > 1 ? ` · ${t.messageCount}` : ''}
@@ -1226,6 +1240,7 @@ When you have enough info, write the final draft and end your message with:
           model: 'claude-sonnet-4-20250514',
           systemPrompt,
           messages: apiMessages,
+          context_hint: 'inbox',
         }),
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);

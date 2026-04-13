@@ -96,10 +96,17 @@ async function fetchCalendarWindow({ userId, tz, loadAllGcalAccounts, loadGcalTo
  * @returns {Promise<{ user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, tz, todayStr, todayDate, currentTime, weekMapStr, profileContext, contextBlock, decisionInstructions, systemPrompt }>}
  */
 async function buildAgenticContext(opts) {
-  const { userId, db } = opts;
+  const { userId, db, contextHint } = opts;
   const tz = opts.tz || 'America/Los_Angeles';
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings] = await Promise.all([
+  // Inbox mode pulls a wider net so Aria can answer open-ended
+  // questions about the user's mail.
+  const inboxMode = contextHint === 'inbox';
+  const emailContextMinRank   = inboxMode ? 1  : 3;
+  const recentClassifiedLimit = inboxMode ? 50 : 20;
+  const importantUnreadLimit  = inboxMode ? 20 : 10;
+
+  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
@@ -107,6 +114,8 @@ async function buildAgenticContext(opts) {
     db.getCalendarNotesForAI(userId).catch(() => []),
     fetchCalendarWindow(opts),
     db.getUserLearnings ? db.getUserLearnings(userId).catch(() => []) : Promise.resolve([]),
+    db.getImportantUnread ? db.getImportantUnread(userId, emailContextMinRank).catch(() => []) : Promise.resolve([]),
+    db.getRecentClassifications ? db.getRecentClassifications(userId, recentClassifiedLimit).catch(() => []) : Promise.resolve([]),
   ]);
 
   const todayStr = getTodayLocal(tz);
@@ -158,14 +167,61 @@ async function buildAgenticContext(opts) {
   const patternsList = (learnings || []).filter(l => l.confidence === 'pattern').slice(0, 10);
   const learningsBlock = buildLearningsBlock(rulesList, patternsList);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + contextBlock;
+  // Email inbox context (optional; built with a char cap for safety).
+  const emailBlock = buildEmailContextBlock({
+    importantUnread, recentClassified,
+    importantUnreadLimit, recentClassifiedLimit,
+  });
+
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + contextBlock;
 
   return {
     user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
+    importantUnread, recentClassified,
     tz, todayStr, todayDate, currentTime, weekMapStr,
-    profileContext, contextBlock, learningsBlock, decisionInstructions: DECISION_INSTRUCTIONS,
+    profileContext, contextBlock, learningsBlock, emailBlock, decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };
+}
+
+// Email inbox context. Truncates recentClassified first, then
+// importantUnread, to stay under EMAIL_BLOCK_CHAR_CAP.
+const EMAIL_BLOCK_CHAR_CAP = 12_000;
+
+function buildEmailContextBlock({ importantUnread, recentClassified, importantUnreadLimit, recentClassifiedLimit }) {
+  const unread = Array.isArray(importantUnread) ? importantUnread.slice(0, importantUnreadLimit) : [];
+  let recent   = Array.isArray(recentClassified) ? recentClassified.slice(0, recentClassifiedLimit) : [];
+  if (!unread.length && !recent.length) return '';
+
+  const fmtDate = (iso) => {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+    catch { return ''; }
+  };
+  const fmtUnread = (r) =>
+    `- From/Vendor: ${r.vendor || 'Unknown'} | Summary: ${r.summary || ''}\n  Category: ${r.category} | Importance: ${r.importance}\n  Entity: ${r.entityName || 'None'} | Date: ${fmtDate(r.classifiedAt)}`;
+  const fmtRecent = (r) =>
+    `- ${r.importance} | ${r.vendor || 'Unknown'} | ${r.summary || ''} | ${fmtDate(r.classifiedAt)}`;
+
+  const build = (u, r) => {
+    let out = '\n\nEMAIL INBOX CONTEXT:\nYou have access to the user\'s classified email data. Use this to answer questions about their inbox.';
+    if (u.length) out += `\n\nEMAILS NEEDING ATTENTION:\n${u.map(fmtUnread).join('\n')}`;
+    if (r.length) out += `\n\nRECENT INBOX:\n${r.map(fmtRecent).join('\n')}`;
+    out += '\n\nIf the user asks about emails, senders, confirmations, invoices, receipts, unread items, or anything inbox-related, answer from this context. Use search_inbox for specific lookups.';
+    return out;
+  };
+
+  let block = build(unread, recent);
+  // Truncate recent first, then unread, until we're under cap.
+  while (block.length > EMAIL_BLOCK_CHAR_CAP && recent.length > 0) {
+    recent = recent.slice(0, Math.max(0, recent.length - Math.ceil(recent.length / 4)));
+    block = build(unread, recent);
+  }
+  while (block.length > EMAIL_BLOCK_CHAR_CAP && unread.length > 0) {
+    unread.pop();
+    block = build(unread, recent);
+  }
+  return block;
 }
 
 function buildLearningsBlock(rules, patterns) {

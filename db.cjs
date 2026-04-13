@@ -1308,6 +1308,31 @@ async function upsertEmailCleanPolicy(userId, p = {}) {
   return rows[0];
 }
 
+/**
+ * Return the most recently classified emails for a user, joined with
+ * the entity name. Used by the context builder to let Aria answer
+ * questions about the inbox.
+ */
+async function getRecentClassifications(userId, limit = 20) {
+  const cap = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
+  const { rows } = await pool.query(
+    `SELECT ec.id, ec.user_id AS "userId", ec.message_id AS "messageId", ec.thread_id AS "threadId",
+            ec.account_email AS "accountEmail", ec.entity_id AS "entityId",
+            ec.category, ec.importance, ec.importance_rank AS "importanceRank",
+            ec.action_required AS "actionRequired", ec.is_read AS "isRead",
+            ec.amount, ec.currency, ec.vendor, ec.summary, ec.source,
+            ec.classified_at AS "classifiedAt",
+            e.name AS "entityName"
+     FROM email_classifications ec
+     LEFT JOIN entities e ON ec.entity_id = e.id
+     WHERE ec.user_id = $1
+     ORDER BY ec.classified_at DESC
+     LIMIT $2`,
+    [userId, cap],
+  );
+  return rows;
+}
+
 async function getImportantUnread(userId, minRank = 3) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
@@ -4522,6 +4547,7 @@ module.exports = {
   batchGetClassifications,
   getClassificationsByEntity,
   getImportantUnread,
+  getRecentClassifications,
   getEmailCleanPolicy,
   upsertEmailCleanPolicy,
 };

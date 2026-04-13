@@ -259,13 +259,13 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
     const apiKey = process.env.CLAUDE_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
 
-    const { messages, systemPrompt: clientPrompt, model: reqModel, timeZone } = req.body;
+    const { messages, systemPrompt: clientPrompt, model: reqModel, timeZone, context_hint } = req.body;
     const model = reqModel || 'claude-sonnet-4-20250514';
 
     try {
       const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
       const ctx = await buildAgenticContext({
-        userId, entityIds, db, tz: userTz,
+        userId, entityIds, db, tz: userTz, contextHint: context_hint,
         loadAllGcalAccounts, loadGcalTokens, saveGcalTokens,
         makeOAuth2Client, google, logger, requestId: req.requestId,
       });
