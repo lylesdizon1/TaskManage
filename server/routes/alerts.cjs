@@ -84,6 +84,16 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
         logger.error('morningBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message });
       }
 
+      // Important unread emails (rank >= 3, unread, classified <= 7d).
+      // Non-fatal: if the lookup fails the brief still sends without
+      // the email section.
+      let importantEmails = [];
+      try {
+        importantEmails = await db.getImportantUnread(userId, 3);
+      } catch (e) {
+        logger.error('morningBrief.importantEmails.failed', { requestId: req.requestId, userId, error: e.message });
+      }
+
       const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: tz });
       const greetingName = user?.displayName || user?.username || 'there';
       const lines = [`☀️ Good morning ${greetingName} — ${dateLabel}\n`];
@@ -103,6 +113,19 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       });
       todayTasks.forEach((t) => lines.push(`- Task: ${t.title}`));
       if (todayTasks.length === 0 && calendarEvents.length === 0) lines.push('- Nothing scheduled');
+
+      if (importantEmails.length > 0) {
+        lines.push('');
+        lines.push(`📧 *IMPORTANT EMAILS (${importantEmails.length})*`);
+        importantEmails.slice(0, 5).forEach((email) => {
+          const summary = email.summary || email.category || 'No summary';
+          const action = email.actionRequired ? ' ⚡ Action required' : '';
+          lines.push(`• ${summary}${action}`);
+        });
+        if (importantEmails.length > 5) {
+          lines.push(`  (+${importantEmails.length - 5} more)`);
+        }
+      }
 
       lines.push('');
       lines.push(`🔥 High priority: ${highPriority.length}`);
