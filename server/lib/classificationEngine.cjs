@@ -174,7 +174,45 @@ Body (first 300 chars): ${String(body || '').slice(0, 300)}`;
 // ── 4. Orchestrator ────────────────────────────────────────────────────────
 const FRESHNESS_MS = 24 * 60 * 60 * 1000;
 
-async function classifyEmail({ userId, messageId, threadId, accountEmail, from, subject, body, isRead, db, anthropicClient }) {
+// Gmail system label → (importance, category) mapping. Match is short-
+// circuit: if any label hits, we skip heuristics and AI entirely.
+const LABEL_MAP = {
+  'CATEGORY_PROMOTIONS': { importance: 'low',    category: 'newsletter' },
+  'CATEGORY_SOCIAL':     { importance: 'low',    category: 'newsletter' },
+  'CATEGORY_FORUMS':     { importance: 'low',    category: 'newsletter' },
+  'CATEGORY_UPDATES':    { importance: 'normal', category: 'general' },
+};
+
+// Sender-local-part patterns that almost always indicate bulk mail.
+const BULK_PATTERNS = [
+  'noreply@', 'no-reply@', 'donotreply@',
+  'notifications@', 'updates@', 'newsletter@',
+  'mailer@', 'bounce@', 'automated@',
+];
+
+function _hasListUnsubscribe(headers) {
+  if (!Array.isArray(headers)) return false;
+  return headers.some(h => String(h?.name || '').toLowerCase() === 'list-unsubscribe');
+}
+
+function _matchLabel(labelIds) {
+  if (!Array.isArray(labelIds)) return null;
+  for (const id of labelIds) {
+    if (LABEL_MAP[id]) return { id, ...LABEL_MAP[id] };
+  }
+  return null;
+}
+
+function _matchBulkHeuristic({ from, body, headers }) {
+  if (_hasListUnsubscribe(headers)) return 'list_unsubscribe';
+  const fromLower = String(from || '').toLowerCase();
+  if (BULK_PATTERNS.some(p => fromLower.includes(p))) return 'bulk_sender';
+  const b = String(body || '').toLowerCase();
+  if (b.includes('unsubscribe') && b.includes('email preferences')) return 'unsubscribe_body';
+  return null;
+}
+
+async function classifyEmail({ userId, messageId, threadId, accountEmail, from, subject, body, isRead, labelIds, headers, db, anthropicClient }) {
   try {
     if (!userId || !messageId || !threadId || !accountEmail) return null;
 
@@ -197,11 +235,14 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     let summary = null;
     let source = 'rule';
 
+    let resolved = false;
+
     if (matched) {
       entityId = matched.entityId || null;
       category = matched.category || 'general';
       importance = matched.importance || 'normal';
       source = 'rule';
+      resolved = true;
 
       const shouldExtract = matched.extractAmount || FINANCIAL_CATEGORIES.has(category);
       if (shouldExtract) {
@@ -214,7 +255,31 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
           if (meta.summary) summary = meta.summary;
         }
       }
-    } else {
+    }
+
+    // Step 3 — Gmail system label mapping. Short-circuits AI.
+    if (!resolved) {
+      const label = _matchLabel(labelIds);
+      if (label) {
+        category = label.category;
+        importance = label.importance;
+        source = 'label';
+        resolved = true;
+      }
+    }
+
+    // Step 4 — sender heuristics (bulk / newsletter signals).
+    if (!resolved) {
+      if (_matchBulkHeuristic({ from, body, headers })) {
+        category = 'newsletter';
+        importance = 'low';
+        source = 'heuristic';
+        resolved = true;
+      }
+    }
+
+    // Step 5 — AI fallback (only if nothing above matched).
+    if (!resolved) {
       const entities = (await db.getEntitiesForUser?.(userId).catch(() => [])) || [];
       const entityNames = entities.map(e => e.name);
       const ai = await classifyEmailWithAI({ from, subject, body, entityNames, anthropicClient });

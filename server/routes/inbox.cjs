@@ -128,7 +128,10 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
               userId, messageId: mid, threadId: t.id,
               accountEmail: t.accountEmail,
               from: t.from, subject: t.subject, body: t.snippet,
-              isRead: !!t.isRead, db,
+              isRead: !!t.isRead,
+              labelIds: t.labelIds || [],
+              headers: [], // not available at list level
+              db,
             }).catch(() => {});
           }
         } catch { /* swallow */ }
@@ -162,14 +165,18 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json({ thread: { ...thread, accountEmail: row.accountEmail, provider: row.provider || 'google' } });
 
       // Fire-and-forget: upgrade snippet-based classification using full
-      // body of the latest message.
+      // body of the latest message. labelIds + headers feed the label
+      // map and sender-heuristic stages of the engine.
       const latest = thread.messages?.[thread.messages.length - 1];
       if (latest) {
         classifyEmail({
           userId, messageId: latest.id, threadId: thread.id,
           accountEmail: row.accountEmail,
           from: latest.from, subject: latest.subject, body: latest.body,
-          isRead: !!latest.isRead, db,
+          isRead: !!latest.isRead,
+          labelIds: latest.labelIds || [],
+          headers: latest.headers || [],
+          db,
         }).catch(() => {});
       }
     } catch (err) {

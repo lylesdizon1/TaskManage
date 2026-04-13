@@ -102,6 +102,7 @@ async function listThreads({ db, userId, accountEmail, maxResults, pageToken, qu
         from: _headerVal(last.payload?.headers, 'From') || '',
         date: _headerVal(last.payload?.headers, 'Date') || '',
         isRead: !labelIds.includes('UNREAD'),
+        labelIds,
         messageCount: msgs.length,
       };
     } catch {
@@ -120,6 +121,12 @@ async function getThread({ db, userId, accountEmail, threadId }) {
   const { data } = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
   const messages = (data.messages || []).map((m) => {
     const headers = m.payload?.headers || [];
+    // Surface headers the engine cares about (List-Unsubscribe,
+    // Precedence, Auto-Submitted) without dragging along the full set.
+    const HEADERS_OF_INTEREST = ['list-unsubscribe', 'precedence', 'auto-submitted'];
+    const extractedHeaders = headers
+      .filter(h => HEADERS_OF_INTEREST.includes(String(h.name || '').toLowerCase()))
+      .map(h => ({ name: h.name, value: h.value }));
     return {
       id: m.id,
       threadId: m.threadId,
@@ -130,6 +137,7 @@ async function getThread({ db, userId, accountEmail, threadId }) {
       body: _extractBody(m.payload),
       isRead: !(m.labelIds || []).includes('UNREAD'),
       labelIds: m.labelIds || [],
+      headers: extractedHeaders,
       snippet: m.snippet || '',
     };
   });
