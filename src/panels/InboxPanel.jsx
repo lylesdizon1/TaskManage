@@ -270,9 +270,22 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   async function submitInboxQuery() {
     const text = inboxQuery.trim();
     if (!text || inboxChatLoading) return;
+    // Thread mode: prefix the user's message with the thread context so
+    // Aria knows what they're asking about. The user sees the original
+    // question in the bubble; the API gets the enriched form.
+    const inThreadMode = !!activeThreadId && !!thread;
+    let apiContent = text;
+    if (inThreadMode) {
+      const latest = thread.messages?.[thread.messages.length - 1];
+      const senderLabel = latest ? (senderName(latest.from) || senderEmail(latest.from) || 'the sender') : 'the sender';
+      const subjectLabel = thread?.messages?.[0]?.subject || latest?.subject || '(no subject)';
+      apiContent = `Regarding the email from ${senderLabel} re: ${subjectLabel}:\n${text}`;
+    }
     setInboxQuery('');
-    const baseMsgs = [...inboxChatMessages, { role: 'user', content: text }];
-    setInboxChatMessages([...baseMsgs, { role: 'assistant', content: '' }]);
+    // UI shows the user's raw text; API payload carries the enriched form.
+    const uiMsgs  = [...inboxChatMessages, { role: 'user', content: text }];
+    const apiBase = [...inboxChatMessages, { role: 'user', content: apiContent }];
+    setInboxChatMessages([...uiMsgs, { role: 'assistant', content: '' }]);
     setInboxChatLoading(true);
     try {
       const res = await apiFetch('/api/chat/execute', {
@@ -280,7 +293,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          messages: baseMsgs,
+          messages: apiBase,
           context_hint: 'inbox',
           // NO systemPrompt — let server build full Aria prompt + inbox context.
         }),
@@ -341,6 +354,13 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       });
     } finally {
       setInboxChatLoading(false);
+      // Thread-mode: return to chat view so the user reads Aria's reply.
+      if (inThreadMode) {
+        setActiveThreadId(null);
+        setActiveAccount(null);
+        setThread(null);
+        setMobileShowThread(false);
+      }
     }
   }
 
@@ -688,68 +708,6 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
             ))}
           </div>
 
-          {/* Ask-about-your-inbox header chat */}
-          <div className="mt-3">
-            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-2 py-1">
-              <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '16px' }}>auto_awesome</span>
-              <input
-                type="text"
-                value={inboxQuery}
-                onChange={(e) => setInboxQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInboxQuery(); } }}
-                placeholder="Ask about your inbox..."
-                className="flex-1 bg-transparent text-[13px] focus:outline-none placeholder:text-gray-400 py-1"
-                style={{ fontFamily: 'Manrope, sans-serif' }}
-                disabled={inboxChatLoading}
-              />
-              <button
-                onClick={submitInboxQuery}
-                disabled={!inboxQuery.trim() || inboxChatLoading}
-                className="w-6 h-6 rounded-full flex items-center justify-center disabled:opacity-30"
-                style={{ backgroundColor: inboxQuery.trim() ? '#4f4dcf' : 'transparent' }}
-                aria-label="Ask"
-              >
-                <span
-                  className={`material-symbols-outlined ${inboxQuery.trim() ? 'text-white' : 'text-slate-400'}`}
-                  style={{ fontSize: '14px' }}
-                >
-                  {inboxChatLoading ? 'hourglass_empty' : 'send'}
-                </span>
-              </button>
-            </div>
-            {(inboxChatMessages.length > 0 || inboxChatLoading) && (
-              <div
-                ref={inboxChatScrollRef}
-                className="mt-2 space-y-1.5 overflow-y-auto pr-1"
-                style={{ maxHeight: 176 }}
-              >
-                {inboxChatMessages.map((m, i) => {
-                  const isUser = m.role === 'user';
-                  return (
-                    <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                      <div
-                        className={`max-w-[88%] ${isUser ? 'text-white' : ''}`}
-                        style={isUser
-                          ? { backgroundColor: '#4f4dcf', fontSize: '12.5px', lineHeight: '1.5', borderRadius: '10px', padding: '6px 9px', fontFamily: 'Manrope, sans-serif', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
-                          : { backgroundColor: '#fff', border: '1px solid #e5e7eb', fontSize: '12.5px', lineHeight: '1.5', borderRadius: '10px', padding: '6px 9px', color: '#1f2937', fontFamily: 'Manrope, sans-serif', wordBreak: 'break-word' }
-                        }
-                      >
-                        {m.content
-                          ? (isUser
-                              ? m.content
-                              : <ReactMarkdown components={INBOX_MD_COMPONENTS}>{m.content}</ReactMarkdown>)
-                          : <span className="text-gray-400">Aria is thinking…</span>}
-                      </div>
-                    </div>
-                  );
-                })}
-                {/* Show thinking pill when the user has submitted but no placeholder yet. */}
-                {inboxChatLoading && inboxChatMessages.length === 0 && (
-                  <div className="text-[12px] text-gray-400">Aria is thinking…</div>
-                )}
-              </div>
-            )}
-          </div>
         </div>
         <div className="flex-1 overflow-y-auto px-2 pb-3">
           {threadsLoading ? (
@@ -895,15 +853,53 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         )}
       </div>
 
-      {/* Right — thread view */}
+      {/* Right — Aria chat by default; thread view when a thread is open */}
       <div className={`flex-1 flex-col h-full ${mobileShowThread ? 'flex' : 'hidden md:flex'}`} style={{ backgroundColor: '#fbf8fe', position: 'relative' }}>
         {!activeThreadId ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <span className="material-symbols-outlined text-gray-300" style={{ fontSize: '48px' }}>mail</span>
-              <p className="text-sm text-gray-500 mt-2">Select a thread to read</p>
+          <>
+            <div className="px-6 pt-4 pb-2 flex items-center gap-1.5">
+              <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '14px' }}>auto_awesome</span>
+              <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Aria</span>
             </div>
-          </div>
+            <div ref={inboxChatScrollRef} className="flex-1 overflow-y-auto px-6 pb-4">
+              {inboxChatMessages.length === 0 && !inboxChatLoading ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center">
+                    <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '44px' }}>auto_awesome</span>
+                    <p className="text-base font-semibold text-gray-900 mt-2" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Ask me anything about your inbox</p>
+                    <p className="text-xs text-gray-500 mt-1 max-w-[300px] mx-auto">Find emails, summarize threads, check what needs attention</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {inboxChatMessages.map((m, i) => {
+                    const isUser = m.role === 'user';
+                    return (
+                      <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[85%] ${isUser ? 'text-white' : ''}`}
+                          style={isUser
+                            ? { backgroundColor: '#4f4dcf', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '9px 12px', fontFamily: 'Manrope, sans-serif', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                            : { backgroundColor: '#fff', border: '1px solid #e5e7eb', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '9px 12px', color: '#1f2937', fontFamily: 'Manrope, sans-serif', wordBreak: 'break-word' }
+                          }
+                        >
+                          {m.content
+                            ? (isUser ? m.content : <ReactMarkdown components={INBOX_MD_COMPONENTS}>{m.content}</ReactMarkdown>)
+                            : <span className="text-gray-400">Aria is thinking…</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <AriaInputBar
+              value={inboxQuery}
+              onChange={setInboxQuery}
+              onSubmit={submitInboxQuery}
+              disabled={inboxChatLoading}
+            />
+          </>
         ) : (
           <>
             <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-3 border-b border-gray-100">
@@ -998,6 +994,14 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               </div>
             )}
 
+            {/* Pinned Aria bar — always visible when viewing a thread */}
+            <AriaInputBar
+              value={inboxQuery}
+              onChange={setInboxQuery}
+              onSubmit={submitInboxQuery}
+              disabled={inboxChatLoading}
+            />
+
             {compose && (
               <ComposeDrawer
                 compose={compose}
@@ -1028,6 +1032,40 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Persistent Aria input bar. Shown at the bottom of the right panel in
+// both chat mode (no thread selected) and thread mode. ~56px tall.
+function AriaInputBar({ value, onChange, onSubmit, disabled }) {
+  const canSend = !!value?.trim() && !disabled;
+  return (
+    <div className="border-t border-gray-100 px-3 py-2" style={{ backgroundColor: '#fbf8fe' }}>
+      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-full pl-3 pr-1 py-1">
+        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '18px' }}>auto_awesome</span>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (canSend) onSubmit(); } }}
+          placeholder="Ask about your inbox..."
+          className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-gray-400 py-1.5"
+          style={{ fontFamily: 'Manrope, sans-serif' }}
+          disabled={disabled}
+        />
+        <button
+          onClick={() => canSend && onSubmit()}
+          disabled={!canSend}
+          className="w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-30 flex-shrink-0"
+          style={{ backgroundColor: canSend ? '#4f4dcf' : 'transparent' }}
+          aria-label="Send"
+        >
+          <span className={`material-symbols-outlined ${canSend ? 'text-white' : 'text-slate-400'}`} style={{ fontSize: '16px' }}>
+            {disabled ? 'hourglass_empty' : 'arrow_forward'}
+          </span>
+        </button>
       </div>
     </div>
   );
