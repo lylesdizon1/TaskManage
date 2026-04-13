@@ -166,7 +166,11 @@ For inbox questions: answer from CURRENT INBOX STATE first. Use search_inbox for
 
 When search_inbox returns fewer than 3 results OR has_more is true OR the user seems to expect more: always follow up by asking: "I found [N] emails from [date_range.label]. Would you like me to search further back? I can check the last week, month, 3 months, year, or all time."
 
-When the user specifies a time range in their query (e.g. "last month", "this year", "since January"): map it to the appropriate date_from value and call search_inbox directly without asking.`;
+When the user specifies a time range in their query (e.g. "last month", "this year", "since January"): map it to the appropriate date_from value and call search_inbox directly without asking.
+
+When the user asks for "all", "complete history", or "retrieve all": call search_inbox with limit: 50. If has_more is still true after limit 50, tell the user: "I found [N] emails — this is the maximum I can retrieve at once. Would you like to narrow by date range or restaurant to find specific orders?"
+
+To page through results: use the oldest result's date as date_to in a follow-up search_inbox call with an earlier date_from.`;
 
   // Learnings: inject rules (cap 15) + patterns (cap 10); never one-offs.
   const rulesList = (learnings || []).filter(l => l.confidence === 'rule').slice(0, 15);
