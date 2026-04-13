@@ -3,6 +3,9 @@ import ReactMarkdown from 'react-markdown';
 import { useToast } from '../contexts/ToastContext';
 import buildSystemPrompt from '../utils/systemPrompt';
 import { getTodayLocal } from '../utils/helpers.js';
+import { parseActionDraft } from '../utils/parseActionDraft.js';
+import TaskDraftTile from '../components/command-center/TaskDraftTile.jsx';
+import EventDraftTile from '../components/command-center/EventDraftTile.jsx';
 
 // Inline-styled markdown components so assistant bubbles keep the
 // current typography (Manrope 15px / 1.6 line-height) and don't
@@ -532,6 +535,35 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       } catch {}
     }
 
+    // ── Dynamic tile intercept: parse task/event intent first ──
+    // If the message is a task/event ask, render an inline editable
+    // draft tile instead of running the agentic loop. default_chat
+    // falls through to the normal flow below.
+    try {
+      const today = new Intl.DateTimeFormat('en-CA', {
+        timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date());
+      const draft = await parseActionDraft({ apiFetch, authToken, message: text, timezone: userTZ, today });
+      if (draft && (draft.type === 'task' || draft.type === 'event')) {
+        const ack = draft.type === 'task'
+          ? (draft.confidence === 'high' ? "Got it — here's the task" : "Here's a task draft")
+          : (draft.confidence === 'high' ? "Got it — here's the event" : "Here's the event draft");
+        const tileId = `tile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+        const payload = draft.type === 'task'
+          ? { title: draft.title, due_date: draft.due_date || '', priority: draft.priority || 'medium' }
+          : { title: draft.title, start_time: draft.start_time, duration_minutes: draft.duration_minutes || 60 };
+        const now = new Date().toISOString();
+        setCcMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: ack, createdAt: now, ts: Date.now() },
+          { role: draft.type === 'task' ? 'task_draft' : 'event_draft', id: tileId, type: draft.type, status: 'draft', confidence: draft.confidence || 'medium', payload, createdAt: now, ts: Date.now() },
+        ]);
+        ccAbortRef.current = null;
+        setCcSending(false);
+        return;
+      }
+    } catch { /* parser failure → fall through to normal chat */ }
+
     // Build context: last 10 messages + full Aria system prompt with live data
     const recentMsgs = [...ccMessages.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
     const aName = currentUser?.assistantName || 'Aria';
@@ -735,6 +767,107 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     };
   }, []);
 
+  // ── Dynamic tile helpers ──────────────────────────────────────────────
+  const updateTile = useCallback((tileId, patch) => {
+    setCcMessages((prev) => prev.map((m) => {
+      if (m.id !== tileId) return m;
+      const nextPayload = patch && patch.payload !== undefined ? patch.payload : { ...(m.payload || {}), ...patch };
+      const nextTop = patch?.payload !== undefined ? { ...m, payload: nextPayload } : { ...m, payload: nextPayload };
+      return nextTop;
+    }));
+  }, []);
+
+  const setTileMeta = useCallback((tileId, patch) => {
+    setCcMessages((prev) => prev.map((m) => (m.id === tileId ? { ...m, ...patch } : m)));
+  }, []);
+
+  const dismissTile = useCallback((tileId) => {
+    setCcMessages((prev) => prev.filter((m) => m.id !== tileId));
+  }, []);
+
+  const executeTile = useCallback(async (tile) => {
+    const p = tile.payload || {};
+    let prompt = '';
+    if (tile.type === 'task') {
+      const parts = [`Please create a task with these exact fields.`];
+      parts.push(`title: "${p.title || ''}"`);
+      if (p.due_date) parts.push(`due_date: ${p.due_date}`);
+      if (p.priority) parts.push(`priority: ${p.priority}`);
+      parts.push('Call the create_task tool with these values. Do not ask me to confirm.');
+      prompt = parts.join('\n');
+    } else {
+      // Map event tile fields → create_event tool fields.
+      const start = p.start_time;
+      const mins = Number(p.duration_minutes) || 60;
+      let endIso = null;
+      try {
+        const s = new Date(start);
+        if (!isNaN(s.getTime())) {
+          const e = new Date(s.getTime() + mins * 60000);
+          const pad = (n) => String(n).padStart(2, '0');
+          endIso = `${e.getFullYear()}-${pad(e.getMonth() + 1)}-${pad(e.getDate())}T${pad(e.getHours())}:${pad(e.getMinutes())}:${pad(e.getSeconds())}`;
+        }
+      } catch {}
+      const parts = [`Please create a calendar event with these exact fields.`];
+      parts.push(`title: "${p.title || ''}"`);
+      parts.push(`start_datetime: ${start}`);
+      if (endIso) parts.push(`end_datetime: ${endIso}`);
+      parts.push('Call the create_event tool with these values. Do not ask me to confirm.');
+      prompt = parts.join('\n');
+    }
+
+    setTileMeta(tile.id, { status: 'executing', error: null });
+    try {
+      const res = await apiFetch('/api/chat/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = null;
+      let toolsRan = [];
+      let sawError = null;
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const raw of lines) {
+          const em = raw.match(/^event: (.+)/);
+          const dm = raw.match(/^data: (.+)/);
+          if (em) currentEvent = em[1].trim();
+          if (dm && currentEvent === 'tools_executed') {
+            try { toolsRan = JSON.parse(dm[1])?.tools || toolsRan; } catch {}
+          }
+          if (dm && currentEvent === 'error') {
+            try { sawError = JSON.parse(dm[1])?.message || 'Execution failed'; } catch { sawError = 'Execution failed'; }
+            break outer;
+          }
+          if (dm && currentEvent === 'done') break outer;
+          if (dm) currentEvent = null;
+        }
+      }
+      const expected = tile.type === 'task' ? 'create_task' : 'create_event';
+      const ok = toolsRan.includes(expected);
+      if (sawError || !ok) {
+        setTileMeta(tile.id, { status: 'error', error: sawError || `Aria didn't call ${expected}.` });
+      } else {
+        setTileMeta(tile.id, { status: 'success', error: null });
+        if (tile.type === 'task') onReloadTasks?.();
+        setTimeout(() => dismissTile(tile.id), 2000);
+      }
+    } catch (err) {
+      setTileMeta(tile.id, { status: 'error', error: err.message || 'Network error' });
+    }
+  }, [apiFetch, authToken, dismissTile, onReloadTasks, setTileMeta]);
+
   const handleCcStop = useCallback(() => {
     ccStoppedRef.current = true;
     try { ccAbortRef.current?.abort(); } catch {}
@@ -877,6 +1010,24 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           ) : (
             <>
               {ccMessages.map((msg, i) => {
+                if (msg.role === 'task_draft' || msg.role === 'event_draft') {
+                  const Tile = msg.role === 'task_draft' ? TaskDraftTile : EventDraftTile;
+                  return (
+                    <div key={msg.id || i} className="flex justify-start">
+                      <div className="max-w-[92%] w-full">
+                        <Tile
+                          payload={msg.payload}
+                          status={msg.status || 'draft'}
+                          error={msg.error}
+                          onChange={(patch) => updateTile(msg.id, patch)}
+                          onConfirm={() => executeTile(msg)}
+                          onCancel={() => dismissTile(msg.id)}
+                          onRetry={() => executeTile(msg)}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
                 if (msg.role === 'email_draft') {
                   const d = msg.draft || {};
                   return (
