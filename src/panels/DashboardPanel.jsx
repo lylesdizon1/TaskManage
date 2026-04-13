@@ -597,8 +597,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // Aria doesn't ask "which account?". Best-effort — silent fall-through
     // on failure so non-email turns and offline cases proceed normally.
     if (emailIntent) {
+      const gmailCtrl = new AbortController();
+      const gmailTimer = setTimeout(() => gmailCtrl.abort(), 2000);
       try {
-        const accountsRes = await apiFetch('/api/gmail/accounts', { headers: { Authorization: `Bearer ${authToken}` } });
+        const accountsRes = await apiFetch('/api/gmail/accounts', {
+          headers: { Authorization: `Bearer ${authToken}` },
+          signal: gmailCtrl.signal,
+        });
         if (accountsRes.ok) {
           const accounts = await accountsRes.json();
           if (Array.isArray(accounts) && accounts.length > 0) {
@@ -611,7 +616,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             }
           }
         }
-      } catch {}
+      } catch {} finally {
+        clearTimeout(gmailTimer);
+      }
     }
 
     const aName = currentUser?.assistantName || 'Aria';
