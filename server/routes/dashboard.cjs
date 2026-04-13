@@ -48,6 +48,7 @@
 const express = require('express');
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
+const { fetchCalendarWindow } = require('../lib/buildAgenticContext.cjs');
 
 /**
  * Factory function that creates the dashboard router.
@@ -194,83 +195,24 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       const todayTasks = activeTasks.filter(t => t.dueDate === todayStr).map(t => t.title).join(', ') || 'None';
       const notes = await db.getPrivateNotesForAI(userId);
 
-      // Fetch calendar events server-side from ALL connected accounts
+      // Fetch calendar events server-side from ALL connected accounts (cached 5min)
       let calendarEventStr = data?.events || 'None';
       try {
-        const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
-        logger.info('ariaBrief.accounts', { requestId: req.requestId, userId, accountCount: allAccounts.length, emails: allAccounts.map(a => a.googleEmail) });
-
-        if (allAccounts.length > 0 && makeOAuth2Client && google) {
-          const userTz = req.user.timezone || 'America/Los_Angeles';
-          // Convert local midnight to UTC ISO string GCal accepts
-          const todayLocal = new Intl.DateTimeFormat('en-CA', {
-            timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
-          }).format(new Date());
-          // Parse as UTC noon (safe from DST), then compute offset to get local midnight in UTC
-          const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
-          const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
-          const offsetMs = noonUtc.getTime() - noonLocal.getTime();
-          const timeMin = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs).toISOString();
-          const timeMax = new Date(noonUtc.getTime() + 12 * 3600000 + offsetMs).toISOString();
-
-          logger.info('ariaBrief.fetchStart', { requestId: req.requestId, userId, timeMin, timeMax, userTz });
-
-          const results = await Promise.allSettled(allAccounts.map(async (acct) => {
-            const acctStart = Date.now();
-            const oauth2 = makeOAuth2Client();
-            if (!oauth2) { logger.warn('ariaBrief.noOAuth2', { userId, googleEmail: acct.googleEmail }); return []; }
-            oauth2.setCredentials(acct.tokens);
-            oauth2.on('tokens', async (newTokens) => {
-              try {
-                const existing = await loadGcalTokens(userId, acct.googleEmail);
-                await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
-                logger.info('ariaBrief.tokenRefreshed', { userId, googleEmail: acct.googleEmail });
-              } catch (e) { logger.error('ariaBrief.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
-            });
-            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-            const { data: calData } = await calendar.events.list({
-              calendarId: 'primary',
-              timeMin,
-              timeMax,
-              timeZone: userTz,
-              singleEvents: true,
-              orderBy: 'startTime',
-              maxResults: 20,
-            });
-            const events = (calData.items || []).map((ev) => ({
-              title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
-              start: ev.start?.dateTime || ev.start?.date || '',
-            }));
-            logger.info('ariaBrief.accountResult', { userId, googleEmail: acct.googleEmail, eventCount: events.length, titles: events.map(e => e.title), durationMs: Date.now() - acctStart });
-            return events;
-          }));
-
-          logger.info('ariaBrief.allSettled', { requestId: req.requestId, userId, statuses: results.map((r, i) => ({ email: allAccounts[i]?.googleEmail, status: r.status, reason: r.status === 'rejected' ? String(r.reason?.message || r.reason) : undefined })) });
-
-          const allEvents = [];
-          const seenTitles = new Set();
-          for (const result of results) {
-            if (result.status === 'fulfilled') {
-              for (const ev of result.value) {
-                const key = `${ev.title}::${ev.start}`;
-                if (!seenTitles.has(key)) {
-                  seenTitles.add(key);
-                  allEvents.push(ev);
-                }
-              }
-            }
-          }
-          allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-          if (allEvents.length > 0) {
-            calendarEventStr = allEvents.map((e) => {
-              if (!e.start || !e.start.includes('T')) return e.title;
-              const t = new Date(e.start);
-              const time = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: userTz });
-              return `${e.title} at ${time}`;
-            }).join('; ');
-          }
-          logger.info('ariaBrief.calendarEvents', { requestId: req.requestId, userId, eventCount: allEvents.length, titles: allEvents.map(e => e.title), calendarEventStr });
+        const userTz = req.user.timezone || 'America/Los_Angeles';
+        const allEvents = await fetchCalendarWindow({
+          userId, tz: userTz, days: 1,
+          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+          logger, requestId: req.requestId,
+        });
+        if (allEvents.length > 0) {
+          calendarEventStr = allEvents.map((e) => {
+            if (!e.start || !e.start.includes('T')) return e.title;
+            const t = new Date(e.start);
+            const time = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: userTz });
+            return `${e.title} at ${time}`;
+          }).join('; ');
         }
+        logger.info('ariaBrief.calendarEvents', { requestId: req.requestId, userId, eventCount: allEvents.length, titles: allEvents.map(e => e.title), calendarEventStr });
       } catch (calErr) {
         logger.error('ariaBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message, stack: calErr.stack?.split('\n').slice(0, 3).join(' | ') });
       }

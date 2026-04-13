@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus } = require('../utils/integrations.cjs');
+const { fetchCalendarWindow } = require('../lib/buildAgenticContext.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
@@ -36,58 +37,14 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     const todayTasks = tasks.filter((t) => !t.completed && t.dueDate === todayStr);
     const highPriority = tasks.filter((t) => !t.completed && t.priority === 'high');
 
-    // Fetch calendar events for today from ALL connected accounts
+    // Fetch calendar events for today from ALL connected accounts (cached 5min)
     let calendarEvents = [];
     try {
-      const allAccounts = loadAllGcalAccounts ? await loadAllGcalAccounts(userId) : [];
-      if (allAccounts.length > 0 && makeOAuth2Client && google) {
-        const userTz = tz;
-        const todayLocal = new Intl.DateTimeFormat('en-CA', {
-          timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
-        }).format(new Date());
-        const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
-        const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
-        const offsetMs = noonUtc.getTime() - noonLocal.getTime();
-        const timeMin = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs).toISOString();
-        const timeMax = new Date(noonUtc.getTime() + 12 * 3600000 + offsetMs).toISOString();
-
-        const gcalResults = await Promise.allSettled(allAccounts.map(async (acct) => {
-          const oauth2 = makeOAuth2Client();
-          if (!oauth2) return [];
-          oauth2.setCredentials(acct.tokens);
-          oauth2.on('tokens', async (newTokens) => {
-            try {
-              const existing = await loadGcalTokens(userId, acct.googleEmail);
-              await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
-            } catch (e) { logger.error('morningBrief.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
-          });
-          const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-          const { data } = await calendar.events.list({
-            calendarId: 'primary',
-            timeMin,
-            timeMax,
-            timeZone: userTz,
-            singleEvents: true,
-            orderBy: 'startTime',
-            maxResults: 20,
-          });
-          return (data.items || []).map((ev) => ({
-            title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
-            start: ev.start?.dateTime || ev.start?.date || '',
-          }));
-        }));
-
-        const seen = new Set();
-        for (const r of gcalResults) {
-          if (r.status === 'fulfilled') {
-            for (const ev of r.value) {
-              const key = `${ev.title}::${ev.start}`;
-              if (!seen.has(key)) { seen.add(key); calendarEvents.push(ev); }
-            }
-          }
-        }
-        calendarEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-      }
+      calendarEvents = await fetchCalendarWindow({
+        userId, tz, days: 1,
+        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+        logger, requestId,
+      });
     } catch (calErr) {
       logger.error('morningBrief.calendarFetch.failed', { requestId, userId, error: calErr.message });
     }

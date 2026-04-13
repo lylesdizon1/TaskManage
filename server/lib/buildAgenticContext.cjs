@@ -14,12 +14,29 @@ const { getTodayLocal } = require('../utils/date.cjs');
 
 const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.`;
 
+// Module-level cache — coalesces the multi-surface GCal reads that
+// previously each hit the Google API independently (aria-brief, morning
+// brief, agentic context). Keyed by userId + tz + window size.
+const calendarCache = new Map();
+const CALENDAR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
- * Fetch upcoming GCal events for the next 7 days, spanning all
- * connected accounts. Returns an array sorted by start time.
+ * Fetch upcoming GCal events for the given window, spanning all connected
+ * accounts. Returns an array sorted by start time. Results are cached for
+ * 5 minutes per (userId, tz, days).
+ *
+ * @param {number} [opts.days=7]  Window length in days starting at local
+ *                                midnight today. Pass 1 for today-only.
  */
-async function fetchCalendarWindow({ userId, tz, loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google, logger, requestId }) {
+async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google, logger, requestId }) {
   const userTz = tz || 'America/Los_Angeles';
+  const windowDays = Number.isFinite(days) && days > 0 ? days : 7;
+
+  const cacheKey = `${userId}::${userTz}::${windowDays}`;
+  const cached = calendarCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CALENDAR_CACHE_TTL_MS) {
+    return cached.events;
+  }
 
   try {
     let allAccounts = [];
@@ -36,7 +53,7 @@ async function fetchCalendarWindow({ userId, tz, loadAllGcalAccounts, loadGcalTo
     const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
     const offsetMs = noonUtc.getTime() - noonLocal.getTime();
     const timeMin = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs).toISOString();
-    const timeMax = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs + 7 * 86400000).toISOString();
+    const timeMax = new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs + windowDays * 86400000).toISOString();
 
     const results = await Promise.allSettled(allAccounts.map(async (acct) => {
       const oauth2 = makeOAuth2Client();
@@ -71,7 +88,9 @@ async function fetchCalendarWindow({ userId, tz, loadAllGcalAccounts, loadGcalTo
         }
       }
     }
-    return allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+    const sorted = allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+    calendarCache.set(cacheKey, { events: sorted, ts: Date.now() });
+    return sorted;
   } catch (err) {
     logger?.error?.('context.calendarFetch.failed', { requestId, userId, error: err.message });
     return [];
@@ -247,4 +266,4 @@ function buildLearningsBlock(rules, patterns) {
   return out;
 }
 
-module.exports = { buildAgenticContext, DECISION_INSTRUCTIONS };
+module.exports = { buildAgenticContext, fetchCalendarWindow, DECISION_INSTRUCTIONS };
