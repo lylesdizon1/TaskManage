@@ -273,8 +273,6 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       // Always forward learnings + email context to the model, even when
       // the client supplies its own base system prompt.
       const emailAndLearnings = (ctx.learningsBlock || '') + (ctx.emailBlock || '');
-      // TEMP: confirm emailBlock reaches the model. Remove after verify.
-      console.log('[ai] emailBlock chars:', ctx.emailBlock?.length || 0);
       const fullSystem = clientPrompt
         ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + emailAndLearnings + ctx.contextBlock
         : ctx.systemPrompt;

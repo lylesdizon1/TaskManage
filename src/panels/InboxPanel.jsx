@@ -857,11 +857,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       <div className={`flex-1 flex-col h-full ${mobileShowThread ? 'flex' : 'hidden md:flex'}`} style={{ backgroundColor: '#fbf8fe', position: 'relative' }}>
         {!activeThreadId ? (
           <>
-            <div className="px-6 pt-4 pb-2 flex items-center gap-1.5">
-              <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '14px' }}>auto_awesome</span>
-              <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Aria</span>
-            </div>
-            <div ref={inboxChatScrollRef} className="flex-1 overflow-y-auto px-6 pb-4">
+            <div ref={inboxChatScrollRef} className="flex-1 overflow-y-auto px-6 pt-4 pb-4">
               {inboxChatMessages.length === 0 && !inboxChatLoading ? (
                 <div className="h-full flex items-center justify-center">
                   <div className="text-center">
