@@ -262,33 +262,10 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
     const { messages, systemPrompt: clientPrompt, model: reqModel, timeZone, context_hint } = req.body;
     const model = reqModel || 'claude-sonnet-4-20250514';
 
-    // Idempotent SSE writer + single-shot finalizer. Hoisted above the
-    // try/catch so the catch block can route errors through finalizeStream.
-    let streamFinalized = false;
-    const send = (event, data) => {
-      if (streamFinalized) return;
-      try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
-    };
-    const finalizeStream = (payload = {}) => {
-      if (streamFinalized) return;
-      streamFinalized = true;
-      logger.info('chat.stream.finalized', { requestId: req.requestId, userId, hasError: !!payload.error, hasText: !!(payload.text && payload.text.length) });
-      try {
-        if (payload.error) {
-          res.write(`event: error\ndata: ${JSON.stringify({ message: payload.error })}\n\n`);
-        } else {
-          res.write(`event: text\ndata: ${JSON.stringify({ content: payload.text || '' })}\n\n`);
-          if (payload.toolSummaries?.length) {
-            res.write(`event: tools_executed\ndata: ${JSON.stringify({ tools: payload.toolSummaries.map(s => s.tool), summaries: payload.toolSummaries })}\n\n`);
-          }
-          if (payload.maxIterationsReached) {
-            res.write(`event: warning\ndata: ${JSON.stringify({ message: 'Step limit reached' })}\n\n`);
-          }
-        }
-        res.write(`event: done\ndata: {}\n\n`);
-      } catch {}
-      try { res.end(); } catch {}
-    };
+    // finalizeStream is defined inside the try (so SSE headers are set
+    // before it writes). Hoisted here with `let` so the catch block can
+    // still route errors through it after assignment.
+    let finalizeStream = () => {};
 
     try {
       const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
@@ -310,6 +287,36 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
+
+      // Idempotent SSE writer + single-shot finalizer. Every terminal path
+      // (happy return, gate-cancel resume, extractor failure, thrown error,
+      // timeout) funnels through finalizeStream so `done` + res.end() fire
+      // exactly once regardless of how control leaves the handler.
+      let streamFinalized = false;
+      const send = (event, data) => {
+        if (streamFinalized) return;
+        try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
+      };
+      finalizeStream = (payload = {}) => {
+        if (streamFinalized) return;
+        streamFinalized = true;
+        logger.info('chat.stream.finalized', { requestId: req.requestId, userId, hasError: !!payload.error, hasText: !!(payload.text && payload.text.length) });
+        try {
+          if (payload.error) {
+            res.write(`event: error\ndata: ${JSON.stringify({ message: payload.error })}\n\n`);
+          } else {
+            res.write(`event: text\ndata: ${JSON.stringify({ content: payload.text || '' })}\n\n`);
+            if (payload.toolSummaries?.length) {
+              res.write(`event: tools_executed\ndata: ${JSON.stringify({ tools: payload.toolSummaries.map(s => s.tool), summaries: payload.toolSummaries })}\n\n`);
+            }
+            if (payload.maxIterationsReached) {
+              res.write(`event: warning\ndata: ${JSON.stringify({ message: 'Step limit reached' })}\n\n`);
+            }
+          }
+          res.write(`event: done\ndata: {}\n\n`);
+        } catch {}
+        try { res.end(); } catch {}
+      };
 
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz);
