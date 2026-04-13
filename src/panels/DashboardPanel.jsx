@@ -36,7 +36,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [calendarLoaded, setCalendarLoaded] = useState(false);
   const [timelineSummary, setTimelineSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  const [gmailAccounts, setGmailAccounts] = useState([]);
+  const draftFromRef = useRef({});
   const toast = useToast();
+
+  useEffect(() => {
+    if (!authToken) return;
+    apiFetch('/api/gmail/accounts', {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((accounts) => setGmailAccounts(Array.isArray(accounts) ? accounts.filter((a) => a.account_email) : []))
+      .catch(() => {});
+  }, [authToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const userTZ = currentUser?.timezone || 'America/Los_Angeles';
   const today = getTodayLocal(userTZ);
@@ -1065,6 +1077,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 }
                 if (msg.role === 'email_draft') {
                   const d = msg.draft || {};
+                  const matched = gmailAccounts.find((a) => a.account_email === d.from);
+                  const currentFrom = draftFromRef.current[msg.ts]
+                    || (matched ? matched.account_email : (gmailAccounts[0]?.account_email || d.from || ''));
+                  if (!draftFromRef.current[msg.ts] && currentFrom) draftFromRef.current[msg.ts] = currentFrom;
+                  const multiAccount = gmailAccounts.length > 1;
                   return (
                     <div key={i} className="flex justify-start">
                       <div
@@ -1076,7 +1093,32 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                             Email draft
                           </div>
                           <div className="grid grid-cols-[56px_1fr] gap-y-1 gap-x-2">
-                            <div className="text-gray-400">From</div><div className="text-gray-800 truncate">{d.from || '—'}</div>
+                            <div className="text-gray-400">From</div>
+                            {multiAccount ? (
+                              <select
+                                defaultValue={currentFrom}
+                                onChange={(e) => { draftFromRef.current[msg.ts] = e.target.value; }}
+                                style={{
+                                  fontFamily: 'Manrope, sans-serif',
+                                  fontSize: '13px',
+                                  color: '#1f2937',
+                                  background: 'transparent',
+                                  border: 'none',
+                                  padding: 0,
+                                  margin: 0,
+                                  outline: 'none',
+                                  cursor: 'pointer',
+                                  appearance: 'none',
+                                  WebkitAppearance: 'none',
+                                }}
+                              >
+                                {gmailAccounts.map((a) => (
+                                  <option key={a.account_email} value={a.account_email}>{a.account_email}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="text-gray-800 truncate">{currentFrom || '—'}</div>
+                            )}
                             <div className="text-gray-400">To</div><div className="text-gray-800 truncate">{d.to || '—'}</div>
                             <div className="text-gray-400">Subject</div><div className="text-gray-800" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
                           </div>
@@ -1106,12 +1148,28 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   const preview = bodyStr
                     ? (bodyStr.length > 300 ? bodyStr.slice(0, 300) + '…' : bodyStr)
                     : (p.subject || '');
+                  // For send_email, look back for the paired email_draft row and
+                  // pull the user's chosen From account (if any) off the ref.
+                  let accountOverride = null;
+                  if (msg.tool === 'send_email') {
+                    for (let k = i - 1; k >= 0; k--) {
+                      const prev = ccMessages[k];
+                      if (prev?.role === 'email_draft') {
+                        accountOverride = draftFromRef.current[prev.ts] || null;
+                        break;
+                      }
+                    }
+                  }
                   const handleConfirm = async (approved) => {
                     try {
                       await apiFetch('/api/chat/confirm', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-                        body: JSON.stringify({ confirm_id: msg.confirmId, approved }),
+                        body: JSON.stringify({
+                          confirm_id: msg.confirmId,
+                          approved,
+                          ...(approved && accountOverride ? { account_email: accountOverride } : {}),
+                        }),
                       });
                       setCcMessages((prev) => prev.map((m, j) => j === i ? { ...m, status: approved ? 'approved' : 'rejected' } : m));
                       onReloadTasks?.(); onReloadNotes?.();
