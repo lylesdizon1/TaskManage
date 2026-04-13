@@ -1036,8 +1036,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           </div>
         </header>
 
-        {/* Contextual Aria input bar — hidden on dashboard where Command Center has its own input */}
-        {((window.innerWidth < 768 && mobileView !== 'tasks' && mobileView !== 'chat') || (window.innerWidth >= 768 && activeView !== 'dashboard' && activeView !== 'chat')) && (
+        {/* Contextual Aria input bar — hidden on dashboard (Command Center has its own input) and on inbox (right panel has its own pinned Aria bar) */}
+        {activeView !== 'inbox' && ((window.innerWidth < 768 && mobileView !== 'tasks' && mobileView !== 'chat') || (window.innerWidth >= 768 && activeView !== 'dashboard' && activeView !== 'chat')) && (
           <div className="flex-shrink-0">
             <UniversalPromptBar
               input={chatInput}
