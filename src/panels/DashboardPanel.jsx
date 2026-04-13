@@ -793,7 +793,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       parts.push(`title: "${p.title || ''}"`);
       if (p.due_date) parts.push(`due_date: ${p.due_date}`);
       if (p.priority) parts.push(`priority: ${p.priority}`);
-      parts.push('Call the create_task tool with these values. Do not ask me to confirm.');
+      parts.push('You MUST call the create_task tool now with exactly these values. Do not respond in prose. Do not ask questions.');
       prompt = parts.join('\n');
     } else {
       // Map event tile fields → create_event tool fields.
@@ -812,11 +812,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       parts.push(`title: "${p.title || ''}"`);
       parts.push(`start_datetime: ${start}`);
       if (endIso) parts.push(`end_datetime: ${endIso}`);
-      parts.push('Call the create_event tool with these values. Do not ask me to confirm.');
+      parts.push('You MUST call the create_event tool now with exactly these values. Do not respond in prose. Do not ask questions.');
       prompt = parts.join('\n');
     }
 
     setTileMeta(tile.id, { status: 'executing', error: null });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
       const res = await apiFetch('/api/chat/execute', {
         method: 'POST',
@@ -825,6 +827,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           model: 'claude-sonnet-4-20250514',
           messages: [{ role: 'user', content: prompt }],
         }),
+        signal: controller.signal,
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
@@ -864,7 +867,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         setTimeout(() => dismissTile(tile.id), 2000);
       }
     } catch (err) {
-      setTileMeta(tile.id, { status: 'error', error: err.message || 'Network error' });
+      if (err?.name === 'AbortError') {
+        setTileMeta(tile.id, { status: 'error', error: 'Request timed out — tap Retry.' });
+      } else {
+        setTileMeta(tile.id, { status: 'error', error: err.message || 'Network error' });
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   }, [apiFetch, authToken, dismissTile, onReloadTasks, setTileMeta]);
 
