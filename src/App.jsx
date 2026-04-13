@@ -542,12 +542,20 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     setChatMessages(updatedMessages);
     setChatInput('');
     localStorage.removeItem('tm_chat_draft');
-    // Auto-route to best persona for this message
-    const detectedIntent = detectIntent(text);
-    const routedPersonaId = routePersona(detectedIntent);
+    // Auto-route to best persona for this message — except on the Inbox
+    // view, where persona routing would hijack inbox questions (e.g.
+    // "how much did I spend?" routing to CFO). Force the default Aria
+    // persona there so the model answers straight from inbox context.
     const { getPersonaById: _getPersonaById } = await import('./config/personas');
-    const routedPersona = _getPersonaById(routedPersonaId);
-    const effectivePersona = routedPersona ?? activePersona;
+    let effectivePersona;
+    if (activeView === 'inbox') {
+      effectivePersona = _getPersonaById('aria') || activePersona;
+    } else {
+      const detectedIntent = detectIntent(text);
+      const routedPersonaId = routePersona(detectedIntent);
+      const routedPersona = _getPersonaById(routedPersonaId);
+      effectivePersona = routedPersona ?? activePersona;
+    }
     setLastAutoPersona(effectivePersona);
     setChatLoading(true);
 

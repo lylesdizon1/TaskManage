@@ -270,8 +270,11 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
         makeOAuth2Client, google, logger, requestId: req.requestId,
       });
       const tz = ctx.tz;
+      // Always forward learnings + email context to the model, even when
+      // the client supplies its own base system prompt.
+      const emailAndLearnings = (ctx.learningsBlock || '') + (ctx.emailBlock || '');
       const fullSystem = clientPrompt
-        ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + ctx.contextBlock
+        ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + emailAndLearnings + ctx.contextBlock
         : ctx.systemPrompt;
 
       // SSE headers
