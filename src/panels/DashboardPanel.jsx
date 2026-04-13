@@ -835,16 +835,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   const executeTile = useCallback(async (tile) => {
     const p = tile.payload || {};
-    let prompt = '';
+    let body;
     if (tile.type === 'task') {
-      const parts = [`Please create a task with these exact fields.`];
-      parts.push(`title: "${p.title || ''}"`);
-      if (p.due_date) parts.push(`due_date: ${p.due_date}`);
-      if (p.priority) parts.push(`priority: ${p.priority}`);
-      parts.push('You MUST call the create_task tool now with exactly these values. Do not respond in prose. Do not ask questions.');
-      prompt = parts.join('\n');
+      body = {
+        type: 'task',
+        payload: {
+          title: p.title || '',
+          due_date: p.due_date || null,
+          priority: p.priority || 'medium',
+        },
+      };
     } else {
-      // Map event tile fields → create_event tool fields.
       const start = p.start_time;
       const mins = Number(p.duration_minutes) || 60;
       let endIso = null;
@@ -856,64 +857,34 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           endIso = `${e.getFullYear()}-${pad(e.getMonth() + 1)}-${pad(e.getDate())}T${pad(e.getHours())}:${pad(e.getMinutes())}:${pad(e.getSeconds())}`;
         }
       } catch {}
-      const parts = [`Please create a calendar event with these exact fields.`];
-      parts.push(`title: "${p.title || ''}"`);
-      parts.push(`start_datetime: ${start}`);
-      if (endIso) parts.push(`end_datetime: ${endIso}`);
-      parts.push('You MUST call the create_event tool now with exactly these values. Do not respond in prose. Do not ask questions.');
-      prompt = parts.join('\n');
+      body = {
+        type: 'event',
+        payload: {
+          title: p.title || '',
+          start_datetime: start,
+          end_datetime: endIso,
+        },
+      };
     }
 
     setTileMeta(tile.id, { status: 'executing', error: null });
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await apiFetch('/api/chat/execute', {
+      const res = await apiFetch('/api/tile/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          messages: [{ role: 'user', content: prompt }],
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let currentEvent = null;
-      let toolsRan = [];
-      let sawError = null;
-      outer: while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const raw of lines) {
-          const em = raw.match(/^event: (.+)/);
-          const dm = raw.match(/^data: (.+)/);
-          if (em) currentEvent = em[1].trim();
-          if (dm && currentEvent === 'tools_executed') {
-            try { toolsRan = JSON.parse(dm[1])?.tools || toolsRan; } catch {}
-          }
-          if (dm && currentEvent === 'error') {
-            try { sawError = JSON.parse(dm[1])?.message || 'Execution failed'; } catch { sawError = 'Execution failed'; }
-            break outer;
-          }
-          if (dm && currentEvent === 'done') break outer;
-          if (dm) currentEvent = null;
-        }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setTileMeta(tile.id, { status: 'error', error: data.error || `HTTP ${res.status}` });
+        return;
       }
-      const expected = tile.type === 'task' ? 'create_task' : 'create_event';
-      const ok = toolsRan.includes(expected);
-      if (sawError || !ok) {
-        setTileMeta(tile.id, { status: 'error', error: sawError || `Aria didn't call ${expected}.` });
-      } else {
-        setTileMeta(tile.id, { status: 'success', error: null });
-        if (tile.type === 'task') onReloadTasks?.();
-        setTimeout(() => dismissTile(tile.id), 2000);
-      }
+      setTileMeta(tile.id, { status: 'success', error: null });
+      if (tile.type === 'task') onReloadTasks?.();
+      setTimeout(() => dismissTile(tile.id), 2000);
     } catch (err) {
       if (err?.name === 'AbortError') {
         setTileMeta(tile.id, { status: 'error', error: 'Request timed out — tap Retry.' });
