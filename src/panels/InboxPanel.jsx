@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { useToast } from '../contexts/ToastContext';
 
 // Minimal HTML detection — good enough to pick a render mode.
@@ -93,6 +94,23 @@ function senderEmail(raw) {
   const m = raw.match(/<([^>]+)>/);
   return m ? m[1].trim() : raw.trim();
 }
+// Markdown renderer components for the compact inbox-header chat.
+// Inline styles so typography/spacing stays in the bubble and doesn't
+// leak global styles.
+const INBOX_MD_COMPONENTS = {
+  p:  ({ node, ...p }) => <p style={{ margin: '0 0 0.35em 0' }} {...p} />,
+  ul: ({ node, ordered, ...p }) => <ul style={{ margin: '0.15em 0 0.35em 1.1em', padding: 0, listStyleType: 'disc' }} {...p} />,
+  ol: ({ node, ordered, ...p }) => <ol style={{ margin: '0.15em 0 0.35em 1.25em', padding: 0, listStyleType: 'decimal' }} {...p} />,
+  li: ({ node, ordered, ...p }) => <li style={{ margin: '0.1em 0' }} {...p} />,
+  strong: ({ node, ...p }) => <strong style={{ fontWeight: 700 }} {...p} />,
+  em: ({ node, ...p }) => <em style={{ fontStyle: 'italic' }} {...p} />,
+  a: ({ node, ...p }) => <a style={{ color: '#4f4dcf', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
+  code: ({ node, inline, ...p }) =>
+    inline
+      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', background: 'rgba(79,77,207,0.06)', padding: '0 3px', borderRadius: '3px' }} {...p} />
+      : <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', whiteSpace: 'pre-wrap' }} {...p} />,
+};
+
 // Decode common HTML entities so Gmail subjects/snippets with things
 // like &amp; or &#39; don't render as literal text in the list rows.
 // Applied to row display only — full message bodies are left untouched.
@@ -159,6 +177,12 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [expandedZones, setExpandedZones] = useState({ attn: true, review: true, low: false, read: false });
   const [touchedZones, setTouchedZones] = useState(() => new Set());
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  // Header "Ask about your inbox..." chat — wired to /api/chat/execute
+  // with context_hint:'inbox' so the server attaches full email context.
+  const [inboxQuery, setInboxQuery] = useState('');
+  const [inboxChatMessages, setInboxChatMessages] = useState([]);
+  const [inboxChatLoading, setInboxChatLoading] = useState(false);
+  const inboxChatScrollRef = useRef(null);
   const [accounts, setAccounts] = useState([]);
   const [accountFilter, setAccountFilter] = useState('');  // '' = all
   const [threads, setThreads] = useState([]);
@@ -231,6 +255,94 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { loadThreads(); }, [loadThreads]);
+
+  // Reset the header chat whenever the inbox reloads or the account
+  // filter changes — the email context the user is asking about has
+  // effectively changed, so a stale thread would be misleading.
+  useEffect(() => { setInboxChatMessages([]); }, [accountFilter]);
+
+  // Autoscroll the header chat as new messages stream in.
+  useEffect(() => {
+    const el = inboxChatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [inboxChatMessages]);
+
+  async function submitInboxQuery() {
+    const text = inboxQuery.trim();
+    if (!text || inboxChatLoading) return;
+    setInboxQuery('');
+    const baseMsgs = [...inboxChatMessages, { role: 'user', content: text }];
+    setInboxChatMessages([...baseMsgs, { role: 'assistant', content: '' }]);
+    setInboxChatLoading(true);
+    try {
+      const res = await apiFetch('/api/chat/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          messages: baseMsgs,
+          context_hint: 'inbox',
+          // NO systemPrompt — let server build full Aria prompt + inbox context.
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = null;
+      let fullText = '';
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const raw of lines) {
+          const em = raw.match(/^event: (.+)/);
+          const dm = raw.match(/^data: (.+)/);
+          if (em) currentEvent = em[1].trim();
+          if (dm && currentEvent === 'text') {
+            try { fullText = JSON.parse(dm[1])?.content || fullText; } catch {}
+            setInboxChatMessages((prev) => {
+              const u = [...prev];
+              u[u.length - 1] = { ...u[u.length - 1], content: fullText };
+              return u;
+            });
+          }
+          if (dm && currentEvent === 'done') break outer;
+          if (dm && currentEvent === 'error') {
+            try {
+              const p = JSON.parse(dm[1]);
+              setInboxChatMessages((prev) => {
+                const u = [...prev];
+                u[u.length - 1] = { role: 'assistant', content: `Couldn't reach Aria — ${p?.message || 'error'}.` };
+                return u;
+              });
+            } catch {}
+            break outer;
+          }
+          if (dm) currentEvent = null;
+        }
+      }
+      // If we exited with no text, drop the empty placeholder.
+      if (!fullText) {
+        setInboxChatMessages((prev) => {
+          const u = [...prev];
+          const last = u[u.length - 1];
+          if (last && last.role === 'assistant' && !last.content) u.pop();
+          return u;
+        });
+      }
+    } catch (err) {
+      setInboxChatMessages((prev) => {
+        const u = [...prev];
+        u[u.length - 1] = { role: 'assistant', content: `Couldn't reach Aria — ${err.message}.` };
+        return u;
+      });
+    } finally {
+      setInboxChatLoading(false);
+    }
+  }
 
   // Batch-lookup classifications once the thread list lands, then poll a
   // couple of times to catch classifications produced by the server's
@@ -574,6 +686,69 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 {label}
               </button>
             ))}
+          </div>
+
+          {/* Ask-about-your-inbox header chat */}
+          <div className="mt-3">
+            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-2 py-1">
+              <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '16px' }}>auto_awesome</span>
+              <input
+                type="text"
+                value={inboxQuery}
+                onChange={(e) => setInboxQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInboxQuery(); } }}
+                placeholder="Ask about your inbox..."
+                className="flex-1 bg-transparent text-[13px] focus:outline-none placeholder:text-gray-400 py-1"
+                style={{ fontFamily: 'Manrope, sans-serif' }}
+                disabled={inboxChatLoading}
+              />
+              <button
+                onClick={submitInboxQuery}
+                disabled={!inboxQuery.trim() || inboxChatLoading}
+                className="w-6 h-6 rounded-full flex items-center justify-center disabled:opacity-30"
+                style={{ backgroundColor: inboxQuery.trim() ? '#4f4dcf' : 'transparent' }}
+                aria-label="Ask"
+              >
+                <span
+                  className={`material-symbols-outlined ${inboxQuery.trim() ? 'text-white' : 'text-slate-400'}`}
+                  style={{ fontSize: '14px' }}
+                >
+                  {inboxChatLoading ? 'hourglass_empty' : 'send'}
+                </span>
+              </button>
+            </div>
+            {(inboxChatMessages.length > 0 || inboxChatLoading) && (
+              <div
+                ref={inboxChatScrollRef}
+                className="mt-2 space-y-1.5 overflow-y-auto pr-1"
+                style={{ maxHeight: 176 }}
+              >
+                {inboxChatMessages.map((m, i) => {
+                  const isUser = m.role === 'user';
+                  return (
+                    <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                      <div
+                        className={`max-w-[88%] ${isUser ? 'text-white' : ''}`}
+                        style={isUser
+                          ? { backgroundColor: '#4f4dcf', fontSize: '12.5px', lineHeight: '1.5', borderRadius: '10px', padding: '6px 9px', fontFamily: 'Manrope, sans-serif', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                          : { backgroundColor: '#fff', border: '1px solid #e5e7eb', fontSize: '12.5px', lineHeight: '1.5', borderRadius: '10px', padding: '6px 9px', color: '#1f2937', fontFamily: 'Manrope, sans-serif', wordBreak: 'break-word' }
+                        }
+                      >
+                        {m.content
+                          ? (isUser
+                              ? m.content
+                              : <ReactMarkdown components={INBOX_MD_COMPONENTS}>{m.content}</ReactMarkdown>)
+                          : <span className="text-gray-400">Aria is thinking…</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* Show thinking pill when the user has submitted but no placeholder yet. */}
+                {inboxChatLoading && inboxChatMessages.length === 0 && (
+                  <div className="text-[12px] text-gray-400">Aria is thinking…</div>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-2 pb-3">
