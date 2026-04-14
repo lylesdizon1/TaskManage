@@ -48,7 +48,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [gmailAccounts, setGmailAccounts] = useState([]);
   const [briefContext, setBriefContext] = useState(null);
-  const [activeZoneState, setActiveZoneState] = useState('context');
+  // Context cards are summoned, not ambient — default to collapsed.
+  // Promoted to 'context' only on: first-load-with-no-chat, time-state
+  // transition, 30+ min return, or an explicit intent ("what's going on").
+  const [activeZoneState, setActiveZoneState] = useState('empty');
   const [activeTile, setActiveTile] = useState(null);
   const draftFromRef = useRef({});
   const draftToRef = useRef({});
@@ -57,6 +60,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // cards still live in ccMessages and use this to locate the paired
   // draft refs (from/to/body).
   const activeEmailDraftTsRef = useRef(null);
+  // Tracking for summon logic.
+  const lastTimeStateRef = useRef(null);
+  const lastActivityRef = useRef(Date.now());
+  const firstBriefFetchRef = useRef(true);
   const toast = useToast();
 
   useEffect(() => {
@@ -69,8 +76,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       .catch(() => {});
   }, [authToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch structured brief context — drives the active-zone context cards.
-  // Fails soft: leaves briefContext null so the zone renders nothing.
+  // Fetch structured brief context. Summon rules (not ambient):
+  //   • first fetch AND user hasn't chatted yet → show
+  //   • time-state transition (morning → midday, etc) → show
+  //   • otherwise → just refresh data, leave zone state alone
+  // Never forces a 'context' state if a tile/email/notes flow is active.
   const fetchBriefContext = useCallback(async () => {
     if (!authToken) return;
     try {
@@ -78,9 +88,18 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       if (!r.ok) return;
       const data = await r.json();
       setBriefContext(data);
-      // If we'd previously collapsed the zone to 'empty' after a success,
-      // promote it back to 'context' now that we have fresh data.
-      setActiveZoneState((s) => (s === 'empty' ? 'context' : s));
+
+      const noUserMessages = !ccMessagesRef.current.some((m) => m.role === 'user');
+      const prevTimeState = lastTimeStateRef.current;
+      const transitioned = prevTimeState && data.timeState && data.timeState !== prevTimeState;
+
+      if ((firstBriefFetchRef.current && noUserMessages) || transitioned) {
+        setActiveZoneState((s) =>
+          (s === 'tile' || s === 'email' || s === 'notes' || s === 'success') ? s : 'context'
+        );
+      }
+      firstBriefFetchRef.current = false;
+      if (data.timeState) lastTimeStateRef.current = data.timeState;
     } catch { /* silent */ }
   }, [apiFetch, authToken]);
 
@@ -88,7 +107,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (!authToken) return;
     fetchBriefContext();
     const interval = setInterval(fetchBriefContext, 5 * 60 * 1000);
-    const onVis = () => { if (document.visibilityState === 'visible') fetchBriefContext(); };
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return;
+      const idleMs = Date.now() - lastActivityRef.current;
+      fetchBriefContext();
+      // 30+ min idle: summon cards + ask Aria for a fresh catch-up.
+      if (idleMs > 30 * 60 * 1000) {
+        lastActivityRef.current = Date.now();
+        setActiveZoneState((s) =>
+          (s === 'tile' || s === 'email' || s === 'notes' || s === 'success') ? s : 'context'
+        );
+        // Small delay so fetch result lands before Aria's response streams in.
+        setTimeout(() => ccSendRef.current?.('Catch me up on my day'), 400);
+      }
+    };
     document.addEventListener('visibilitychange', onVis);
     return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVis); };
   }, [authToken, fetchBriefContext]);
@@ -581,6 +613,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const controller = new AbortController();
     ccAbortRef.current = controller;
 
+    // Mark activity so the 30-min idle summon doesn't fire immediately.
+    lastActivityRef.current = Date.now();
+
     // Lightweight intent detection — drives the rotating placeholder copy
     // and decides whether to inject the user's connected Gmail accounts.
     const lower = text.toLowerCase();
@@ -591,6 +626,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     else if (taskIntent)  setThinkingIntent('task');
     else if (eventIntent) setThinkingIntent('event');
     else                  setThinkingIntent('default');
+
+    // "Summon context" intent — show cards alongside Aria's prose. Every
+    // other message collapses the zone to give the chat full height.
+    // Preserve tile/email/notes/success — those have their own lifecycle.
+    const contextIntent = /what('s| is) (going on|happening|on my|my day)|catch me up|what do i have|good morning/i;
+    const wantsContext = contextIntent.test(text);
+    setActiveZoneState((s) => {
+      if (s === 'tile' || s === 'email' || s === 'notes' || s === 'success') return s;
+      return wantsContext ? 'context' : 'empty';
+    });
+    if (wantsContext) fetchBriefContext();
 
     const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString(), ts: Date.now() };
     setCcMessages((prev) => [...prev, userMsg]);
@@ -856,7 +902,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       ccAbortRef.current = null;
       setCcSending(false);
     }
-  }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch, tasks, entities, notes, calendarEvents, chatCalendarEvents]);
+  }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch, tasks, entities, notes, calendarEvents, chatCalendarEvents, fetchBriefContext]);
 
   // Keep a live ref to the latest send handler so window-event listeners
   // can trigger a send without re-binding on every render.
@@ -922,8 +968,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   const cancelActiveTile = useCallback(() => {
     setActiveTile(null);
-    setActiveZoneState(briefContext ? 'context' : 'empty');
-  }, [briefContext]);
+    setActiveZoneState('empty');
+  }, []);
 
   const executeActiveTile = useCallback(async () => {
     setActiveTile((prev) => (prev ? { ...prev, status: 'executing', error: null } : prev));
@@ -1265,7 +1311,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           }}
           onSkipMeetingNotes={(event) => {
             setActiveTile(null);
-            setActiveZoneState(briefContext ? 'context' : 'empty');
+            setActiveZoneState('empty');
             ccSendRef.current?.(`Remind me to add notes for ${event.title || 'the meeting'} in 30 minutes`);
           }}
         />
