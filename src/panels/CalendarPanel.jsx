@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
-import { format, parse, startOfWeek, getDay, startOfMonth, endOfMonth, addMonths, subMonths } from 'date-fns';
+import { format, parse, startOfWeek, getDay, startOfMonth, endOfMonth, addMonths, subMonths, addDays, subDays } from 'date-fns';
 import enUS from 'date-fns/locale/en-US';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import { SpinnerIcon, CalendarIcon } from '../components/icons/Icons.jsx';
@@ -502,25 +502,37 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 flex-shrink-0">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setCurrentDate(new Date())}
+            onClick={() => { setCurrentDate(new Date()); if (view !== 'day') setView('day'); }}
             className="px-3 py-1 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
           >
             Today
           </button>
           <button
-            onClick={() => setCurrentDate(d => view === 'month' ? subMonths(d, 1) : new Date(d.getTime() - 7 * 86400000))}
+            onClick={() => setCurrentDate(d => (
+              view === 'month' ? subMonths(d, 1)
+              : view === 'day' ? subDays(d, 1)
+              : new Date(d.getTime() - 7 * 86400000)
+            ))}
             className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
           >
             <span className="material-symbols-outlined text-[18px]">chevron_left</span>
           </button>
           <button
-            onClick={() => setCurrentDate(d => view === 'month' ? addMonths(d, 1) : new Date(d.getTime() + 7 * 86400000))}
+            onClick={() => setCurrentDate(d => (
+              view === 'month' ? addMonths(d, 1)
+              : view === 'day' ? addDays(d, 1)
+              : new Date(d.getTime() + 7 * 86400000)
+            ))}
             className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
           >
             <span className="material-symbols-outlined text-[18px]">chevron_right</span>
           </button>
           <h2 className="text-sm font-semibold text-gray-900 ml-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-            {format(currentDate, view === 'month' ? 'MMMM yyyy' : "'Week of' MMM d, yyyy")}
+            {view === 'day'
+              ? format(currentDate, 'EEEE, MMMM d yyyy')
+              : view === 'week'
+                ? `Week of ${format(currentDate, 'MMM d, yyyy')}`
+                : format(currentDate, 'MMMM yyyy')}
           </h2>
         </div>
         <div className="flex items-center gap-2">
@@ -532,7 +544,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             + New Event
           </button>
           <div className="flex bg-gray-100 rounded-lg p-0.5">
-          {['month', 'week', 'history'].map((v) => (
+          {['month', 'week', 'day', 'history'].map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -620,7 +632,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             events={events}
             view={view}
             onView={v => { if (v !== 'history') setView(v); }}
-            views={['month', 'week']}
+            views={['month', 'week', 'day']}
             date={currentDate}
             onNavigate={handleNavigate}
             onSelectEvent={handleSelectEvent}
@@ -629,6 +641,15 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             eventPropGetter={eventPropGetter}
             toolbar={false}
             popup
+            scrollToTime={(() => {
+              // Open day/week views anchored one hour before the current
+              // hour so the current time sits near the top of the visible
+              // range rather than pinned at the very top.
+              const s = new Date();
+              s.setMinutes(0, 0, 0);
+              s.setHours(Math.max(0, s.getHours() - 1));
+              return s;
+            })()}
             style={{ height: '100%', minHeight: 500 }}
           />
         </div>
