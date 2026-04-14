@@ -49,6 +49,7 @@ const express = require('express');
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { fetchCalendarWindow, localMidnightUtc } = require('../lib/buildAgenticContext.cjs');
+const { withRetry } = require('../lib/anthropicRetry.cjs');
 
 /**
  * Compute the user's local hour, human-readable time, and time-state label.
@@ -319,18 +320,21 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
 
       const dataStr = `Overdue tasks: ${overdue}\nHigh priority tasks: ${highPriority}\nTasks due today: ${todayTasks}\nToday's calendar events: ${calendarEventStr}\nRecent notes (only mention if actionable): ${actionableNotes}\nBusinesses: ${data?.entities || 'None'}`;
 
-      const response = await axios.post(
-        'https://api.anthropic.com/v1/messages',
-        {
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 300,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: `Write the ${timeState} update for ${userName}.\n\n${dataStr}` }],
-        },
-        {
-          headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-          timeout: 15_000,
-        },
+      const response = await withRetry(
+        () => axios.post(
+          'https://api.anthropic.com/v1/messages',
+          {
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 300,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: `Write the ${timeState} update for ${userName}.\n\n${dataStr}` }],
+          },
+          {
+            headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+            timeout: 15_000,
+          },
+        ),
+        'aria-brief',
       );
 
       const brief = response.data.content?.[0]?.text || '';

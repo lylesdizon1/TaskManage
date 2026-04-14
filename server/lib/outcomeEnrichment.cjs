@@ -18,6 +18,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../../db.cjs');
+const { withRetry } = require('./anthropicRetry.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
@@ -76,11 +77,14 @@ Respond with JSON only. No markdown, no explanation.`;
 
     let response;
     try {
-      response = await c.messages.create({
-        model: MODEL,
-        max_tokens: 500,
-        messages: [{ role: 'user', content: prompt }],
-      });
+      response = await withRetry(
+        () => c.messages.create({
+          model: MODEL,
+          max_tokens: 500,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        'outcome-enrichment',
+      );
     } catch (err) {
       console.error('[outcome-enrichment] haiku call failed:', err.message);
       return;
