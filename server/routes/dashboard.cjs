@@ -453,6 +453,24 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       logger.error('brief.context.notesNeeded.failed', { requestId: req.requestId, userId, error: e.message });
     }
 
+    // Active projects + open project tasks for the CC integration.
+    let projects = [];
+    let openProjectTasks = [];
+    try {
+      if (db.getProjectContextForUser) {
+        projects = await db.getProjectContextForUser(userId, 3);
+      }
+    } catch (e) {
+      logger.error('brief.context.projects.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+    try {
+      if (db.getOpenProjectTasksForUser) {
+        openProjectTasks = await db.getOpenProjectTasksForUser(userId, 5);
+      }
+    } catch (e) {
+      logger.error('brief.context.projectTasks.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+
     const stats = {
       tasksCompletedToday: completedToday.length,
       tasksTotalToday: dueToday.length + completedToday.length,
@@ -467,6 +485,8 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       events: { completed, live, upcoming },
       emails: { needsAttention },
       meetingsNeedingNotes,
+      projects,
+      projectTasks: { open: openProjectTasks },
       stats,
     });
   });

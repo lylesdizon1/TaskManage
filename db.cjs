@@ -5387,10 +5387,18 @@ async function deleteProjectNote(id) {
 
 /**
  * Active projects across every entity the user can access (member or owner).
- * Used by buildAgenticContext so Aria can reference open project state.
+ * Used by buildAgenticContext so Aria can reference open project state +
+ * by /api/brief/context for the active-zone Projects card.
+ *
+ * Each row carries:
+ *   {id, title, status, entityId, entityName,
+ *    openTasks, completedTasks,
+ *    openTaskTitles: ["…", "…"],     // top 2 by recency
+ *    recentNote: "…"|null}            // newest note body, truncated 100 chars
  */
 async function getProjectContextForUser(userId, limit = 5) {
-  const { rows } = await pool.query(
+  // Step 1: project rollup (counts + identity).
+  const { rows: projects } = await pool.query(
     `SELECT p.id, p.title, p.status, p.entity_id AS "entityId",
             e.name AS "entityName",
             COUNT(DISTINCT pt.id) FILTER (WHERE pt.status = 'open')      AS "openTasks",
@@ -5406,6 +5414,68 @@ async function getProjectContextForUser(userId, limit = 5) {
        AND p.status = 'active'
      GROUP BY p.id, e.name
      ORDER BY p.updated_at DESC
+     LIMIT $2`,
+    [userId, limit],
+  );
+  if (!projects.length) return [];
+
+  const ids = projects.map((p) => p.id);
+
+  // Step 2: top 2 open task titles per project (window function).
+  const { rows: taskRows } = await pool.query(
+    `SELECT project_id AS "projectId", title FROM (
+       SELECT project_id, title,
+              ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY created_at DESC) AS rn
+       FROM project_tasks
+       WHERE project_id = ANY($1::text[]) AND status = 'open'
+     ) t WHERE rn <= 2`,
+    [ids],
+  );
+  const tasksByProject = new Map();
+  for (const r of taskRows) {
+    if (!tasksByProject.has(r.projectId)) tasksByProject.set(r.projectId, []);
+    tasksByProject.get(r.projectId).push(r.title);
+  }
+
+  // Step 3: most recent note body per project.
+  const { rows: noteRows } = await pool.query(
+    `SELECT project_id AS "projectId", body FROM (
+       SELECT project_id, body,
+              ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY created_at DESC) AS rn
+       FROM project_notes
+       WHERE project_id = ANY($1::text[])
+     ) n WHERE rn = 1`,
+    [ids],
+  );
+  const noteByProject = new Map(noteRows.map((r) => [r.projectId, r.body]));
+
+  return projects.map((p) => ({
+    ...p,
+    openTaskTitles: tasksByProject.get(p.id) || [],
+    recentNote: noteByProject.has(p.id) ? String(noteByProject.get(p.id)).slice(0, 100) : null,
+  }));
+}
+
+/**
+ * Open project tasks across every entity a user can access. Used by the
+ * brief-context "Still open" rollup so personal tasks and project tasks
+ * surface together.
+ */
+async function getOpenProjectTasksForUser(userId, limit = 5) {
+  const { rows } = await pool.query(
+    `SELECT pt.id, pt.title, p.title AS "projectTitle",
+            e.name AS "entityName", pt.entity_id AS "entityId",
+            pt.project_id AS "projectId"
+     FROM project_tasks pt
+     JOIN projects p ON p.id = pt.project_id
+     JOIN entities e ON e.id = pt.entity_id
+     WHERE pt.entity_id IN (
+       SELECT entity_id FROM entity_members WHERE user_id = $1
+       UNION
+       SELECT id FROM entities WHERE created_by = $1
+     )
+       AND pt.status = 'open'
+     ORDER BY pt.created_at DESC
      LIMIT $2`,
     [userId, limit],
   );
@@ -5595,6 +5665,7 @@ module.exports = {
   updateProjectNote,
   deleteProjectNote,
   getProjectContextForUser,
+  getOpenProjectTasksForUser,
   seedEntitiesIfEmpty,
   getTaskById,
   getTasksForUser,

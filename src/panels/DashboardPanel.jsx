@@ -2027,26 +2027,37 @@ function ActiveZone({
       </div>
     );
 
-    // STILL OPEN — overdue first, then dueToday (cap 4 rows)
+    // STILL OPEN — overdue first, then dueToday, then open project tasks (cap 6)
     const stillOpen = [
       ...(bc.tasks?.overdue || []).slice(0, 2).map((t) => ({ t, chip: 'overdue', chipColor: '#b91c1c', chipBg: 'rgba(239,68,68,0.15)' })),
       ...(bc.tasks?.dueToday || []).slice(0, 2).map((t) => ({ t, chip: 'today', chipColor: '#4f4dcf', chipBg: 'rgba(79,77,207,0.12)' })),
     ].slice(0, 4);
+    const projectTasksOpen = (bc.projectTasks?.open || []).slice(0, 3);
 
-    const stillOpenRows = stillOpen.length === 0
+    const stillOpenRows = (stillOpen.length === 0 && projectTasksOpen.length === 0)
       ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
-      : stillOpen.map(({ t, chip, chipColor, chipBg }, i) => (
-          <Row
-            key={`still-${i}`}
-            dotColor={entityDot(t)}
-            label={t.title}
-            chip={chip} chipColor={chipColor} chipBg={chipBg}
-            actions={[
-              { label: 'Done', onClick: () => onCompleteTask?.(t.id, t.title) },
-              { label: 'Reschedule', onClick: () => sendPrompt?.(`Reschedule ${t.title} to tomorrow`) },
-            ]}
-          />
-        ));
+      : [
+          ...stillOpen.map(({ t, chip, chipColor, chipBg }, i) => (
+            <Row
+              key={`still-${i}`}
+              dotColor={entityDot(t)}
+              label={t.title}
+              chip={chip} chipColor={chipColor} chipBg={chipBg}
+              actions={[
+                { label: 'Done', onClick: () => onCompleteTask?.(t.id, t.title) },
+                { label: 'Reschedule', onClick: () => sendPrompt?.(`Reschedule ${t.title} to tomorrow`) },
+              ]}
+            />
+          )),
+          ...projectTasksOpen.map((pt, i) => (
+            <Row
+              key={`still-pt-${i}`}
+              dotColor={entityColorMap[(pt.entityName || '').toLowerCase()] || '#4f4dcf'}
+              label={`${pt.projectTitle}: ${pt.title}`}
+              chip={pt.entityName || 'project'} chipColor="#534ab7" chipBg="#eeedfe"
+            />
+          )),
+        ];
 
     // DONE TODAY — completed tasks + completed events (cap 4)
     const completedTasks = (bc.tasks?.completedToday || []).slice(0, 2);
@@ -2118,12 +2129,31 @@ function ActiveZone({
           )] : []),
         ];
 
+    // ACTIVE PROJECTS — entity / title + X/Y chip; only when projects exist.
+    const activeProjects = (bc.projects || []).slice(0, 3);
+    const projectsRows = activeProjects.length === 0
+      ? null
+      : activeProjects.map((p, i) => {
+          const total = (p.openTasks || 0) + (p.completedTasks || 0);
+          const chip = `${p.completedTasks || 0}/${total} tasks`;
+          return (
+            <Row
+              key={`proj-${i}`}
+              dotColor={entityColorMap[(p.entityName || '').toLowerCase()] || '#4f4dcf'}
+              label={`${p.entityName} / ${p.title}`}
+              chip={chip} chipColor="#534ab7" chipBg="#eeedfe"
+              onChipClick={() => sendPrompt?.(`Summarize ${p.title} in ${p.entityName}`)}
+            />
+          );
+        });
+
     return (
       <div style={wrapperStyle}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <Card title="Still open">{stillOpenRows}</Card>
           <Card title="Done today">{doneRows}</Card>
           <Card title="Up next">{upNextRows}</Card>
+          {projectsRows && <Card title="Active projects">{projectsRows}</Card>}
         </div>
       </div>
     );
