@@ -167,6 +167,55 @@ test('requireOwnership: owner still passes', async () => {
     'owner must pass requireOwnership');
 });
 
+// ── Tests — mutation SQL enforces user scoping (belt-and-suspenders) ──
+// The note seeded in setup() is owned by userA (createNote({userId: userA.id,...})).
+// Actually setup() creates noteA under userA.id, so userB (as admin) attacking
+// should fail. Test: fake "admin" pretending to update userB-owned note by
+// passing userB.id as target — but our userA has admin role, so we simulate a
+// request where userA (admin) tries to mutate the note of userB by passing
+// userA.id as userId. The SQL must return null / 0 rows.
+
+test('updateNote: userA admin CANNOT mutate userB-owned note (SQL scoping)', async () => {
+  // Create a note owned by userB for this test.
+  const attackNoteId = `test-attack-note-${SUFFIX}`;
+  await db.createNote({
+    id: attackNoteId, userId: userB.id, title: 'B-private', content: 'do not mutate',
+    visibility: 'private', type: 'quick', pillar: null, category: '', subcategory: '', tags: [], entityId: null,
+  });
+  try {
+    // userA (admin) attempts to mutate: passes own id as userId to updateNote,
+    // expecting the SQL's `AND user_id = $2` to reject.
+    const updated = await db.updateNote(attackNoteId, userA.id, { title: 'pwned-by-admin' });
+    assert.equal(updated, null, 'updateNote must return null when userId does not match note.user_id');
+
+    // Verify the row is still intact.
+    const row = await db.getNoteById(attackNoteId, userB.id);
+    assert.ok(row, 'userB should still be able to fetch their own note');
+    assert.equal(row.title, 'B-private', 'note title must not have been mutated');
+  } finally {
+    try { await db.pool.query('DELETE FROM notes WHERE id = $1', [attackNoteId]); } catch {}
+  }
+});
+
+test('deleteNote: userA admin CANNOT delete userB-owned note (SQL scoping)', async () => {
+  const attackNoteId = `test-attack-note-del-${SUFFIX}`;
+  await db.createNote({
+    id: attackNoteId, userId: userB.id, title: 'B-delete-target', content: 'hands off',
+    visibility: 'private', type: 'quick', pillar: null, category: '', subcategory: '', tags: [], entityId: null,
+  });
+  try {
+    // userA (admin) tries to delete userB's note by passing own id.
+    await db.deleteNote(attackNoteId, userA.id);
+
+    // The note must still exist for userB.
+    const row = await db.getNoteById(attackNoteId, userB.id);
+    assert.ok(row, 'deleteNote with wrong userId must not remove the row');
+    assert.equal(row.id, attackNoteId, 'the original note must still be present');
+  } finally {
+    try { await db.pool.query('DELETE FROM notes WHERE id = $1', [attackNoteId]); } catch {}
+  }
+});
+
 // ── Runner ─────────────────────────────────────────────────────────────────
 
 (async () => {

@@ -253,7 +253,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         // This message might be a completion note reply — save it
         pendingCompletionNotes.delete(pendingKey);
         try {
-          await db.updateTask(pending.taskId, { completionNote: msgBody });
+          await db.updateTask(pending.taskId, userId, { completionNote: msgBody });
           await db.logMemory({
             userId, tool: 'complete_task',
             content: `Added completion note to "${pending.taskTitle}": ${msgBody}`,

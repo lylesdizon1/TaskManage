@@ -1864,10 +1864,12 @@ async function createEntity({ id, name, color, createdBy, type, parentId, shared
  * @note Authorization (who can create/update entities) is
  * enforced at the route layer — this helper assumes valid input.
  */
-async function updateEntity(id, fields) {
+async function updateEntity(id, userId, fields) {
+  // Defense-in-depth: scope UPDATE by created_by = userId so a missed
+  // route-level ownership check cannot cross-tenant-mutate.
   const sets = [];
-  const vals = [id];
-  let idx = 2;
+  const vals = [id, userId];
+  let idx = 3;
 
   if (fields.name !== undefined) { sets.push(`name = $${idx++}`); vals.push(fields.name); }
   if (fields.color !== undefined) { sets.push(`color = $${idx++}`); vals.push(fields.color); }
@@ -1880,7 +1882,7 @@ async function updateEntity(id, fields) {
   if (sets.length === 0) return null;
 
   const { rows } = await pool.query(
-    `UPDATE entities SET ${sets.join(', ')} WHERE id = $1
+    `UPDATE entities SET ${sets.join(', ')} WHERE id = $1 AND created_by = $2
      RETURNING id, name, color, created_by AS "createdBy", created_at AS "createdAt",
                type, parent_id AS "parentId", shared,
                calendar_id AS "calendarId", color_source AS "colorSource"`,
@@ -1925,9 +1927,11 @@ async function getEntityById(id) {
  * @returns {Promise<void>}
  */
 async function deleteEntity(id, userId) {
-  // Route already validates ownership or admin/superadmin — delete by id only
-  // (seeded entities have NULL created_by, so AND created_by = $2 would never match)
-  await pool.query('DELETE FROM entities WHERE id = $1', [id]);
+  // Defense-in-depth: scope by created_by so a missed pre-check can't
+  // cross-tenant-delete. Legacy seed entities with NULL created_by are
+  // intentionally undeletable via this path — they must go through an
+  // admin-only helper that explicitly allows NULL-owner cleanup.
+  await pool.query('DELETE FROM entities WHERE id = $1 AND created_by = $2', [id, userId]);
 }
 
 // ── calendar_events cache helpers (Session 1) ──────────────────────────────
@@ -3259,27 +3263,30 @@ async function getOrCreateCommandCenterConversation(userId, dateStr) {
  * @returns {Promise<Object|null>} Updated task record or null.
  * @throws {Error} If the database query fails.
  */
-async function updateTask(id, fields) {
+async function updateTask(id, userId, fields) {
+  // Defense-in-depth: mandate owner = userId on the UPDATE so a missed
+  // pre-check in the route layer cannot cross-tenant-mutate.
   const { rows } = await pool.query(
     `UPDATE tasks
-     SET title           = COALESCE($2, title),
-         description     = COALESCE($3, description),
-         priority        = COALESCE($4, priority),
-         due_date        = COALESCE($5, due_date),
-         due_time        = COALESCE($6, due_time),
-         tags            = COALESCE($7, tags),
-         visibility      = COALESCE($8, visibility),
-         completed       = COALESCE($9, completed),
-         google_event_id = COALESCE($10, google_event_id),
-         completed_at    = CASE WHEN $11::text = '__null__' THEN NULL WHEN $11::text IS NOT NULL THEN $11::timestamptz ELSE completed_at END,
-         completion_note = COALESCE($12, completion_note),
+     SET title           = COALESCE($3, title),
+         description     = COALESCE($4, description),
+         priority        = COALESCE($5, priority),
+         due_date        = COALESCE($6, due_date),
+         due_time        = COALESCE($7, due_time),
+         tags            = COALESCE($8, tags),
+         visibility      = COALESCE($9, visibility),
+         completed       = COALESCE($10, completed),
+         google_event_id = COALESCE($11, google_event_id),
+         completed_at    = CASE WHEN $12::text = '__null__' THEN NULL WHEN $12::text IS NOT NULL THEN $12::timestamptz ELSE completed_at END,
+         completion_note = COALESCE($13, completion_note),
          updated_at      = NOW()
-     WHERE id = $1
+     WHERE id = $1 AND owner = $2
      RETURNING id, title, description, priority, status, due_date AS "dueDate",
                due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
                google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"`,
     [
       id,
+      userId,
       fields.title ?? null,
       fields.description ?? null,
       fields.priority ?? null,

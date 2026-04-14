@@ -98,7 +98,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
     try {
       const task = await db.getTaskById(req.params.id, req.user.id);
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
-      const updated = await db.updateTask(req.params.id, req.body);
+      const updated = await db.updateTask(req.params.id, req.user.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Task not found' });
       try { await writeAudit({ userId: req.user.id, entityType: 'task', entityId: req.params.id, action: 'updated', before: task, after: updated, requestId: req.requestId }); } catch {}
       if (req.body.completionNote !== undefined) {
@@ -121,7 +121,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
     try {
       const task = await db.getTaskById(req.params.id, req.user.id);
       if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
-      const updated = await db.updateTask(req.params.id, { completionNote: req.body.completion_note });
+      const updated = await db.updateTask(req.params.id, req.user.id, { completionNote: req.body.completion_note });
       if (!updated) return res.status(404).json({ error: 'Task not found' });
       try { await writeAudit({ userId: req.user.id, entityType: 'task', entityId: req.params.id, action: 'updated', before: task, after: updated, requestId: req.requestId }); } catch {}
       try {

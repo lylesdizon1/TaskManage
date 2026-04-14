@@ -484,7 +484,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (!task) return { success: false, error: 'Task not found or access denied' };
         const updateFields = { completed: true, completedAt: new Date().toISOString() };
         if (toolInput.completion_note) updateFields.completionNote = toolInput.completion_note;
-        await db.updateTask(task.id, updateFields);
+        await db.updateTask(task.id, userId, updateFields);
         try {
           await db.logMemory({
             userId, tool: 'complete_task',
@@ -504,7 +504,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (toolInput.due_date !== undefined) fields.dueDate = toolInput.due_date;
         if (toolInput.due_time !== undefined) fields.dueTime = toolInput.due_time;
         if (toolInput.notes !== undefined) fields.description = toolInput.notes;
-        await db.updateTask(toolInput.task_id, fields);
+        await db.updateTask(toolInput.task_id, userId, fields);
         try {
           await db.logMemory({
             userId, tool: 'update_task',
@@ -528,7 +528,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       case 'delete_task': {
         const task = await db.getTaskById(toolInput.task_id, userId);
         if (!task) return { success: false, error: 'Task not found or access denied' };
-        await db.updateTask(toolInput.task_id, { status: 'deleted', completed: true, completedAt: new Date().toISOString() });
+        await db.updateTask(toolInput.task_id, userId, { status: 'deleted', completed: true, completedAt: new Date().toISOString() });
         try {
           await db.logMemory({ userId, tool: 'delete_task', content: `Deleted task: "${task.title}"`, metadata: { task_id: toolInput.task_id } });
         } catch (e) { console.error('[memory] log failed:', e.message); }

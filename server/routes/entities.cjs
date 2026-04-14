@@ -77,7 +77,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
         const parent = await db.getEntityById(req.body.parentId);
         if (!parent) return res.status(400).json({ error: 'Parent entity not found' });
       }
-      const updated = await db.updateEntity(req.params.id, req.body);
+      const updated = await db.updateEntity(req.params.id, req.user.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Entity not found' });
       return res.json(updated);
     } catch (err) {
