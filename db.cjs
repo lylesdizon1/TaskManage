@@ -5427,7 +5427,6 @@ async function getProjectContextForUser(userId, limit = 5) {
      LIMIT $2`,
     [userId, limit],
   );
-  console.log('[buildProjectsBlock] rows:', projects?.length, projects?.map((r) => r.title));
   if (!projects.length) return [];
 
   const ids = projects.map((p) => p.id);
