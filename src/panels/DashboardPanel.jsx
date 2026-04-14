@@ -1281,20 +1281,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           onSaveMeetingNotes={async (event, body) => {
             if (!body || !body.trim()) return;
             try {
-              const res = await apiFetch('/api/tile/execute', {
+              const res = await apiFetch('/api/calendar-notes/post', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
                 body: JSON.stringify({
-                  type: 'note',
-                  payload: {
-                    title: `${event.title || 'Meeting'} — notes`,
-                    body,
-                    entity_name: event.entityName || null,
-                  },
+                  eventId: event.id,
+                  eventTitle: event.title,
+                  eventStart: event.startTime || event.start,
+                  eventEnd:   event.endTime   || event.end,
+                  accountEmail: event.accountEmail || '',
+                  postNote: body,
                 }),
               });
-              const data = await res.json().catch(() => ({}));
-              if (!res.ok || !data.success) {
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
                 setActiveTile((prev) => prev ? { ...prev, error: data.error || `HTTP ${res.status}` } : prev);
                 return;
               }

@@ -66,6 +66,41 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
   });
 
   /**
+   * POST /api/calendar-notes/post
+   * Narrow endpoint for the active-zone meeting-notes flow: saves
+   * post_note for a completed event. Body: { eventId, eventTitle,
+   * eventStart, eventEnd, accountEmail, postNote }.
+   */
+  router.post('/api/calendar-notes/post', authenticateToken, logger.tool('postCalendarNote'), async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { eventId, eventTitle, eventStart, eventEnd, accountEmail, postNote } = req.body || {};
+      if (!eventId)           return res.status(400).json({ error: 'eventId required' });
+      if (!postNote || !String(postNote).trim()) return res.status(400).json({ error: 'postNote required' });
+
+      const note = await db.upsertCalendarNotePost(
+        userId, eventId, eventTitle || null, eventStart || null,
+        eventEnd || null, accountEmail || null, String(postNote),
+      );
+
+      try { await writeAudit({ userId, entityType: 'calendar_note', entityId: eventId, action: 'updated', before: null, after: note, requestId: req.requestId }); } catch {}
+
+      try {
+        await db.logMemory({
+          userId, tool: 'calendar_note',
+          content: `Captured outcome note for event: "${eventTitle || eventId}"`,
+          metadata: { eventId, event_title: eventTitle, via: 'active_zone' },
+        });
+      } catch (e) { logger.error('memory.calendarNote.failed', { requestId: req.requestId, userId, error: e.message }); }
+
+      return res.json({ success: true, note });
+    } catch (err) {
+      logger.error('calendarNotes.post.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
    * GET /api/calendar-notes/history
    * Returns past events with notes for the user.
    * Query: search, dateRange (today/week/month/3months/all), limit

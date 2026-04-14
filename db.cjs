@@ -2008,6 +2008,12 @@ async function deleteStaleCalendarEvents(userId, cutoffDate) {
  * Drives the "Add notes" chip on completed events in the active zone.
  */
 async function getMeetingsNeedingNotes(userId) {
+  // A meeting is considered to have notes when EITHER:
+  //   (a) calendar_notes has a populated post_note for this event (primary
+  //       signal, written by POST /api/calendar-notes/post), OR
+  //   (b) a standalone note was created around the meeting window whose
+  //       title/content mentions the event title (legacy / heuristic fallback
+  //       for meetings captured before the dedicated flow existed).
   const { rows } = await pool.query(
     `SELECT
        ce.id,
@@ -2022,6 +2028,13 @@ async function getMeetingsNeedingNotes(userId) {
        AND ce.end_time < NOW()
        AND ce.end_time > NOW() - INTERVAL '4 hours'
        AND ce.all_day = FALSE
+       AND NOT EXISTS (
+         SELECT 1 FROM calendar_notes cn
+         WHERE cn.user_id = $1
+           AND cn.event_id = ce.id
+           AND cn.post_note IS NOT NULL
+           AND cn.post_note <> ''
+       )
        AND NOT EXISTS (
          SELECT 1 FROM notes n
          WHERE n.user_id = $1
@@ -4824,6 +4837,33 @@ async function getCalendarNote(userId, eventId) {
   return rows[0] || null;
 }
 
+/**
+ * Positional-arg helper for saving a post-meeting note. Narrower than
+ * upsertCalendarNote (handles post_note only, requires event metadata)
+ * — intended for the active-zone meeting notes flow.
+ */
+async function upsertCalendarNotePost(userId, eventId, eventTitle, eventStart, eventEnd, accountEmail, postNote) {
+  const { rows } = await pool.query(
+    `INSERT INTO calendar_notes
+       (user_id, event_id, event_title, event_start, event_end, source_account, post_note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (user_id, event_id)
+     DO UPDATE SET
+       event_title    = COALESCE(EXCLUDED.event_title,    calendar_notes.event_title),
+       event_start    = COALESCE(EXCLUDED.event_start,    calendar_notes.event_start),
+       event_end      = COALESCE(EXCLUDED.event_end,      calendar_notes.event_end),
+       source_account = COALESCE(EXCLUDED.source_account, calendar_notes.source_account),
+       post_note      = EXCLUDED.post_note,
+       updated_at     = NOW()
+     RETURNING id, user_id AS "userId", event_id AS "eventId", event_title AS "eventTitle",
+               event_start AS "eventStart", event_end AS "eventEnd", source_account AS "sourceAccount",
+               pre_note AS "preNote", post_note AS "postNote", post_alert_sent AS "postAlertSent",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [userId, eventId, eventTitle || null, eventStart || null, eventEnd || null, accountEmail || null, postNote],
+  );
+  return rows[0];
+}
+
 async function upsertCalendarNote(userId, eventId, fields) {
   const { eventTitle, eventStart, eventEnd, sourceAccount, preNote, postNote } = fields;
   const { rows } = await pool.query(
@@ -5070,6 +5110,7 @@ module.exports = {
   DEFAULT_CADENCE_CONFIGS,
   getCalendarNote,
   upsertCalendarNote,
+  upsertCalendarNotePost,
   getCalendarNotesHistory,
   getCalendarNotesForAI,
   getRecentlyEndedEventsForAlerts,
