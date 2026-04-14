@@ -165,5 +165,6 @@ Full spec: /docs/design-system.md
 - docs/dizon-os-architecture-v1.md — Core system architecture, six layers, system principles (Ray, Apr 13)
 - docs/system-review-apr13.md — Security audit findings, engineering rules, strategic impact (Ray, Apr 13)
 - docs/aria-leave-now-mvp.md — Aria "Leave Now" feature spec. Location + calendar + live traffic → proactive departure alerts. The magic feature. (Ray + Lyle, Apr 13)
+- docs/dizon-entity-workspace-spec-v1.md — Entity workspace V1/V2 spec. Projects, tasks, checklists, notes — collaborative execution inside entities. Lightweight, not Asana. (Ray, Apr 14)
 
 These documents are the source of truth for system design decisions. Read before making architectural changes.
