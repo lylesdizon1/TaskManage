@@ -19,7 +19,7 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../guardrails/logger.cjs');
 
-const VALID_TYPES = new Set(['task', 'event', 'default_chat']);
+const VALID_TYPES = new Set(['task', 'event', 'project', 'default_chat']);
 const VALID_PRIORITY = new Set(['low', 'medium', 'high']);
 const VALID_CONFIDENCE = new Set(['high', 'medium', 'low']);
 
@@ -52,20 +52,28 @@ module.exports = function createAriaDraftRouter({ authenticateToken }) {
     const today = req.body?.today || new Intl.DateTimeFormat('en-CA', {
       timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(new Date());
+    const userEntities = Array.isArray(req.body?.entities) ? req.body.entities : [];
+    const entityListStr = userEntities.length
+      ? userEntities.map((e) => `- ${e.name}`).join('\n')
+      : '(none)';
 
     const system = 'You classify a single user message for a personal productivity assistant. Output ONLY one JSON object. No prose.';
     const prompt =
 `Today is ${today} (${tz}).
+
+User's entities (workspaces):
+${entityListStr}
 
 HARD RULES — these override everything else:
 1. If the message contains "remind me", "reminder", "don't forget", "don't let me forget" → ALWAYS return {"type": "task"}. Never event.
 2. If the message contains "send", "email", "message", "reach out", "reply" → ALWAYS return {"type": "default_chat"}. Never task or event.
 3. "Call X" alone with no date/time → task.
 4. "Call X at [time]" or "meeting with X" → event.
+5. "Create a project", "set up a project", "make a [X] project", "new project" → ALWAYS return {"type": "project"}. Never task or event.
 
 These rules are absolute. Do not override them based on other context in the message.
 
-Classify the user message into exactly one of three buckets:
+Classify the user message into exactly one of four buckets:
 
 1) "task" — todos, reminders, things to do.
    Output: {"type":"task","title":string,"due_date":"YYYY-MM-DD"|null,"due_time":"HH:MM"|null,"priority":"low"|"medium"|"high"|null,"confidence":"high"|"medium"|"low"}
@@ -74,7 +82,11 @@ Classify the user message into exactly one of three buckets:
 2) "event" — meetings, calls, calendar items with a time.
    Output: {"type":"event","title":string,"start_time":"YYYY-MM-DDTHH:MM:SS","duration_minutes":number,"confidence":"high"|"medium"|"low"}
 
-3) "default_chat" — anything else (questions, chitchat, lookups).
+3) "project" — collaborative project workspaces inside an entity.
+   Output: {"type":"project","title":string,"entity_name":string|null,"description":string,"confidence":"high"|"medium"|"low"}
+   For entity_name: match (case-insensitive) against the entity list above when the message mentions one (e.g. "QA project for Careific" → entity_name: "Careific"). If no entity is named or no match found, set entity_name to null. Description is optional — set to "" if not specified.
+
+4) "default_chat" — anything else (questions, chitchat, lookups).
    Output: {"type":"default_chat"}
 
 Rules:
@@ -139,6 +151,23 @@ User message: ${message}`;
         if (!title || !start_time) return res.json({ type: 'default_chat' });
         const duration_minutes = Number.isFinite(parsed.duration_minutes) ? Math.max(5, Math.min(parsed.duration_minutes, 12 * 60)) : 60;
         return res.json({ type: 'event', title, start_time, duration_minutes, confidence });
+      }
+
+      if (parsed.type === 'project') {
+        const title = typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 200) : '';
+        if (!title) return res.json({ type: 'default_chat' });
+        const description = typeof parsed.description === 'string' ? parsed.description.trim().slice(0, 1000) : '';
+        // Resolve entity_name → entity_id via the user's actual entity list
+        // (case-insensitive). If no match, return null id and let the client
+        // surface "No entity" so the user knows to clarify.
+        let entity_id = null;
+        let entity_name = null;
+        const claimed = typeof parsed.entity_name === 'string' ? parsed.entity_name.trim() : '';
+        if (claimed) {
+          const match = userEntities.find((e) => (e.name || '').toLowerCase() === claimed.toLowerCase());
+          if (match) { entity_id = match.id; entity_name = match.name; }
+        }
+        return res.json({ type: 'project', title, entity_id, entity_name, description, confidence });
       }
 
       return res.json({ type: 'default_chat' });
