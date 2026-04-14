@@ -19,7 +19,7 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../guardrails/logger.cjs');
 
-const VALID_TYPES = new Set(['task', 'event', 'project', 'default_chat']);
+const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'default_chat']);
 const VALID_PRIORITY = new Set(['low', 'medium', 'high']);
 const VALID_CONFIDENCE = new Set(['high', 'medium', 'low']);
 
@@ -56,6 +56,10 @@ module.exports = function createAriaDraftRouter({ authenticateToken }) {
     const entityListStr = userEntities.length
       ? userEntities.map((e) => `- ${e.name}`).join('\n')
       : '(none)';
+    const userProjects = Array.isArray(req.body?.projects) ? req.body.projects : [];
+    const projectListStr = userProjects.length
+      ? userProjects.map((p) => `- ${p.title}${p.entityName ? ` (entity: ${p.entityName})` : ''}`).join('\n')
+      : '(none)';
 
     const system = 'You classify a single user message for a personal productivity assistant. Output ONLY one JSON object. No prose.';
     const prompt =
@@ -64,12 +68,16 @@ module.exports = function createAriaDraftRouter({ authenticateToken }) {
 User's entities (workspaces):
 ${entityListStr}
 
+User's active projects:
+${projectListStr}
+
 HARD RULES — these override everything else:
 1. If the message contains "remind me", "reminder", "don't forget", "don't let me forget" → ALWAYS return {"type": "task"}. Never event.
 2. If the message contains "send", "email", "message", "reach out", "reply" → ALWAYS return {"type": "default_chat"}. Never task or event.
 3. "Call X" alone with no date/time → task.
 4. "Call X at [time]" or "meeting with X" → event.
 5. "Create a project", "set up a project", "make a [X] project", "new project" → ALWAYS return {"type": "project"}. Never task or event.
+6. "Add a task to [project]", "create a task for [project]", "add task under [project]", "add [X] to [project name]" where the named project matches the active projects list → ALWAYS return {"type": "project_task"}. Never task or event. If no project matches, return {"type": "default_chat"}.
 
 These rules are absolute. Do not override them based on other context in the message.
 
@@ -86,7 +94,11 @@ Classify the user message into exactly one of four buckets:
    Output: {"type":"project","title":string,"entity_name":string|null,"description":string,"confidence":"high"|"medium"|"low"}
    For entity_name: match (case-insensitive) against the entity list above when the message mentions one (e.g. "QA project for Careific" → entity_name: "Careific"). If no entity is named or no match found, set entity_name to null. Description is optional — set to "" if not specified.
 
-4) "default_chat" — anything else (questions, chitchat, lookups).
+4) "project_task" — a task created inside an existing active project.
+   Output: {"type":"project_task","title":string,"project_name":string,"description":string,"confidence":"high"|"medium"|"low"}
+   For project_name: match (case-insensitive) against the active projects list above. Only return this type when a project matches. If no project matches, return {"type":"default_chat"}. Description is optional — set to "" if not specified.
+
+5) "default_chat" — anything else (questions, chitchat, lookups).
    Output: {"type":"default_chat"}
 
 Rules:
@@ -151,6 +163,29 @@ User message: ${message}`;
         if (!title || !start_time) return res.json({ type: 'default_chat' });
         const duration_minutes = Number.isFinite(parsed.duration_minutes) ? Math.max(5, Math.min(parsed.duration_minutes, 12 * 60)) : 60;
         return res.json({ type: 'event', title, start_time, duration_minutes, confidence });
+      }
+
+      if (parsed.type === 'project_task') {
+        const title = typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 200) : '';
+        if (!title) return res.json({ type: 'default_chat' });
+        const description = typeof parsed.description === 'string' ? parsed.description.trim().slice(0, 1000) : '';
+        const claimed = typeof parsed.project_name === 'string' ? parsed.project_name.trim() : '';
+        if (!claimed) return res.json({ type: 'default_chat' });
+        // Resolve project_name → project_id + entity_id via the user's
+        // active project list (case-insensitive). If no match, downgrade
+        // so the client can ask "Which project?".
+        const match = userProjects.find((p) => (p.title || '').toLowerCase() === claimed.toLowerCase());
+        if (!match) return res.json({ type: 'project_task', title, project_id: null, project_name: null, entity_id: null, entity_name: null, description, confidence });
+        return res.json({
+          type: 'project_task',
+          title,
+          project_id: match.id,
+          project_name: match.title,
+          entity_id: match.entityId,
+          entity_name: match.entityName || null,
+          description,
+          confidence,
+        });
       }
 
       if (parsed.type === 'project') {

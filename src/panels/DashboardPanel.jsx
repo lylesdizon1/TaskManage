@@ -7,6 +7,7 @@ import { parseActionDraft } from '../utils/parseActionDraft.js';
 import TaskDraftTile from '../components/command-center/TaskDraftTile.jsx';
 import EventDraftTile from '../components/command-center/EventDraftTile.jsx';
 import ProjectDraftTile from '../components/command-center/ProjectDraftTile.jsx';
+import ProjectTaskDraftTile from '../components/command-center/ProjectTaskDraftTile.jsx';
 
 // Inline-styled markdown components so assistant bubbles keep the
 // current typography (Manrope 15px / 1.6 line-height) and don't
@@ -672,8 +673,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const today = new Intl.DateTimeFormat('en-CA', {
         timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(new Date());
-      const draft = await parseActionDraft({ apiFetch, authToken, message: text, timezone: userTZ, today, entities });
-      if (draft && (draft.type === 'task' || draft.type === 'event' || draft.type === 'project')) {
+      const draft = await parseActionDraft({ apiFetch, authToken, message: text, timezone: userTZ, today, entities, projects: briefContext?.projects });
+      if (draft && (draft.type === 'task' || draft.type === 'event' || draft.type === 'project' || draft.type === 'project_task')) {
         // Project with no resolved entity → ask for clarification, no tile.
         if (draft.type === 'project' && !draft.entity_id) {
           const now = new Date().toISOString();
@@ -685,9 +686,21 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           setCcSending(false);
           return;
         }
+        // Project task with no resolved project → ask for clarification, no tile.
+        if (draft.type === 'project_task' && !draft.project_id) {
+          const now = new Date().toISOString();
+          setCcMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: 'Which project should I add this task to?', createdAt: now, ts: Date.now() },
+          ]);
+          ccAbortRef.current = null;
+          setCcSending(false);
+          return;
+        }
         let ack;
         if (draft.type === 'task') ack = draft.confidence === 'high' ? "Got it — here's the task" : "Here's a task draft";
         else if (draft.type === 'event') ack = draft.confidence === 'high' ? "Got it — here's the event" : "Here's the event draft";
+        else if (draft.type === 'project_task') ack = `I drafted a task for ${draft.project_name}: ${draft.title}. Confirm to create it.`;
         else ack = `I drafted a new project for ${draft.entity_name}: ${draft.title}. Confirm to create it.`;
         const tileId = `tile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
         let payload;
@@ -698,6 +711,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         } else if (draft.type === 'event') {
           role = 'event_draft';
           payload = { title: draft.title, start_time: draft.start_time, duration_minutes: draft.duration_minutes || 60 };
+        } else if (draft.type === 'project_task') {
+          role = 'project_task_draft';
+          payload = {
+            title: draft.title,
+            project_id: draft.project_id,
+            project_name: draft.project_name,
+            entity_id: draft.entity_id,
+            entity_name: draft.entity_name,
+            description: draft.description || '',
+          };
         } else {
           role = 'project_draft';
           payload = { title: draft.title, entity_id: draft.entity_id, entity_name: draft.entity_name, description: draft.description || '' };
@@ -997,6 +1020,47 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const tile = activeTile;
     if (!tile) return;
     const p = tile.payload || {};
+
+    // Project-task tiles bypass /api/tile/execute and POST /api/project-tasks directly.
+    if (tile.type === 'project_task') {
+      if (!p.project_id || !p.entity_id) {
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: 'No project selected' } : prev));
+        return;
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const res = await apiFetch('/api/project-tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ project_id: p.project_id, entity_id: p.entity_id, title: p.title, description: p.description || '' }),
+          signal: controller.signal,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.task) {
+          setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${res.status}` } : prev));
+          return;
+        }
+        const now = new Date().toISOString();
+        setCcMessages((prev) => [
+          ...prev,
+          { role: 'system', content: `Task created — ${p.title || 'untitled'}${p.project_name ? ` · ${p.project_name}` : ''}`, createdAt: now, ts: Date.now() },
+          { role: 'assistant', content: 'Task created. Want to add checklist items?', createdAt: now, ts: Date.now() },
+        ]);
+        setActiveZoneState('success');
+        setTimeout(() => {
+          setActiveTile(null);
+          setActiveZoneState('empty');
+          fetchBriefContext();
+        }, 2000);
+      } catch (err) {
+        const msg = err?.name === 'AbortError' ? 'Request timed out — tap Retry.' : (err.message || 'Network error');
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: msg } : prev));
+      } finally {
+        clearTimeout(timeout);
+      }
+      return;
+    }
 
     // Project tiles bypass /api/tile/execute and POST /api/projects directly.
     if (tile.type === 'project') {
@@ -2227,13 +2291,14 @@ function ActiveZone({
   if (state === 'tile' && activeTile) {
     const Tile = activeTile.role === 'task_draft' ? TaskDraftTile
       : activeTile.role === 'project_draft' ? ProjectDraftTile
+      : activeTile.role === 'project_task_draft' ? ProjectTaskDraftTile
       : EventDraftTile;
     return (
       <div style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
           <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {activeTile.type === 'task' ? 'Task draft' : activeTile.type === 'project' ? 'Project draft' : 'Event draft'}
+            {activeTile.type === 'task' ? 'Task draft' : activeTile.type === 'project' ? 'Project draft' : activeTile.type === 'project_task' ? 'Project task draft' : 'Event draft'}
           </span>
         </div>
         <Tile
