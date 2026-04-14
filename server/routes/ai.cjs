@@ -283,7 +283,6 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       const fullSystem = clientPrompt
         ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + serverBlocks + ctx.contextBlock
         : ctx.systemPrompt;
-      console.log('[ai.chat] systemPrompt includes ACTIVE PROJECTS:', fullSystem.includes('ACTIVE PROJECTS'), 'clientPrompt?', !!clientPrompt);
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');

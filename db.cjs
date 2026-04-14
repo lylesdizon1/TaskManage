@@ -5397,7 +5397,6 @@ async function deleteProjectNote(id) {
  *    recentNote: "…"|null}            // newest note body, truncated 100 chars
  */
 async function getProjectContextForUser(userId, limit = 5) {
-  console.log('[getProjectContextForUser] userId:', userId);
   // Step 1: project rollup (counts + identity).
   // Entity-access paths covered (mirrors the broader visibility surface
   // used elsewhere in the app, plus legacy fallbacks):
@@ -5433,7 +5432,6 @@ async function getProjectContextForUser(userId, limit = 5) {
      LIMIT $2`,
     [userId, limit],
   );
-  console.log('[getProjectContextForUser] rows:', projects?.length, JSON.stringify(projects?.map((r) => r.title)));
   if (!projects.length) return [];
 
   const ids = projects.map((p) => p.id);
