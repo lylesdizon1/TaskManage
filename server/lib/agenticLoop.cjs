@@ -110,6 +110,20 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         ? { ...toolUse.input, ...gateDecision.overrides }
         : toolUse.input;
 
+      // If the gate says the tool was already executed elsewhere (e.g. the
+      // user confirmed via WhatsApp and the webhook handler ran the tool),
+      // skip executeTool and inject a synthetic success result so the model
+      // can generate its follow-up text without double execution.
+      if (gateDecision?.alreadyExecuted) {
+        const synthetic = { success: true, already_executed: true, tool: toolUse.name };
+        resultContent = JSON.stringify(synthetic);
+        toolSummaries.push({ tool: toolUse.name, success: true, result: synthetic });
+        if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result: synthetic });
+        try { await logAction?.({ eventType: 'tool_executed_elsewhere', toolName: toolUse.name, input: effectiveInput, output: synthetic, status: 'success' }); } catch {}
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent });
+        continue;
+      }
+
       try {
         const result = await executeTool(toolUse.name, effectiveInput, userId);
         resultContent = typeof result === 'string' ? result : JSON.stringify(result);

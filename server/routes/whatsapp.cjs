@@ -50,6 +50,7 @@ const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
+const { resolveWebWaiter } = require('./ai.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 /** Derive a short user-facing code from a confirmation ID. */
@@ -157,6 +158,23 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           if (pending && codeFromConfirmId(pending.id) === code) {
             const nextStatus = approved ? 'approved' : 'rejected';
             await db.updatePendingConfirmationStatus(pending.id, userId, nextStatus).catch(() => {});
+
+            // If a web SSE turn is simultaneously waiting on this same
+            // pending row, resolve its waiter with alreadyExecuted so the
+            // loop unblocks without re-running the tool. Returns false
+            // (no-op) when there's no overlapping web turn.
+            try {
+              resolveWebWaiter(pending.id, {
+                action: approved ? 'allow' : 'deny',
+                alreadyExecuted: true,
+                overrides: {},
+                reason: approved ? undefined : 'user_rejected',
+                message: approved ? undefined : `User cancelled ${pending.toolName}.`,
+              });
+            } catch (e) {
+              logger.error('whatsapp.confirm.resolveWebWaiter.failed', { userId, error: e.message });
+            }
+
             await db.logAgentAction({
               userId,
               eventType: approved ? 'confirmation_approved' : 'confirmation_rejected',

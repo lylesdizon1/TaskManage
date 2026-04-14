@@ -67,6 +67,21 @@ const logger = require('../../guardrails/logger.cjs');
 const webConfirmWaiters = new Map();
 
 /**
+ * Resolve a paused web agentic-loop waiter from outside this module — used
+ * by the WhatsApp webhook when a YES/NO reply confirms a pending row that
+ * a web SSE turn is simultaneously waiting on, so the loop unpauses without
+ * executing the tool a second time.
+ */
+function resolveWebWaiter(confirmId, resolution) {
+  const waiter = webConfirmWaiters.get(confirmId);
+  if (!waiter) return false;
+  clearTimeout(waiter.timeout);
+  webConfirmWaiters.delete(confirmId);
+  waiter.resolve(resolution);
+  return true;
+}
+
+/**
  * Factory function that creates the AI router with all chat and proxy endpoints.
  *
  * @param {Object} deps - Injected dependencies.
@@ -81,7 +96,7 @@ const webConfirmWaiters = new Map();
  * before being passed into agenticLoop. This module does not implement tool
  * logic directly; it injects executeTool into agenticLoop and handles transport.
  */
-module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
+function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   // ── GCal token cache (5-minute TTL per user) ───────────────────────────────
@@ -474,4 +489,8 @@ module.exports = function createAiRouter({ authenticateToken, db, loadGcalTokens
   });
 
   return router;
-};
+}
+
+module.exports = createAiRouter;
+module.exports.createAiRouter = createAiRouter;
+module.exports.resolveWebWaiter = resolveWebWaiter;
