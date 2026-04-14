@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus } = require('../utils/integrations.cjs');
-const { fetchCalendarWindow } = require('../lib/buildAgenticContext.cjs');
+const { fetchCalendarWindow, localMidnightUtc } = require('../lib/buildAgenticContext.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
@@ -37,14 +37,29 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     const todayTasks = tasks.filter((t) => !t.completed && t.dueDate === todayStr);
     const highPriority = tasks.filter((t) => !t.completed && t.priority === 'high');
 
-    // Fetch calendar events for today from ALL connected accounts (cached 5min)
+    // Fetch calendar events for today — DB cache first, live fallback.
     let calendarEvents = [];
     try {
-      calendarEvents = await fetchCalendarWindow({
-        userId, tz, days: 1,
-        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
-        logger, requestId,
-      });
+      if (db.getCalendarEventsForUser) {
+        try {
+          const startUtc = localMidnightUtc(tz, 0);
+          const endUtc   = localMidnightUtc(tz, 1);
+          const cached = await db.getCalendarEventsForUser(userId, startUtc, endUtc);
+          if (cached && cached.length > 0) {
+            calendarEvents = cached.map((e) => ({
+              title: (e.title || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+              start: e.startTime ? new Date(e.startTime).toISOString() : '',
+            }));
+          }
+        } catch { /* silent */ }
+      }
+      if (calendarEvents.length === 0) {
+        calendarEvents = await fetchCalendarWindow({
+          userId, tz, days: 1,
+          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+          logger, requestId,
+        });
+      }
     } catch (calErr) {
       logger.error('morningBrief.calendarFetch.failed', { requestId, userId, error: calErr.message });
     }

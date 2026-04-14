@@ -48,7 +48,7 @@
 const express = require('express');
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
-const { fetchCalendarWindow } = require('../lib/buildAgenticContext.cjs');
+const { fetchCalendarWindow, localMidnightUtc } = require('../lib/buildAgenticContext.cjs');
 
 /**
  * Compute the user's local hour, human-readable time, and time-state label.
@@ -227,15 +227,31 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       const todayTasks = activeTasks.filter(t => t.dueDate === todayStr).map(t => t.title).join(', ') || 'None';
       const notes = await db.getPrivateNotesForAI(userId);
 
-      // Fetch calendar events server-side from ALL connected accounts (cached 5min)
+      // Fetch calendar events: DB cache first, live GCal fallback.
       let calendarEventStr = data?.events || 'None';
       try {
         const userTz = req.user.timezone || 'America/Los_Angeles';
-        const allEvents = await fetchCalendarWindow({
-          userId, tz: userTz, days: 1,
-          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
-          logger, requestId: req.requestId,
-        });
+        let allEvents = [];
+        if (db.getCalendarEventsForUser) {
+          try {
+            const startUtc = localMidnightUtc(userTz, 0);
+            const endUtc   = localMidnightUtc(userTz, 1);
+            const cached = await db.getCalendarEventsForUser(userId, startUtc, endUtc);
+            if (cached && cached.length > 0) {
+              allEvents = cached.map((e) => ({
+                title: (e.title || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+                start: e.startTime ? new Date(e.startTime).toISOString() : '',
+              }));
+            }
+          } catch { /* silent — fall through to live */ }
+        }
+        if (allEvents.length === 0) {
+          allEvents = await fetchCalendarWindow({
+            userId, tz: userTz, days: 1,
+            loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+            logger, requestId: req.requestId,
+          });
+        }
         if (allEvents.length > 0) {
           calendarEventStr = allEvents.map((e) => {
             if (!e.start || !e.start.includes('T')) return e.title;
@@ -344,14 +360,31 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       logger.error('brief.context.tasks.failed', { requestId: req.requestId, userId, error: e.message });
     }
 
-    // Events
+    // Events — DB-first, fall back to live fetchCalendarWindow on empty/err.
     let completed = [], live = [], upcoming = [];
     try {
-      const events = await fetchCalendarWindow({
-        userId, tz: userTz, days: 1,
-        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
-        logger, requestId: req.requestId,
-      });
+      let events = [];
+      if (db.getCalendarEventsForUser) {
+        try {
+          const startUtc = localMidnightUtc(userTz, 0);
+          const endUtc   = localMidnightUtc(userTz, 1);
+          const cached = await db.getCalendarEventsForUser(userId, startUtc, endUtc);
+          if (cached && cached.length > 0) {
+            events = cached.map((e) => ({
+              title: e.title || '(No title)',
+              start: e.startTime ? new Date(e.startTime).toISOString() : '',
+              end:   e.endTime   ? new Date(e.endTime).toISOString()   : '',
+            }));
+          }
+        } catch { /* silent fallback */ }
+      }
+      if (events.length === 0) {
+        events = await fetchCalendarWindow({
+          userId, tz: userTz, days: 1,
+          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+          logger, requestId: req.requestId,
+        });
+      }
       for (const ev of (events || [])) {
         const bucket = classifyEvent(ev, nowMs);
         const entry = { title: ev.title, start: ev.start, end: ev.end };

@@ -21,6 +21,26 @@ const calendarCache = new Map();
 const CALENDAR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
+ * Return a Date corresponding to the start of the user's local day
+ * (00:00 in `tz`) plus an optional offset in days. The returned Date
+ * is the exact UTC instant — safe to pass to Postgres TIMESTAMPTZ
+ * comparisons regardless of the server's local timezone.
+ *
+ * Uses the noon-UTC trick (same approach as the fetchCalendarWindow
+ * window math) to stay DST-safe.
+ */
+function localMidnightUtc(tz, offsetDays = 0) {
+  const userTz = tz || 'America/Los_Angeles';
+  const todayLocal = new Intl.DateTimeFormat('en-CA', {
+    timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
+  const noonLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: userTz }));
+  const offsetMs = noonUtc.getTime() - noonLocal.getTime();
+  return new Date(noonUtc.getTime() - 12 * 3600000 + offsetMs + offsetDays * 86400000);
+}
+
+/**
  * Fetch upcoming GCal events for the given window, spanning all connected
  * accounts. Returns an array sorted by start time. Results are cached for
  * 5 minutes per (userId, tz, days).
@@ -126,13 +146,35 @@ async function buildAgenticContext(opts) {
   const recentClassifiedLimit = inboxMode ? 50 : 20;
   const importantUnreadLimit  = inboxMode ? 20 : 10;
 
+  // Calendar events: read from the synced calendar_events cache first
+  // (populated by the 15-min sync cron). Fall back to live fetchCalendarWindow
+  // if the cache is empty (e.g. user just connected GCal, sync hasn't run).
+  const calendarEventsPromise = (async () => {
+    if (db.getCalendarEventsForUser) {
+      try {
+        const startUtc = localMidnightUtc(tz, 0);
+        const endUtc   = localMidnightUtc(tz, 7);
+        const cached = await db.getCalendarEventsForUser(userId, startUtc, endUtc);
+        if (cached && cached.length > 0) {
+          return cached
+            .map((ev) => ({
+              title: (ev.title || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
+              start: ev.startTime ? new Date(ev.startTime).toISOString() : '',
+            }))
+            .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+        }
+      } catch { /* silent — fall through to live fetch */ }
+    }
+    return fetchCalendarWindow(opts);
+  })();
+
   const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
     db.getRecentMemories(userId, 20).catch(() => []),
     db.getCalendarNotesForAI(userId).catch(() => []),
-    fetchCalendarWindow(opts),
+    calendarEventsPromise,
     db.getUserLearnings ? db.getUserLearnings(userId).catch(() => []) : Promise.resolve([]),
     db.getImportantUnread ? db.getImportantUnread(userId, emailContextMinRank).catch(() => []) : Promise.resolve([]),
     db.getRecentClassifications ? db.getRecentClassifications(userId, recentClassifiedLimit).catch(() => []) : Promise.resolve([]),
@@ -267,4 +309,4 @@ function buildLearningsBlock(rules, patterns) {
   return out;
 }
 
-module.exports = { buildAgenticContext, fetchCalendarWindow, DECISION_INSTRUCTIONS };
+module.exports = { buildAgenticContext, fetchCalendarWindow, localMidnightUtc, DECISION_INSTRUCTIONS };
