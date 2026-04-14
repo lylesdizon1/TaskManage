@@ -57,6 +57,14 @@ module.exports = function createAriaDraftRouter({ authenticateToken }) {
     const prompt =
 `Today is ${today} (${tz}).
 
+HARD RULES — these override everything else:
+1. If the message contains "remind me", "reminder", "don't forget", "don't let me forget" → ALWAYS return {"type": "task"}. Never event.
+2. If the message contains "send", "email", "message", "reach out", "reply" → ALWAYS return {"type": "default_chat"}. Never task or event.
+3. "Call X" alone with no date/time → task.
+4. "Call X at [time]" or "meeting with X" → event.
+
+These rules are absolute. Do not override them based on other context in the message.
+
 Classify the user message into exactly one of three buckets:
 
 1) "task" — todos, reminders, things to do.
