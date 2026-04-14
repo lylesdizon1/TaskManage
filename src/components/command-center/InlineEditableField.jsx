@@ -103,7 +103,7 @@ export default function InlineEditableField({
           value={draft}
           onChange={(e) => { setDraft(e.target.value); onChange?.(e.target.value); setEditing(false); }}
           onBlur={cancel}
-          style={inputStyle}
+          style={{ ...inputStyle, maxWidth: '220px', width: '100%' }}
         >
           {options?.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
@@ -115,6 +115,7 @@ export default function InlineEditableField({
 
   const htmlType = inputType === 'datetime-local' ? 'datetime-local'
     : inputType === 'date' ? 'date'
+    : inputType === 'time' ? 'time'
     : inputType === 'number' ? 'number'
     : 'text';
 

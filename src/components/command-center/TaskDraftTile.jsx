@@ -47,12 +47,20 @@ export default function TaskDraftTile({ payload = {}, status = 'draft', error, o
           placeholder="What needs doing?"
           disabled={disabled}
         />
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <InlineEditableField
             label="Due date"
             value={payload.due_date || ''}
             onChange={(v) => onChange?.({ due_date: v || null })}
             inputType="date"
+            placeholder="—"
+            disabled={disabled}
+          />
+          <InlineEditableField
+            label="Due time"
+            value={payload.due_time || ''}
+            onChange={(v) => onChange?.({ due_time: v || null })}
+            inputType="time"
             placeholder="—"
             disabled={disabled}
           />

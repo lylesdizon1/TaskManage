@@ -589,7 +589,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           : (draft.confidence === 'high' ? "Got it — here's the event" : "Here's the event draft");
         const tileId = `tile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
         const payload = draft.type === 'task'
-          ? { title: draft.title, due_date: draft.due_date || '', priority: draft.priority || 'medium' }
+          ? { title: draft.title, due_date: draft.due_date || '', due_time: draft.due_time || '', priority: draft.priority || 'medium' }
           : { title: draft.title, start_time: draft.start_time, duration_minutes: draft.duration_minutes || 60 };
         const now = new Date().toISOString();
         setCcMessages((prev) => [
@@ -869,6 +869,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           title: p.title || '',
           due_date: p.due_date || null,
           priority: p.priority || 'medium',
+          ...(p.due_time ? { due_time: p.due_time } : {}),
           ...(p.entity_name ? { entity_name: p.entity_name } : {}),
         },
       };

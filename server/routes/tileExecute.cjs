@@ -38,6 +38,7 @@ module.exports = function createTileExecuteRouter({ authenticateToken, db }) {
           title: payload.title,
           due_date: payload.due_date || undefined,
           priority: payload.priority || 'medium',
+          ...(payload.due_time ? { due_time: payload.due_time } : {}),
           ...(payload.entity_name ? { entity_name: payload.entity_name } : {}),
         };
         if (!toolInput.title) return res.status(400).json({ success: false, error: 'title required' });

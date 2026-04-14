@@ -68,7 +68,8 @@ These rules are absolute. Do not override them based on other context in the mes
 Classify the user message into exactly one of three buckets:
 
 1) "task" — todos, reminders, things to do.
-   Output: {"type":"task","title":string,"due_date":"YYYY-MM-DD"|null,"priority":"low"|"medium"|"high"|null,"confidence":"high"|"medium"|"low"}
+   Output: {"type":"task","title":string,"due_date":"YYYY-MM-DD"|null,"due_time":"HH:MM"|null,"priority":"low"|"medium"|"high"|null,"confidence":"high"|"medium"|"low"}
+   If the message mentions a specific time (e.g. "at 9am", "at 2pm"), extract it as due_time in 24-hour HH:MM format. If no time mentioned, omit due_time.
 
 2) "event" — meetings, calls, calendar items with a time.
    Output: {"type":"event","title":string,"start_time":"YYYY-MM-DDTHH:MM:SS","duration_minutes":number,"confidence":"high"|"medium"|"low"}
@@ -125,8 +126,9 @@ User message: ${message}`;
         const title = typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 200) : '';
         if (!title) return res.json({ type: 'default_chat' });
         const due_date = (typeof parsed.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.due_date)) ? parsed.due_date : null;
+        const due_time = (typeof parsed.due_time === 'string' && /^\d{2}:\d{2}$/.test(parsed.due_time)) ? parsed.due_time : null;
         const priority = VALID_PRIORITY.has(parsed.priority) ? parsed.priority : null;
-        return res.json({ type: 'task', title, due_date, priority, confidence });
+        return res.json({ type: 'task', title, due_date, due_time, priority, confidence });
       }
 
       if (parsed.type === 'event') {
