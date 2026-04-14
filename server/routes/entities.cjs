@@ -16,17 +16,15 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
 
   router.get('/api/entities', authenticateToken, async (req, res) => {
     try {
-      // Admin sees all; others see own + shared
-      const isPrivileged = req.user.role === 'admin' || req.user.role === 'superadmin';
-      const entities = isPrivileged
-        ? await db.getEntities()
-        : await db.getEntitiesForUser(req.user.id);
-      // Add isOwner flag for privileged users (getEntities doesn't compute it)
-      const result = entities.map((e) => ({
-        ...e,
-        isOwner: e.isOwner !== undefined ? e.isOwner : (e.createdBy === req.user.id || isPrivileged),
-      }));
-      return res.json(result);
+      // P0: always scope to the authenticated user + shared entities —
+      // admins and superadmins included. Cross-tenant entity visibility
+      // belongs in a dedicated admin endpoint gated by requireSuperAdmin,
+      // not the user-facing list that feeds dropdowns.
+      const entities = await db.getEntitiesForUser(req.user.id);
+      // getEntitiesForUser already computes isOwner = (created_by = userId)
+      // in SQL, so no client-side isOwner override (which previously flipped
+      // the flag true for admins on other users' rows).
+      return res.json(entities);
     } catch (err) {
       logger.error('entities.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json([]);
