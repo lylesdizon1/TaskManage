@@ -443,7 +443,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
   router.post('/api/chat/confirm', authenticateToken, async (req, res) => {
     try {
       const userId = req.user.id;
-      const { confirm_id, approved, account_email, to_override } = req.body || {};
+      const { confirm_id, approved, account_email, to_override, body_override } = req.body || {};
       if (!confirm_id) return res.status(400).json({ error: 'confirm_id required' });
 
       const pending = await db.getPendingConfirmation(confirm_id, userId);
@@ -458,6 +458,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       const overrides = {};
       if (account_email) overrides.account_email = account_email;
       if (to_override)   overrides.to = to_override;
+      if (typeof body_override === 'string') overrides.body = body_override;
       const resolution = approved
         ? { action: 'allow', overrides }
         : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` };

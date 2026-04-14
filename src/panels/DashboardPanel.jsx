@@ -49,6 +49,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [gmailAccounts, setGmailAccounts] = useState([]);
   const draftFromRef = useRef({});
   const draftToRef = useRef({});
+  const draftBodyRef = useRef({});
   const toast = useToast();
 
   useEffect(() => {
@@ -1170,20 +1171,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           </div>
                         </div>
                         <div style={{ borderTop: '1px solid #e5e7eb' }} />
-                        <div
+                        <textarea
+                          defaultValue={d.body || ''}
+                          onChange={(e) => { draftBodyRef.current[msg.ts] = e.target.value; }}
+                          placeholder="Email body"
                           style={{
+                            display: 'block',
+                            width: '100%',
                             padding: '12px 14px',
-                            fontSize: '14px',
+                            fontFamily: 'Manrope, sans-serif',
+                            fontSize: '13px',
                             lineHeight: '1.55',
                             color: '#1f2937',
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                            maxHeight: '220px',
-                            overflowY: 'auto',
+                            background: 'transparent',
+                            border: 'none',
+                            borderTop: '1px solid transparent',
+                            borderRadius: 0,
+                            outline: 'none',
+                            resize: 'vertical',
+                            minHeight: '80px',
+                            maxHeight: '320px',
+                            boxSizing: 'border-box',
                           }}
-                        >
-                          {d.body || ''}
-                        </div>
+                          onFocus={(e) => { e.target.style.borderTop = '1px solid rgba(79,77,207,0.4)'; }}
+                          onBlur={(e) => { e.target.style.borderTop = '1px solid transparent'; }}
+                        />
                       </div>
                     </div>
                   );
@@ -1195,9 +1207,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     ? (bodyStr.length > 300 ? bodyStr.slice(0, 300) + '…' : bodyStr)
                     : (p.subject || '');
                   // For send_email, look back for the paired email_draft row and
-                  // pull the user's edits (From account + To address) off the refs.
+                  // pull the user's edits (From account + To address + body) off the refs.
                   let accountOverride = null;
                   let toOverride = null;
+                  let bodyOverride = null;
                   if (msg.tool === 'send_email') {
                     for (let k = i - 1; k >= 0; k--) {
                       const prev = ccMessages[k];
@@ -1207,6 +1220,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                         const originalTo = prev.draft?.to || '';
                         if (typeof editedTo === 'string' && editedTo.trim() && editedTo.trim() !== originalTo) {
                           toOverride = editedTo.trim();
+                        }
+                        const editedBody = draftBodyRef.current[prev.ts];
+                        const originalBody = prev.draft?.body || '';
+                        if (typeof editedBody === 'string' && editedBody !== originalBody) {
+                          bodyOverride = editedBody;
                         }
                         break;
                       }
@@ -1222,6 +1240,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           approved,
                           ...(approved && accountOverride ? { account_email: accountOverride } : {}),
                           ...(approved && toOverride ? { to_override: toOverride } : {}),
+                          ...(approved && bodyOverride !== null ? { body_override: bodyOverride } : {}),
                         }),
                       });
                       setCcMessages((prev) => prev.map((m, j) => j === i ? { ...m, status: approved ? 'approved' : 'rejected' } : m));
