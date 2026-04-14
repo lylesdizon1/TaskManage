@@ -415,6 +415,25 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       logger.error('brief.context.emails.failed', { requestId: req.requestId, userId, error: e.message });
     }
 
+    // Meetings that recently ended and don't yet have matching notes.
+    // Non-fatal: surface an empty array if the helper fails or isn't
+    // deployed yet.
+    let meetingsNeedingNotes = [];
+    try {
+      if (db.getMeetingsNeedingNotes) {
+        const rows = await db.getMeetingsNeedingNotes(userId);
+        meetingsNeedingNotes = (rows || []).map((m) => ({
+          id: m.id,
+          title: m.title,
+          startTime: m.startTime,
+          endTime: m.endTime,
+          entityId: m.entityId || null,
+        }));
+      }
+    } catch (e) {
+      logger.error('brief.context.notesNeeded.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+
     const stats = {
       tasksCompletedToday: completedToday.length,
       tasksTotalToday: dueToday.length + completedToday.length,
@@ -428,6 +447,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       tasks: { overdue, dueToday, completedToday },
       events: { completed, live, upcoming },
       emails: { needsAttention },
+      meetingsNeedingNotes,
       stats,
     });
   });

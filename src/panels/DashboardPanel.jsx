@@ -1932,7 +1932,7 @@ function ActiveZone({
       } catch { return ''; }
     };
 
-    const Row = ({ dotColor, label, chip, chipColor, chipBg, actions }) => (
+    const Row = ({ dotColor, label, chip, chipColor, chipBg, onChipClick, actions }) => (
       <div
         style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: '#374151' }}
         className="group"
@@ -1940,7 +1940,18 @@ function ActiveZone({
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor || '#9ca3af', flexShrink: 0 }} />
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
         {chip && (
-          <span style={{ fontSize: 10, color: chipColor || '#6b7280', background: chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, flexShrink: 0 }}>{chip}</span>
+          onChipClick
+            ? (
+              <button
+                onClick={onChipClick}
+                style={{ fontSize: 10, fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 600, color: chipColor || '#6b7280', background: chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, border: 'none', cursor: 'pointer', flexShrink: 0 }}
+              >
+                {chip}
+              </button>
+            )
+            : (
+              <span style={{ fontSize: 10, color: chipColor || '#6b7280', background: chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, flexShrink: 0 }}>{chip}</span>
+            )
         )}
         {actions && actions.length > 0 && (
           <span
@@ -1986,6 +1997,10 @@ function ActiveZone({
     // DONE TODAY — completed tasks + completed events (cap 4)
     const completedTasks = (bc.tasks?.completedToday || []).slice(0, 2);
     const completedEvents = (bc.events?.completed || []).slice(0, 2);
+    const needsNotesList = bc.meetingsNeedingNotes || [];
+    const eventNeedsNotes = (event) =>
+      needsNotesList.some((m) => m.id === event.id || m.title === event.title);
+
     const doneRows = (completedTasks.length + completedEvents.length) === 0
       ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
       : [
@@ -1997,17 +2012,23 @@ function ActiveZone({
               chip="✓" chipColor="#059669" chipBg="rgba(5,150,105,0.12)"
             />
           )),
-          ...completedEvents.map((ev, i) => (
-            <Row
-              key={`dt-e-${i}`}
-              dotColor="#10b981"
-              label={ev.title}
-              chip={formatTime(ev.start)} chipColor="#065f46" chipBg="rgba(5,150,105,0.08)"
-              actions={[
-                { label: 'Notes', onClick: () => onOpenMeetingNotes?.(ev) },
-              ]}
-            />
-          )),
+          ...completedEvents.map((ev, i) => {
+            const needsNotes = eventNeedsNotes(ev);
+            return (
+              <Row
+                key={`dt-e-${i}`}
+                dotColor="#10b981"
+                label={ev.title}
+                chip={needsNotes ? 'Add notes' : formatTime(ev.start)}
+                chipColor={needsNotes ? '#534ab7' : '#065f46'}
+                chipBg={needsNotes ? '#eeedfe' : 'rgba(5,150,105,0.08)'}
+                onChipClick={needsNotes ? () => onOpenMeetingNotes?.(ev) : undefined}
+                actions={[
+                  { label: 'Notes', onClick: () => onOpenMeetingNotes?.(ev) },
+                ]}
+              />
+            );
+          }),
         ];
 
     // UP NEXT — upcoming events + first important unread email (cap 3)

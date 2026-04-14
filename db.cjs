@@ -2000,6 +2000,46 @@ async function deleteStaleCalendarEvents(userId, cutoffDate) {
 }
 
 /**
+ * Meetings that recently ended (in the last 4 hours) for which the user
+ * has NOT already captured notes. "Captured" = a note exists whose
+ * created_at falls within the meeting window + 2 hours and whose
+ * title/content mentions the meeting title. User-scoped.
+ *
+ * Drives the "Add notes" chip on completed events in the active zone.
+ */
+async function getMeetingsNeedingNotes(userId) {
+  const { rows } = await pool.query(
+    `SELECT
+       ce.id,
+       ce.user_id AS "userId",
+       ce.account_email AS "accountEmail",
+       ce.title,
+       ce.start_time AS "startTime",
+       ce.end_time AS "endTime",
+       ce.entity_id AS "entityId"
+     FROM calendar_events ce
+     WHERE ce.user_id = $1
+       AND ce.end_time < NOW()
+       AND ce.end_time > NOW() - INTERVAL '4 hours'
+       AND ce.all_day = FALSE
+       AND NOT EXISTS (
+         SELECT 1 FROM notes n
+         WHERE n.user_id = $1
+           AND n.created_at > ce.start_time
+           AND n.created_at < ce.end_time + INTERVAL '2 hours'
+           AND (
+             n.content ILIKE '%' || ce.title || '%'
+             OR n.title   ILIKE '%' || ce.title || '%'
+           )
+       )
+     ORDER BY ce.end_time DESC
+     LIMIT 5`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
  * List users with at least one enabled Gmail (= GCal) integration row.
  * Used by the sync cron to iterate targets.
  */
@@ -4938,6 +4978,7 @@ module.exports = {
   getCalendarEventsForUser,
   deleteStaleCalendarEvents,
   getUsersWithGcalConnected,
+  getMeetingsNeedingNotes,
   seedEntitiesIfEmpty,
   getTaskById,
   getTasksForUser,
