@@ -1732,6 +1732,90 @@ async function getEntitiesForUser(userId) {
 }
 
 /**
+ * Canonical entity-access query for Phase 1 of the membership system.
+ * Returns every entity visible to the given user via any of three paths:
+ *   1. They created it (`created_by = userId`)
+ *   2. It's marked org-wide and their org matches (`visibility = 'org'`)
+ *   3. They're a member of it via `entity_members`
+ *
+ * Existing call sites keep using getEntitiesForUser for now — this helper
+ * is staged for Phase 2 swap after tests pass.
+ *
+ * @param {string} userId - Authenticated user ID.
+ * @param {string|null} orgId - The user's organization id, or null when
+ *   they have no org (the org clause simply won't match).
+ * @returns {Promise<Array<Object>>} Entities visible to the user.
+ */
+async function getEntitiesForUserWithMembership(userId, orgId) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT e.id, e.name, e.color, e.created_by AS "createdBy", e.created_at AS "createdAt",
+            e.type, e.parent_id AS "parentId", e.shared, e.visibility, e.org_id AS "orgId",
+            e.calendar_id AS "calendarId", e.color_source AS "colorSource",
+            (e.created_by = $1) AS "isOwner"
+     FROM entities e
+     LEFT JOIN entity_members em ON em.entity_id = e.id AND em.user_id = $1
+     WHERE
+       e.created_by = $1
+       OR (e.visibility = 'org' AND e.org_id = $2)
+       OR em.user_id = $1
+     ORDER BY e.name ASC`,
+    [userId, orgId],
+  );
+  return rows;
+}
+
+/** Return all members of an entity (includes user display info for UI). */
+async function getEntityMembers(entityId) {
+  const { rows } = await pool.query(
+    `SELECT em.id, em.entity_id AS "entityId", em.user_id AS "userId",
+            em.role, em.invited_by AS "invitedBy", em.created_at AS "createdAt",
+            u.username, u.display_name AS "displayName", u.email
+     FROM entity_members em
+     LEFT JOIN users u ON u.id = em.user_id
+     WHERE em.entity_id = $1
+     ORDER BY em.created_at ASC`,
+    [entityId],
+  );
+  return rows;
+}
+
+/**
+ * Add a member to an entity. Idempotent on (entity_id, user_id) — conflict
+ * updates the role/invited_by so a re-invite can upgrade a viewer to editor.
+ */
+async function addEntityMember(entityId, userId, role = 'editor', invitedBy = null) {
+  const { rows } = await pool.query(
+    `INSERT INTO entity_members (entity_id, user_id, role, invited_by)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (entity_id, user_id) DO UPDATE
+       SET role = EXCLUDED.role,
+           invited_by = COALESCE(EXCLUDED.invited_by, entity_members.invited_by)
+     RETURNING id, entity_id AS "entityId", user_id AS "userId",
+               role, invited_by AS "invitedBy", created_at AS "createdAt"`,
+    [entityId, userId, role, invitedBy],
+  );
+  return rows[0] || null;
+}
+
+/** Remove a member from an entity. Returns true if a row was deleted. */
+async function removeEntityMember(entityId, userId) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM entity_members WHERE entity_id = $1 AND user_id = $2`,
+    [entityId, userId],
+  );
+  return rowCount > 0;
+}
+
+/** Return the user's role on an entity, or null if they're not a member. */
+async function getEntityMemberRole(entityId, userId) {
+  const { rows } = await pool.query(
+    `SELECT role FROM entity_members WHERE entity_id = $1 AND user_id = $2`,
+    [entityId, userId],
+  );
+  return rows[0]?.role || null;
+}
+
+/**
  * Create a new entity and return the inserted row.
  *
  * @param {Object} entity
@@ -3447,6 +3531,56 @@ async function runMigrations() {
   // ── entity calendar mapping columns ─────────────────────────────────────
   await pool.query(`ALTER TABLE entities ADD COLUMN IF NOT EXISTS calendar_id TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE entities ADD COLUMN IF NOT EXISTS color_source TEXT DEFAULT 'system'`).catch(() => {});
+
+  // ── entity membership Phase 1 ──────────────────────────────────────────
+  // Schema only; no route changes yet. Call sites continue to use
+  // getEntitiesForUser until Phase 2 swaps them to the canonical access
+  // helper.
+  await pool.query(`
+    ALTER TABLE entities
+      ADD COLUMN IF NOT EXISTS visibility TEXT
+      NOT NULL DEFAULT 'private'
+      CHECK (visibility IN ('private', 'org', 'members'))
+  `).catch((err) => console.warn('[migration] entities.visibility:', err.message));
+
+  await pool.query(`
+    ALTER TABLE entities
+      ADD COLUMN IF NOT EXISTS org_id TEXT
+      REFERENCES organizations(id) ON DELETE SET NULL
+  `).catch((err) => console.warn('[migration] entities.org_id:', err.message));
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS entity_members (
+      id          SERIAL PRIMARY KEY,
+      entity_id   TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role        TEXT NOT NULL DEFAULT 'editor'
+                  CHECK (role IN ('owner', 'editor', 'viewer')),
+      invited_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(entity_id, user_id)
+    )
+  `).catch((err) => console.warn('[migration] entity_members table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS entity_members_user_id ON entity_members(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS entity_members_entity_id ON entity_members(entity_id)`).catch(() => {});
+
+  // Backfill: shared=true entities become visibility='org' (membership-free
+  // org-wide visibility). Only touches rows that are still at the private
+  // default so re-runs are no-ops.
+  await pool.query(`
+    UPDATE entities SET visibility = 'org'
+    WHERE shared = TRUE AND visibility = 'private'
+  `).catch((err) => console.warn('[migration] entities.visibility backfill:', err.message));
+
+  // Backfill: creator is always a member (role=owner) of their own entity.
+  // ON CONFLICT DO NOTHING makes this idempotent.
+  await pool.query(`
+    INSERT INTO entity_members (entity_id, user_id, role)
+    SELECT id, created_by, 'owner'
+    FROM entities
+    WHERE created_by IS NOT NULL
+    ON CONFLICT (entity_id, user_id) DO NOTHING
+  `).catch((err) => console.warn('[migration] entity_members creator backfill:', err.message));
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -4658,6 +4792,11 @@ module.exports = {
   deleteUser,
   getEntities,
   getEntitiesForUser,
+  getEntitiesForUserWithMembership,
+  getEntityMembers,
+  addEntityMember,
+  removeEntityMember,
+  getEntityMemberRole,
   getEntityById,
   createEntity,
   updateEntity,
