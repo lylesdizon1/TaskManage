@@ -63,10 +63,11 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
 
   router.put('/api/entities/:id', authenticateToken, async (req, res) => {
     try {
-      // Ownership check for shared entities
+      // Owner-only mutation — no admin/superadmin bypass. Cross-tenant
+      // mutation (if ever needed) belongs in /api/admin/* routes.
       const existing = await db.getEntityById(req.params.id);
       if (!existing) return res.status(404).json({ error: 'Entity not found' });
-      if (existing.createdBy !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+      if (existing.createdBy !== req.user.id) {
         return res.status(403).json({ error: 'You can only edit your own entities' });
       }
       const validTypes = ['business', 'project', 'personal'];
@@ -88,9 +89,10 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
 
   router.delete('/api/entities/:id', authenticateToken, async (req, res) => {
     try {
+      // Owner-only deletion — no admin/superadmin bypass.
       const existing = await db.getEntityById(req.params.id);
       if (!existing) return res.status(404).json({ error: 'Entity not found' });
-      if (existing.createdBy !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+      if (existing.createdBy !== req.user.id) {
         return res.status(403).json({ error: 'Only the owner can delete this entity' });
       }
       await db.deleteEntity(req.params.id, req.user.id);
