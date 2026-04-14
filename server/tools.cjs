@@ -560,9 +560,13 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
 
       // ── CALENDAR ───────────────────────────────────────────────────────
       case 'create_event': {
-        const { title, start_datetime, end_datetime, description: eventDesc, location, attendees } = toolInput;
-        const tokens = await loadGcalTokens(userId, db);
-        if (!tokens) return { success: false, error: 'Google Calendar not connected.' };
+        const { title, start_datetime, end_datetime, description: eventDesc, location, attendees, account_email } = toolInput;
+        // Optional account_email routes to a specific connected Google
+        // account; falls back to the user's default GCal tokens.
+        const tokens = account_email
+          ? await loadGcalTokens(userId, db, account_email)
+          : await loadGcalTokens(userId, db);
+        if (!tokens) return { success: false, error: account_email ? `Google Calendar not connected for ${account_email}.` : 'Google Calendar not connected.' };
         const oauth2 = makeOAuth2Client();
         if (!oauth2) return { success: false, error: 'Google OAuth not configured on server.' };
         oauth2.setCredentials(tokens);

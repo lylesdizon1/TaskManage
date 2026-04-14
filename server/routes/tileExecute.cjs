@@ -46,6 +46,10 @@ module.exports = function createTileExecuteRouter({ authenticateToken, db }) {
           title: payload.title,
           start_datetime: payload.start_datetime,
           end_datetime: payload.end_datetime || undefined,
+          // calendarId from the tile selector → account_email routing for
+          // the GCal tokens lookup. Falls through to default account when
+          // omitted, preserving the prior single-account behavior.
+          ...(payload.calendarId ? { account_email: payload.calendarId } : {}),
         };
         if (!toolInput.title || !toolInput.start_datetime) {
           return res.status(400).json({ success: false, error: 'title and start_datetime required' });

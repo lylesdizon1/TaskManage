@@ -889,6 +889,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           title: p.title || '',
           start_datetime: start,
           end_datetime: endIso,
+          ...(p.calendarId ? { calendarId: p.calendarId } : {}),
         },
       };
     }
@@ -1081,6 +1082,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           onConfirm={() => executeTile(msg)}
                           onCancel={() => dismissTile(msg.id)}
                           onRetry={() => executeTile(msg)}
+                          gmailAccounts={gmailAccounts}
                         />
                       </div>
                     </div>
