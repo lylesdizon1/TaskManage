@@ -704,6 +704,17 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       // ── COMMUNICATION ──────────────────────────────────────────────────
       case 'send_email': {
         const { to, subject, body, account_email } = toolInput || {};
+        // Hard guard: refuse sends with a malformed or missing recipient.
+        // Feeds back to the model as a tool_result so the loop asks the
+        // user for the full address instead of re-attempting the send.
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!to || !emailRegex.test(String(to).trim())) {
+          return {
+            success: false,
+            error: `Invalid recipient address "${to || ''}". Please provide a complete email address (name@domain.com).`,
+            requiresInfo: 'recipient_email',
+          };
+        }
         const { tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'send_email');
         if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}. Reconnect in Settings.` };
         const oauth2 = makeGmailOAuth2Client();
