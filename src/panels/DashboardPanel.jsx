@@ -1280,12 +1280,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           }}
           onSaveMeetingNotes={async (event, body) => {
             if (!body || !body.trim()) return;
+            // Upstream event objects come from different sources (briefContext
+            // events.completed has no id, meetingsNeedingNotes has id). Try a
+            // few common field names, then guard before the network call.
+            const resolvedEventId = event?.id || event?.eventId || event?.event_id || null;
+            if (!resolvedEventId) {
+              setActiveTile((prev) => prev ? { ...prev, error: 'Could not identify this meeting — reload and try again.' } : prev);
+              return;
+            }
             try {
               const res = await apiFetch('/api/calendar-notes/post', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
                 body: JSON.stringify({
-                  eventId: event.id,
+                  eventId: resolvedEventId,
                   eventTitle: event.title,
                   eventStart: event.startTime || event.start,
                   eventEnd:   event.endTime   || event.end,

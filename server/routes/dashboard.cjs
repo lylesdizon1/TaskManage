@@ -371,6 +371,8 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
           const cached = await db.getCalendarEventsForUser(userId, startUtc, endUtc);
           if (cached && cached.length > 0) {
             events = cached.map((e) => ({
+              id: e.id || null,
+              accountEmail: e.accountEmail || null,
               title: e.title || '(No title)',
               start: e.startTime ? new Date(e.startTime).toISOString() : '',
               end:   e.endTime   ? new Date(e.endTime).toISOString()   : '',
@@ -387,7 +389,9 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       }
       for (const ev of (events || [])) {
         const bucket = classifyEvent(ev, nowMs);
-        const entry = { title: ev.title, start: ev.start, end: ev.end };
+        // Preserve id + accountEmail when available so client-side handlers
+        // (e.g. onSaveMeetingNotes) can reference the event unambiguously.
+        const entry = { id: ev.id || null, accountEmail: ev.accountEmail || null, title: ev.title, start: ev.start, end: ev.end };
         if (bucket === 'completed') completed.push(entry);
         else if (bucket === 'live')  live.push(entry);
         else upcoming.push(entry);
