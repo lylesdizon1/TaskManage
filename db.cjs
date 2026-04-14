@@ -3865,6 +3865,8 @@ async function runMigrations() {
     )
   `).catch((err) => console.warn('[migration] memory_facts table:', err.message));
   await pool.query(`CREATE INDEX IF NOT EXISTS memory_facts_user_id ON memory_facts(user_id, strength_score DESC)`).catch(() => {});
+  // Unique index required by upsertMemoryFact's ON CONFLICT (user_id, fact_text).
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique ON memory_facts(user_id, fact_text)`).catch((err) => console.warn('[migration] memory_facts unique:', err.message));
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -5135,6 +5137,73 @@ async function getOutcomeRecordsForUser(userId, limit = 20, offset = 0) {
   return rows;
 }
 
+/** Persist a single enrichment signal on an outcome. Idempotent by default. */
+async function createOutcomeSignal(outcomeId, signalName, signalValue, confidence, modelName) {
+  await pool.query(
+    `INSERT INTO outcome_signals
+       (outcome_id, signal_name, signal_value, confidence, model_name)
+     VALUES ($1, $2, $3::jsonb, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    [outcomeId, signalName, JSON.stringify(signalValue), confidence, modelName],
+  );
+}
+
+/**
+ * Flip follow_up_needed on an outcome_records row and optionally log a
+ * follow-up suggestion as a signal. User-scoped on the UPDATE to prevent
+ * cross-tenant mutation.
+ */
+async function updateOutcomeFollowUp(outcomeId, userId, followUpNeeded, suggestion) {
+  await pool.query(
+    `UPDATE outcome_records
+     SET follow_up_needed = $3, updated_at = NOW()
+     WHERE id = $1 AND user_id = $2`,
+    [outcomeId, userId, followUpNeeded],
+  );
+  if (suggestion) {
+    await pool.query(
+      `INSERT INTO outcome_signals
+         (outcome_id, signal_name, signal_value, confidence, model_name)
+       VALUES ($1, 'follow_up_suggestion', $2::jsonb, 0.8, 'claude-haiku-4-5-20251001')
+       ON CONFLICT DO NOTHING`,
+      [outcomeId, JSON.stringify(suggestion)],
+    );
+  }
+}
+
+/**
+ * Upsert a memory fact keyed on (user_id, fact_text). Repeat observations
+ * bump supporting_count and raise strength_score (capped at 1.0).
+ * `source` is accepted for caller symmetry but not persisted — add a
+ * source column later if provenance becomes important.
+ */
+async function upsertMemoryFact(userId, entityId, factText, factType /*, source */) {
+  await pool.query(
+    `INSERT INTO memory_facts
+       (user_id, entity_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at)
+     VALUES ($1, $2, $3, $4, 1, 0.5, NOW(), NOW())
+     ON CONFLICT (user_id, fact_text)
+     DO UPDATE SET
+       supporting_count = memory_facts.supporting_count + 1,
+       strength_score   = LEAST(1.0, memory_facts.strength_score + 0.1),
+       last_seen_at     = NOW()`,
+    [userId, entityId, factText, factType],
+  );
+}
+
+/** Return strongest memory facts for a user, strength-first. */
+async function getMemoryFactsForUser(userId, limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT fact_text, fact_type, supporting_count, strength_score, last_seen_at
+     FROM memory_facts
+     WHERE user_id = $1
+     ORDER BY strength_score DESC, last_seen_at DESC
+     LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
 /**
  * Recent outcomes with narrative notes — fed into the Aria system prompt
  * so responses reflect what actually happened on prior tasks/events.
@@ -5180,6 +5249,10 @@ module.exports = {
   createOutcomeRecord,
   getOutcomeRecordsForUser,
   getRecentOutcomeContext,
+  createOutcomeSignal,
+  updateOutcomeFollowUp,
+  upsertMemoryFact,
+  getMemoryFactsForUser,
   seedEntitiesIfEmpty,
   getTaskById,
   getTasksForUser,

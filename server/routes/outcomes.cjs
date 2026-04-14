@@ -14,6 +14,7 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const { enrichOutcomeRecord } = require('../lib/outcomeEnrichment.cjs');
 
 const VALID_SOURCE_TYPES = new Set(['task', 'event']);
 const VALID_STATUSES = new Set(['success', 'mixed', 'neutral', 'failed', 'cancelled', 'no_show']);
@@ -51,6 +52,10 @@ module.exports = function createOutcomesRouter({ authenticateToken, db }) {
         followUpBy: followUpBy || null,
         enteredBy: safeEnteredBy,
       });
+
+      // Fire-and-forget Haiku enrichment — never blocks the response.
+      enrichOutcomeRecord(outcome.id, userId, outcome)
+        .catch((err) => console.error('[outcome-enrichment] failed:', err.message));
 
       return res.json({ success: true, outcome });
     } catch (err) {

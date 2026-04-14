@@ -166,7 +166,7 @@ async function buildAgenticContext(opts) {
     return fetchCalendarWindow(opts);
   })();
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes] = await Promise.all([
+  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
@@ -177,6 +177,7 @@ async function buildAgenticContext(opts) {
     db.getImportantUnread ? db.getImportantUnread(userId, emailContextMinRank).catch(() => []) : Promise.resolve([]),
     db.getRecentClassifications ? db.getRecentClassifications(userId, recentClassifiedLimit).catch(() => []) : Promise.resolve([]),
     db.getRecentOutcomeContext ? db.getRecentOutcomeContext(userId, 5).catch(() => []) : Promise.resolve([]),
+    db.getMemoryFactsForUser ? db.getMemoryFactsForUser(userId, 10).catch(() => []) : Promise.resolve([]),
   ]);
 
   const todayStr = getTodayLocal(tz);
@@ -248,15 +249,31 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // tasks/events so Aria can reference outcomes in future responses.
   const outcomesBlock = buildOutcomesBlock(recentOutcomes, tz);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + contextBlock;
+  // Memory facts — durable patterns extracted by the enrichment worker.
+  // Only facts with strength_score >= 0.5 make it in.
+  const factsBlock = buildFactsBlock(memoryFacts);
+
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + contextBlock;
 
   return {
     user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
-    importantUnread, recentClassified, recentOutcomes,
+    importantUnread, recentClassified, recentOutcomes, memoryFacts,
     tz, todayStr, todayDate, currentTime, weekMapStr,
-    profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, decisionInstructions: DECISION_INSTRUCTIONS,
+    profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };
+}
+
+/**
+ * Build a LEARNED PATTERNS block from memory_facts. Filters to facts at
+ * or above 0.5 strength_score (fresh facts start at 0.5 so first-time
+ * facts qualify; casual observations never boosted above 0.5 drop out).
+ */
+function buildFactsBlock(facts) {
+  if (!Array.isArray(facts) || facts.length === 0) return '';
+  const strong = facts.filter((f) => Number(f.strength_score) >= 0.5);
+  if (strong.length === 0) return '';
+  return `\n\nLEARNED PATTERNS\n${strong.map((f) => `- ${f.fact_text}`).join('\n')}`;
 }
 
 /**
