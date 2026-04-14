@@ -21,6 +21,7 @@
 
 const assert = require('node:assert/strict');
 const db = require('../db.cjs');
+const { requireOwnership } = require('../server/middleware/auth.cjs');
 
 // Helpers — simple test runner so we don't take a dependency on jest/vitest.
 const tests = [];
@@ -137,6 +138,33 @@ test('userA (admin) GET tasks → only own tasks visible', async () => {
   assert.ok(rows.some((t) => t.id === taskA.id), 'userA should see their own task');
   assert.equal(rows.every((t) => t.owner === userA.id), true,
     'admin path leaked task belonging to another user');
+});
+
+// ── Tests — admin cannot mutate another user's data via requireOwnership ──
+// Guards against regression of the P0 fix to server/middleware/auth.cjs,
+// where the helper used to return true for any admin regardless of the
+// actual owner field. Feeds the helper a realistic record shape owned by
+// userB and a req object shaped like userA-the-admin.
+
+test('requireOwnership: userA admin CANNOT mutate userB-owned note', async () => {
+  const noteOwnedByB = { id: noteA.id, user_id: userB.id, title: 'B note' };
+  const reqAdminA = { user: { id: userA.id, role: 'admin', entityIds: [] } };
+  assert.equal(requireOwnership(noteOwnedByB, reqAdminA), false,
+    'admin must not pass requireOwnership on another user\'s note');
+});
+
+test('requireOwnership: userA superadmin CANNOT mutate userB-owned note', async () => {
+  const noteOwnedByB = { id: noteA.id, user_id: userB.id, title: 'B note' };
+  const reqSuperA = { user: { id: userA.id, role: 'superadmin', entityIds: [] } };
+  assert.equal(requireOwnership(noteOwnedByB, reqSuperA), false,
+    'superadmin must not pass requireOwnership on another user\'s note');
+});
+
+test('requireOwnership: owner still passes', async () => {
+  const noteOwnedByB = { id: noteA.id, user_id: userB.id, title: 'B note' };
+  const reqUserB = { user: { id: userB.id, role: 'member', entityIds: [] } };
+  assert.equal(requireOwnership(noteOwnedByB, reqUserB), true,
+    'owner must pass requireOwnership');
 });
 
 // ── Runner ─────────────────────────────────────────────────────────────────

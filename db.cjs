@@ -3673,6 +3673,22 @@ async function runMigrations() {
     ON CONFLICT (entity_id, user_id) DO NOTHING
   `).catch((err) => console.warn('[migration] entity_members creator backfill:', err.message));
 
+  // Second pass: entities with created_by IS NULL (pre-migration/seed era).
+  // Only assign an owner when there is exactly one user whose entity_ids
+  // JSONB array contains the entity id — ambiguous cases are left with
+  // no owner rather than guessing (safer: they stay visible only via the
+  // org-visibility path or explicit future member rows).
+  await pool.query(`
+    INSERT INTO entity_members (entity_id, user_id, role)
+    SELECT e.id,
+           (SELECT u.id FROM users u WHERE u.entity_ids::jsonb ? e.id LIMIT 1),
+           'owner'
+    FROM entities e
+    WHERE e.created_by IS NULL
+      AND (SELECT COUNT(*) FROM users u WHERE u.entity_ids::jsonb ? e.id) = 1
+    ON CONFLICT (entity_id, user_id) DO NOTHING
+  `).catch((err) => console.warn('[migration] entity_members null-created_by backfill:', err.message));
+
   // ── calendar_events cache (Session 1) ──────────────────────────────────
   // Local mirror of each user's GCal events so dashboard / brief / context
   // reads avoid per-request Google API calls. Populated by the 15-min sync
