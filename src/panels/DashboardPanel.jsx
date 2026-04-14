@@ -1025,7 +1025,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${res.status}` } : prev));
         return;
       }
-      // Success: append summary to chat feed, flip zone to success, decay to empty.
+      // Success: append summary to chat feed, flip zone to success, then
+      // either decay to empty (events) or prompt for outcome capture (tasks).
       const summary = tile.type === 'task'
         ? `Task created — ${p.title || 'untitled'}${p.due_date ? ` · due ${p.due_date}` : ''}${p.entity_name ? ` · ${p.entity_name}` : ''}`
         : `Event created — ${p.title || 'untitled'}${p.start_time ? ` · ${p.start_time}` : ''}`;
@@ -1033,12 +1034,22 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       if (tile.type === 'task') onReloadTasks?.();
       else if (tile.type === 'event') onReloadCalendar?.();
       setActiveZoneState('success');
-      setTimeout(() => {
-        setActiveTile(null);
-        setActiveZoneState('empty');
-        // Refresh briefContext so the context cards repopulate with the new task/event.
-        fetchBriefContext();
-      }, 2000);
+
+      if (tile.type === 'task') {
+        // After a brief success flash, transition into outcome capture.
+        const taskId = data.result?.task_id || tile.id;
+        const taskTitle = data.result?.title || p.title || '';
+        setTimeout(() => {
+          setActiveTile({ type: 'outcome', taskId, taskTitle, ts: Date.now() });
+          setActiveZoneState('outcome');
+        }, 800);
+      } else {
+        setTimeout(() => {
+          setActiveTile(null);
+          setActiveZoneState('empty');
+          fetchBriefContext();
+        }, 2000);
+      }
     } catch (err) {
       const msg = err?.name === 'AbortError' ? 'Request timed out — tap Retry.' : (err.message || 'Network error');
       setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: msg } : prev));
@@ -1263,7 +1274,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           draftToRef={draftToRef}
           draftBodyRef={draftBodyRef}
           sendPrompt={(msg) => ccSendRef.current?.(msg)}
-          onCompleteTask={async (taskId) => {
+          onCompleteTask={async (taskId, taskTitle) => {
             try {
               await apiFetch(`/api/tasks/${taskId}`, {
                 method: 'PUT',
@@ -1271,8 +1282,42 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 body: JSON.stringify({ completed: true, completedAt: new Date().toISOString() }),
               });
               onReloadTasks?.();
-              fetchBriefContext();
+              // Flip active zone into outcome capture for this task.
+              setActiveTile({ type: 'outcome', taskId, taskTitle: taskTitle || '', ts: Date.now() });
+              setActiveZoneState('outcome');
             } catch {}
+          }}
+          onSaveOutcome={async ({ sourceId, titleSnapshot, outcomeStatus, rawNote }) => {
+            try {
+              const res = await apiFetch('/api/outcomes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                body: JSON.stringify({
+                  sourceType: 'task',
+                  sourceId,
+                  titleSnapshot,
+                  outcomeStatus: outcomeStatus || null,
+                  rawNote: rawNote || null,
+                  followUpNeeded: false,
+                  enteredBy: 'user',
+                }),
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                setActiveTile((prev) => prev ? { ...prev, error: data.error || `HTTP ${res.status}` } : prev);
+                return;
+              }
+              setCcMessages((prev) => [...prev, { role: 'system', content: 'Got it — logged.', createdAt: new Date().toISOString(), ts: Date.now() }]);
+              setActiveTile(null);
+              setActiveZoneState('empty');
+              fetchBriefContext();
+            } catch {
+              setActiveTile((prev) => prev ? { ...prev, error: 'Network error' } : prev);
+            }
+          }}
+          onSkipOutcome={() => {
+            setActiveTile(null);
+            setActiveZoneState('empty');
           }}
           onOpenMeetingNotes={(event) => {
             setActiveTile({ type: 'meeting_notes', event, ts: Date.now() });
@@ -1911,9 +1956,10 @@ function ActiveZone({
   draftFromRef, draftToRef, draftBodyRef,
   sendPrompt, onCompleteTask, onOpenMeetingNotes,
   onSaveMeetingNotes, onSkipMeetingNotes,
+  onSaveOutcome, onSkipOutcome,
 }) {
   const isContext = state === 'context' && briefContext;
-  const isVisible = isContext || state === 'tile' || state === 'email' || state === 'notes' || state === 'success';
+  const isVisible = isContext || state === 'tile' || state === 'email' || state === 'notes' || state === 'outcome' || state === 'success';
 
   if (!isVisible) {
     return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
@@ -1996,7 +2042,7 @@ function ActiveZone({
             label={t.title}
             chip={chip} chipColor={chipColor} chipBg={chipBg}
             actions={[
-              { label: 'Done', onClick: () => onCompleteTask?.(t.id) },
+              { label: 'Done', onClick: () => onCompleteTask?.(t.id, t.title) },
               { label: 'Reschedule', onClick: () => sendPrompt?.(`Reschedule ${t.title} to tomorrow`) },
             ]}
           />
@@ -2217,6 +2263,10 @@ function ActiveZone({
     );
   }
 
+  if (state === 'outcome' && activeTile?.type === 'outcome') {
+    return <OutcomePrompt tile={activeTile} onSave={onSaveOutcome} onSkip={onSkipOutcome} />;
+  }
+
   if (state === 'success') {
     return (
       <div style={wrapperStyle}>
@@ -2229,4 +2279,114 @@ function ActiveZone({
   }
 
   return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
+}
+
+// ── OutcomePrompt ───────────────────────────────────────────────────────
+// "How did it go?" capture UI shown after a task completes. Status chip +
+// optional narrative; either writes to outcome_records or dismisses.
+const OUTCOME_STATUS_CONFIG = [
+  { key: 'success',   label: '✓ Success',   fg: '#3b6d11', bg: '#eaf3de' },
+  { key: 'mixed',     label: '~ Mixed',     fg: '#534ab7', bg: '#eeedfe' },
+  { key: 'neutral',   label: '— Neutral',   fg: '#534ab7', bg: '#eeedfe' },
+  { key: 'failed',    label: '✗ Failed',    fg: '#a32d2d', bg: '#fcebeb' },
+  { key: 'cancelled', label: '⊘ Cancelled', fg: '#5f5e5a', bg: '#f1efe8' },
+];
+
+function OutcomePrompt({ tile, onSave, onSkip }) {
+  const [selectedStatus, setSelectedStatus] = useState(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const wrapperStyle = {
+    flexShrink: 0,
+    padding: '14px 16px',
+    borderBottom: '0.5px solid rgba(79,77,207,0.08)',
+    background: '#fcfbff',
+  };
+
+  const chipBase = {
+    fontFamily: "'Plus Jakarta Sans', sans-serif",
+    fontSize: 11,
+    fontWeight: 600,
+    padding: '4px 10px',
+    borderRadius: 10,
+    border: '0.5px solid #d1d5db',
+    background: 'transparent',
+    color: '#4b5563',
+    cursor: 'pointer',
+    transition: 'background 120ms, color 120ms, border-color 120ms',
+  };
+
+  const handleSave = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onSave?.({
+        sourceId: tile.taskId,
+        titleSnapshot: tile.taskTitle,
+        outcomeStatus: selectedStatus,
+        rawNote: note.trim() || null,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={wrapperStyle}>
+      <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: '#1f2937' }}>
+        {tile.taskTitle || 'Task completed'}
+      </div>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12, color: '#6b7280', marginTop: 2, marginBottom: 8 }}>
+        How did it go?
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+        {OUTCOME_STATUS_CONFIG.map((s) => {
+          const active = selectedStatus === s.key;
+          const style = active
+            ? { ...chipBase, background: s.bg, color: s.fg, borderColor: s.bg }
+            : chipBase;
+          return (
+            <button
+              key={s.key}
+              onClick={() => setSelectedStatus(active ? null : s.key)}
+              style={style}
+            >
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Any notes? Decisions, follow-ups, what actually happened..."
+        style={{
+          display: 'block', width: '100%', padding: '10px 12px',
+          fontFamily: 'Manrope, sans-serif', fontSize: 13, lineHeight: 1.55, color: '#1f2937',
+          background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+          outline: 'none', resize: 'vertical', minHeight: 60, boxSizing: 'border-box',
+        }}
+      />
+      {tile.error && (
+        <div style={{ color: '#dc2626', fontSize: 12, marginTop: 6 }}>{tile.error}</div>
+      )}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
+        <button
+          onClick={onSkip}
+          disabled={busy}
+          style={{ ...chipBase, fontSize: 12, padding: '4px 12px' }}
+        >
+          Skip
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={busy}
+          style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 12, fontWeight: 600, padding: '4px 14px', background: '#4f4dcf', color: '#fff', border: 'none', borderRadius: 8, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.7 : 1 }}
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
 }

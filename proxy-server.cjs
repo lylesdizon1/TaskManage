@@ -78,6 +78,7 @@ app.use('/', require('./server/routes/classification.cjs')({ authenticateToken, 
 app.use('/', require('./server/routes/emailClean.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/ariaDraft.cjs')({ authenticateToken }));
 app.use('/', require('./server/routes/tileExecute.cjs')({ authenticateToken, db }));
+app.use('/', require('./server/routes/outcomes.cjs')({ authenticateToken, db }));
 
 // ── Sentry error handler ────────────────────────────────────────────────────
 const Sentry = require('./guardrails/instrument.cjs');
