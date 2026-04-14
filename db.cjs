@@ -5398,6 +5398,12 @@ async function deleteProjectNote(id) {
  */
 async function getProjectContextForUser(userId, limit = 5) {
   // Step 1: project rollup (counts + identity).
+  // Entity-access paths covered (mirrors the broader visibility surface
+  // used elsewhere in the app, plus legacy fallbacks):
+  //   1. entity_members rows for this user (canonical Phase 1 path)
+  //   2. entities the user created (created_by)
+  //   3. entities flagged as shared=true (legacy badge, still in use)
+  //   4. entities listed in users.entity_ids JSONB (legacy access list)
   const { rows: projects } = await pool.query(
     `SELECT p.id, p.title, p.status, p.entity_id AS "entityId",
             e.name AS "entityName",
@@ -5410,13 +5416,18 @@ async function getProjectContextForUser(userId, limit = 5) {
        SELECT entity_id FROM entity_members WHERE user_id = $1
        UNION
        SELECT id FROM entities WHERE created_by = $1
+       UNION
+       SELECT id FROM entities WHERE shared = TRUE
+       UNION
+       SELECT jsonb_array_elements_text(u.entity_ids) FROM users u WHERE u.id = $1
      )
-       AND p.status = 'active'
+       AND LOWER(p.status) = 'active'
      GROUP BY p.id, e.name
      ORDER BY p.updated_at DESC
      LIMIT $2`,
     [userId, limit],
   );
+  console.log('[buildProjectsBlock] rows:', projects?.length, projects?.map((r) => r.title));
   if (!projects.length) return [];
 
   const ids = projects.map((p) => p.id);
@@ -5473,8 +5484,12 @@ async function getOpenProjectTasksForUser(userId, limit = 5) {
        SELECT entity_id FROM entity_members WHERE user_id = $1
        UNION
        SELECT id FROM entities WHERE created_by = $1
+       UNION
+       SELECT id FROM entities WHERE shared = TRUE
+       UNION
+       SELECT jsonb_array_elements_text(u.entity_ids) FROM users u WHERE u.id = $1
      )
-       AND pt.status = 'open'
+       AND LOWER(pt.status) = 'open'
      ORDER BY pt.created_at DESC
      LIMIT $2`,
     [userId, limit],
