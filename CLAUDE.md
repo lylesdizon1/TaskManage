@@ -81,6 +81,41 @@ All JSDoc documentation complete for server/ and src/lib/ — see individual fil
 9. Read the relevant /docs file before building anything new
 10. Timezone always flows from req.user.timezone — never hardcode America/Los_Angeles in app logic
 
+## Architectural Principles (Ray, April 13 2026)
+
+Core:
+- PostgreSQL is the source of truth
+- NOTIFY is a signal, not truth
+- No in-memory critical state
+- Authorization lives in middleware, not SQL helpers
+- Exactly-once execution for all gated actions
+- Multi-tenant safety is non-negotiable
+
+Authorization model:
+- Shared data helpers accept userId and plain filters ONLY
+- Never accept role or any authz-shaped parameter that changes tenant scope — this is a code review rejection
+- Admin access only via /api/admin/* routes
+- requireSuperAdmin for cross-tenant visibility
+- Owner-only mutation for entities (no broad admin PUT/DELETE)
+- Membership controls visibility, not org role
+
+Entity system:
+- Default visibility: private
+- Invites: owner-only
+- Calendar events: contextual tag only, not a sharing primitive
+
+Security rules:
+- No SQL branching on role
+- No cross-tenant queries in shared endpoints
+- Always validate against DB state
+- Use parameterized queries everywhere
+
+## Future Work (locked — do not build without Ray review)
+- Entity membership schema (entity_members table)
+- Postgres RLS on highest-risk tables (after membership stabilizes)
+- Two-user regression test suite
+- Admin-only routes for cross-tenant visibility (/api/admin/*)
+
 ## Key Files
 - proxy-server.cjs — slim entry (86 lines), mounts all routers
 - server/routes/ — 18 route files (admin, ai, alerts, auth, chat, dashboard, email, entities, financial, gcal, gmail, inbox, notes, preferences, settings, tasks, users, whatsapp)
