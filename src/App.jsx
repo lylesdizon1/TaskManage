@@ -89,6 +89,7 @@ import { GearIcon, XIcon, SendIcon, ChatIcon, SpinnerIcon, MailIcon, ChecklistIc
 const CalendarPanel = lazy(() => import('./panels/CalendarPanel.jsx'));
 const InboxPanel = lazy(() => import('./panels/InboxPanel.jsx'));
 const NotesPanel = lazy(() => import('./panels/NotesPanel.jsx'));
+const ProjectsPanel = lazy(() => import('./panels/ProjectsPanel.jsx'));
 const AddTaskForm = lazy(() => import('./components/tasks/AddTaskForm.jsx'));
 const DashboardPanel = lazy(() => import('./panels/DashboardPanel.jsx'));
 const AdminPanel = lazy(() => import('./panels/AdminPanel.jsx'));
@@ -965,6 +966,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
             { key: 'inbox', label: 'Inbox', icon: 'inbox' },
             { key: 'daily', label: 'Tasks', icon: 'task' },
+            { key: 'projects', label: 'Projects', icon: 'folder_open' },
             { key: 'calendar', label: 'Calendar', icon: 'calendar_today' },
             { key: 'notes', label: 'Notes', icon: 'sticky_note_2' },
             { key: 'chat', label: 'Aria', icon: 'chat' },
@@ -1105,6 +1107,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <ActivityPanel authToken={authToken} currentUser={currentUser} apiFetch={apiFetch} />
           ) : activeView === 'inbox' ? (
             <InboxPanel authToken={authToken} apiFetch={apiFetch} onNavigate={setActiveView} onUnreadCountChange={setInboxUnread} />
+          ) : activeView === 'projects' ? (
+            <ProjectsPanel entities={userEntities} apiFetch={apiFetch} authToken={authToken} />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} authToken={authToken} addToast={addToast} apiFetch={apiFetch} />
           ) : activeView === 'notes' ? (

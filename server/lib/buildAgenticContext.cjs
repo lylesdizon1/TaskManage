@@ -166,7 +166,7 @@ async function buildAgenticContext(opts) {
     return fetchCalendarWindow(opts);
   })();
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts] = await Promise.all([
+  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
@@ -178,6 +178,7 @@ async function buildAgenticContext(opts) {
     db.getRecentClassifications ? db.getRecentClassifications(userId, recentClassifiedLimit).catch(() => []) : Promise.resolve([]),
     db.getRecentOutcomeContext ? db.getRecentOutcomeContext(userId, 5).catch(() => []) : Promise.resolve([]),
     db.getMemoryFactsForUser ? db.getMemoryFactsForUser(userId, 10).catch(() => []) : Promise.resolve([]),
+    db.getProjectContextForUser ? db.getProjectContextForUser(userId, 5).catch(() => []) : Promise.resolve([]),
   ]);
 
   const todayStr = getTodayLocal(tz);
@@ -253,15 +254,27 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // Only facts with strength_score >= 0.5 make it in.
   const factsBlock = buildFactsBlock(memoryFacts);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + contextBlock;
+  // Active projects across every entity the user can access.
+  const projectsBlock = buildProjectsBlock(projectsCtx);
+
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + contextBlock;
 
   return {
     user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
-    importantUnread, recentClassified, recentOutcomes, memoryFacts,
+    importantUnread, recentClassified, recentOutcomes, memoryFacts, projects: projectsCtx,
     tz, todayStr, todayDate, currentTime, weekMapStr,
-    profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, decisionInstructions: DECISION_INSTRUCTIONS,
+    profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock, decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };
+}
+
+/** Build ACTIVE PROJECTS block. Empty string when no active projects. */
+function buildProjectsBlock(projects) {
+  if (!Array.isArray(projects) || projects.length === 0) return '';
+  const lines = projects.map((p) =>
+    `- ${p.entityName || 'Entity'} / ${p.title}: ${p.openTasks || 0} open, ${p.completedTasks || 0} done`
+  );
+  return `\n\nACTIVE PROJECTS\n${lines.join('\n')}`;
 }
 
 /**

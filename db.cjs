@@ -3884,6 +3884,80 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS memory_facts_user_id ON memory_facts(user_id, strength_score DESC)`).catch(() => {});
   // Unique index required by upsertMemoryFact's ON CONFLICT (user_id, fact_text).
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique ON memory_facts(user_id, fact_text)`).catch((err) => console.warn('[migration] memory_facts unique:', err.message));
+
+  // ── Entity Workspace Projects V1 ────────────────────────────────────────
+  // See docs/dizon-entity-workspace-spec-v1.md. Membership enforcement
+  // lives at the route layer via canAccessEntity; SQL helpers stay
+  // entity_id-scoped only.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      entity_id    TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      title        TEXT NOT NULL,
+      description  TEXT,
+      status       TEXT NOT NULL DEFAULT 'active'
+                   CHECK (status IN ('active','completed','archived')),
+      created_by   TEXT NOT NULL REFERENCES users(id),
+      completed_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] projects table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS projects_entity_id  ON projects(entity_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS projects_created_by ON projects(created_by)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_tasks (
+      id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      entity_id    TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      title        TEXT NOT NULL,
+      description  TEXT,
+      status       TEXT NOT NULL DEFAULT 'open'
+                   CHECK (status IN ('open','completed','cancelled')),
+      created_by   TEXT NOT NULL REFERENCES users(id),
+      completed_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] project_tasks table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS project_tasks_project_id ON project_tasks(project_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS project_tasks_entity_id  ON project_tasks(entity_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS project_tasks_created_by ON project_tasks(created_by)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_checklist_items (
+      id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      task_id      TEXT NOT NULL REFERENCES project_tasks(id) ON DELETE CASCADE,
+      entity_id    TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      text         TEXT NOT NULL,
+      is_done      BOOLEAN DEFAULT FALSE,
+      created_by   TEXT NOT NULL REFERENCES users(id),
+      completed_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] task_checklist_items table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS task_checklist_items_task_id    ON task_checklist_items(task_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS task_checklist_items_entity_id  ON task_checklist_items(entity_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS task_checklist_items_created_by ON task_checklist_items(created_by)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_notes (
+      id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      task_id      TEXT REFERENCES project_tasks(id) ON DELETE CASCADE,
+      entity_id    TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      body         TEXT NOT NULL,
+      created_by   TEXT NOT NULL REFERENCES users(id),
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] project_notes table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_project_id ON project_notes(project_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_task_id    ON project_notes(task_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_entity_id  ON project_notes(entity_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_created_by ON project_notes(created_by)`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -5113,6 +5187,231 @@ async function saveWhatsAppMessage(userId, phone, role, content) {
   );
 }
 
+// ── Entity Workspace Projects helpers (V1) ─────────────────────────────────
+// Membership enforcement happens at the route layer via canAccessEntity.
+// These helpers are scoped by id / entity_id only.
+
+const PROJECT_FIELDS = `id, entity_id AS "entityId", title, description, status,
+  created_by AS "createdBy", completed_at AS "completedAt",
+  created_at AS "createdAt", updated_at AS "updatedAt"`;
+const TASK_FIELDS = `id, project_id AS "projectId", entity_id AS "entityId",
+  title, description, status, created_by AS "createdBy",
+  completed_at AS "completedAt", created_at AS "createdAt", updated_at AS "updatedAt"`;
+const CHECKLIST_FIELDS = `id, task_id AS "taskId", entity_id AS "entityId",
+  text, is_done AS "isDone", created_by AS "createdBy",
+  completed_at AS "completedAt", created_at AS "createdAt", updated_at AS "updatedAt"`;
+const NOTE_FIELDS = `id, project_id AS "projectId", task_id AS "taskId",
+  entity_id AS "entityId", body, created_by AS "createdBy",
+  created_at AS "createdAt", updated_at AS "updatedAt"`;
+
+async function listProjectsForEntity(entityId) {
+  const { rows } = await pool.query(
+    `SELECT ${PROJECT_FIELDS} FROM projects WHERE entity_id = $1 ORDER BY updated_at DESC`,
+    [entityId],
+  );
+  return rows;
+}
+async function getProjectById(id) {
+  const { rows } = await pool.query(`SELECT ${PROJECT_FIELDS} FROM projects WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+async function createProject({ entityId, title, description, createdBy }) {
+  const { rows } = await pool.query(
+    `INSERT INTO projects (entity_id, title, description, created_by)
+     VALUES ($1, $2, $3, $4) RETURNING ${PROJECT_FIELDS}`,
+    [entityId, title, description || null, createdBy],
+  );
+  return rows[0];
+}
+async function updateProject(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+  if (fields.title !== undefined)       { sets.push(`title = $${idx++}`);       vals.push(fields.title); }
+  if (fields.description !== undefined) { sets.push(`description = $${idx++}`); vals.push(fields.description); }
+  if (fields.status !== undefined)      {
+    sets.push(`status = $${idx++}`);    vals.push(fields.status);
+    sets.push(`completed_at = CASE WHEN $${idx} = 'completed' THEN NOW() ELSE completed_at END`); vals.push(fields.status); idx++;
+  }
+  if (!sets.length) return getProjectById(id);
+  sets.push(`updated_at = NOW()`);
+  const { rows } = await pool.query(
+    `UPDATE projects SET ${sets.join(', ')} WHERE id = $1 RETURNING ${PROJECT_FIELDS}`,
+    vals,
+  );
+  return rows[0] || null;
+}
+async function deleteProject(id) {
+  await pool.query('DELETE FROM projects WHERE id = $1', [id]);
+}
+
+async function listTasksForProject(projectId) {
+  const { rows } = await pool.query(
+    `SELECT ${TASK_FIELDS} FROM project_tasks WHERE project_id = $1 ORDER BY created_at ASC`,
+    [projectId],
+  );
+  return rows;
+}
+async function getProjectTaskById(id) {
+  const { rows } = await pool.query(`SELECT ${TASK_FIELDS} FROM project_tasks WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+async function createProjectTask({ projectId, entityId, title, description, createdBy }) {
+  const { rows } = await pool.query(
+    `INSERT INTO project_tasks (project_id, entity_id, title, description, created_by)
+     VALUES ($1, $2, $3, $4, $5) RETURNING ${TASK_FIELDS}`,
+    [projectId, entityId, title, description || null, createdBy],
+  );
+  return rows[0];
+}
+async function updateProjectTask(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+  if (fields.title !== undefined)       { sets.push(`title = $${idx++}`);       vals.push(fields.title); }
+  if (fields.description !== undefined) { sets.push(`description = $${idx++}`); vals.push(fields.description); }
+  if (fields.status !== undefined)      {
+    sets.push(`status = $${idx++}`); vals.push(fields.status);
+    sets.push(`completed_at = CASE WHEN $${idx} = 'completed' THEN NOW() ELSE completed_at END`); vals.push(fields.status); idx++;
+  }
+  if (!sets.length) return getProjectTaskById(id);
+  sets.push(`updated_at = NOW()`);
+  const { rows } = await pool.query(
+    `UPDATE project_tasks SET ${sets.join(', ')} WHERE id = $1 RETURNING ${TASK_FIELDS}`,
+    vals,
+  );
+  return rows[0] || null;
+}
+async function deleteProjectTask(id) {
+  await pool.query('DELETE FROM project_tasks WHERE id = $1', [id]);
+}
+async function completeProjectTask(id) {
+  const { rows } = await pool.query(
+    `UPDATE project_tasks SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+     WHERE id = $1 RETURNING ${TASK_FIELDS}`,
+    [id],
+  );
+  return rows[0] || null;
+}
+async function countOpenChecklistForTask(taskId) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS open FROM task_checklist_items WHERE task_id = $1 AND is_done = FALSE`,
+    [taskId],
+  );
+  return rows[0]?.open || 0;
+}
+
+async function listChecklistForTask(taskId) {
+  const { rows } = await pool.query(
+    `SELECT ${CHECKLIST_FIELDS} FROM task_checklist_items WHERE task_id = $1 ORDER BY created_at ASC`,
+    [taskId],
+  );
+  return rows;
+}
+async function getChecklistItemById(id) {
+  const { rows } = await pool.query(`SELECT ${CHECKLIST_FIELDS} FROM task_checklist_items WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+async function createChecklistItem({ taskId, entityId, text, createdBy }) {
+  const { rows } = await pool.query(
+    `INSERT INTO task_checklist_items (task_id, entity_id, text, created_by)
+     VALUES ($1, $2, $3, $4) RETURNING ${CHECKLIST_FIELDS}`,
+    [taskId, entityId, text, createdBy],
+  );
+  return rows[0];
+}
+async function updateChecklistItem(id, fields) {
+  const sets = [];
+  const vals = [id];
+  let idx = 2;
+  if (fields.text !== undefined) { sets.push(`text = $${idx++}`); vals.push(fields.text); }
+  if (!sets.length) return getChecklistItemById(id);
+  sets.push(`updated_at = NOW()`);
+  const { rows } = await pool.query(
+    `UPDATE task_checklist_items SET ${sets.join(', ')} WHERE id = $1 RETURNING ${CHECKLIST_FIELDS}`,
+    vals,
+  );
+  return rows[0] || null;
+}
+async function deleteChecklistItem(id) {
+  await pool.query('DELETE FROM task_checklist_items WHERE id = $1', [id]);
+}
+async function toggleChecklistItem(id) {
+  const { rows } = await pool.query(
+    `UPDATE task_checklist_items
+     SET is_done = NOT is_done,
+         completed_at = CASE WHEN NOT is_done THEN NOW() ELSE NULL END,
+         updated_at = NOW()
+     WHERE id = $1 RETURNING ${CHECKLIST_FIELDS}`,
+    [id],
+  );
+  return rows[0] || null;
+}
+
+async function listNotesForProject(projectId) {
+  const { rows } = await pool.query(
+    `SELECT ${NOTE_FIELDS} FROM project_notes WHERE project_id = $1 ORDER BY created_at DESC`,
+    [projectId],
+  );
+  return rows;
+}
+async function listNotesForTask(taskId) {
+  const { rows } = await pool.query(
+    `SELECT ${NOTE_FIELDS} FROM project_notes WHERE task_id = $1 ORDER BY created_at DESC`,
+    [taskId],
+  );
+  return rows;
+}
+async function getProjectNoteById(id) {
+  const { rows } = await pool.query(`SELECT ${NOTE_FIELDS} FROM project_notes WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+async function createProjectNote({ projectId, taskId, entityId, body, createdBy }) {
+  const { rows } = await pool.query(
+    `INSERT INTO project_notes (project_id, task_id, entity_id, body, created_by)
+     VALUES ($1, $2, $3, $4, $5) RETURNING ${NOTE_FIELDS}`,
+    [projectId || null, taskId || null, entityId, body, createdBy],
+  );
+  return rows[0];
+}
+async function updateProjectNote(id, body) {
+  const { rows } = await pool.query(
+    `UPDATE project_notes SET body = $2, updated_at = NOW() WHERE id = $1 RETURNING ${NOTE_FIELDS}`,
+    [id, body],
+  );
+  return rows[0] || null;
+}
+async function deleteProjectNote(id) {
+  await pool.query('DELETE FROM project_notes WHERE id = $1', [id]);
+}
+
+/**
+ * Active projects across every entity the user can access (member or owner).
+ * Used by buildAgenticContext so Aria can reference open project state.
+ */
+async function getProjectContextForUser(userId, limit = 5) {
+  const { rows } = await pool.query(
+    `SELECT p.id, p.title, p.status, p.entity_id AS "entityId",
+            e.name AS "entityName",
+            COUNT(DISTINCT pt.id) FILTER (WHERE pt.status = 'open')      AS "openTasks",
+            COUNT(DISTINCT pt.id) FILTER (WHERE pt.status = 'completed') AS "completedTasks"
+     FROM projects p
+     JOIN entities e ON e.id = p.entity_id
+     LEFT JOIN project_tasks pt ON pt.project_id = p.id
+     WHERE p.entity_id IN (
+       SELECT entity_id FROM entity_members WHERE user_id = $1
+       UNION
+       SELECT id FROM entities WHERE created_by = $1
+     )
+       AND p.status = 'active'
+     GROUP BY p.id, e.name
+     ORDER BY p.updated_at DESC
+     LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
 // ── Outcome Intelligence helpers (Phase 1) ─────────────────────────────────
 
 /**
@@ -5270,6 +5569,32 @@ module.exports = {
   updateOutcomeFollowUp,
   upsertMemoryFact,
   getMemoryFactsForUser,
+  // Entity workspace projects
+  listProjectsForEntity,
+  getProjectById,
+  createProject,
+  updateProject,
+  deleteProject,
+  listTasksForProject,
+  getProjectTaskById,
+  createProjectTask,
+  updateProjectTask,
+  deleteProjectTask,
+  completeProjectTask,
+  countOpenChecklistForTask,
+  listChecklistForTask,
+  getChecklistItemById,
+  createChecklistItem,
+  updateChecklistItem,
+  deleteChecklistItem,
+  toggleChecklistItem,
+  listNotesForProject,
+  listNotesForTask,
+  getProjectNoteById,
+  createProjectNote,
+  updateProjectNote,
+  deleteProjectNote,
+  getProjectContextForUser,
   seedEntitiesIfEmpty,
   getTaskById,
   getTasksForUser,
