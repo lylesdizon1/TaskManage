@@ -179,6 +179,23 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
 
   // ── Checklist items ──────────────────────────────────────────────────
 
+  router.get('/api/task-checklist-items', authenticateToken, async (req, res) => {
+    try {
+      const taskId = req.query.task_id;
+      if (!taskId) return res.status(400).json({ error: 'task_id required' });
+      const task = await db.getProjectTaskById(taskId);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (!(await canAccessEntity(req.user.id, task.entityId, req.user.orgId))) {
+        return res.status(403).json({ error: 'Not a member of this entity' });
+      }
+      const items = await db.listChecklistForTask(taskId);
+      return res.json({ items });
+    } catch (err) {
+      logger.error('projects.checklist.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   router.post('/api/task-checklist-items', authenticateToken, async (req, res) => {
     try {
       const { task_id: taskId, entity_id: entityId, text } = req.body || {};

@@ -266,21 +266,26 @@ function TaskRow({ task, entity, apiFetch, authToken, onChange }) {
 
   const reload = useCallback(async () => {
     try {
-      const tr = await apiFetch(`/api/projects/${task.projectId}/tasks`, { headers: { Authorization: `Bearer ${authToken}` } });
-      const td = await tr.json();
-      const ck = (Array.isArray(td?.tasks) ? td.tasks.find((t) => t.id === task.id) : null);
-      // Checklist fetch
-      const cr = await fetch(`/api/projects/${task.projectId}/tasks`, { headers: { Authorization: `Bearer ${authToken}` } }).catch(() => null);
-      // Use dedicated lookups via the notes/checklist routes if available; fallback embed.
-      const nr = await apiFetch(`/api/project-notes?task_id=${encodeURIComponent(task.id)}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      const nd = await nr.json();
+      const [cr, nr] = await Promise.all([
+        apiFetch(`/api/task-checklist-items?task_id=${encodeURIComponent(task.id)}`, { headers: { Authorization: `Bearer ${authToken}` } }),
+        apiFetch(`/api/project-notes?task_id=${encodeURIComponent(task.id)}`, { headers: { Authorization: `Bearer ${authToken}` } }),
+      ]);
+      const cd = await cr.json().catch(() => ({}));
+      const nd = await nr.json().catch(() => ({}));
+      const fetchedItems = Array.isArray(cd?.items) ? cd.items : [];
+      // Merge with locally-added items (dedupe by id, server wins on conflict).
+      setItems((prev) => {
+        const byId = new Map(prev.map((it) => [it.id, it]));
+        for (const it of fetchedItems) byId.set(it.id, it);
+        return Array.from(byId.values());
+      });
       setTaskNotes(Array.isArray(nd?.notes) ? nd.notes : []);
-      // For checklist, hit a known route — V1 doesn't have a listChecklist GET endpoint.
-      // We expose state via state-only adds; backend GET would be an enhancement.
     } catch {} finally { setLoaded(true); }
-  }, [apiFetch, authToken, task.projectId, task.id]);
+  }, [apiFetch, authToken, task.id]);
 
-  useEffect(() => { if (expanded && !loaded) reload(); }, [expanded, loaded, reload]);
+  // Load checklist + notes on mount so they appear before the user expands.
+  // Without this, items don't survive a page reload until the row is opened.
+  useEffect(() => { reload(); }, [reload]);
 
   const addItem = async () => {
     const t = text.trim();
