@@ -110,9 +110,10 @@ function requireOwnership(record, req) {
 
   const isOwner   = ownerId === req.user.id;
   const inEntity  = entityId && (req.user.entityIds || []).includes(entityId);
-  const isPrivileged = req.user.role === 'admin' || req.user.role === 'superadmin';
 
-  return isOwner || inEntity || isPrivileged;
+  // No admin/superadmin bypass — cross-tenant mutation belongs in
+  // /api/admin/* routes gated by requireSuperAdmin, not this helper.
+  return isOwner || inEntity;
 }
 
 /**
