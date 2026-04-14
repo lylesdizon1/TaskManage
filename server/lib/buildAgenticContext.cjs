@@ -13,7 +13,7 @@
 const { getTodayLocal } = require('../utils/date.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 
-const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.`;
+const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.\n\nYou have full access to the user's projects, tasks, checklist items, and notes within their entities. This data is provided to you in the ACTIVE PROJECTS context block above. When asked about projects, summarize from that context. Never say you don't have access to projects.`;
 
 // Cross-surface GCal cache — now Redis-backed for durability across
 // multi-instance deploys and server restarts. Falls back to no-cache
@@ -274,7 +274,11 @@ To page through results: use the oldest result's date as date_to in a follow-up 
  * ready" without an additional tool call. Empty string when no projects.
  */
 function buildProjectsBlock(projects) {
-  if (!Array.isArray(projects) || projects.length === 0) return '';
+  if (!Array.isArray(projects) || projects.length === 0) {
+    // Surface the section even when empty so Aria knows projects exist as
+    // a concept and doesn't claim "no access" when asked.
+    return `\n\nACTIVE PROJECTS\nNo active projects.`;
+  }
   const lines = projects.map((p) => {
     const head = `- ${p.entityName || 'Entity'} / ${p.title}: ${p.openTasks || 0} open, ${p.completedTasks || 0} done`;
     const tasks = (p.openTaskTitles && p.openTaskTitles.length)
