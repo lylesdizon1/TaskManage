@@ -275,12 +275,15 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         makeOAuth2Client, google, logger, requestId: req.requestId,
       });
       const tz = ctx.tz;
-      // Always forward learnings + email context to the model, even when
-      // the client supplies its own base system prompt.
-      const emailAndLearnings = (ctx.learningsBlock || '') + (ctx.emailBlock || '');
+      // Always forward learnings + email + projects + outcomes + facts to
+      // the model, even when the client supplies its own base system prompt.
+      // Missing projectsBlock here was the bug where Aria claimed no project
+      // access despite getProjectContextForUser returning rows.
+      const serverBlocks = (ctx.learningsBlock || '') + (ctx.emailBlock || '') + (ctx.outcomesBlock || '') + (ctx.factsBlock || '') + (ctx.projectsBlock || '');
       const fullSystem = clientPrompt
-        ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + emailAndLearnings + ctx.contextBlock
+        ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + serverBlocks + ctx.contextBlock
         : ctx.systemPrompt;
+      console.log('[ai.chat] systemPrompt includes ACTIVE PROJECTS:', fullSystem.includes('ACTIVE PROJECTS'), 'clientPrompt?', !!clientPrompt);
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');
