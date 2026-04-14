@@ -38,6 +38,13 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL?.includes('railway.app')
     ? { rejectUnauthorized: false }
     : undefined,
+  // listenForConfirmation holds a dedicated client for up to 2min per
+  // paused web confirmation — bumped above pg default (10) so concurrent
+  // confirmations don't starve normal queries.
+  max: 25,
+  idleTimeoutMillis: 30000,
+  // Fail fast instead of hanging indefinitely when the pool is exhausted.
+  connectionTimeoutMillis: 5000,
 });
 
 /**
