@@ -794,26 +794,26 @@ async function backfillSuperadminIntegrationsFromEnv() {
       const cfg = { recipientEmail: process.env.ALERT_RECIPIENT_EMAIL };
       if (process.env.RESEND_FROM_EMAIL) cfg.fromEmail = process.env.RESEND_FROM_EMAIL;
       await pool.query(
-        `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
-         VALUES ($1, 'email_alerts', $2::jsonb, TRUE)
-         ON CONFLICT (user_id, integration_type) DO NOTHING`,
+        `INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
+         VALUES ($1, 'email_alerts', '', $2::jsonb, TRUE)
+         ON CONFLICT (user_id, integration_type, account_email) DO NOTHING`,
         [u.id, JSON.stringify(cfg)],
       );
     }
     if (process.env.SLACK_WEBHOOK_URL) {
       await pool.query(
-        `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
-         VALUES ($1, 'slack_webhook', $2::jsonb, TRUE)
-         ON CONFLICT (user_id, integration_type) DO NOTHING`,
+        `INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
+         VALUES ($1, 'slack_webhook', '', $2::jsonb, TRUE)
+         ON CONFLICT (user_id, integration_type, account_email) DO NOTHING`,
         [u.id, JSON.stringify({ webhookUrl: process.env.SLACK_WEBHOOK_URL })],
       );
     }
     if (process.env.ULTRAMSG_INSTANCE && process.env.ULTRAMSG_TOKEN) {
       const phone = u.whatsappPhone || process.env.ULTRAMSG_PHONE || null;
       await pool.query(
-        `INSERT INTO user_integrations (user_id, integration_type, config_json, is_enabled)
-         VALUES ($1, 'ultramsg_whatsapp', $2::jsonb, $3)
-         ON CONFLICT (user_id, integration_type) DO NOTHING`,
+        `INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
+         VALUES ($1, 'ultramsg_whatsapp', '', $2::jsonb, $3)
+         ON CONFLICT (user_id, integration_type, account_email) DO NOTHING`,
         [
           u.id,
           JSON.stringify({
@@ -3502,12 +3502,20 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE user_integrations ALTER COLUMN account_email SET NOT NULL`).catch(() => {});
   await pool.query(`ALTER TABLE user_integrations ALTER COLUMN account_email SET DEFAULT ''`).catch(() => {});
   await pool.query(`ALTER TABLE user_integrations DROP CONSTRAINT IF EXISTS user_integrations_user_id_integration_type_key`).catch(() => {});
+  // Pre-check via pg_catalog — the older EXCEPTION-based guard only
+  // caught `duplicate_object`, not `duplicate_table` which Postgres
+  // raises when the constraint's backing index name already exists.
   await pool.query(`
     DO $$ BEGIN
-      ALTER TABLE user_integrations
-        ADD CONSTRAINT user_integrations_user_id_type_email_key
-        UNIQUE (user_id, integration_type, account_email);
-    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'user_integrations_user_id_type_email_key'
+      ) THEN
+        ALTER TABLE user_integrations
+          ADD CONSTRAINT user_integrations_user_id_type_email_key
+          UNIQUE (user_id, integration_type, account_email);
+      END IF;
+    END $$;
   `).catch((err) => console.warn('[migration] user_integrations UNIQUE:', err.message));
 
   // ── user_integrations: provider column (for future multi-provider routing) ──
