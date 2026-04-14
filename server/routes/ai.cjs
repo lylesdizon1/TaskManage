@@ -455,8 +455,17 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       }
 
       const nextStatus = approved ? 'approved' : 'rejected';
-      // DB update first — the row is authoritative. NOTIFY is advisory.
-      await db.updatePendingConfirmationStatus(confirm_id, userId, nextStatus).catch(() => {});
+      const overrides = {};
+      if (account_email) overrides.account_email = account_email;
+      if (to_override)   overrides.to = to_override;
+      const resolution = approved
+        ? { action: 'allow', overrides }
+        : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` };
+
+      // DB update first (row is authoritative, resolution_json persisted so
+      // the listener's re-read path works even if NOTIFY is lost). NOTIFY is
+      // the wake-up signal only.
+      await db.updatePendingConfirmationStatus(confirm_id, userId, nextStatus, resolution).catch(() => {});
       await db.logAgentAction({
         userId,
         eventType: approved ? 'confirmation_approved' : 'confirmation_rejected',
@@ -465,16 +474,11 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         confirmId: confirm_id,
       });
 
-      const overrides = {};
-      if (account_email) overrides.account_email = account_email;
-      if (to_override)   overrides.to = to_override;
       try {
-        await db.notifyConfirmation(confirm_id, approved
-          ? { action: 'allow', overrides }
-          : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` });
+        await db.notifyConfirmation(confirm_id, resolution);
       } catch (e) {
-        // Non-fatal: if no listener is attached (e.g. after a restart),
-        // the waiter's re-read-on-LISTEN already catches the DB state.
+        // Non-fatal: listener re-reads resolution_json on LISTEN so it still
+        // recovers the full payload even without NOTIFY delivery.
         logger.warn('chat.confirm.notify.failed', { requestId: req.requestId, userId, confirmId: confirm_id, error: e.message });
       }
       return res.json({ success: true, status: nextStatus });

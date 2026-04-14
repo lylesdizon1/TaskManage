@@ -155,35 +155,40 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         try {
           const pending = await db.findLatestPendingConfirmation(userId, 'whatsapp');
           if (pending && codeFromConfirmId(pending.id) === code) {
-            const nextStatus = approved ? 'approved' : 'rejected';
-            await db.updatePendingConfirmationStatus(pending.id, userId, nextStatus).catch(() => {});
-
-            await db.logAgentAction({
-              userId,
-              eventType: approved ? 'confirmation_approved' : 'confirmation_rejected',
-              toolName: pending.toolName,
-              input: pending.params,
-              confirmId: pending.id,
-            });
-
-            // On deny, notify any waiting web turn immediately (no tool to run).
+            // On deny, persist resolution + notify.
             if (!approved) {
-              try {
-                await db.notifyConfirmation(pending.id, {
-                  action: 'deny',
-                  reason: 'user_rejected',
-                  message: `User cancelled ${pending.toolName}.`,
-                });
-              } catch (e) {
-                logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message });
-              }
+              const denyResolution = {
+                action: 'deny',
+                reason: 'user_rejected',
+                message: `User cancelled ${pending.toolName}.`,
+              };
+              await db.updatePendingConfirmationStatus(pending.id, userId, 'rejected', denyResolution).catch(() => {});
+              await db.logAgentAction({
+                userId,
+                eventType: 'confirmation_rejected',
+                toolName: pending.toolName,
+                input: pending.params,
+                confirmId: pending.id,
+              });
+              try { await db.notifyConfirmation(pending.id, denyResolution); }
+              catch (e) { logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message }); }
               await db.logAgentAction({ userId, eventType: 'tool_cancelled', toolName: pending.toolName, input: pending.params, confirmId: pending.id });
               await sendWhatsApp(db, userId, `Cancelled.`, fromRaw).catch(() => {});
               return res.json({ ok: true, confirmed: false });
             }
 
-            // Approved: run the tool, then resolve the waiter (if any) with
-            // the actual result so the web loop's synthetic tool_result is real.
+            // Approved: run the tool first so we can persist the real result
+            // atomically with the status flip. Exactly-once: if the web
+            // listener re-reads resolution_json (NOTIFY missed), it sees
+            // alreadyExecuted:true and skips re-execution.
+            await db.logAgentAction({
+              userId,
+              eventType: 'confirmation_approved',
+              toolName: pending.toolName,
+              input: pending.params,
+              confirmId: pending.id,
+            });
+
             const result = await executeTool(pending.toolName, pending.params, userId, entityIds, db, tzForUser);
             await db.logAgentAction({
               userId,
@@ -196,16 +201,15 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
               confirmId: pending.id,
             });
 
-            try {
-              await db.notifyConfirmation(pending.id, {
-                action: 'allow',
-                alreadyExecuted: true,
-                result,
-                overrides: {},
-              });
-            } catch (e) {
-              logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message });
-            }
+            const allowResolution = {
+              action: 'allow',
+              alreadyExecuted: true,
+              result,
+              overrides: {},
+            };
+            await db.updatePendingConfirmationStatus(pending.id, userId, 'approved', allowResolution).catch(() => {});
+            try { await db.notifyConfirmation(pending.id, allowResolution); }
+            catch (e) { logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message }); }
 
             const reply = result?.success === false
               ? `Couldn't complete ${pending.toolName}: ${result.error || 'unknown error'}`

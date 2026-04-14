@@ -614,6 +614,7 @@ async function initTables() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_id)`).catch(() => {});
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolution_json JSONB`).catch(() => {});
 
   // ── user_integrations table (per-user outbound notification routing) ──
   await pool.query(`
@@ -958,7 +959,8 @@ function getConfirmationChannel(confirmId) {
 async function getConfirmationById(id) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
-            channel, status, expires_at AS "expiresAt", created_at AS "createdAt", resolved_at AS "resolvedAt"
+            channel, status, expires_at AS "expiresAt", created_at AS "createdAt",
+            resolved_at AS "resolvedAt", resolution_json AS "resolution"
      FROM pending_confirmations WHERE id = $1`,
     [id],
   );
@@ -1008,18 +1010,23 @@ async function listenForConfirmation(confirmId, timeoutMs, { signal } = {}) {
   };
 
   return new Promise((resolve, reject) => {
-    const buildResolution = (row, payload = {}) => {
+    const buildResolution = (row, notifyPayload = {}) => {
       if (!row) return { action: 'deny', reason: 'not_found' };
       const dbAction = row.status === 'approved' ? 'allow' : 'deny';
-      // Payload is advisory; DB wins on action mismatch.
-      const trustedPayload = (payload.action && payload.action !== dbAction) ? {} : payload;
+      // Prefer the persisted resolution_json (DB is authoritative + survives
+      // missed NOTIFY deliveries); fall back to the in-flight notify payload.
+      const persisted = row.resolution && typeof row.resolution === 'object' ? row.resolution : null;
+      const rawMeta = persisted || notifyPayload || {};
+      // Drop metadata if its action disagrees with DB truth.
+      const meta = (rawMeta.action && rawMeta.action !== dbAction) ? {} : rawMeta;
       return {
         action: dbAction,
-        overrides: trustedPayload.overrides && typeof trustedPayload.overrides === 'object' ? trustedPayload.overrides : {},
-        alreadyExecuted: trustedPayload.alreadyExecuted === true,
-        result: trustedPayload.result,
-        reason: dbAction === 'deny' ? (trustedPayload.reason || (row.status === 'expired' ? 'expired' : 'user_rejected')) : undefined,
-        message: dbAction === 'deny' ? (trustedPayload.message || `User cancelled ${row.toolName}.`) : undefined,
+        overrides: meta.overrides && typeof meta.overrides === 'object' ? meta.overrides : {},
+        alreadyExecuted: meta.alreadyExecuted === true,
+        result: meta.result ?? null,
+        reason: dbAction === 'deny' ? (meta.reason || (row.status === 'expired' ? 'expired' : 'user_rejected')) : undefined,
+        message: dbAction === 'deny' ? (meta.message || `User cancelled ${row.toolName}.`) : undefined,
+        fromDb: !!persisted,
       };
     };
 
@@ -1083,15 +1090,25 @@ async function getPendingConfirmation(id, userId) {
   return rows[0] || null;
 }
 
-async function updatePendingConfirmationStatus(id, userId, status) {
+async function updatePendingConfirmationStatus(id, userId, status, resolution) {
+  // When resolution metadata is passed with a terminal status, persist it so
+  // the listener can reconstruct the full resolution payload even when the
+  // NOTIFY is lost (e.g. restart between status write and notify delivery).
+  const resolutionJson = resolution && typeof resolution === 'object' ? JSON.stringify(resolution) : null;
   const { rows } = await pool.query(
     `UPDATE pending_confirmations
      SET status = $3,
-         resolved_at = CASE WHEN $3 = 'pending' THEN resolved_at ELSE NOW() END
+         resolved_at = CASE WHEN $3 = 'pending' THEN resolved_at ELSE NOW() END,
+         resolution_json = CASE
+           WHEN $3 = 'pending' THEN resolution_json
+           WHEN $4::jsonb IS NOT NULL THEN $4::jsonb
+           ELSE resolution_json
+         END
      WHERE id = $1 AND user_id = $2
      RETURNING id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
-               channel, status, expires_at AS "expiresAt", resolved_at AS "resolvedAt"`,
-    [id, userId, status],
+               channel, status, expires_at AS "expiresAt", resolved_at AS "resolvedAt",
+               resolution_json AS "resolution"`,
+    [id, userId, status, resolutionJson],
   );
   return rows[0] || null;
 }
