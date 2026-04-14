@@ -47,9 +47,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [timelineSummary, setTimelineSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [gmailAccounts, setGmailAccounts] = useState([]);
+  const [briefContext, setBriefContext] = useState(null);
+  const [activeZoneState, setActiveZoneState] = useState('context');
+  const [activeTile, setActiveTile] = useState(null);
   const draftFromRef = useRef({});
   const draftToRef = useRef({});
   const draftBodyRef = useRef({});
+  // ts of the email draft currently showing in the active zone — confirm
+  // cards still live in ccMessages and use this to locate the paired
+  // draft refs (from/to/body).
+  const activeEmailDraftTsRef = useRef(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -61,6 +68,30 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       .then((accounts) => setGmailAccounts(Array.isArray(accounts) ? accounts.filter((a) => a.account_email) : []))
       .catch(() => {});
   }, [authToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch structured brief context — drives the active-zone context cards.
+  // Fails soft: leaves briefContext null so the zone renders nothing.
+  const fetchBriefContext = useCallback(async () => {
+    if (!authToken) return;
+    try {
+      const r = await apiFetch('/api/brief/context', { headers: { Authorization: `Bearer ${authToken}` } });
+      if (!r.ok) return;
+      const data = await r.json();
+      setBriefContext(data);
+      // If we'd previously collapsed the zone to 'empty' after a success,
+      // promote it back to 'context' now that we have fresh data.
+      setActiveZoneState((s) => (s === 'empty' ? 'context' : s));
+    } catch { /* silent */ }
+  }, [apiFetch, authToken]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    fetchBriefContext();
+    const interval = setInterval(fetchBriefContext, 5 * 60 * 1000);
+    const onVis = () => { if (document.visibilityState === 'visible') fetchBriefContext(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVis); };
+  }, [authToken, fetchBriefContext]);
 
   const userTZ = currentUser?.timezone || 'America/Los_Angeles';
   const today = getTodayLocal(userTZ);
@@ -232,6 +263,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const ccAbortRef   = useRef(null);   // active AbortController for chat stream
   const ccStoppedRef = useRef(false);  // set true on user Stop so late events are ignored
   const ccSendRef    = useRef(null);   // holds latest handleCcSend for cross-surface triggers
+  const ccMessagesRef = useRef([]);    // mirror of ccMessages for stable reads inside callbacks
   const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
   const lastCheckedRef = useRef(new Date().toISOString());
@@ -269,6 +301,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, []);
 
   useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
+
+  // Mirror ccMessages into a ref so callbacks (handleCcSend) can read the
+  // latest committed state without depending on ccMessages in their deps.
+  useEffect(() => { ccMessagesRef.current = ccMessages; }, [ccMessages]);
 
   // Persist CC messages to localStorage on every change
   useEffect(() => {
@@ -394,9 +430,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         return;
       }
 
-      // Step 3: no messages — generate brief first
-      const h = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: userTZ, hour: 'numeric', hour12: false }).format(new Date()), 10);
-      const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+      // Step 3: no messages — generate brief first. Server derives time
+      // state from req.user.timezone so no timeOfDay needed here.
       const aName = currentUser?.assistantName || 'Aria';
       const briefRes = await apiFetch('/api/dashboard/aria-brief', {
         method: 'POST',
@@ -406,7 +441,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           assistantName: aName,
           persona: 'executive_assistant',
           userName: firstName,
-          timeOfDay: tod,
           data: {
             overdue: initialBriefData?.overdue || overdueTasks.map((t) => t.title).join(', ') || 'None',
             highPriority: initialBriefData?.highPriority || highPriorityTasks.map((t) => t.title).join(', ') || 'None',
@@ -484,8 +518,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (!ccConvId || ccRefreshing) return;
     setCcRefreshing(true);
     try {
-      const h = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: userTZ, hour: 'numeric', hour12: false }).format(new Date()), 10);
-      const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+      // Server derives time state from req.user.timezone.
       const aName = currentUser?.assistantName || 'Aria';
       const briefRes = await apiFetch('/api/dashboard/aria-brief', {
         method: 'POST',
@@ -495,7 +528,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           assistantName: aName,
           persona: 'executive_assistant',
           userName: firstName,
-          timeOfDay: tod,
           data: {
             overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
             highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
@@ -603,19 +635,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           ? { title: draft.title, due_date: draft.due_date || '', due_time: to24hTo12h(draft.due_time), priority: draft.priority || 'medium' }
           : { title: draft.title, start_time: draft.start_time, duration_minutes: draft.duration_minutes || 60 };
         const now = new Date().toISOString();
+        // Ack goes to chat feed; tile goes to the active zone.
         setCcMessages((prev) => [
           ...prev,
           { role: 'assistant', content: ack, createdAt: now, ts: Date.now() },
-          { role: draft.type === 'task' ? 'task_draft' : 'event_draft', id: tileId, type: draft.type, status: 'draft', confidence: draft.confidence || 'medium', payload, createdAt: now, ts: Date.now() },
         ]);
+        setActiveTile({
+          role: draft.type === 'task' ? 'task_draft' : 'event_draft',
+          id: tileId,
+          type: draft.type,
+          status: 'draft',
+          confidence: draft.confidence || 'medium',
+          payload,
+          createdAt: now,
+          ts: Date.now(),
+        });
+        setActiveZoneState('tile');
         ccAbortRef.current = null;
         setCcSending(false);
         return;
       }
     } catch { /* parser failure → fall through to normal chat */ }
 
-    // Build context: last 10 messages + full Aria system prompt with live data
-    const recentMsgs = [...ccMessages.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
+    // Build context: last 10 messages + full Aria system prompt with live data.
+    // Read from ref so we always see the latest committed state.
+    const recentMsgs = [...ccMessagesRef.current.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
 
     // Email-intent: inject the list of connected Gmail accounts inline so
     // Aria doesn't ask "which account?". Best-effort — silent fall-through
@@ -708,19 +752,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   onReloadNotes?.();
                 }
               } else if (currentEvent === 'email_draft') {
-                // Full draft preview — shown ABOVE the approval card.
-                setCcMessages((prev) => {
-                  const updated = [...prev];
-                  const placeholder = updated.pop();
-                  updated.push({
-                    role: 'email_draft',
-                    draft: parsed.draft || {},
-                    createdAt: new Date().toISOString(),
-                    ts: Date.now(),
-                  });
-                  if (placeholder) updated.push(placeholder);
-                  return updated;
+                // Full draft preview — rendered in the active zone now.
+                const draftTs = Date.now();
+                activeEmailDraftTsRef.current = draftTs;
+                setActiveTile({
+                  role: 'email_draft',
+                  draft: parsed.draft || {},
+                  createdAt: new Date().toISOString(),
+                  ts: draftTs,
                 });
+                setActiveZoneState('email');
               } else if (currentEvent === 'tool_confirm') {
                 // Inject an inline confirmation card BEFORE the (empty) assistant placeholder
                 setCcMessages((prev) => {
@@ -869,6 +910,96 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     Object.values(dismissTimers.current).forEach(clearTimeout);
     dismissTimers.current = {};
   }, []);
+
+  // ── Active-zone tile helpers (Phase 2) ────────────────────────────────
+  const updateActiveTile = useCallback((patch) => {
+    setActiveTile((prev) => {
+      if (!prev) return prev;
+      const nextPayload = patch && patch.payload !== undefined ? patch.payload : { ...(prev.payload || {}), ...patch };
+      return { ...prev, payload: nextPayload };
+    });
+  }, []);
+
+  const cancelActiveTile = useCallback(() => {
+    setActiveTile(null);
+    setActiveZoneState(briefContext ? 'context' : 'empty');
+  }, [briefContext]);
+
+  const executeActiveTile = useCallback(async () => {
+    setActiveTile((prev) => (prev ? { ...prev, status: 'executing', error: null } : prev));
+    const tile = activeTile;
+    if (!tile) return;
+    const p = tile.payload || {};
+    let body;
+    if (tile.type === 'task') {
+      body = {
+        type: 'task',
+        payload: {
+          title: p.title || '',
+          due_date: p.due_date || null,
+          priority: p.priority || 'medium',
+          ...(p.due_time ? { due_time: p.due_time } : {}),
+          ...(p.entity_name ? { entity_name: p.entity_name } : {}),
+        },
+      };
+    } else {
+      const start = p.start_time;
+      const mins = Number(p.duration_minutes) || 60;
+      let endIso = null;
+      try {
+        const s = new Date(start);
+        if (!isNaN(s.getTime())) {
+          const e = new Date(s.getTime() + mins * 60000);
+          const pad = (n) => String(n).padStart(2, '0');
+          endIso = `${e.getFullYear()}-${pad(e.getMonth() + 1)}-${pad(e.getDate())}T${pad(e.getHours())}:${pad(e.getMinutes())}:${pad(e.getSeconds())}`;
+        }
+      } catch {}
+      body = {
+        type: 'event',
+        payload: {
+          title: p.title || '',
+          start_datetime: start,
+          end_datetime: endIso,
+          ...(p.calendarId ? { calendarId: p.calendarId } : {}),
+        },
+      };
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await apiFetch('/api/tile/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${res.status}` } : prev));
+        return;
+      }
+      // Success: append summary to chat feed, flip zone to success, decay to empty.
+      const summary = tile.type === 'task'
+        ? `Task created — ${p.title || 'untitled'}${p.due_date ? ` · due ${p.due_date}` : ''}${p.entity_name ? ` · ${p.entity_name}` : ''}`
+        : `Event created — ${p.title || 'untitled'}${p.start_time ? ` · ${p.start_time}` : ''}`;
+      setCcMessages((prev) => [...prev, { role: 'system', content: summary, createdAt: new Date().toISOString(), ts: Date.now() }]);
+      if (tile.type === 'task') onReloadTasks?.();
+      else if (tile.type === 'event') onReloadCalendar?.();
+      setActiveZoneState('success');
+      setTimeout(() => {
+        setActiveTile(null);
+        setActiveZoneState('empty');
+        // Refresh briefContext so the context cards repopulate with the new task/event.
+        fetchBriefContext();
+      }, 2000);
+    } catch (err) {
+      const msg = err?.name === 'AbortError' ? 'Request timed out — tap Retry.' : (err.message || 'Network error');
+      setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: msg } : prev));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, [activeTile, apiFetch, authToken, onReloadTasks, onReloadCalendar, fetchBriefContext]);
 
   const executeTile = useCallback(async (tile) => {
     const p = tile.payload || {};
@@ -1055,7 +1186,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       {/* ROW 2: Command Center */}
       <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '1485px', width: '100%' }}>
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5" style={{ flexShrink: 0 }}>
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-lg" style={{ color: '#4f4dcf' }}>auto_awesome</span>
             <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: '#4f4dcf' }}>Command Center</h3>
@@ -1070,6 +1201,22 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             <option value="chatgpt">ChatGPT</option>
           </select>
         </div>
+        {/* Active zone — structured context, tiles, email drafts, success */}
+        <ActiveZone
+          state={activeZoneState}
+          briefContext={briefContext}
+          activeTile={activeTile}
+          entityColorMap={entityColorMap}
+          gmailAccounts={gmailAccounts}
+          entities={entities}
+          onTileChange={(patch) => updateActiveTile(patch)}
+          onTileConfirm={executeActiveTile}
+          onTileCancel={cancelActiveTile}
+          onTileRetry={executeActiveTile}
+          draftFromRef={draftFromRef}
+          draftToRef={draftToRef}
+          draftBodyRef={draftBodyRef}
+        />
         {/* Messages */}
         <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '405px', fontFamily: 'Manrope, sans-serif' }}>
           {ccLoading ? (
@@ -1206,27 +1353,26 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   const preview = bodyStr
                     ? (bodyStr.length > 300 ? bodyStr.slice(0, 300) + '…' : bodyStr)
                     : (p.subject || '');
-                  // For send_email, look back for the paired email_draft row and
-                  // pull the user's edits (From account + To address + body) off the refs.
+                  // For send_email, the paired email_draft now lives in the
+                  // active zone; use activeEmailDraftTsRef + activeTile to
+                  // locate the user's edits.
                   let accountOverride = null;
                   let toOverride = null;
                   let bodyOverride = null;
                   if (msg.tool === 'send_email') {
-                    for (let k = i - 1; k >= 0; k--) {
-                      const prev = ccMessages[k];
-                      if (prev?.role === 'email_draft') {
-                        accountOverride = draftFromRef.current[prev.ts] || null;
-                        const editedTo = draftToRef.current[prev.ts];
-                        const originalTo = prev.draft?.to || '';
-                        if (typeof editedTo === 'string' && editedTo.trim() && editedTo.trim() !== originalTo) {
-                          toOverride = editedTo.trim();
-                        }
-                        const editedBody = draftBodyRef.current[prev.ts];
-                        const originalBody = prev.draft?.body || '';
-                        if (typeof editedBody === 'string' && editedBody !== originalBody) {
-                          bodyOverride = editedBody;
-                        }
-                        break;
+                    const draftTs = activeEmailDraftTsRef.current;
+                    const activeDraft = (activeTile?.role === 'email_draft') ? (activeTile.draft || {}) : {};
+                    if (draftTs) {
+                      accountOverride = draftFromRef.current[draftTs] || null;
+                      const editedTo = draftToRef.current[draftTs];
+                      const originalTo = activeDraft.to || '';
+                      if (typeof editedTo === 'string' && editedTo.trim() && editedTo.trim() !== originalTo) {
+                        toOverride = editedTo.trim();
+                      }
+                      const editedBody = draftBodyRef.current[draftTs];
+                      const originalBody = activeDraft.body || '';
+                      if (typeof editedBody === 'string' && editedBody !== originalBody) {
+                        bodyOverride = editedBody;
                       }
                     }
                   }
@@ -1617,4 +1763,192 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
     </div>
   );
+}
+
+// ── ActiveZone ───────────────────────────────────────────────────────────
+// Structured surface above the chat feed. Renders one of:
+//   context → 3 mini-cards (still open / done today / up next)
+//   tile    → TaskDraftTile or EventDraftTile
+//   email   → inline editable email draft card
+//   success → green confirmation
+//   empty   → collapsed (height 0)
+function ActiveZone({ state, briefContext, activeTile, entityColorMap, gmailAccounts, entities, onTileChange, onTileConfirm, onTileCancel, onTileRetry, draftFromRef, draftToRef, draftBodyRef }) {
+  const isContext = state === 'context' && briefContext;
+  const isVisible = isContext || state === 'tile' || state === 'email' || state === 'success';
+
+  if (!isVisible) {
+    return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
+  }
+
+  const wrapperStyle = {
+    flexShrink: 0,
+    padding: '14px 16px',
+    borderBottom: '0.5px solid rgba(79,77,207,0.08)',
+    background: '#fcfbff',
+  };
+
+  if (isContext) {
+    const bc = briefContext;
+    const Card = ({ title, rows }) => (
+      <div style={{ flex: 1, minWidth: 140, background: '#f5f2fa', borderRadius: 10, padding: '10px 12px' }}>
+        <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{title}</div>
+        {rows.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
+        ) : rows.map((r, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: '#374151' }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: r.color || '#9ca3af', flexShrink: 0 }} />
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
+            {r.chip && <span style={{ fontSize: 10, color: r.chipColor || '#6b7280', background: r.chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, flexShrink: 0 }}>{r.chip}</span>}
+          </div>
+        ))}
+      </div>
+    );
+
+    const entityDot = (t) => {
+      const tag = (t.tags && t.tags[0]) || null;
+      return tag ? (entityColorMap[tag.toLowerCase()] || '#9ca3af') : '#9ca3af';
+    };
+    const formatTime = (iso) => {
+      try {
+        if (!iso) return '';
+        const d = new Date(iso);
+        return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+      } catch { return ''; }
+    };
+
+    const stillOpen = [
+      ...(bc.tasks?.overdue || []).slice(0, 2).map((t) => ({
+        label: t.title, color: entityDot(t), chip: 'overdue', chipColor: '#b91c1c', chipBg: 'rgba(239,68,68,0.15)',
+      })),
+      ...(bc.tasks?.dueToday || []).slice(0, 2).map((t) => ({
+        label: t.title, color: entityDot(t), chip: 'today', chipColor: '#4f4dcf', chipBg: 'rgba(79,77,207,0.12)',
+      })),
+    ].slice(0, 4);
+
+    const doneToday = [
+      ...(bc.tasks?.completedToday || []).slice(0, 2).map((t) => ({
+        label: t.title, color: entityDot(t), chip: '✓', chipColor: '#059669', chipBg: 'rgba(5,150,105,0.12)',
+      })),
+      ...(bc.events?.completed || []).slice(0, 2).map((ev) => ({
+        label: ev.title, color: '#10b981', chip: formatTime(ev.start), chipColor: '#065f46', chipBg: 'rgba(5,150,105,0.08)',
+      })),
+    ].slice(0, 4);
+
+    const upNext = [
+      ...(bc.events?.upcoming || []).slice(0, 2).map((ev) => ({
+        label: ev.title, color: '#4f4dcf', chip: formatTime(ev.start), chipColor: '#4f4dcf', chipBg: 'rgba(79,77,207,0.1)',
+      })),
+      ...(bc.emails?.needsAttention || []).slice(0, 1).map((e) => ({
+        label: `${e.vendor || 'Email'}: ${e.summary || ''}`.slice(0, 60), color: '#f59e0b',
+        chip: e.actionRequired ? 'action' : 'inbox', chipColor: '#92400e', chipBg: 'rgba(245,158,11,0.12)',
+      })),
+    ].slice(0, 3);
+
+    return (
+      <div style={wrapperStyle}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <Card title="Still open" rows={stillOpen} />
+          <Card title="Done today" rows={doneToday} />
+          <Card title="Up next" rows={upNext} />
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'tile' && activeTile) {
+    const Tile = activeTile.role === 'task_draft' ? TaskDraftTile : EventDraftTile;
+    return (
+      <div style={wrapperStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            {activeTile.type === 'task' ? 'Task draft' : 'Event draft'}
+          </span>
+        </div>
+        <Tile
+          payload={activeTile.payload}
+          status={activeTile.status || 'draft'}
+          error={activeTile.error}
+          onChange={onTileChange}
+          onConfirm={onTileConfirm}
+          onCancel={onTileCancel}
+          onRetry={onTileRetry}
+          gmailAccounts={gmailAccounts}
+          entities={entities}
+        />
+      </div>
+    );
+  }
+
+  if (state === 'email' && activeTile?.role === 'email_draft') {
+    const d = activeTile.draft || {};
+    const matched = gmailAccounts.find((a) => a.account_email === d.from);
+    const currentFrom = draftFromRef.current[activeTile.ts]
+      || (matched ? matched.account_email : (gmailAccounts[0]?.account_email || d.from || ''));
+    if (!draftFromRef.current[activeTile.ts] && currentFrom) draftFromRef.current[activeTile.ts] = currentFrom;
+    const multiAccount = gmailAccounts.length > 1;
+
+    return (
+      <div style={wrapperStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Email draft</span>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm" style={{ fontFamily: 'Manrope, sans-serif' }}>
+          <div style={{ padding: '12px 14px', fontSize: '13px', color: '#374151' }}>
+            <div className="grid grid-cols-[56px_1fr] gap-y-1 gap-x-2">
+              <div className="text-gray-400">From</div>
+              {multiAccount ? (
+                <select
+                  defaultValue={currentFrom}
+                  onChange={(e) => { draftFromRef.current[activeTile.ts] = e.target.value; }}
+                  style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#1f2937', background: 'transparent', border: 'none', padding: 0, outline: 'none', cursor: 'pointer' }}
+                >
+                  {gmailAccounts.map((a) => (
+                    <option key={a.account_email} value={a.account_email}>{a.account_email}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="text-gray-800 truncate">{currentFrom || '—'}</div>
+              )}
+              <div className="text-gray-400">To</div>
+              <input
+                type="text"
+                defaultValue={d.to || ''}
+                onChange={(e) => { draftToRef.current[activeTile.ts] = e.target.value; }}
+                placeholder="recipient@email.com"
+                style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#1f2937', background: 'transparent', border: 'none', borderBottom: '1px solid transparent', padding: '1px 0', outline: 'none', width: '100%' }}
+                onFocus={(e) => { e.target.style.borderBottom = '1px solid rgba(79,77,207,0.4)'; }}
+                onBlur={(e) => { e.target.style.borderBottom = '1px solid transparent'; }}
+              />
+              <div className="text-gray-400">Subject</div>
+              <div className="text-gray-800" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
+            </div>
+          </div>
+          <div style={{ borderTop: '1px solid #e5e7eb' }} />
+          <textarea
+            defaultValue={d.body || ''}
+            onChange={(e) => { draftBodyRef.current[activeTile.ts] = e.target.value; }}
+            placeholder="Email body"
+            style={{ display: 'block', width: '100%', padding: '12px 14px', fontFamily: 'Manrope, sans-serif', fontSize: '13px', lineHeight: '1.55', color: '#1f2937', background: 'transparent', border: 'none', borderTop: '1px solid transparent', outline: 'none', resize: 'vertical', minHeight: '80px', maxHeight: '320px', boxSizing: 'border-box' }}
+            onFocus={(e) => { e.target.style.borderTop = '1px solid rgba(79,77,207,0.4)'; }}
+            onBlur={(e) => { e.target.style.borderTop = '1px solid transparent'; }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'success') {
+    return (
+      <div style={wrapperStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#059669' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>check_circle</span>
+          <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600 }}>Created successfully</span>
+        </div>
+      </div>
+    );
+  }
+
+  return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
 }
