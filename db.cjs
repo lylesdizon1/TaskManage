@@ -4454,7 +4454,7 @@ async function markCalendarNoteAlertSent(userId, eventId) {
 
 async function getWhatsAppHistory(phone, limit = 6) {
   const { rows } = await pool.query(
-    `SELECT role, content FROM whatsapp_conversations
+    `SELECT role, content, created_at AS "createdAt" FROM whatsapp_conversations
      WHERE phone = $1
      ORDER BY created_at DESC
      LIMIT $2`,

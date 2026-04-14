@@ -350,10 +350,22 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       };
 
       // ── Load conversation history (last 3 exchanges = 6 messages) ────
+      // If the most recent message is older than SESSION_TIMEOUT_MS, start
+      // a fresh session so stale context (e.g. yesterday's topic) doesn't
+      // bleed into today's turn.
+      const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
       let priorMessages = [];
       try {
         const history = await db.getWhatsAppHistory(normalizedPhone, 6);
-        priorMessages = history.map(m => ({ role: m.role, content: m.content }));
+        // history is oldest-first, so most-recent is the last element.
+        const mostRecent = history.length ? history[history.length - 1] : null;
+        const age = mostRecent?.createdAt ? Date.now() - new Date(mostRecent.createdAt).getTime() : null;
+        if (age !== null && age > SESSION_TIMEOUT_MS) {
+          logger.info('whatsapp.history.sessionExpired', { requestId: req.requestId, userId, ageMinutes: Math.round(age / 60000) });
+          priorMessages = [];
+        } else {
+          priorMessages = history.map(m => ({ role: m.role, content: m.content }));
+        }
       } catch (e) { logger.error('whatsapp.history.loadFailed', { requestId: req.requestId, userId, error: e.message }); }
 
       // Build user message — text-only or multipart (image + text) for vision
