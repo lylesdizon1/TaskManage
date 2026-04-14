@@ -61,26 +61,10 @@ const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
-// NOTE: in-memory — server restart during a pending confirmation orphans
-// the loop. TTL handles cleanup on the DB side. Upgrade to pub/sub if this
-// becomes common.
-const webConfirmWaiters = new Map();
-
-/**
- * Resolve a paused web agentic-loop waiter from outside this module — used
- * by the WhatsApp webhook when a YES/NO reply confirms a pending row that
- * a web SSE turn is simultaneously waiting on, so the loop unpauses without
- * executing the tool a second time.
- */
-function resolveWebWaiter(confirmId, resolution) {
-  const waiter = webConfirmWaiters.get(confirmId);
-  if (!waiter) return false;
-  logger.info('webWaiter.crossSurfaceResolved', { confirmId, action: resolution?.action, alreadyExecuted: !!resolution?.alreadyExecuted });
-  clearTimeout(waiter.timeout);
-  webConfirmWaiters.delete(confirmId);
-  waiter.resolve(resolution);
-  return true;
-}
+// Confirmation waiters now use pg LISTEN/NOTIFY (db.listenForConfirmation /
+// db.notifyConfirmation). The DB's pending_confirmations row is the
+// authoritative state; NOTIFY carries advisory payload metadata. No
+// in-memory waiter map — survives restarts and horizontal scaling.
 
 /**
  * Factory function that creates the AI router with all chat and proxy endpoints.
@@ -382,21 +366,32 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         logger.info('chat.gate.waiter.created', { requestId: req.requestId, userId, tool, confirmId: pending.id });
         await logAction({ eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id, decision });
 
-        return new Promise((resolve) => {
-          const timeout = setTimeout(async () => {
-            webConfirmWaiters.delete(pending.id);
+        // Abort the listener (releases its dedicated pg client) if the SSE
+        // response closes before the user confirms.
+        const listenController = new AbortController();
+        const onResClose = () => { try { listenController.abort(); } catch {} };
+        res.once('close', onResClose);
+
+        try {
+          const resolution = await db.listenForConfirmation(pending.id, 2 * 60 * 1000, { signal: listenController.signal });
+          res.removeListener('close', onResClose);
+          logger.info('chat.gate.waiter.resolved', { requestId: req.requestId, userId, tool, confirmId: pending.id, action: resolution?.action, alreadyExecuted: !!resolution?.alreadyExecuted });
+          return resolution;
+        } catch (err) {
+          res.removeListener('close', onResClose);
+          if (err.message === 'confirmation_timeout') {
             await db.updatePendingConfirmationStatus(pending.id, userId, 'expired').catch(() => {});
             await logAction({ eventType: 'tool_cancelled', toolName: tool, input, errorMsg: 'expired', confirmId: pending.id });
             logger.info('chat.gate.waiter.expired', { requestId: req.requestId, userId, tool, confirmId: pending.id });
-            resolve({ action: 'deny', reason: 'expired', message: `Confirmation for ${tool} timed out.` });
-          }, 2 * 60 * 1000);
-
-          const wrappedResolve = (value) => {
-            logger.info('chat.gate.waiter.resolved', { requestId: req.requestId, userId, tool, confirmId: pending.id, action: value?.action });
-            resolve(value || { action: 'deny', reason: 'undefined_resolve', message: `Confirmation for ${tool} was not acknowledged.` });
-          };
-          webConfirmWaiters.set(pending.id, { userId, resolve: wrappedResolve, timeout, tool, input });
-        });
+            return { action: 'deny', reason: 'expired', message: `Confirmation for ${tool} timed out.` };
+          }
+          if (err.message === 'confirmation_aborted') {
+            logger.info('chat.gate.waiter.aborted', { requestId: req.requestId, userId, tool, confirmId: pending.id });
+            return { action: 'deny', reason: 'client_disconnected', message: `Confirmation for ${tool} was not acknowledged.` };
+          }
+          logger.error('chat.gate.listen.failed', { requestId: req.requestId, userId, tool, confirmId: pending.id, error: err.message });
+          return { action: 'deny', reason: 'listen_failed', message: `Could not wait for confirmation for ${tool}.` };
+        }
       };
 
       const loopResult = await runAgenticLoop({
@@ -459,8 +454,8 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         return res.status(410).json({ error: 'Confirmation expired' });
       }
 
-      const waiter = webConfirmWaiters.get(confirm_id);
       const nextStatus = approved ? 'approved' : 'rejected';
+      // DB update first — the row is authoritative. NOTIFY is advisory.
       await db.updatePendingConfirmationStatus(confirm_id, userId, nextStatus).catch(() => {});
       await db.logAgentAction({
         userId,
@@ -470,17 +465,17 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         confirmId: confirm_id,
       });
 
-      if (waiter) {
-        clearTimeout(waiter.timeout);
-        webConfirmWaiters.delete(confirm_id);
-        const overrides = {};
-        if (account_email) overrides.account_email = account_email;
-        if (to_override)   overrides.to = to_override;
-        waiter.resolve(
-          approved
-            ? { action: 'allow', overrides }
-            : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` }
-        );
+      const overrides = {};
+      if (account_email) overrides.account_email = account_email;
+      if (to_override)   overrides.to = to_override;
+      try {
+        await db.notifyConfirmation(confirm_id, approved
+          ? { action: 'allow', overrides }
+          : { action: 'deny', reason: 'user_rejected', message: `User cancelled ${pending.toolName}.` });
+      } catch (e) {
+        // Non-fatal: if no listener is attached (e.g. after a restart),
+        // the waiter's re-read-on-LISTEN already catches the DB state.
+        logger.warn('chat.confirm.notify.failed', { requestId: req.requestId, userId, confirmId: confirm_id, error: e.message });
       }
       return res.json({ success: true, status: nextStatus });
     } catch (err) {
@@ -494,4 +489,3 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
 
 module.exports = createAiRouter;
 module.exports.createAiRouter = createAiRouter;
-module.exports.resolveWebWaiter = resolveWebWaiter;

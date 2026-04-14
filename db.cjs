@@ -943,6 +943,136 @@ async function createPendingConfirmation({ userId, toolName, params, channel }) 
   return rows[0];
 }
 
+/**
+ * Sanitize a confirmation id into a safe pg LISTEN/NOTIFY channel.
+ * Lowercase alphanumerics + underscore only; capped at 55 chars so the
+ * `confirm_` prefix keeps the identifier under the 63-byte pg limit.
+ * Defense-in-depth — UUIDs are already safe, but never trust an id shape.
+ */
+function getConfirmationChannel(confirmId) {
+  const safe = String(confirmId).toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 55);
+  return `confirm_${safe}`;
+}
+
+/** Bare-id lookup used by the listener to re-read DB truth after a NOTIFY. */
+async function getConfirmationById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
+            channel, status, expires_at AS "expiresAt", created_at AS "createdAt", resolved_at AS "resolvedAt"
+     FROM pending_confirmations WHERE id = $1`,
+    [id],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Send a NOTIFY payload on a confirmation's channel. Non-fatal if no
+ * listener is attached — pg_notify is fire-and-forget.
+ */
+async function notifyConfirmation(confirmId, payload) {
+  const channel = getConfirmationChannel(confirmId);
+  await pool.query('SELECT pg_notify($1, $2)', [channel, JSON.stringify(payload || {})]);
+}
+
+/**
+ * Wait for a pending confirmation to reach a terminal status via pg
+ * LISTEN/NOTIFY. The DB row is the authoritative state; NOTIFY is only
+ * a wake-up carrying advisory metadata (overrides, alreadyExecuted, result).
+ *
+ * Resolution shape matches what the agentic loop's gate expects:
+ *   { action: 'allow'|'deny', overrides, alreadyExecuted?, result?, reason?, message? }
+ *
+ * Rejects with:
+ *   Error('confirmation_timeout')  after timeoutMs
+ *   Error('confirmation_aborted')  if signal fires (e.g. SSE client disconnect)
+ *
+ * The dedicated pg client is released in exactly one place regardless of
+ * which path settles the promise.
+ */
+async function listenForConfirmation(confirmId, timeoutMs, { signal } = {}) {
+  const channel = getConfirmationChannel(confirmId);
+  const client = await pool.connect();
+  let settled = false;
+  let notificationHandler = null;
+  let timeoutHandle = null;
+  let abortHandler = null;
+
+  const cleanup = async () => {
+    if (settled) return;
+    settled = true;
+    if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
+    if (notificationHandler) { client.removeListener('notification', notificationHandler); notificationHandler = null; }
+    if (abortHandler && signal) { try { signal.removeEventListener('abort', abortHandler); } catch {} abortHandler = null; }
+    try { await client.query(`UNLISTEN "${channel}"`); } catch {}
+    try { client.release(); } catch {}
+  };
+
+  return new Promise((resolve, reject) => {
+    const buildResolution = (row, payload = {}) => {
+      if (!row) return { action: 'deny', reason: 'not_found' };
+      const dbAction = row.status === 'approved' ? 'allow' : 'deny';
+      // Payload is advisory; DB wins on action mismatch.
+      const trustedPayload = (payload.action && payload.action !== dbAction) ? {} : payload;
+      return {
+        action: dbAction,
+        overrides: trustedPayload.overrides && typeof trustedPayload.overrides === 'object' ? trustedPayload.overrides : {},
+        alreadyExecuted: trustedPayload.alreadyExecuted === true,
+        result: trustedPayload.result,
+        reason: dbAction === 'deny' ? (trustedPayload.reason || (row.status === 'expired' ? 'expired' : 'user_rejected')) : undefined,
+        message: dbAction === 'deny' ? (trustedPayload.message || `User cancelled ${row.toolName}.`) : undefined,
+      };
+    };
+
+    // Abort + timeout wiring.
+    if (signal) {
+      if (signal.aborted) {
+        cleanup().finally(() => reject(new Error('confirmation_aborted')));
+        return;
+      }
+      abortHandler = () => cleanup().finally(() => reject(new Error('confirmation_aborted')));
+      signal.addEventListener('abort', abortHandler, { once: true });
+    }
+    timeoutHandle = setTimeout(() => {
+      cleanup().finally(() => reject(new Error('confirmation_timeout')));
+    }, timeoutMs);
+
+    notificationHandler = async (msg) => {
+      if (msg.channel !== channel) return;
+      let payload = {};
+      try { payload = JSON.parse(msg.payload || '{}'); } catch { payload = {}; }
+
+      let row = null;
+      try { row = await getConfirmationById(confirmId); } catch {}
+      if (!row || row.status === 'pending') return; // spurious — keep waiting
+      const resolution = buildResolution(row, payload);
+      await cleanup();
+      resolve(resolution);
+    };
+    client.on('notification', notificationHandler);
+
+    // LISTEN, then immediately re-read the row — covers the race where the
+    // status was updated + NOTIFY fired before this listener attached.
+    client.query(`LISTEN "${channel}"`)
+      .then(async () => {
+        let row = null;
+        try { row = await getConfirmationById(confirmId); }
+        catch (err) { await cleanup(); return reject(err); }
+        if (!row) { await cleanup(); return resolve({ action: 'deny', reason: 'not_found' }); }
+        if (row.status !== 'pending') {
+          // Terminal already — resolve without payload metadata (lost if it was sent).
+          const resolution = buildResolution(row, {});
+          await cleanup();
+          return resolve(resolution);
+        }
+        // Still pending: keep waiting on NOTIFY / timeout / abort.
+      })
+      .catch(async (err) => {
+        await cleanup();
+        reject(err);
+      });
+  });
+}
+
 async function getPendingConfirmation(id, userId) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
@@ -4635,6 +4765,10 @@ module.exports = {
   updatePendingConfirmationStatus,
   findLatestPendingConfirmation,
   cleanupPendingConfirmations,
+  getConfirmationChannel,
+  getConfirmationById,
+  notifyConfirmation,
+  listenForConfirmation,
   createOrUpdateLearning,
   getUserLearnings,
   deactivateLearning,

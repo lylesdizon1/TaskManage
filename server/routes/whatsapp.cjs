@@ -50,7 +50,6 @@ const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
-const { resolveWebWaiter } = require('./ai.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 /** Derive a short user-facing code from a confirmation ID. */
@@ -167,16 +166,16 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
               confirmId: pending.id,
             });
 
-            // On deny, resolve any waiting web turn immediately (no tool to run).
+            // On deny, notify any waiting web turn immediately (no tool to run).
             if (!approved) {
               try {
-                resolveWebWaiter(pending.id, {
+                await db.notifyConfirmation(pending.id, {
                   action: 'deny',
                   reason: 'user_rejected',
                   message: `User cancelled ${pending.toolName}.`,
                 });
               } catch (e) {
-                logger.error('whatsapp.confirm.resolveWebWaiter.failed', { userId, error: e.message });
+                logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message });
               }
               await db.logAgentAction({ userId, eventType: 'tool_cancelled', toolName: pending.toolName, input: pending.params, confirmId: pending.id });
               await sendWhatsApp(db, userId, `Cancelled.`, fromRaw).catch(() => {});
@@ -198,14 +197,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             });
 
             try {
-              resolveWebWaiter(pending.id, {
+              await db.notifyConfirmation(pending.id, {
                 action: 'allow',
                 alreadyExecuted: true,
                 result,
                 overrides: {},
               });
             } catch (e) {
-              logger.error('whatsapp.confirm.resolveWebWaiter.failed', { userId, error: e.message });
+              logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message });
             }
 
             const reply = result?.success === false
