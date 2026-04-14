@@ -3463,15 +3463,7 @@ async function runMigrations() {
  * @note Admin access bypasses user scoping — callers must ensure
  * the admin role is verified before passing role='admin'.
  */
-async function getFinancialAccounts(userId, role) {
-  if (role === 'admin') {
-    const { rows } = await pool.query(
-      `SELECT id, user_id AS "userId", name, type, institution, currency,
-              entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"
-       FROM financial_accounts ORDER BY created_at DESC`,
-    );
-    return rows;
-  }
+async function getFinancialAccounts(userId) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", name, type, institution, currency,
             entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"
@@ -3570,15 +3562,15 @@ async function deleteFinancialAccount(id) {
  * @note Admin access bypasses user scoping — callers must ensure
  * the admin role is verified before passing role='admin'.
  */
-async function getTransactions(userId, role, filters = {}) {
+async function getTransactions(userId, filters = {}) {
   const where = [];
   const vals = [];
   let idx = 1;
 
-  if (role !== 'admin') {
-    where.push(`t.user_id = $${idx++}`);
-    vals.push(userId);
-  }
+  // Always user-scoped. Admin cross-tenant visibility, if ever needed,
+  // lives behind a separate helper gated by requireSuperAdmin.
+  where.push(`t.user_id = $${idx++}`);
+  vals.push(userId);
   if (filters.accountId) {
     where.push(`t.account_id = $${idx++}`);
     vals.push(filters.accountId);
@@ -3726,46 +3718,44 @@ async function updateTransaction(id, fields) {
  * @note Balance is computed as SUM(credits) - SUM(debits), not stored.
  * This means balance accuracy depends on all transactions being present.
  *
- * @param {string} userId - Authenticated user ID.
- * @param {string} role - User role — 'admin' bypasses user scoping.
+ * @param {string} userId - Authenticated user ID. Always scoped — cross-
+ *   tenant aggregation (if ever needed) belongs behind a separate helper
+ *   gated by requireSuperAdmin, not this one.
  * @returns {Promise<Object>} { monthly, balances, topCategories }.
  *
  * @note This is an aggregate query — may become expensive as
  * transaction volume grows. Consider caching or pagination
  * if needed at scale.
  */
-async function getFinancialSummary(userId, role) {
-  const userFilter = role === 'admin' ? '' : 'WHERE t.user_id = $1';
-  const vals = role === 'admin' ? [] : [userId];
+async function getFinancialSummary(userId) {
+  const vals = [userId];
 
   const { rows } = await pool.query(
     `SELECT t.entity_id AS "entityId", t.account_class AS "accountClass",
             SUBSTRING(t.date FROM 1 FOR 7) AS month,
             SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE 0 END)::float AS income,
             SUM(CASE WHEN t.type = 'debit' THEN t.amount ELSE 0 END)::float AS expenses
-     FROM transactions t ${userFilter}
+     FROM transactions t WHERE t.user_id = $1
      GROUP BY t.entity_id, t.account_class, SUBSTRING(t.date FROM 1 FOR 7)
      ORDER BY month DESC`,
     vals,
   );
 
-  // Get account balances
-  const balFilter = role === 'admin' ? '' : 'WHERE a.user_id = $1';
+  // Account balances
   const { rows: balanceRows } = await pool.query(
     `SELECT a.id AS "accountId", a.name, a.type, a.entity_id AS "entityId", a.account_class AS "accountClass",
             COALESCE(SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE -t.amount END), 0)::float AS balance
      FROM financial_accounts a
      LEFT JOIN transactions t ON t.account_id = a.id
-     ${balFilter}
+     WHERE a.user_id = $1
      GROUP BY a.id, a.name, a.type, a.entity_id, a.account_class`,
     vals,
   );
 
   // Top spending categories
-  const catFilter = role === 'admin' ? `WHERE t.type = 'debit'` : `WHERE t.user_id = $1 AND t.type = 'debit'`;
   const { rows: categoryRows } = await pool.query(
     `SELECT t.category, SUM(t.amount)::float AS total
-     FROM transactions t ${catFilter}
+     FROM transactions t WHERE t.user_id = $1 AND t.type = 'debit'
      GROUP BY t.category ORDER BY total DESC LIMIT 10`,
     vals,
   );

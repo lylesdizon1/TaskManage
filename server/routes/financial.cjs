@@ -305,7 +305,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.get('/api/financial/accounts', authenticateToken, async (req, res) => {
     try {
-      const accounts = await db.getFinancialAccounts(req.user.id, req.user.role);
+      const accounts = await db.getFinancialAccounts(req.user.id);
       return res.json(accounts);
     } catch (err) {
       logger.error('financial.accounts.readFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
@@ -376,7 +376,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       if (req.query.category) filters.category = req.query.category;
       if (req.query.startDate) filters.startDate = req.query.startDate;
       if (req.query.endDate) filters.endDate = req.query.endDate;
-      const txns = await db.getTransactions(req.user.id, req.user.role, filters);
+      const txns = await db.getTransactions(req.user.id, filters);
       return res.json(txns);
     } catch (err) {
       logger.error('financial.transactions.readFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
@@ -507,7 +507,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.get('/api/financial/summary', authenticateToken, async (req, res) => {
     try {
-      const summary = await db.getFinancialSummary(req.user.id, req.user.role);
+      const summary = await db.getFinancialSummary(req.user.id);
       return res.json(summary);
     } catch (err) {
       logger.error('financial.summary.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
