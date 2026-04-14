@@ -20,8 +20,12 @@ const PRIORITY_OPTIONS = [
  *   onCancel  — () => void
  *   onRetry   — () => void
  */
-export default function TaskDraftTile({ payload = {}, status = 'draft', error, onChange, onConfirm, onCancel, onRetry }) {
+export default function TaskDraftTile({ payload = {}, status = 'draft', error, onChange, onConfirm, onCancel, onRetry, entities = [] }) {
   const disabled = status === 'executing';
+  const showEntityField = Array.isArray(entities) && entities.length > 0;
+  const entityOptions = showEntityField
+    ? [{ value: '', label: '—' }, ...entities.map((e) => ({ value: e.name, label: e.name }))]
+    : [];
 
   return (
     <div
@@ -61,6 +65,16 @@ export default function TaskDraftTile({ payload = {}, status = 'draft', error, o
             disabled={disabled}
           />
         </div>
+        {showEntityField && (
+          <InlineEditableField
+            label="Entity"
+            value={payload.entity_name || ''}
+            onChange={(v) => onChange?.({ entity_name: v || null })}
+            inputType="select"
+            options={entityOptions}
+            disabled={disabled}
+          />
+        )}
       </div>
 
       <TileFooter

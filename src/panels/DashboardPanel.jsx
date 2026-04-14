@@ -869,6 +869,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           title: p.title || '',
           due_date: p.due_date || null,
           priority: p.priority || 'medium',
+          ...(p.entity_name ? { entity_name: p.entity_name } : {}),
         },
       };
     } else {
@@ -1083,6 +1084,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           onCancel={() => dismissTile(msg.id)}
                           onRetry={() => executeTile(msg)}
                           gmailAccounts={gmailAccounts}
+                          entities={entities}
                         />
                       </div>
                     </div>
