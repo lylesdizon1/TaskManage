@@ -223,3 +223,14 @@ cron.schedule('* * * * *', async () => {
   }
 });
 console.log('[cron] Morning brief scheduler started');
+
+// ── Pending-confirmations sweep — runs hourly ──────────────────────────────
+cron.schedule('0 * * * *', async () => {
+  try {
+    const { expired, deleted } = await db.cleanupPendingConfirmations();
+    cronLogger.info('pending-confirmations.sweep.done', { expired, deleted });
+  } catch (e) {
+    cronLogger.error('pending-confirmations.sweep.failed', { error: e.message });
+  }
+});
+console.log('[cron] Pending-confirmations sweep scheduler started');

@@ -1354,6 +1354,27 @@ async function getImportantUnread(userId, minRank = 3) {
 }
 
 /** Find the most recent pending row for a user on a given channel (for WhatsApp YES/NO matching). */
+/**
+ * Nightly/hourly sweep:
+ *   1) flip rows stuck in 'pending' past their expiry (>10 min) to 'expired'
+ *   2) hard-delete terminal rows older than 30 days so the table doesn't grow.
+ * Returns counts for logging.
+ */
+async function cleanupPendingConfirmations() {
+  const { rowCount: expired } = await pool.query(
+    `UPDATE pending_confirmations
+     SET status = 'expired', resolved_at = NOW()
+     WHERE status = 'pending'
+       AND created_at < NOW() - INTERVAL '10 minutes'`,
+  );
+  const { rowCount: deleted } = await pool.query(
+    `DELETE FROM pending_confirmations
+     WHERE status <> 'pending'
+       AND created_at < NOW() - INTERVAL '30 days'`,
+  );
+  return { expired, deleted };
+}
+
 async function findLatestPendingConfirmation(userId, channel, toolName) {
   const params = [userId, channel];
   let where = `WHERE user_id = $1 AND channel = $2 AND status = 'pending' AND expires_at > NOW()`;
@@ -4613,6 +4634,7 @@ module.exports = {
   getPendingConfirmation,
   updatePendingConfirmationStatus,
   findLatestPendingConfirmation,
+  cleanupPendingConfirmations,
   createOrUpdateLearning,
   getUserLearnings,
   deactivateLearning,
