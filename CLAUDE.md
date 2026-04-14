@@ -159,3 +159,10 @@ Full spec: /docs/design-system.md
 - 2026-04-08: JSDoc documentation pass complete (server/ + src/lib/)
 - 2026-04-08: Security audit Phases 2+3 closed (all criticals + mediums)
 - 2026-04-08: Settings fetch auth fix — was silently 401ing, broke AI tag suggestions
+
+## Architecture Documents
+
+- docs/dizon-os-architecture-v1.md — Core system architecture, six layers, system principles (Ray, Apr 13)
+- docs/system-review-apr13.md — Security audit findings, engineering rules, strategic impact (Ray, Apr 13)
+
+These documents are the source of truth for system design decisions. Read before making architectural changes.
