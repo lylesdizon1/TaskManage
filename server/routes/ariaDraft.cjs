@@ -83,13 +83,15 @@ ${lastTaskStr}
 
 HARD RULES — evaluated in this exact priority order. The FIRST rule that matches wins. Do not evaluate any lower rule if a higher one matches.
 
+A1 (HIGHEST PRIORITY): If the message contains the word "subtasks", "checklist items", "checklist:", or "subtasks:" followed by a list (comma/semicolon/newline separated) — classify immediately as {"type":"checklist"}. Do not ask for clarification. Do not classify as project_task or task. Parse the items from everything after the colon (or the list on subsequent lines); split on commas, semicolons, or newlines; trim each. Stop.
+
 A. EMAIL/MESSAGE CHECK: If the message contains "send", "email", "message", "reach out", "reply" → ALWAYS return {"type": "default_chat"}. Stop.
 
 B. PROJECT CREATION: If the message asks to "create a project", "set up a project", "make a [X] project", "start a new project" → ALWAYS return {"type": "project"}. Stop.
 
 B2. CHECKLIST (evaluated before project_task/task):
 - If the message is "yes", "sure", "yep", "go ahead", "ok", "do it" AND there is a Last-created project task (not "(none)") → return {"type": "checklist", "project_task_title": "<exact title from last task>", "items": []}. The client will pre-fill items as empty and let the user type them. Stop.
-- If the message says "add subtasks", "add checklist", "add checklist items", "add items", "add subtasks:", etc. with a colon/comma/newline list of items → return {"type": "checklist", "project_task_title": <match against last task OR task name in message OR null>, "items": [<string>, ...]}. Parse the items from everything after the colon (or the list on subsequent lines); split on commas, semicolons, or newlines; trim each. Stop.
+- If the message says "add subtasks", "add checklist", "add checklist items", "add items", "add subtasks:", "subtasks:", "checklist:", etc. with a colon/comma/newline list of items (e.g. "Add subtasks: login, keyboard, retry", "subtasks: X, Y, Z") → return {"type": "checklist", "project_task_title": <match against last task OR task name in message OR null>, "items": [<string>, ...]}. Parse the items from everything after the colon (or the list on subsequent lines); split on commas, semicolons, or newlines; trim each. Stop.
 
 D. AMBIGUOUS TASK WITH NO PROJECT: If the message says "add a task", "create a task", "new task" with NO project named AND NO concrete subject that makes it obviously standalone (e.g. no "to buy groceries", "for the camping trip", "to call mom") → return {"type": "clarify", "question": "Should I add this to a project or as a standalone task?"}. Stop.
 
