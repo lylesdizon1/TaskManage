@@ -51,6 +51,38 @@ const logger = require('../../guardrails/logger.cjs');
 const { fetchCalendarWindow } = require('../lib/buildAgenticContext.cjs');
 
 /**
+ * Compute the user's local hour, human-readable time, and time-state label.
+ * Shared by /api/brief/context and /api/dashboard/aria-brief so both views
+ * agree on the phase of day. Buckets:
+ *   morning  5-10   midday  11-13   afternoon 14-17
+ *   evening  18-20  wrapup  21-4
+ */
+function getTimeState(tz) {
+  const zone = tz || 'America/Los_Angeles';
+  const hour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', hour12: false }).format(new Date()), 10);
+  const localTime = new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date());
+  let state = 'wrapup';
+  if (hour >= 5  && hour < 11) state = 'morning';
+  else if (hour >= 11 && hour < 14) state = 'midday';
+  else if (hour >= 14 && hour < 18) state = 'afternoon';
+  else if (hour >= 18 && hour < 21) state = 'evening';
+  return { state, hour, localTime };
+}
+
+/**
+ * Classify a GCal event into completed | live | upcoming relative to `now`.
+ * Falls back to a 60-minute duration when the event has no end time.
+ */
+function classifyEvent(ev, nowMs) {
+  const start = ev.start ? new Date(ev.start).getTime() : NaN;
+  const end   = ev.end   ? new Date(ev.end).getTime()   : (Number.isFinite(start) ? start + 60 * 60 * 1000 : NaN);
+  if (!Number.isFinite(start)) return 'upcoming';
+  if (end <= nowMs)   return 'completed';
+  if (start <= nowMs) return 'live';
+  return 'upcoming';
+}
+
+/**
  * Factory function that creates the dashboard router.
  *
  * @param {Object} deps - Injected dependencies.
@@ -227,7 +259,29 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       const tone = personaTones[persona] || personaTones.executive_assistant;
       const name = assistantName || 'Aria';
 
-      const systemPrompt = `You are ${name}, the user's ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Write a warm, ${tone} ${timeOfDay || 'morning'} brief for ${userName} in 2-4 sentences. Be specific — reference actual data below. Do not use bullet points. Write naturally like a real person. IMPORTANT: mention EVERY calendar event listed below with its time — do not skip or summarize events. If there are 2 events, mention both. If there are 5, mention all 5. Only reference tasks, calendar events, and notes that are explicitly listed in the context below. Do not infer or reference activities from memory, business context, or profile information. Do NOT mention note counts — only mention a specific note if it contains something actionable today. Sign off with just your name: — ${name}`;
+      // Time-aware prose — tone + framing shifts across the day. User tz drives
+      // state so the morning-brief cron (which hits this endpoint at 8am local)
+      // naturally gets the 'morning' treatment.
+      const userTz = req.user.timezone || 'America/Los_Angeles';
+      const { state: timeState } = getTimeState(userTz);
+      const timePrompts = {
+        morning:   "It's morning. Set the day. Lead with the most important thing ahead. Be direct — 2-3 sentences max.",
+        midday:    "It's midday. Assess progress. What's done, what's still open, what's the window. 2-3 sentences.",
+        afternoon: "It's afternoon. One task left lens. What matters most before end of day. 2-3 sentences.",
+        evening:   "It's evening. Wind down. What got done, what didn't. If tasks are still open or meetings just ended, mention them and offer to help close out or capture notes. 2-3 sentences.",
+        wrapup:    "It's late. Be brief and reflective. Preview tomorrow if anything notable. 1-2 sentences.",
+      };
+      const commonRules = [
+        'Use past tense for completed events ("you had", "you were in").',
+        'Use future tense for upcoming ("you have", "coming up").',
+        'Use present tense for live events ("you\'re in", "you\'re currently in").',
+        'Reference specific names, companies, and times from context.',
+        'Never start with "Good morning", "Good afternoon", or "Good evening".',
+        'Never say "Here\'s your brief" or "Here\'s a summary". Never use the word "brief".',
+        'Sound like a sharp human chief of staff, not a bot.',
+      ].join(' ');
+
+      const systemPrompt = `You are ${name}, ${userName}'s ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Tone: ${tone}. ${timePrompts[timeState] || timePrompts.morning} ${commonRules} Only reference tasks, events, and notes explicitly listed below — never infer from memory or profile. Sign off with just your name: — ${name}`;
 
       // Build actionable notes string — only include notes with actionable/time-sensitive content
       const actionableNotes = notes
@@ -244,7 +298,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
           model: 'claude-sonnet-4-20250514',
           max_tokens: 300,
           system: systemPrompt,
-          messages: [{ role: 'user', content: `Write my ${timeOfDay || 'morning'} brief.\n\n${dataStr}` }],
+          messages: [{ role: 'user', content: `Write the ${timeState} update for ${userName}.\n\n${dataStr}` }],
         },
         {
           headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -258,6 +312,91 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       logger.error('ariaBrief.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json({ brief: '' });
     }
+  });
+
+  /**
+   * GET /api/brief/context — structured state for the dynamic Command Center
+   * brief (Phase 2 frontend). Fails soft per section: partial failures return
+   * whatever is available. Never 500s.
+   */
+  router.get('/api/brief/context', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const userTz = req.user.timezone || 'America/Los_Angeles';
+    const { state: timeState, localTime } = getTimeState(userTz);
+    const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const nowMs = Date.now();
+
+    // Tasks
+    let overdue = [], dueToday = [], completedToday = [];
+    try {
+      const tasks = await db.getTasksForUser(userId, []);
+      const projectTask = (t) => ({ id: t.id, title: t.title, priority: t.priority, due_date: t.dueDate || null, due_time: t.dueTime || null });
+      overdue = tasks
+        .filter(t => !t.completed && t.dueDate && t.dueDate < todayLocal)
+        .map(projectTask);
+      dueToday = tasks
+        .filter(t => !t.completed && t.dueDate === todayLocal)
+        .map(projectTask);
+      completedToday = tasks
+        .filter(t => t.completed && t.completedAt && t.completedAt.slice(0, 10) === todayLocal)
+        .map(projectTask);
+    } catch (e) {
+      logger.error('brief.context.tasks.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+
+    // Events
+    let completed = [], live = [], upcoming = [];
+    try {
+      const events = await fetchCalendarWindow({
+        userId, tz: userTz, days: 1,
+        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+        logger, requestId: req.requestId,
+      });
+      for (const ev of (events || [])) {
+        const bucket = classifyEvent(ev, nowMs);
+        const entry = { title: ev.title, start: ev.start, end: ev.end };
+        if (bucket === 'completed') completed.push(entry);
+        else if (bucket === 'live')  live.push(entry);
+        else upcoming.push(entry);
+      }
+    } catch (e) {
+      logger.error('brief.context.events.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+
+    // Important unread emails
+    let needsAttention = [];
+    try {
+      if (db.getImportantUnread) {
+        const rows = await db.getImportantUnread(userId, 3);
+        needsAttention = (rows || []).map(r => ({
+          vendor: r.vendor || null,
+          summary: r.summary || null,
+          category: r.category || null,
+          importance: r.importance || null,
+          entityName: r.entityName || null,
+          classifiedAt: r.classifiedAt || null,
+          actionRequired: !!r.actionRequired,
+        }));
+      }
+    } catch (e) {
+      logger.error('brief.context.emails.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+
+    const stats = {
+      tasksCompletedToday: completedToday.length,
+      tasksTotalToday: dueToday.length + completedToday.length,
+      meetingsDone: completed.length,
+      meetingsTotal: completed.length + live.length + upcoming.length,
+    };
+
+    return res.json({
+      timeState,
+      localTime,
+      tasks: { overdue, dueToday, completedToday },
+      events: { completed, live, upcoming },
+      emails: { needsAttention },
+      stats,
+    });
   });
 
   // ── Dashboard Timeline Summary ────────────────────────────────────────────────

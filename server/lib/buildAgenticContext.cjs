@@ -75,6 +75,7 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
       return (data.items || []).map(ev => ({
         title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
         start: ev.start?.dateTime || ev.start?.date || '',
+        end:   ev.end?.dateTime   || ev.end?.date   || '',
       }));
     }));
 
