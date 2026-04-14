@@ -11,14 +11,14 @@
  */
 
 const { getTodayLocal } = require('../utils/date.cjs');
+const { rediGet, rediSet } = require('./redis.cjs');
 
 const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.`;
 
-// Module-level cache — coalesces the multi-surface GCal reads that
-// previously each hit the Google API independently (aria-brief, morning
-// brief, agentic context). Keyed by userId + tz + window size.
-const calendarCache = new Map();
-const CALENDAR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// Cross-surface GCal cache — now Redis-backed for durability across
+// multi-instance deploys and server restarts. Falls back to no-cache
+// behavior when REDIS_URL is unset (see server/lib/redis.cjs).
+const CALENDAR_CACHE_TTL_SEC = 5 * 60; // 5 minutes
 
 /**
  * Return a Date corresponding to the start of the user's local day
@@ -52,11 +52,9 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
   const userTz = tz || 'America/Los_Angeles';
   const windowDays = Number.isFinite(days) && days > 0 ? days : 7;
 
-  const cacheKey = `${userId}::${userTz}::${windowDays}`;
-  const cached = calendarCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < CALENDAR_CACHE_TTL_MS) {
-    return cached.events;
-  }
+  const cacheKey = `gcal:${userId}:${userTz}:${windowDays}`;
+  const cached = await rediGet(cacheKey);
+  if (cached) return cached;
 
   try {
     let allAccounts = [];
@@ -110,7 +108,7 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
       }
     }
     const sorted = allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-    calendarCache.set(cacheKey, { events: sorted, ts: Date.now() });
+    await rediSet(cacheKey, sorted, CALENDAR_CACHE_TTL_SEC);
     return sorted;
   } catch (err) {
     logger?.error?.('context.calendarFetch.failed', { requestId, userId, error: err.message });

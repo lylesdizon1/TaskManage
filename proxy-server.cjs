@@ -198,6 +198,9 @@ function getLocalDateKey(tz) {
   } catch { return new Date().toISOString().slice(0, 10); }
 }
 
+// Lazy Redis helpers — optional fast-path in front of the DB dedup lock.
+const { rediGet: _rediGet, rediSet: _rediSet, rediDel: _rediDel } = require('./server/lib/redis.cjs');
+
 cron.schedule('* * * * *', async () => {
   try {
     const users = await db.getUsersWithMorningBriefEnabled();
@@ -207,12 +210,27 @@ cron.schedule('* * * * *', async () => {
         if (!localTime || localTime !== user.briefTime) continue;
 
         const dateKey = getLocalDateKey(user.timezone);
+        const redisKey = `morning-brief:${user.id}:${dateKey}`;
+
+        // Redis fast-path: if the key is present, we already sent today.
+        // Avoids a DB roundtrip per cron tick. Redis is best-effort — if
+        // it returns null (miss OR connection down), fall through to the
+        // DB lock which is authoritative.
+        const cachedSent = await _rediGet(redisKey);
+        if (cachedSent) continue;
+
         const alreadySent = await db.checkAndLockMorningBriefSent(user.id, dateKey);
-        if (alreadySent) continue;
+        if (alreadySent) {
+          // Mirror the DB state into Redis so subsequent ticks short-circuit.
+          await _rediSet(redisKey, true, 86400);
+          continue;
+        }
 
         await buildAndSendMorningBrief(user.id, {
           requestId: `cron-morning-brief-${user.id}`,
         });
+        // Mark as sent in Redis for the next 24h.
+        await _rediSet(redisKey, true, 86400);
         cronLogger.info('morning-brief-cron.sent', { userId: user.id });
       } catch (e) {
         cronLogger.error('morning-brief-cron.user-failed', { userId: user.id, error: e.message });
@@ -286,6 +304,13 @@ async function syncGcalForUser(userId, tz) {
         }));
 
         await db.upsertCalendarEvents(userId, googleEmail, events);
+        // Invalidate the Redis cache for the common fetchCalendarWindow
+        // window sizes so downstream reads pick up fresh DB data.
+        try {
+          await Promise.all([1, 7, 14].map((d) =>
+            _rediDel(`gcal:${userId}:${tz}:${d}`)
+          ));
+        } catch { /* silent — cache purge is best-effort */ }
       } catch (e) {
         cronLogger.error('gcal-sync.account-failed', { userId, error: e.message });
       }
