@@ -275,11 +275,15 @@ To page through results: use the oldest result's date as date_to in a follow-up 
  * snippet so Aria can answer "what's left", "what's blocking", "are we
  * ready" without an additional tool call. Empty string when no projects.
  */
-function buildProjectsBlock(projects) {
+function buildProjectsBlock(projectsCtx) {
+  console.log('[buildProjectsBlock] input rows:', JSON.stringify(projectsCtx?.slice(0, 2)));
+  const projects = projectsCtx;
   if (!Array.isArray(projects) || projects.length === 0) {
     // Surface the section even when empty so Aria knows projects exist as
     // a concept and doesn't claim "no access" when asked.
-    return `\n\nACTIVE PROJECTS\nNo active projects.`;
+    const result = `\n\nACTIVE PROJECTS\nNo active projects.`;
+    console.log('[buildProjectsBlock] output:', JSON.stringify(result?.slice(0, 300)));
+    return result;
   }
   const lines = projects.map((p) => {
     const head = `- ${p.entityName || 'Entity'} / ${p.title}: ${p.openTasks || 0} open, ${p.completedTasks || 0} done`;
@@ -289,7 +293,9 @@ function buildProjectsBlock(projects) {
     const note = p.recentNote ? ` · Note: "${p.recentNote}"` : '';
     return `${head}${tasks}${note}`;
   });
-  return `\n\nACTIVE PROJECTS\n${lines.join('\n')}`;
+  const result = `\n\nACTIVE PROJECTS\n${lines.join('\n')}`;
+  console.log('[buildProjectsBlock] output:', JSON.stringify(result?.slice(0, 300)));
+  return result;
 }
 
 /**
