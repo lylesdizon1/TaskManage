@@ -4256,8 +4256,7 @@ async function checkAndLockMorningBriefSent(userId, dateKey) {
 async function getUnfiredAlerts() {
   // Per-user DND check: compute each user's local time via AT TIME ZONE
   const { rows } = await pool.query(
-    `SELECT sa.id, sa.user_id, sa.task_id, sa.alert_key, sa.message, sa.channels, sa.fire_at,
-            u.whatsapp_phone AS "whatsappPhone", u.email
+    `SELECT sa.id, sa.user_id, sa.task_id, sa.alert_key, sa.message, sa.channels, sa.fire_at, u.email
      FROM scheduled_alerts sa
      JOIN users u ON u.id = sa.user_id
      JOIN tasks t ON t.id = sa.task_id

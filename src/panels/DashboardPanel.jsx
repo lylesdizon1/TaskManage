@@ -29,7 +29,7 @@ const MD_COMPONENTS = {
 
 const API_BASE = '';
 
-export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks, onReloadNotes }) {
+export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks, onReloadNotes, onReloadCalendar }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -58,7 +58,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // Clear stale date-keyed caches on mount
   useEffect(() => {
     Object.keys(localStorage).forEach((key) => {
-      if ((key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_') || key.startsWith('cc_messages_')) && !key.includes(today)) {
+      if ((key.startsWith('timeline_summary_') || key.startsWith('digest_') || key.startsWith('cc_messages_')) && !key.includes(today)) {
         localStorage.removeItem(key);
       }
     });
@@ -640,7 +640,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
     // Stream response
     let fullResponse = '';
-    const placeholderIdx = ccMessages.length + 1;
     setCcMessages((prev) => [...prev, { role: 'assistant', content: '', createdAt: new Date().toISOString(), ts: Date.now() }]);
 
     try {
@@ -904,6 +903,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       }
       setTileMeta(tile.id, { status: 'success', error: null });
       if (tile.type === 'task') onReloadTasks?.();
+      else if (tile.type === 'event') onReloadCalendar?.();
       setTimeout(() => dismissTile(tile.id), 2000);
     } catch (err) {
       if (err?.name === 'AbortError') {
@@ -914,7 +914,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     } finally {
       clearTimeout(timeout);
     }
-  }, [apiFetch, authToken, dismissTile, onReloadTasks, setTileMeta]);
+  }, [apiFetch, authToken, dismissTile, onReloadTasks, onReloadCalendar, setTileMeta]);
 
   const handleCcStop = useCallback(() => {
     ccStoppedRef.current = true;

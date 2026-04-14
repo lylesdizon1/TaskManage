@@ -75,6 +75,7 @@ const webConfirmWaiters = new Map();
 function resolveWebWaiter(confirmId, resolution) {
   const waiter = webConfirmWaiters.get(confirmId);
   if (!waiter) return false;
+  logger.info('webWaiter.crossSurfaceResolved', { confirmId, action: resolution?.action, alreadyExecuted: !!resolution?.alreadyExecuted });
   clearTimeout(waiter.timeout);
   webConfirmWaiters.delete(confirmId);
   waiter.resolve(resolution);

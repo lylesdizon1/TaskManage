@@ -159,22 +159,6 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             const nextStatus = approved ? 'approved' : 'rejected';
             await db.updatePendingConfirmationStatus(pending.id, userId, nextStatus).catch(() => {});
 
-            // If a web SSE turn is simultaneously waiting on this same
-            // pending row, resolve its waiter with alreadyExecuted so the
-            // loop unblocks without re-running the tool. Returns false
-            // (no-op) when there's no overlapping web turn.
-            try {
-              resolveWebWaiter(pending.id, {
-                action: approved ? 'allow' : 'deny',
-                alreadyExecuted: true,
-                overrides: {},
-                reason: approved ? undefined : 'user_rejected',
-                message: approved ? undefined : `User cancelled ${pending.toolName}.`,
-              });
-            } catch (e) {
-              logger.error('whatsapp.confirm.resolveWebWaiter.failed', { userId, error: e.message });
-            }
-
             await db.logAgentAction({
               userId,
               eventType: approved ? 'confirmation_approved' : 'confirmation_rejected',
@@ -182,27 +166,53 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
               input: pending.params,
               confirmId: pending.id,
             });
-            if (approved) {
-              const result = await executeTool(pending.toolName, pending.params, userId, entityIds, db, tzForUser);
-              await db.logAgentAction({
-                userId,
-                eventType: result?.success === false ? 'tool_failed' : 'tool_executed',
-                toolName: pending.toolName,
-                input: pending.params,
-                output: result,
-                status: result?.success === false ? 'failure' : 'success',
-                errorMsg: result?.success === false ? (result.error || 'failed') : null,
-                confirmId: pending.id,
-              });
-              const reply = result?.success === false
-                ? `Couldn't complete ${pending.toolName}: ${result.error || 'unknown error'}`
-                : `Done — ${pending.toolName} executed.`;
-              await sendWhatsApp(db, userId, reply, fromRaw).catch(() => {});
-            } else {
+
+            // On deny, resolve any waiting web turn immediately (no tool to run).
+            if (!approved) {
+              try {
+                resolveWebWaiter(pending.id, {
+                  action: 'deny',
+                  reason: 'user_rejected',
+                  message: `User cancelled ${pending.toolName}.`,
+                });
+              } catch (e) {
+                logger.error('whatsapp.confirm.resolveWebWaiter.failed', { userId, error: e.message });
+              }
               await db.logAgentAction({ userId, eventType: 'tool_cancelled', toolName: pending.toolName, input: pending.params, confirmId: pending.id });
               await sendWhatsApp(db, userId, `Cancelled.`, fromRaw).catch(() => {});
+              return res.json({ ok: true, confirmed: false });
             }
-            return res.json({ ok: true, confirmed: approved });
+
+            // Approved: run the tool, then resolve the waiter (if any) with
+            // the actual result so the web loop's synthetic tool_result is real.
+            const result = await executeTool(pending.toolName, pending.params, userId, entityIds, db, tzForUser);
+            await db.logAgentAction({
+              userId,
+              eventType: result?.success === false ? 'tool_failed' : 'tool_executed',
+              toolName: pending.toolName,
+              input: pending.params,
+              output: result,
+              status: result?.success === false ? 'failure' : 'success',
+              errorMsg: result?.success === false ? (result.error || 'failed') : null,
+              confirmId: pending.id,
+            });
+
+            try {
+              resolveWebWaiter(pending.id, {
+                action: 'allow',
+                alreadyExecuted: true,
+                result,
+                overrides: {},
+              });
+            } catch (e) {
+              logger.error('whatsapp.confirm.resolveWebWaiter.failed', { userId, error: e.message });
+            }
+
+            const reply = result?.success === false
+              ? `Couldn't complete ${pending.toolName}: ${result.error || 'unknown error'}`
+              : `Done — ${pending.toolName} executed.`;
+            await sendWhatsApp(db, userId, reply, fromRaw).catch(() => {});
+            return res.json({ ok: true, confirmed: true });
           }
         } catch (e) {
           logger.error('whatsapp.confirm.failed', { requestId: req.requestId, userId, error: e.message });

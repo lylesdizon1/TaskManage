@@ -192,7 +192,7 @@ export default function App() {
   function handleLogin(user, token) {
     // Clear all Aria/digest/timeline/CC caches so fresh login always generates fresh brief
     Object.keys(localStorage).forEach((key) => {
-      if (key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_') || key.startsWith('cc_messages_')) {
+      if (key.startsWith('timeline_summary_') || key.startsWith('digest_') || key.startsWith('cc_messages_')) {
         localStorage.removeItem(key);
       }
     });
@@ -211,7 +211,7 @@ export default function App() {
     localStorage.removeItem('tm_user');
     localStorage.removeItem('tm_chat_draft');
     Object.keys(localStorage).forEach((key) => {
-      if (key.startsWith('cc_messages_') || key.startsWith('aria_brief_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) {
+      if (key.startsWith('cc_messages_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) {
         localStorage.removeItem(key);
       }
     });
@@ -720,17 +720,16 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch Google Calendar events for chat context
-  useEffect(() => {
+  const reloadCalendar = () => {
     if (!currentUser?.id) return;
     apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}&days=7`, {
       headers: { Authorization: `Bearer ${authToken}` },
     })
       .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) setChatCalendarEvents(data);
-      })
+      .then((data) => { if (Array.isArray(data)) setChatCalendarEvents(data); })
       .catch(() => {});
-  }, [currentUser?.id]);
+  };
+  useEffect(() => { reloadCalendar(); }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scan email inbox on mount; cadence follows gmail_config.scanFrequency.
   const emailScanInProgressRef = useRef(false);
@@ -1098,6 +1097,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               callClaudeChat={callClaudeChat}
               onReloadTasks={reloadTasks}
               onReloadNotes={reloadNotes}
+              onReloadCalendar={reloadCalendar}
             />
           ) : activeView === 'admin' && currentUser?.role === 'superadmin' ? (
             <AdminPanel authToken={authToken} />

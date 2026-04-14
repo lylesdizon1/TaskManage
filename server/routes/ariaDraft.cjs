@@ -81,17 +81,30 @@ Rules:
 
 User message: ${message}`;
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let resp;
     try {
-      const resp = await Promise.race([
-        client.messages.create({
+      resp = await client.messages.create(
+        {
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 200,
           system,
           messages: [{ role: 'user', content: prompt }],
-        }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('parse-timeout')), 8000)),
-      ]);
+        },
+        { signal: controller.signal },
+      );
+    } catch (e) {
+      clearTimeout(timeout);
+      if (e?.name === 'AbortError' || /aborted|parse-timeout/i.test(e?.message || '')) {
+        return res.json({ type: 'default_chat' });
+      }
+      logger.warn('aria.parseDraft.failed', { requestId: req.requestId, error: e.message });
+      return res.json({ type: 'default_chat' });
+    }
+    clearTimeout(timeout);
 
+    try {
       const text = resp?.content?.[0]?.text || '';
       const parsed = _safeParse(text);
       if (!parsed || !VALID_TYPES.has(parsed.type)) return res.json({ type: 'default_chat' });

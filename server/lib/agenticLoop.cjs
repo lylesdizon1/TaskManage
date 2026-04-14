@@ -115,11 +115,18 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
       // skip executeTool and inject a synthetic success result so the model
       // can generate its follow-up text without double execution.
       if (gateDecision?.alreadyExecuted) {
-        const synthetic = { success: true, already_executed: true, tool: toolUse.name };
-        resultContent = JSON.stringify(synthetic);
-        toolSummaries.push({ tool: toolUse.name, success: true, result: synthetic });
-        if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result: synthetic });
-        try { await logAction?.({ eventType: 'tool_executed_elsewhere', toolName: toolUse.name, input: effectiveInput, output: synthetic, status: 'success' }); } catch {}
+        // Prefer the real result passed through the waiter resolution;
+        // fall back to a minimal synthetic if the other surface didn't
+        // plumb it through.
+        const real = gateDecision.result;
+        const payload = real && typeof real === 'object'
+          ? { ...real, already_executed: true }
+          : { success: true, already_executed: true, tool: toolUse.name };
+        resultContent = JSON.stringify(payload);
+        const success = payload.success !== false;
+        toolSummaries.push({ tool: toolUse.name, success, result: payload });
+        if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result: payload });
+        try { await logAction?.({ eventType: 'tool_executed_elsewhere', toolName: toolUse.name, input: effectiveInput, output: payload, status: success ? 'success' : 'failure' }); } catch {}
         toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent });
         continue;
       }
