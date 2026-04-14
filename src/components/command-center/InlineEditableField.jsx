@@ -103,7 +103,7 @@ export default function InlineEditableField({
           value={draft}
           onChange={(e) => { setDraft(e.target.value); onChange?.(e.target.value); setEditing(false); }}
           onBlur={cancel}
-          style={{ ...inputStyle, maxWidth: '220px', width: '100%' }}
+          style={{ ...inputStyle, width: 'auto', minWidth: '80px', maxWidth: '220px' }}
         >
           {options?.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>

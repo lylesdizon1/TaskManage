@@ -4,6 +4,23 @@ const express = require('express');
 const { executeTool } = require('../tools.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
+/**
+ * Convert "h:MM AM/PM" (or bare "HH:MM") to the tool's expected 24-hour
+ * "HH:MM" format. Unrecognized input passes through so we don't corrupt
+ * already-24h values or lose user text the tool can reject.
+ */
+function to12hTo24h(t) {
+  if (!t) return null;
+  const match = String(t).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return t;
+  let h = parseInt(match[1], 10);
+  const m = match[2];
+  const ampm = match[3].toUpperCase();
+  if (ampm === 'PM' && h !== 12) h += 12;
+  if (ampm === 'AM' && h === 12) h = 0;
+  return `${String(h).padStart(2, '0')}:${m}`;
+}
+
 /** Map internal error messages to safe user-facing copy. */
 function sanitizeError(msg) {
   const s = String(msg || '');
@@ -38,7 +55,7 @@ module.exports = function createTileExecuteRouter({ authenticateToken, db }) {
           title: payload.title,
           due_date: payload.due_date || undefined,
           priority: payload.priority || 'medium',
-          ...(payload.due_time ? { due_time: payload.due_time } : {}),
+          ...(payload.due_time ? { due_time: to12hTo24h(payload.due_time) } : {}),
           ...(payload.entity_name ? { entity_name: payload.entity_name } : {}),
         };
         if (!toolInput.title) return res.status(400).json({ success: false, error: 'title required' });

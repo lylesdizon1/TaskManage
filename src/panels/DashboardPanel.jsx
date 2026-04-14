@@ -29,6 +29,16 @@ const MD_COMPONENTS = {
 
 const API_BASE = '';
 
+/** Convert "HH:MM" (24h) to "h:MM AM/PM" for display in draft tiles. */
+function to24hTo12h(t) {
+  if (!t) return '';
+  const [h, m] = String(t).split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return '';
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
 export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks, onReloadNotes, onReloadCalendar }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
@@ -589,7 +599,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           : (draft.confidence === 'high' ? "Got it — here's the event" : "Here's the event draft");
         const tileId = `tile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
         const payload = draft.type === 'task'
-          ? { title: draft.title, due_date: draft.due_date || '', due_time: draft.due_time || '', priority: draft.priority || 'medium' }
+          ? { title: draft.title, due_date: draft.due_date || '', due_time: to24hTo12h(draft.due_time), priority: draft.priority || 'medium' }
           : { title: draft.title, start_time: draft.start_time, duration_minutes: draft.duration_minutes || 60 };
         const now = new Date().toISOString();
         setCcMessages((prev) => [

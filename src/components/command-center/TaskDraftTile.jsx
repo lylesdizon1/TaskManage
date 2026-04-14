@@ -60,8 +60,8 @@ export default function TaskDraftTile({ payload = {}, status = 'draft', error, o
             label="Due time"
             value={payload.due_time || ''}
             onChange={(v) => onChange?.({ due_time: v || null })}
-            inputType="time"
-            placeholder="—"
+            inputType="text"
+            placeholder="e.g. 9:00 AM"
             disabled={disabled}
           />
           <InlineEditableField
