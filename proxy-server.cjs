@@ -234,3 +234,78 @@ cron.schedule('0 * * * *', async () => {
   }
 });
 console.log('[cron] Pending-confirmations sweep scheduler started');
+
+// ── GCal sync — every 15 min, mirrors 14-day window into calendar_events ──
+async function syncGcalForUser(userId, tz) {
+  try {
+    const accounts = await loadAllGcalAccounts(userId);
+    for (const account of accounts) {
+      try {
+        const { googleEmail, tokens } = account;
+        const oauth2Client = makeOAuth2Client();
+        if (!oauth2Client) continue;
+        oauth2Client.setCredentials(tokens);
+        // Persist refreshed tokens back to user_integrations so the next
+        // cron tick doesn't re-auth from a stale refresh_token.
+        oauth2Client.on('tokens', async (newTokens) => {
+          try {
+            const existing = await loadGcalTokens(userId, googleEmail);
+            await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
+          } catch (e) {
+            cronLogger.error('gcal-sync.tokenRefresh.failed', { userId, googleEmail, error: e.message });
+          }
+        });
+
+        const now = new Date();
+        const timeMin = new Date(now);
+        timeMin.setHours(0, 0, 0, 0);
+        const timeMax = new Date(timeMin);
+        timeMax.setDate(timeMax.getDate() + 14);
+
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+        const res = await calendar.events.list({
+          calendarId: 'primary',
+          timeMin: timeMin.toISOString(),
+          timeMax: timeMax.toISOString(),
+          singleEvents: true,
+          orderBy: 'startTime',
+          maxResults: 100,
+          timeZone: tz,
+        });
+
+        const events = (res.data.items || []).map((ev) => ({
+          id: ev.id,
+          title: ev.summary || '(No title)',
+          start_time: ev.start?.dateTime || ev.start?.date,
+          end_time:   ev.end?.dateTime   || ev.end?.date,
+          all_day: !ev.start?.dateTime,
+          location: ev.location || null,
+          description: ev.description || null,
+        }));
+
+        await db.upsertCalendarEvents(userId, googleEmail, events);
+      } catch (e) {
+        cronLogger.error('gcal-sync.account-failed', { userId, error: e.message });
+      }
+    }
+    // Drop rows whose end_time is older than 30 days so the table stays bounded.
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    await db.deleteStaleCalendarEvents(userId, cutoff);
+  } catch (e) {
+    cronLogger.error('gcal-sync.user-failed', { userId, error: e.message });
+  }
+}
+
+cron.schedule('*/15 * * * *', async () => {
+  try {
+    const users = await db.getUsersWithGcalConnected();
+    for (const user of users) {
+      await syncGcalForUser(user.id, user.timezone || 'America/Los_Angeles');
+    }
+    cronLogger.info('gcal-sync.complete', { userCount: users.length });
+  } catch (e) {
+    cronLogger.error('gcal-sync.failed', { error: e.message });
+  }
+});
+console.log('[cron] GCal sync scheduler started');

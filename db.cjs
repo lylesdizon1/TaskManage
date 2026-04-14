@@ -1930,6 +1930,92 @@ async function deleteEntity(id, userId) {
   await pool.query('DELETE FROM entities WHERE id = $1', [id]);
 }
 
+// ── calendar_events cache helpers (Session 1) ──────────────────────────────
+
+/**
+ * Upsert a batch of GCal events for one user+account. Idempotent via
+ * (user_id, account_email, id) PK; re-running the sync updates fields in
+ * place and bumps synced_at.
+ *
+ * @param {string} userId
+ * @param {string} accountEmail - Google account the events came from.
+ * @param {Array<Object>} events - normalized event rows with {id, title,
+ *   start_time, end_time, all_day, location, description}
+ */
+async function upsertCalendarEvents(userId, accountEmail, events) {
+  if (!events || !events.length) return;
+  for (const ev of events) {
+    await pool.query(
+      `INSERT INTO calendar_events
+         (id, user_id, account_email, title, start_time,
+          end_time, all_day, location, description, synced_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+       ON CONFLICT (user_id, account_email, id)
+       DO UPDATE SET
+         title = EXCLUDED.title,
+         start_time = EXCLUDED.start_time,
+         end_time = EXCLUDED.end_time,
+         all_day = EXCLUDED.all_day,
+         location = EXCLUDED.location,
+         description = EXCLUDED.description,
+         synced_at = NOW()`,
+      [
+        ev.id, userId, accountEmail, ev.title,
+        ev.start_time, ev.end_time, ev.all_day || false,
+        ev.location || null, ev.description || null,
+      ],
+    );
+  }
+}
+
+/**
+ * Read cached events for a user within a half-open [startDate, endDate)
+ * window. User-scoped — no cross-tenant access.
+ */
+async function getCalendarEventsForUser(userId, startDate, endDate) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId",
+            account_email AS "accountEmail",
+            title, start_time AS "startTime",
+            end_time AS "endTime",
+            all_day AS "allDay", location, description,
+            entity_id AS "entityId"
+     FROM calendar_events
+     WHERE user_id = $1
+       AND start_time >= $2
+       AND start_time < $3
+     ORDER BY start_time ASC`,
+    [userId, startDate, endDate],
+  );
+  return rows;
+}
+
+/** Purge cached events whose end_time is older than cutoffDate. */
+async function deleteStaleCalendarEvents(userId, cutoffDate) {
+  await pool.query(
+    `DELETE FROM calendar_events
+     WHERE user_id = $1 AND end_time < $2`,
+    [userId, cutoffDate],
+  );
+}
+
+/**
+ * List users with at least one enabled Gmail (= GCal) integration row.
+ * Used by the sync cron to iterate targets.
+ */
+async function getUsersWithGcalConnected() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT u.id, u.timezone
+     FROM users u
+     JOIN user_integrations ui ON ui.user_id = u.id
+     WHERE ui.integration_type = 'gmail'
+       AND ui.is_enabled = TRUE
+       AND ui.account_email IS NOT NULL
+       AND ui.account_email != ''`,
+  );
+  return rows;
+}
+
 /**
  * No-op placeholder preserved for backward compatibility with callers
  * that still invoke it during boot/migration.
@@ -3586,6 +3672,32 @@ async function runMigrations() {
     WHERE created_by IS NOT NULL
     ON CONFLICT (entity_id, user_id) DO NOTHING
   `).catch((err) => console.warn('[migration] entity_members creator backfill:', err.message));
+
+  // ── calendar_events cache (Session 1) ──────────────────────────────────
+  // Local mirror of each user's GCal events so dashboard / brief / context
+  // reads avoid per-request Google API calls. Populated by the 15-min sync
+  // cron in proxy-server.cjs. No call sites swap to it yet — that comes in
+  // a follow-up session.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id            TEXT NOT NULL,
+      user_id       TEXT NOT NULL,
+      account_email TEXT NOT NULL,
+      title         TEXT,
+      start_time    TIMESTAMPTZ,
+      end_time      TIMESTAMPTZ,
+      all_day       BOOLEAN DEFAULT FALSE,
+      location      TEXT,
+      description   TEXT,
+      entity_id     TEXT,
+      synced_at     TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, account_email, id)
+    )
+  `).catch((err) => console.warn('[migration] calendar_events table:', err.message));
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS calendar_events_user_start
+    ON calendar_events(user_id, start_time)
+  `).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -4806,6 +4918,10 @@ module.exports = {
   createEntity,
   updateEntity,
   deleteEntity,
+  upsertCalendarEvents,
+  getCalendarEventsForUser,
+  deleteStaleCalendarEvents,
+  getUsersWithGcalConnected,
   seedEntitiesIfEmpty,
   getTaskById,
   getTasksForUser,
