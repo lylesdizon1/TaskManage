@@ -674,6 +674,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(new Date());
       const draft = await parseActionDraft({ apiFetch, authToken, message: text, timezone: userTZ, today, entities, projects: briefContext?.projects });
+      // Clarify: ambiguous task/project — ask and bail, no tile.
+      if (draft && draft.type === 'clarify') {
+        const now = new Date().toISOString();
+        setCcMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: draft.question || 'Should I add this to a project or as a standalone task?', createdAt: now, ts: Date.now() },
+        ]);
+        ccAbortRef.current = null;
+        setCcSending(false);
+        return;
+      }
       if (draft && (draft.type === 'task' || draft.type === 'event' || draft.type === 'project' || draft.type === 'project_task')) {
         // Project with no resolved entity → ask for clarification, no tile.
         if (draft.type === 'project' && !draft.entity_id) {

@@ -19,7 +19,7 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../guardrails/logger.cjs');
 
-const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'default_chat']);
+const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'clarify', 'default_chat']);
 const VALID_PRIORITY = new Set(['low', 'medium', 'high']);
 const VALID_CONFIDENCE = new Set(['high', 'medium', 'low']);
 
@@ -71,19 +71,27 @@ ${entityListStr}
 User's active projects:
 ${projectListStr}
 
-HARD RULES — these override everything else:
-1. If the message contains "remind me", "reminder", "don't forget", "don't let me forget" → ALWAYS return {"type": "task"}. Never event.
-2. If the message contains "send", "email", "message", "reach out", "reply" → ALWAYS return {"type": "default_chat"}. Never task or event.
-3. "Call X" alone with no date/time → task.
-4. "Call X at [time]" or "meeting with X" → event.
-5. "Create a project", "set up a project", "make a [X] project", "new project" → ALWAYS return {"type": "project"}. Never task or event.
-6. "Add a task to [project]", "create a task for [project]", "add task under [project]", "add [X] to [project name]" where the named project matches the active projects list → ALWAYS return {"type": "project_task"}. Never task or event. If no project matches, return {"type": "default_chat"}.
+HARD RULES — evaluated in this exact priority order. The FIRST rule that matches wins. Do not evaluate any lower rule if a higher one matches.
 
-These rules are absolute. Do not override them based on other context in the message.
+A. EMAIL/MESSAGE CHECK: If the message contains "send", "email", "message", "reach out", "reply" → ALWAYS return {"type": "default_chat"}. Stop.
 
-Classify the user message into exactly one of four buckets:
+B. PROJECT CREATION: If the message asks to "create a project", "set up a project", "make a [X] project", "start a new project" → ALWAYS return {"type": "project"}. Stop.
 
-1) "task" — todos, reminders, things to do.
+C. PROJECT TASK: If the message references an existing project by name (fuzzy match against the active projects list above — e.g. "collab project" matches "Test project collab feature", "the release project" matches "Release v2") AND asks to add/create a task, item, todo, or to-do under/to/for/in that project → ALWAYS return {"type": "project_task"}. The project_name field MUST be the exact title from the active projects list above. Stop.
+
+D. AMBIGUOUS TASK WITH NO PROJECT: If the message says "add a task", "create a task", "new task" with NO project named AND NO concrete subject that makes it obviously standalone (e.g. no "to buy groceries", "for the camping trip", "to call mom") → return {"type": "clarify", "question": "Should I add this to a project or as a standalone task?"}. Stop.
+
+E. REMINDER / STANDALONE TASK: If the message contains "remind me", "reminder", "don't forget", "don't let me forget" OR asks to do something concrete with no project context (e.g. "buy groceries", "call Mom at 3pm with no time → task", "Wire to Schwab") → return {"type": "task"}. Stop.
+
+F. MEETING / EVENT: "Call X at [time]", "meeting with X", scheduled calendar item → {"type": "event"}. Stop.
+
+G. DEFAULT: Anything else → {"type": "default_chat"}.
+
+These rules are absolute and ordered. C must be evaluated before E. D must be evaluated before E.
+
+Bucket output shapes:
+
+1) "task" — todos, reminders, things to do (standalone — no project).
    Output: {"type":"task","title":string,"due_date":"YYYY-MM-DD"|null,"due_time":"HH:MM"|null,"priority":"low"|"medium"|"high"|null,"confidence":"high"|"medium"|"low"}
    If the message mentions a specific time (e.g. "at 9am", "at 2pm"), extract it as due_time in 24-hour HH:MM format. If no time mentioned, omit due_time.
 
@@ -92,13 +100,16 @@ Classify the user message into exactly one of four buckets:
 
 3) "project" — collaborative project workspaces inside an entity.
    Output: {"type":"project","title":string,"entity_name":string|null,"description":string,"confidence":"high"|"medium"|"low"}
-   For entity_name: match (case-insensitive) against the entity list above when the message mentions one (e.g. "QA project for Careific" → entity_name: "Careific"). If no entity is named or no match found, set entity_name to null. Description is optional — set to "" if not specified.
+   For entity_name: match (case-insensitive) against the entity list above when the message mentions one. If no entity named or no match, set null. Description optional — set to "" if not specified.
 
-4) "project_task" — a task created inside an existing active project.
+4) "project_task" — a task inside an existing active project.
    Output: {"type":"project_task","title":string,"project_name":string,"description":string,"confidence":"high"|"medium"|"low"}
-   For project_name: match (case-insensitive) against the active projects list above. Only return this type when a project matches. If no project matches, return {"type":"default_chat"}. Description is optional — set to "" if not specified.
+   project_name MUST be the exact title from the active projects list (not the user's paraphrase). Description optional.
 
-5) "default_chat" — anything else (questions, chitchat, lookups).
+5) "clarify" — ambiguous task request with no project context.
+   Output: {"type":"clarify","question":"Should I add this to a project or as a standalone task?"}
+
+6) "default_chat" — anything else (questions, chitchat, lookups).
    Output: {"type":"default_chat"}
 
 Rules:
@@ -144,6 +155,13 @@ User message: ${message}`;
 
       if (parsed.type === 'default_chat') return res.json({ type: 'default_chat' });
 
+      if (parsed.type === 'clarify') {
+        const question = typeof parsed.question === 'string' && parsed.question.trim()
+          ? parsed.question.trim().slice(0, 300)
+          : 'Should I add this to a project or as a standalone task?';
+        return res.json({ type: 'clarify', question });
+      }
+
       const confidence = VALID_CONFIDENCE.has(parsed.confidence) ? parsed.confidence : 'medium';
 
       if (parsed.type === 'task') {
@@ -174,8 +192,12 @@ User message: ${message}`;
         // Resolve project_name → project_id + entity_id via the user's
         // active project list (case-insensitive). If no match, downgrade
         // so the client can ask "Which project?".
-        const match = userProjects.find((p) => (p.title || '').toLowerCase() === claimed.toLowerCase());
-        if (!match) return res.json({ type: 'project_task', title, project_id: null, project_name: null, entity_id: null, entity_name: null, description, confidence });
+        // Exact match first, then substring/token overlap as a safety net
+        // (Haiku is instructed to return the exact title but may paraphrase).
+        const claimedLc = claimed.toLowerCase();
+        let match = userProjects.find((p) => (p.title || '').toLowerCase() === claimedLc);
+        if (!match) match = userProjects.find((p) => (p.title || '').toLowerCase().includes(claimedLc) || claimedLc.includes((p.title || '').toLowerCase()));
+        if (!match) return res.json({ type: 'clarify', question: 'Which project should I add this task to?' });
         return res.json({
           type: 'project_task',
           title,
