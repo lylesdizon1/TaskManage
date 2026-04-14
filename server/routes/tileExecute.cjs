@@ -59,6 +59,22 @@ module.exports = function createTileExecuteRouter({ authenticateToken, db }) {
           ...(payload.entity_name ? { entity_name: payload.entity_name } : {}),
         };
         if (!toolInput.title) return res.status(400).json({ success: false, error: 'title required' });
+      } else if (type === 'note') {
+        toolName = 'create_note';
+        // create_note tool uses `content` not `body`; map the UI field.
+        toolInput = {
+          title: payload.title || '',
+          content: payload.body || payload.content || '',
+        };
+        if (!toolInput.title || !toolInput.content) {
+          return res.status(400).json({ success: false, error: 'title and body required' });
+        }
+        // entity_name may map onto the pillar enum; only pass it through when
+        // it matches one of the accepted values, otherwise the tool rejects.
+        const entity = payload.entity_name || payload.pillar;
+        if (entity && ['hustle', 'home', 'grow', 'move'].includes(String(entity).toLowerCase())) {
+          toolInput.pillar = String(entity).toLowerCase();
+        }
       } else if (type === 'event') {
         toolName = 'create_event';
         toolInput = {

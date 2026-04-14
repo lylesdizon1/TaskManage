@@ -1216,6 +1216,58 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           draftFromRef={draftFromRef}
           draftToRef={draftToRef}
           draftBodyRef={draftBodyRef}
+          sendPrompt={(msg) => ccSendRef.current?.(msg)}
+          onCompleteTask={async (taskId) => {
+            try {
+              await apiFetch(`/api/tasks/${taskId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                body: JSON.stringify({ completed: true, completedAt: new Date().toISOString() }),
+              });
+              onReloadTasks?.();
+              fetchBriefContext();
+            } catch {}
+          }}
+          onOpenMeetingNotes={(event) => {
+            setActiveTile({ type: 'meeting_notes', event, ts: Date.now() });
+            setActiveZoneState('notes');
+          }}
+          onSaveMeetingNotes={async (event, body) => {
+            if (!body || !body.trim()) return;
+            try {
+              const res = await apiFetch('/api/tile/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                body: JSON.stringify({
+                  type: 'note',
+                  payload: {
+                    title: `${event.title || 'Meeting'} — notes`,
+                    body,
+                    entity_name: event.entityName || null,
+                  },
+                }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok || !data.success) {
+                setActiveTile((prev) => prev ? { ...prev, error: data.error || `HTTP ${res.status}` } : prev);
+                return;
+              }
+              onReloadNotes?.();
+              setActiveZoneState('success');
+              setTimeout(() => {
+                setActiveTile(null);
+                setActiveZoneState('empty');
+                fetchBriefContext();
+              }, 2000);
+            } catch {
+              setActiveTile((prev) => prev ? { ...prev, error: 'Network error' } : prev);
+            }
+          }}
+          onSkipMeetingNotes={(event) => {
+            setActiveTile(null);
+            setActiveZoneState(briefContext ? 'context' : 'empty');
+            ccSendRef.current?.(`Remind me to add notes for ${event.title || 'the meeting'} in 30 minutes`);
+          }}
         />
         {/* Messages */}
         <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '405px', fontFamily: 'Manrope, sans-serif' }}>
@@ -1770,11 +1822,44 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 //   context → 3 mini-cards (still open / done today / up next)
 //   tile    → TaskDraftTile or EventDraftTile
 //   email   → inline editable email draft card
+//   notes   → post-meeting notes capture
 //   success → green confirmation
 //   empty   → collapsed (height 0)
-function ActiveZone({ state, briefContext, activeTile, entityColorMap, gmailAccounts, entities, onTileChange, onTileConfirm, onTileCancel, onTileRetry, draftFromRef, draftToRef, draftBodyRef }) {
+const ROW_BTN_STYLE = {
+  fontFamily: "'Plus Jakarta Sans', sans-serif",
+  fontSize: '11px',
+  padding: '2px 8px',
+  border: '0.5px solid #d1d5db',
+  borderRadius: '8px',
+  background: 'transparent',
+  color: '#4b5563',
+  cursor: 'pointer',
+  transition: 'background 120ms',
+};
+
+function RowButton({ children, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={ROW_BTN_STYLE}
+      onMouseEnter={(e) => { e.currentTarget.style.background = '#f3f4f6'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ActiveZone({
+  state, briefContext, activeTile,
+  entityColorMap, gmailAccounts, entities,
+  onTileChange, onTileConfirm, onTileCancel, onTileRetry,
+  draftFromRef, draftToRef, draftBodyRef,
+  sendPrompt, onCompleteTask, onOpenMeetingNotes,
+  onSaveMeetingNotes, onSkipMeetingNotes,
+}) {
   const isContext = state === 'context' && briefContext;
-  const isVisible = isContext || state === 'tile' || state === 'email' || state === 'success';
+  const isVisible = isContext || state === 'tile' || state === 'email' || state === 'notes' || state === 'success';
 
   if (!isVisible) {
     return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
@@ -1789,21 +1874,6 @@ function ActiveZone({ state, briefContext, activeTile, entityColorMap, gmailAcco
 
   if (isContext) {
     const bc = briefContext;
-    const Card = ({ title, rows }) => (
-      <div style={{ flex: 1, minWidth: 140, background: '#f5f2fa', borderRadius: 10, padding: '10px 12px' }}>
-        <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{title}</div>
-        {rows.length === 0 ? (
-          <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
-        ) : rows.map((r, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: '#374151' }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: r.color || '#9ca3af', flexShrink: 0 }} />
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
-            {r.chip && <span style={{ fontSize: 10, color: r.chipColor || '#6b7280', background: r.chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, flexShrink: 0 }}>{r.chip}</span>}
-          </div>
-        ))}
-      </div>
-    );
-
     const entityDot = (t) => {
       const tag = (t.tags && t.tags[0]) || null;
       return tag ? (entityColorMap[tag.toLowerCase()] || '#9ca3af') : '#9ca3af';
@@ -1816,40 +1886,123 @@ function ActiveZone({ state, briefContext, activeTile, entityColorMap, gmailAcco
       } catch { return ''; }
     };
 
+    const Row = ({ dotColor, label, chip, chipColor, chipBg, actions }) => (
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: '#374151' }}
+        className="group"
+      >
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor || '#9ca3af', flexShrink: 0 }} />
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        {chip && (
+          <span style={{ fontSize: 10, color: chipColor || '#6b7280', background: chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, flexShrink: 0 }}>{chip}</span>
+        )}
+        {actions && actions.length > 0 && (
+          <span
+            className="opacity-0 group-hover:opacity-100 transition-opacity"
+            style={{ display: 'flex', gap: 4, flexShrink: 0 }}
+          >
+            {actions.map((a, i) => (
+              <RowButton key={i} onClick={a.onClick}>{a.label}</RowButton>
+            ))}
+          </span>
+        )}
+      </div>
+    );
+
+    const Card = ({ title, children }) => (
+      <div style={{ flex: 1, minWidth: 140, background: '#f5f2fa', borderRadius: 10, padding: '10px 12px' }}>
+        <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{title}</div>
+        {children}
+      </div>
+    );
+
+    // STILL OPEN — overdue first, then dueToday (cap 4 rows)
     const stillOpen = [
-      ...(bc.tasks?.overdue || []).slice(0, 2).map((t) => ({
-        label: t.title, color: entityDot(t), chip: 'overdue', chipColor: '#b91c1c', chipBg: 'rgba(239,68,68,0.15)',
-      })),
-      ...(bc.tasks?.dueToday || []).slice(0, 2).map((t) => ({
-        label: t.title, color: entityDot(t), chip: 'today', chipColor: '#4f4dcf', chipBg: 'rgba(79,77,207,0.12)',
-      })),
+      ...(bc.tasks?.overdue || []).slice(0, 2).map((t) => ({ t, chip: 'overdue', chipColor: '#b91c1c', chipBg: 'rgba(239,68,68,0.15)' })),
+      ...(bc.tasks?.dueToday || []).slice(0, 2).map((t) => ({ t, chip: 'today', chipColor: '#4f4dcf', chipBg: 'rgba(79,77,207,0.12)' })),
     ].slice(0, 4);
 
-    const doneToday = [
-      ...(bc.tasks?.completedToday || []).slice(0, 2).map((t) => ({
-        label: t.title, color: entityDot(t), chip: '✓', chipColor: '#059669', chipBg: 'rgba(5,150,105,0.12)',
-      })),
-      ...(bc.events?.completed || []).slice(0, 2).map((ev) => ({
-        label: ev.title, color: '#10b981', chip: formatTime(ev.start), chipColor: '#065f46', chipBg: 'rgba(5,150,105,0.08)',
-      })),
-    ].slice(0, 4);
+    const stillOpenRows = stillOpen.length === 0
+      ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
+      : stillOpen.map(({ t, chip, chipColor, chipBg }, i) => (
+          <Row
+            key={`still-${i}`}
+            dotColor={entityDot(t)}
+            label={t.title}
+            chip={chip} chipColor={chipColor} chipBg={chipBg}
+            actions={[
+              { label: 'Done', onClick: () => onCompleteTask?.(t.id) },
+              { label: 'Reschedule', onClick: () => sendPrompt?.(`Reschedule ${t.title} to tomorrow`) },
+            ]}
+          />
+        ));
 
-    const upNext = [
-      ...(bc.events?.upcoming || []).slice(0, 2).map((ev) => ({
-        label: ev.title, color: '#4f4dcf', chip: formatTime(ev.start), chipColor: '#4f4dcf', chipBg: 'rgba(79,77,207,0.1)',
-      })),
-      ...(bc.emails?.needsAttention || []).slice(0, 1).map((e) => ({
-        label: `${e.vendor || 'Email'}: ${e.summary || ''}`.slice(0, 60), color: '#f59e0b',
-        chip: e.actionRequired ? 'action' : 'inbox', chipColor: '#92400e', chipBg: 'rgba(245,158,11,0.12)',
-      })),
-    ].slice(0, 3);
+    // DONE TODAY — completed tasks + completed events (cap 4)
+    const completedTasks = (bc.tasks?.completedToday || []).slice(0, 2);
+    const completedEvents = (bc.events?.completed || []).slice(0, 2);
+    const doneRows = (completedTasks.length + completedEvents.length) === 0
+      ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
+      : [
+          ...completedTasks.map((t, i) => (
+            <Row
+              key={`dt-t-${i}`}
+              dotColor={entityDot(t)}
+              label={t.title}
+              chip="✓" chipColor="#059669" chipBg="rgba(5,150,105,0.12)"
+            />
+          )),
+          ...completedEvents.map((ev, i) => (
+            <Row
+              key={`dt-e-${i}`}
+              dotColor="#10b981"
+              label={ev.title}
+              chip={formatTime(ev.start)} chipColor="#065f46" chipBg="rgba(5,150,105,0.08)"
+              actions={[
+                { label: 'Notes', onClick: () => onOpenMeetingNotes?.(ev) },
+              ]}
+            />
+          )),
+        ];
+
+    // UP NEXT — upcoming events + first important unread email (cap 3)
+    const upcomingEvents = (bc.events?.upcoming || []).slice(0, 2);
+    const topEmail = (bc.emails?.needsAttention || [])[0];
+    const upNextRows = (upcomingEvents.length === 0 && !topEmail)
+      ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
+      : [
+          ...upcomingEvents.map((ev, i) => (
+            <Row
+              key={`un-e-${i}`}
+              dotColor="#4f4dcf"
+              label={ev.title}
+              chip={formatTime(ev.start)} chipColor="#4f4dcf" chipBg="rgba(79,77,207,0.1)"
+              actions={[
+                { label: 'Prep me', onClick: () => sendPrompt?.(`Prep me for ${ev.title}`) },
+              ]}
+            />
+          )),
+          ...(topEmail ? [(
+            <Row
+              key="un-m"
+              dotColor="#f59e0b"
+              label={(() => {
+                const raw = topEmail.summary || topEmail.vendor || 'Email';
+                return raw.length > 30 ? raw.slice(0, 30) + '…' : raw;
+              })()}
+              chip="action" chipColor="#92400e" chipBg="rgba(245,158,11,0.12)"
+              actions={[
+                { label: 'Reply', onClick: () => sendPrompt?.(`Help me reply to ${topEmail.summary || 'this email'} from ${topEmail.vendor || 'the sender'}`) },
+              ]}
+            />
+          )] : []),
+        ];
 
     return (
       <div style={wrapperStyle}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <Card title="Still open" rows={stillOpen} />
-          <Card title="Done today" rows={doneToday} />
-          <Card title="Up next" rows={upNext} />
+          <Card title="Still open">{stillOpenRows}</Card>
+          <Card title="Done today">{doneRows}</Card>
+          <Card title="Up next">{upNextRows}</Card>
         </div>
       </div>
     );
@@ -1939,12 +2092,62 @@ function ActiveZone({ state, briefContext, activeTile, entityColorMap, gmailAcco
     );
   }
 
+  if (state === 'notes' && activeTile?.type === 'meeting_notes') {
+    const event = activeTile.event || {};
+    return (
+      <div style={wrapperStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: '#1f2937' }}>
+            {event.title || 'Meeting'} just ended
+          </span>
+        </div>
+        <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+          Any notes? I&apos;ll save them.
+        </div>
+        <textarea
+          ref={(el) => { if (el) el.dataset.notesInput = '1'; }}
+          id={`meeting-notes-${activeTile.ts}`}
+          rows={3}
+          placeholder="What came out of it? Decisions, follow-ups, anything worth remembering..."
+          style={{
+            display: 'block', width: '100%', padding: '10px 12px',
+            fontFamily: 'Manrope, sans-serif', fontSize: 13, lineHeight: 1.55, color: '#1f2937',
+            background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+            outline: 'none', resize: 'vertical', minHeight: 60, boxSizing: 'border-box',
+          }}
+        />
+        {activeTile.error && (
+          <div style={{ color: '#dc2626', fontSize: 12, marginTop: 6 }}>{activeTile.error}</div>
+        )}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => onSkipMeetingNotes?.(event)}
+            style={{ ...ROW_BTN_STYLE, fontSize: 12, padding: '4px 10px' }}
+          >
+            Skip
+          </button>
+          <button
+            onClick={() => {
+              const el = document.getElementById(`meeting-notes-${activeTile.ts}`);
+              const body = el ? el.value : '';
+              onSaveMeetingNotes?.(event, body);
+            }}
+            style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 12, fontWeight: 600, padding: '4px 12px', background: '#4f4dcf', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+          >
+            Save notes
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (state === 'success') {
     return (
       <div style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#059669' }}>
           <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>check_circle</span>
-          <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600 }}>Created successfully</span>
+          <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600 }}>Done</span>
         </div>
       </div>
     );
