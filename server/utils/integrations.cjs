@@ -32,9 +32,27 @@ async function sendSlack(db, userId, text) {
 
 async function sendWhatsApp(db, userId, text, toPhoneOverride) {
   const row = await db.getUserIntegration(userId, 'ultramsg_whatsapp');
-  if (!row || !row.isEnabled) return { ok: false, reason: 'not_configured' };
-  const { instance, token, phone } = row.config || {};
-  const to = toPhoneOverride || phone;
+  if (row && row.isEnabled === false) return { ok: false, reason: 'not_configured' };
+
+  const cfg = row?.config || {};
+  // UltraMsg instance + token are business-wide (one account) — the
+  // superadmin seed (db.cjs) stamps them from ULTRAMSG_INSTANCE/TOKEN
+  // env vars. Fall back to the same env source for users whose row
+  // doesn't carry them so outbound still works.
+  const instance = cfg.instance || process.env.ULTRAMSG_INSTANCE || null;
+  const token    = cfg.token    || process.env.ULTRAMSG_TOKEN    || null;
+
+  // Phone fallback: some users populated the legacy users.whatsapp_phone
+  // column but never put a phone in the integration's config_json. Honor
+  // that so outbound still reaches them.
+  let to = toPhoneOverride || cfg.phone || null;
+  if (!to) {
+    try {
+      const user = await db.getUserById(userId);
+      to = user?.whatsappPhone || null;
+    } catch { /* leave null → not_configured below */ }
+  }
+
   if (!instance || !token || !to) return { ok: false, reason: 'not_configured' };
 
   const r = await fetch(`https://api.ultramsg.com/${instance}/messages/chat`, {
