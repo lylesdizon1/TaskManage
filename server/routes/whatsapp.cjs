@@ -366,7 +366,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
       let priorMessages = [];
       try {
-        const history = await db.getWhatsAppHistory(normalizedPhone, 6);
+        const history = await db.getWhatsAppHistory(userId, normalizedPhone, 6);
         // history is oldest-first, so most-recent is the last element.
         const mostRecent = history.length ? history[history.length - 1] : null;
         const age = mostRecent?.createdAt ? Date.now() - new Date(mostRecent.createdAt).getTime() : null;

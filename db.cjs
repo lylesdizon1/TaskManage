@@ -613,6 +613,7 @@ async function initTables() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_id)`).catch(() => {});
+  await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`).catch(() => {});
 
   // ── user_integrations table (per-user outbound notification routing) ──
   await pool.query(`
@@ -954,10 +955,12 @@ async function getPendingConfirmation(id, userId) {
 
 async function updatePendingConfirmationStatus(id, userId, status) {
   const { rows } = await pool.query(
-    `UPDATE pending_confirmations SET status = $3
+    `UPDATE pending_confirmations
+     SET status = $3,
+         resolved_at = CASE WHEN $3 = 'pending' THEN resolved_at ELSE NOW() END
      WHERE id = $1 AND user_id = $2
      RETURNING id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
-               channel, status, expires_at AS "expiresAt"`,
+               channel, status, expires_at AS "expiresAt", resolved_at AS "resolvedAt"`,
     [id, userId, status],
   );
   return rows[0] || null;
@@ -1351,14 +1354,20 @@ async function getImportantUnread(userId, minRank = 3) {
 }
 
 /** Find the most recent pending row for a user on a given channel (for WhatsApp YES/NO matching). */
-async function findLatestPendingConfirmation(userId, channel) {
+async function findLatestPendingConfirmation(userId, channel, toolName) {
+  const params = [userId, channel];
+  let where = `WHERE user_id = $1 AND channel = $2 AND status = 'pending' AND expires_at > NOW()`;
+  if (toolName) {
+    params.push(toolName);
+    where += ` AND tool_name = $3`;
+  }
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
             channel, status, expires_at AS "expiresAt", created_at AS "createdAt"
      FROM pending_confirmations
-     WHERE user_id = $1 AND channel = $2 AND status = 'pending' AND expires_at > NOW()
+     ${where}
      ORDER BY created_at DESC LIMIT 1`,
-    [userId, channel],
+    params,
   );
   return rows[0] || null;
 }
@@ -4451,15 +4460,20 @@ async function markCalendarNoteAlertSent(userId, eventId) {
 
 // ── WhatsApp conversation history ────────────────────────────────────────────
 
-async function getWhatsAppHistory(phone, limit = 6) {
+async function getWhatsAppHistory(userId, phone, limit = 6) {
+  // Oldest-first so callers can feed directly into the agentic messages array.
   const { rows } = await pool.query(
-    `SELECT role, content, created_at AS "createdAt" FROM whatsapp_conversations
-     WHERE phone = $1
-     ORDER BY created_at DESC
-     LIMIT $2`,
-    [phone, limit],
+    `SELECT * FROM (
+       SELECT role, content, created_at AS "createdAt"
+       FROM whatsapp_conversations
+       WHERE user_id = $1 AND phone = $2
+       ORDER BY created_at DESC
+       LIMIT $3
+     ) sub
+     ORDER BY "createdAt" ASC`,
+    [userId, phone, limit],
   );
-  return rows.reverse(); // oldest first
+  return rows;
 }
 
 async function saveWhatsAppMessage(userId, phone, role, content) {

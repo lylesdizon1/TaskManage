@@ -4,6 +4,14 @@ const express = require('express');
 const { executeTool } = require('../tools.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
+/** Map internal error messages to safe user-facing copy. */
+function sanitizeError(msg) {
+  const s = String(msg || '');
+  if (/not found/i.test(s)) return 'Item not found';
+  if (/OAuth|auth|token|not connected/i.test(s)) return 'Calendar not connected — check your integrations';
+  return 'Something went wrong — please try again';
+}
+
 /**
  * tileExecute — direct tool execution for Command Center tile confirmations.
  *
@@ -48,12 +56,13 @@ module.exports = function createTileExecuteRouter({ authenticateToken, db }) {
 
       const result = await executeTool(toolName, toolInput, userId, entityIds, db, tz);
       if (result && result.success === false) {
-        return res.status(400).json({ success: false, error: result.error || 'Tool execution failed' });
+        logger.warn('tile.execute.toolFailure', { requestId: req.requestId, userId, type, internal: result.error });
+        return res.status(400).json({ success: false, error: sanitizeError(result.error) });
       }
       return res.json({ success: true, result });
     } catch (err) {
       logger.error('tile.execute.failed', { requestId: req.requestId, userId, type, error: err.message });
-      return res.status(500).json({ success: false, error: err.message });
+      return res.status(500).json({ success: false, error: sanitizeError(err.message) });
     }
   });
 

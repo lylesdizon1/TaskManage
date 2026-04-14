@@ -852,6 +852,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     setCcMessages((prev) => prev.filter((m) => m.id !== tileId));
   }, []);
 
+  // Track auto-dismiss timers so we can cancel them on unmount.
+  const dismissTimers = useRef({});
+  useEffect(() => () => {
+    Object.values(dismissTimers.current).forEach(clearTimeout);
+    dismissTimers.current = {};
+  }, []);
+
   const executeTile = useCallback(async (tile) => {
     const p = tile.payload || {};
     let body;
@@ -904,7 +911,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       setTileMeta(tile.id, { status: 'success', error: null });
       if (tile.type === 'task') onReloadTasks?.();
       else if (tile.type === 'event') onReloadCalendar?.();
-      setTimeout(() => dismissTile(tile.id), 2000);
+      dismissTimers.current[tile.id] = setTimeout(() => {
+        dismissTile(tile.id);
+        delete dismissTimers.current[tile.id];
+      }, 2000);
     } catch (err) {
       if (err?.name === 'AbortError') {
         setTileMeta(tile.id, { status: 'error', error: 'Request timed out — tap Retry.' });
