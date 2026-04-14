@@ -236,6 +236,8 @@ cron.schedule('0 * * * *', async () => {
 console.log('[cron] Pending-confirmations sweep scheduler started');
 
 // ── GCal sync — every 15 min, mirrors 14-day window into calendar_events ──
+const { localMidnightUtc } = require('./server/lib/buildAgenticContext.cjs');
+
 async function syncGcalForUser(userId, tz) {
   try {
     const accounts = await loadAllGcalAccounts(userId);
@@ -256,11 +258,11 @@ async function syncGcalForUser(userId, tz) {
           }
         });
 
-        const now = new Date();
-        const timeMin = new Date(now);
-        timeMin.setHours(0, 0, 0, 0);
-        const timeMax = new Date(timeMin);
-        timeMax.setDate(timeMax.getDate() + 14);
+        // Anchor the window to the user's local midnight, not the server's.
+        // Without this, a Railway-hosted (UTC) server skews the window for
+        // non-UTC users — in the worst case losing up to a day of events.
+        const timeMin = localMidnightUtc(tz, 0);
+        const timeMax = localMidnightUtc(tz, 14);
 
         const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
         const res = await calendar.events.list({
@@ -309,3 +311,23 @@ cron.schedule('*/15 * * * *', async () => {
   }
 });
 console.log('[cron] GCal sync scheduler started');
+
+// ── Startup sync — trigger one pass for all connected users on boot so
+// new deploys don't wait up to 15 min for the first tick. Non-blocking;
+// per-user failures are isolated to that user.
+(async () => {
+  // Small delay so runMigrations + initTables have definitely settled on
+  // the server start() path before we start hitting the DB + Google API.
+  await new Promise((r) => setTimeout(r, 5000));
+  try {
+    const users = await db.getUsersWithGcalConnected();
+    cronLogger.info('gcal-sync.startup.begin', { userCount: users.length });
+    for (const user of users) {
+      try { await syncGcalForUser(user.id, user.timezone || 'America/Los_Angeles'); }
+      catch (e) { cronLogger.error('gcal-sync.startup.user-failed', { userId: user.id, error: e.message }); }
+    }
+    cronLogger.info('gcal-sync.startup.complete', { userCount: users.length });
+  } catch (e) {
+    cronLogger.error('gcal-sync.startup.failed', { error: e.message });
+  }
+})();

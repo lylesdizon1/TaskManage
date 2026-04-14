@@ -1994,11 +1994,18 @@ async function getCalendarEventsForUser(userId, startDate, endDate) {
   return rows;
 }
 
-/** Purge cached events whose end_time is older than cutoffDate. */
+/**
+ * Purge cached events whose end_time is older than cutoffDate. The extra
+ * `start_time < NOW()` guard makes absolutely sure we never delete events
+ * that haven't started yet, even in degenerate cases where end_time is
+ * malformed or precedes start_time (e.g. bad DST data, legacy rows).
+ */
 async function deleteStaleCalendarEvents(userId, cutoffDate) {
   await pool.query(
     `DELETE FROM calendar_events
-     WHERE user_id = $1 AND end_time < $2`,
+     WHERE user_id = $1
+       AND end_time < $2
+       AND start_time < NOW()`,
     [userId, cutoffDate],
   );
 }
