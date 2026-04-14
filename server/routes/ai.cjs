@@ -262,6 +262,11 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
     const { messages, systemPrompt: clientPrompt, model: reqModel, timeZone, context_hint } = req.body;
     const model = reqModel || 'claude-sonnet-4-20250514';
 
+    // Hoist finalizeStream so the sibling catch block can reference it even
+    // when an error occurs before the try-body assignment runs. The no-op
+    // default covers the pre-flushHeaders failure mode (catch returns JSON).
+    let finalizeStream = () => {};
+
     try {
       const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
       const ctx = await buildAgenticContext({
@@ -292,7 +297,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         if (streamFinalized) return;
         try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
       };
-      const finalizeStream = (payload = {}) => {
+      finalizeStream = (payload = {}) => {
         if (streamFinalized) return;
         streamFinalized = true;
         logger.info('chat.stream.finalized', { requestId: req.requestId, userId, hasError: !!payload.error, hasText: !!(payload.text && payload.text.length) });

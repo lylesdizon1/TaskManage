@@ -70,6 +70,17 @@ function getTimeState(tz) {
 }
 
 /**
+ * Return a YYYY-MM-DD string regardless of whether the DB returned the
+ * timestamp as a Date object (TIMESTAMPTZ columns via node-postgres) or
+ * as an ISO string (legacy code paths). Safe on null/undefined.
+ */
+function toDateStr(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val.toISOString().slice(0, 10);
+  return String(val).slice(0, 10);
+}
+
+/**
  * Classify a GCal event into completed | live | upcoming relative to `now`.
  * Falls back to a 60-minute duration when the event has no end time.
  */
@@ -354,7 +365,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         .filter(t => !t.completed && t.dueDate === todayLocal)
         .map(projectTask);
       completedToday = tasks
-        .filter(t => t.completed && t.completedAt && t.completedAt.slice(0, 10) === todayLocal)
+        .filter(t => t.completed && t.completedAt && toDateStr(t.completedAt) === todayLocal)
         .map(projectTask);
     } catch (e) {
       logger.error('brief.context.tasks.failed', { requestId: req.requestId, userId, error: e.message });

@@ -101,19 +101,6 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   }, [entities]);
 
   function getEventColor(event) {
-    if ((event.title || '').toLowerCase().includes('tahoe') || (event.title || '').toLowerCase().includes('fun')) {
-      console.log('[DEBUG getEventColor]', {
-        title: event.title,
-        entityName: event.entityName,
-        entityNameLower: event.entityName ? event.entityName.toLowerCase() : '',
-        calendarId: event.calendarId,
-        entityColorMap: JSON.parse(JSON.stringify(entityColorMap)),
-        calendarEntityColorMap: JSON.parse(JSON.stringify(calendarEntityColorMap)),
-        directLookup: entityColorMap['personal'],
-        lowerLookup: event.entityName ? entityColorMap[event.entityName.toLowerCase()] : 'no entityName',
-        calendarIdResult: event.calendarId ? calendarEntityColorMap[event.calendarId] : 'no calendarId',
-      });
-    }
     // Explicit entity tag takes priority — user chose this deliberately
     if (event.entityName) {
       const c = entityColorMap[event.entityName.toLowerCase()];
