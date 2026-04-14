@@ -8,6 +8,7 @@ import TaskDraftTile from '../components/command-center/TaskDraftTile.jsx';
 import EventDraftTile from '../components/command-center/EventDraftTile.jsx';
 import ProjectDraftTile from '../components/command-center/ProjectDraftTile.jsx';
 import ProjectTaskDraftTile from '../components/command-center/ProjectTaskDraftTile.jsx';
+import ChecklistDraftTile from '../components/command-center/ChecklistDraftTile.jsx';
 
 // Inline-styled markdown components so assistant bubbles keep the
 // current typography (Manrope 15px / 1.6 line-height) and don't
@@ -66,6 +67,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const lastTimeStateRef = useRef(null);
   const lastActivityRef = useRef(Date.now());
   const firstBriefFetchRef = useRef(true);
+  // Last project task created via chat — enables "yes" / "add subtasks"
+  // follow-ups to resolve to the right task without asking again. Stale
+  // after 60 seconds.
+  const lastCreatedProjectTaskRef = useRef(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -673,7 +678,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const today = new Intl.DateTimeFormat('en-CA', {
         timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(new Date());
-      const draft = await parseActionDraft({ apiFetch, authToken, message: text, timezone: userTZ, today, entities, projects: briefContext?.projects });
+      // Freshness gate on lastCreatedProjectTaskRef (stale after 60s).
+      const lpt = lastCreatedProjectTaskRef.current;
+      const freshLastTask = lpt && (Date.now() - lpt.ts < 60000) ? lpt : null;
+      const draft = await parseActionDraft({
+        apiFetch, authToken, message: text, timezone: userTZ, today,
+        entities, projects: briefContext?.projects,
+        lastProjectTask: freshLastTask,
+      });
       // Clarify: ambiguous task/project — ask and bail, no tile.
       if (draft && draft.type === 'clarify') {
         const now = new Date().toISOString();
@@ -685,13 +697,24 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         setCcSending(false);
         return;
       }
-      if (draft && (draft.type === 'task' || draft.type === 'event' || draft.type === 'project' || draft.type === 'project_task')) {
+      if (draft && (draft.type === 'task' || draft.type === 'event' || draft.type === 'project' || draft.type === 'project_task' || draft.type === 'checklist')) {
         // Project with no resolved entity → ask for clarification, no tile.
         if (draft.type === 'project' && !draft.entity_id) {
           const now = new Date().toISOString();
           setCcMessages((prev) => [
             ...prev,
             { role: 'assistant', content: 'Which entity should this project belong to?', createdAt: now, ts: Date.now() },
+          ]);
+          ccAbortRef.current = null;
+          setCcSending(false);
+          return;
+        }
+        // Checklist with no resolved task → ask which task, no tile.
+        if (draft.type === 'checklist' && !draft.project_task_id) {
+          const now = new Date().toISOString();
+          setCcMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: 'Which task should I add these to?', createdAt: now, ts: Date.now() },
           ]);
           ccAbortRef.current = null;
           setCcSending(false);
@@ -712,6 +735,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         if (draft.type === 'task') ack = draft.confidence === 'high' ? "Got it — here's the task" : "Here's a task draft";
         else if (draft.type === 'event') ack = draft.confidence === 'high' ? "Got it — here's the event" : "Here's the event draft";
         else if (draft.type === 'project_task') ack = `I drafted a task for ${draft.project_name}: ${draft.title}. Confirm to create it.`;
+        else if (draft.type === 'checklist') ack = draft.items?.length
+          ? `Here are ${draft.items.length} item${draft.items.length === 1 ? '' : 's'} for ${draft.task_title}. Confirm to add.`
+          : `Add checklist items to ${draft.task_title} below.`;
         else ack = `I drafted a new project for ${draft.entity_name}: ${draft.title}. Confirm to create it.`;
         const tileId = `tile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
         let payload;
@@ -731,6 +757,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             entity_id: draft.entity_id,
             entity_name: draft.entity_name,
             description: draft.description || '',
+          };
+        } else if (draft.type === 'checklist') {
+          role = 'checklist_draft';
+          const seedItems = Array.isArray(draft.items) && draft.items.length ? draft.items : [''];
+          payload = {
+            project_task_id: draft.project_task_id,
+            task_title: draft.task_title,
+            project_name: draft.project_name,
+            entity_id: draft.entity_id,
+            items: seedItems,
           };
         } else {
           role = 'project_draft';
@@ -1032,6 +1068,51 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (!tile) return;
     const p = tile.payload || {};
 
+    // Checklist tiles batch-POST to /api/task-checklist-items.
+    if (tile.type === 'checklist') {
+      if (!p.project_task_id || !p.entity_id) {
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: 'No task selected' } : prev));
+        return;
+      }
+      const cleaned = (Array.isArray(p.items) ? p.items : [])
+        .map((s) => (s || '').trim())
+        .filter((s) => s.length > 0);
+      if (cleaned.length === 0) {
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: 'Add at least one item' } : prev));
+        return;
+      }
+      try {
+        const results = await Promise.all(cleaned.map((text) =>
+          apiFetch('/api/task-checklist-items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ task_id: p.project_task_id, entity_id: p.entity_id, text }),
+          }).then(async (r) => ({ ok: r.ok, data: await r.json().catch(() => ({})), status: r.status }))
+        ));
+        const failed = results.filter((r) => !r.ok || !r.data?.item);
+        if (failed.length) {
+          const firstErr = failed[0].data?.error || `HTTP ${failed[0].status}`;
+          setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: `${failed.length}/${cleaned.length} failed: ${firstErr}` } : prev));
+          return;
+        }
+        const now = new Date().toISOString();
+        setCcMessages((prev) => [
+          ...prev,
+          { role: 'system', content: `${cleaned.length} checklist item${cleaned.length === 1 ? '' : 's'} added to ${p.task_title || 'task'}`, createdAt: now, ts: Date.now() },
+        ]);
+        setActiveZoneState('success');
+        setTimeout(() => {
+          setActiveTile(null);
+          setActiveZoneState('empty');
+          fetchBriefContext();
+        }, 2000);
+      } catch (err) {
+        const msg = err?.message || 'Network error';
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: msg } : prev));
+      }
+      return;
+    }
+
     // Project-task tiles bypass /api/tile/execute and POST /api/project-tasks directly.
     if (tile.type === 'project_task') {
       if (!p.project_id || !p.entity_id) {
@@ -1052,6 +1133,21 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${res.status}` } : prev));
           return;
         }
+        // Stash for checklist follow-up ("yes" / "add subtasks: …"). Stale
+        // after 60s so old context doesn't leak into later conversations.
+        const createdTask = data.task || {};
+        lastCreatedProjectTaskRef.current = {
+          id: createdTask.id,
+          title: createdTask.title || p.title,
+          projectName: p.project_name || null,
+          entityId: p.entity_id,
+          ts: Date.now(),
+        };
+        setTimeout(() => {
+          if (lastCreatedProjectTaskRef.current && Date.now() - lastCreatedProjectTaskRef.current.ts >= 60000) {
+            lastCreatedProjectTaskRef.current = null;
+          }
+        }, 60000);
         const now = new Date().toISOString();
         setCcMessages((prev) => [
           ...prev,
@@ -2303,13 +2399,14 @@ function ActiveZone({
     const Tile = activeTile.role === 'task_draft' ? TaskDraftTile
       : activeTile.role === 'project_draft' ? ProjectDraftTile
       : activeTile.role === 'project_task_draft' ? ProjectTaskDraftTile
+      : activeTile.role === 'checklist_draft' ? ChecklistDraftTile
       : EventDraftTile;
     return (
       <div style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
           <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {activeTile.type === 'task' ? 'Task draft' : activeTile.type === 'project' ? 'Project draft' : activeTile.type === 'project_task' ? 'Project task draft' : 'Event draft'}
+            {activeTile.type === 'task' ? 'Task draft' : activeTile.type === 'project' ? 'Project draft' : activeTile.type === 'project_task' ? 'Project task draft' : activeTile.type === 'checklist' ? 'Checklist draft' : 'Event draft'}
           </span>
         </div>
         <Tile

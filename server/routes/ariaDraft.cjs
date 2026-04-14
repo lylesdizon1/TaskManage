@@ -19,7 +19,7 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../guardrails/logger.cjs');
 
-const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'clarify', 'default_chat']);
+const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'checklist', 'clarify', 'default_chat']);
 const VALID_PRIORITY = new Set(['low', 'medium', 'high']);
 const VALID_CONFIDENCE = new Set(['high', 'medium', 'low']);
 
@@ -60,6 +60,13 @@ module.exports = function createAriaDraftRouter({ authenticateToken }) {
     const projectListStr = userProjects.length
       ? userProjects.map((p) => `- ${p.title}${p.entityName ? ` (entity: ${p.entityName})` : ''}`).join('\n')
       : '(none)';
+    // Last-created project task — passed by the Command Center so that
+    // "yes" / "add subtasks" following "Want to add checklist items?"
+    // resolves to the right task without asking again.
+    const lastTask = req.body?.lastProjectTask && typeof req.body.lastProjectTask === 'object' ? req.body.lastProjectTask : null;
+    const lastTaskStr = lastTask && lastTask.id && lastTask.title
+      ? `- ${lastTask.title}${lastTask.projectName ? ` (project: ${lastTask.projectName})` : ''}`
+      : '(none)';
 
     const system = 'You classify a single user message for a personal productivity assistant. Output ONLY one JSON object. No prose.';
     const prompt =
@@ -71,13 +78,18 @@ ${entityListStr}
 User's active projects:
 ${projectListStr}
 
+Last-created project task (recent, may be the target of a "yes" follow-up):
+${lastTaskStr}
+
 HARD RULES — evaluated in this exact priority order. The FIRST rule that matches wins. Do not evaluate any lower rule if a higher one matches.
 
 A. EMAIL/MESSAGE CHECK: If the message contains "send", "email", "message", "reach out", "reply" → ALWAYS return {"type": "default_chat"}. Stop.
 
 B. PROJECT CREATION: If the message asks to "create a project", "set up a project", "make a [X] project", "start a new project" → ALWAYS return {"type": "project"}. Stop.
 
-C. PROJECT TASK: If the message references an existing project by name (fuzzy match against the active projects list above — e.g. "collab project" matches "Test project collab feature", "the release project" matches "Release v2") AND asks to add/create a task, item, todo, or to-do under/to/for/in that project → ALWAYS return {"type": "project_task"}. The project_name field MUST be the exact title from the active projects list above. Stop.
+B2. CHECKLIST (evaluated before project_task/task):
+- If the message is "yes", "sure", "yep", "go ahead", "ok", "do it" AND there is a Last-created project task (not "(none)") → return {"type": "checklist", "project_task_title": "<exact title from last task>", "items": []}. The client will pre-fill items as empty and let the user type them. Stop.
+- If the message says "add subtasks", "add checklist", "add checklist items", "add items", "add subtasks:", etc. with a colon/comma/newline list of items → return {"type": "checklist", "project_task_title": <match against last task OR task name in message OR null>, "items": [<string>, ...]}. Parse the items from everything after the colon (or the list on subsequent lines); split on commas, semicolons, or newlines; trim each. Stop.
 
 D. AMBIGUOUS TASK WITH NO PROJECT: If the message says "add a task", "create a task", "new task" with NO project named AND NO concrete subject that makes it obviously standalone (e.g. no "to buy groceries", "for the camping trip", "to call mom") → return {"type": "clarify", "question": "Should I add this to a project or as a standalone task?"}. Stop.
 
@@ -109,7 +121,11 @@ Bucket output shapes:
 5) "clarify" — ambiguous task request with no project context.
    Output: {"type":"clarify","question":"Should I add this to a project or as a standalone task?"}
 
-6) "default_chat" — anything else (questions, chitchat, lookups).
+6) "checklist" — batch checklist items under an existing project task.
+   Output: {"type":"checklist","project_task_title":string|null,"items":string[]}
+   Items parsed from the message. If the user said "yes" after a recent task creation, leave items empty — the client renders a blank list.
+
+7) "default_chat" — anything else (questions, chitchat, lookups).
    Output: {"type":"default_chat"}
 
 Rules:
@@ -181,6 +197,40 @@ User message: ${message}`;
         if (!title || !start_time) return res.json({ type: 'default_chat' });
         const duration_minutes = Number.isFinite(parsed.duration_minutes) ? Math.max(5, Math.min(parsed.duration_minutes, 12 * 60)) : 60;
         return res.json({ type: 'event', title, start_time, duration_minutes, confidence });
+      }
+
+      if (parsed.type === 'checklist') {
+        const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+        const items = rawItems
+          .map((s) => (typeof s === 'string' ? s.trim() : ''))
+          .filter((s) => s.length > 0)
+          .slice(0, 50);
+        const claimedTitle = typeof parsed.project_task_title === 'string' ? parsed.project_task_title.trim() : '';
+        // Resolve to a task id. Prefer lastTask when its title matches (or
+        // when the user said "yes"); otherwise the client must clarify.
+        let resolved = null;
+        if (lastTask?.id && lastTask?.title) {
+          const lt = (lastTask.title || '').toLowerCase();
+          const ct = claimedTitle.toLowerCase();
+          if (!claimedTitle || lt === ct || lt.includes(ct) || ct.includes(lt)) {
+            resolved = {
+              project_task_id: lastTask.id,
+              task_title: lastTask.title,
+              project_name: lastTask.projectName || null,
+              entity_id: lastTask.entityId || null,
+            };
+          }
+        }
+        if (!resolved) return res.json({ type: 'clarify', question: 'Which task should I add these to?' });
+        return res.json({
+          type: 'checklist',
+          project_task_id: resolved.project_task_id,
+          task_title: resolved.task_title,
+          project_name: resolved.project_name,
+          entity_id: resolved.entity_id,
+          items,
+          confidence,
+        });
       }
 
       if (parsed.type === 'project_task') {

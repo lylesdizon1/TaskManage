@@ -2,7 +2,7 @@
 // Returns one of: { type:'task', … }, { type:'event', … }, { type:'default_chat' }.
 // Any failure resolves to { type:'default_chat' } so the Command Center
 // silently falls back to normal agentic chat.
-export async function parseActionDraft({ apiFetch, authToken, message, timezone, today, entities, projects }) {
+export async function parseActionDraft({ apiFetch, authToken, message, timezone, today, entities, projects, lastProjectTask }) {
   try {
     const entityList = Array.isArray(entities)
       ? entities.slice(0, 50).map((e) => ({ id: e.id, name: e.name })).filter((e) => e.name)
@@ -10,10 +10,13 @@ export async function parseActionDraft({ apiFetch, authToken, message, timezone,
     const projectList = Array.isArray(projects)
       ? projects.slice(0, 50).map((p) => ({ id: p.id, title: p.title, entityId: p.entityId, entityName: p.entityName })).filter((p) => p.id && p.title)
       : [];
+    const lt = lastProjectTask && lastProjectTask.id && lastProjectTask.title
+      ? { id: lastProjectTask.id, title: lastProjectTask.title, projectName: lastProjectTask.projectName || null, entityId: lastProjectTask.entityId || null }
+      : null;
     const res = await apiFetch('/api/aria/parse-draft', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ message, timezone, today, entities: entityList, projects: projectList }),
+      body: JSON.stringify({ message, timezone, today, entities: entityList, projects: projectList, lastProjectTask: lt }),
     });
     if (!res.ok) return { type: 'default_chat' };
     const data = await res.json();
