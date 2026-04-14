@@ -16,14 +16,13 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
 
   router.get('/api/entities', authenticateToken, async (req, res) => {
     try {
-      // P0: always scope to the authenticated user + shared entities —
-      // admins and superadmins included. Cross-tenant entity visibility
-      // belongs in a dedicated admin endpoint gated by requireSuperAdmin,
-      // not the user-facing list that feeds dropdowns.
-      const entities = await db.getEntitiesForUser(req.user.id);
-      // getEntitiesForUser already computes isOwner = (created_by = userId)
-      // in SQL, so no client-side isOwner override (which previously flipped
-      // the flag true for admins on other users' rows).
+      // Canonical access path (Phase 2): creator + org-wide-with-user's-org
+      // + explicit entity_members membership. orgId is null when the user
+      // has no org — the org clause simply won't match.
+      const entities = await db.getEntitiesForUserWithMembership(
+        req.user.id,
+        req.user.orgId || null,
+      );
       return res.json(entities);
     } catch (err) {
       logger.error('entities.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

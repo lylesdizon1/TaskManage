@@ -3183,7 +3183,12 @@ async function updateTask(id, fields) {
  */
 async function getUserAuthContext(id) {
   const { rows } = await pool.query(
-    `SELECT id, timezone, role, entity_ids AS "entityIds" FROM users WHERE id = $1`,
+    `SELECT u.id, u.timezone, u.role, u.entity_ids AS "entityIds",
+            om.org_id AS "orgId"
+     FROM users u
+     LEFT JOIN org_members om ON om.user_id = u.id
+     WHERE u.id = $1
+     LIMIT 1`,
     [id],
   );
   return rows[0] || null;

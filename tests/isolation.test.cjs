@@ -93,7 +93,13 @@ async function teardown() {
 
 test('userB GET entities → no userA entities', async () => {
   const rows = await db.getEntitiesForUser(userB.id);
-  assert.equal(rows.some((e) => e.id === entityA.id), false, `userB leaked entity ${entityA.id}`);
+  assert.equal(rows.some((e) => e.id === entityA.id), false, `userB leaked entity via getEntitiesForUser ${entityA.id}`);
+
+  // Also verify the Phase 2 canonical access helper is scoped the same way.
+  // userB has no org → null orgId; userA's private entity must not surface
+  // via the creator / org / members branches.
+  const rowsWM = await db.getEntitiesForUserWithMembership(userB.id, null);
+  assert.equal(rowsWM.some((e) => e.id === entityA.id), false, `userB leaked entity via getEntitiesForUserWithMembership ${entityA.id}`);
 });
 
 test('userB GET tasks → no userA tasks', async () => {
