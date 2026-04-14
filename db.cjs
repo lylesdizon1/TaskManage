@@ -3781,6 +3781,82 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS calendar_events_user_start
     ON calendar_events(user_id, start_time)
   `).catch(() => {});
+
+  // ── Outcome Intelligence Phase 1 — schema only ──────────────────────────
+  // See docs/aria-outcome-intelligence-system.md.
+  // completion_note already exists (line ~118); the other three are new.
+  await pool.query(`
+    ALTER TABLE tasks
+      ADD COLUMN IF NOT EXISTS completion_note TEXT,
+      ADD COLUMN IF NOT EXISTS completion_status TEXT
+        CHECK (completion_status IN (
+          'success','mixed','neutral','failed','cancelled','no_show'
+        )),
+      ADD COLUMN IF NOT EXISTS follow_up_needed BOOLEAN DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS follow_up_by TIMESTAMPTZ
+  `).catch((err) => console.warn('[migration] tasks.outcome cols:', err.message));
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS outcome_records (
+      id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_type     TEXT NOT NULL CHECK (source_type IN ('task','event')),
+      source_id       TEXT NOT NULL,
+      completed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      title_snapshot  TEXT,
+      raw_note        TEXT,
+      outcome_status  TEXT CHECK (outcome_status IN (
+                        'success','mixed','neutral','failed','cancelled','no_show'
+                      )),
+      follow_up_needed BOOLEAN DEFAULT FALSE,
+      follow_up_by    TIMESTAMPTZ,
+      entered_by      TEXT DEFAULT 'user'
+                      CHECK (entered_by IN ('user','assistant','system','staff')),
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] outcome_records table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS outcome_records_user_id ON outcome_records(user_id, completed_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS outcome_records_source  ON outcome_records(source_type, source_id)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS outcome_entities (
+      id          SERIAL PRIMARY KEY,
+      outcome_id  TEXT NOT NULL REFERENCES outcome_records(id) ON DELETE CASCADE,
+      entity_id   TEXT REFERENCES entities(id) ON DELETE SET NULL,
+      entity_type TEXT,
+      role        TEXT,
+      confidence  NUMERIC(3,2),
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] outcome_entities table:', err.message));
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS outcome_signals (
+      id              SERIAL PRIMARY KEY,
+      outcome_id      TEXT NOT NULL REFERENCES outcome_records(id) ON DELETE CASCADE,
+      signal_name     TEXT NOT NULL,
+      signal_value    JSONB,
+      confidence      NUMERIC(3,2),
+      model_name      TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] outcome_signals table:', err.message));
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS memory_facts (
+      id               SERIAL PRIMARY KEY,
+      user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id        TEXT REFERENCES entities(id) ON DELETE SET NULL,
+      fact_text        TEXT NOT NULL,
+      fact_type        TEXT,
+      supporting_count INTEGER DEFAULT 1,
+      strength_score   NUMERIC(3,2) DEFAULT 0.5,
+      first_seen_at    TIMESTAMPTZ DEFAULT NOW(),
+      last_seen_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] memory_facts table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS memory_facts_user_id ON memory_facts(user_id, strength_score DESC)`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -5010,6 +5086,66 @@ async function saveWhatsAppMessage(userId, phone, role, content) {
   );
 }
 
+// ── Outcome Intelligence helpers (Phase 1) ─────────────────────────────────
+
+/**
+ * Persist an outcome record for a completed task or event. `enteredBy`
+ * defaults to 'user' for direct captures; Phase 2 will set 'assistant'
+ * for Aria-parsed notes and 'system' for auto-classified events.
+ */
+async function createOutcomeRecord(userId, {
+  sourceType, sourceId, completedAt, titleSnapshot,
+  rawNote, outcomeStatus, followUpNeeded, followUpBy,
+  enteredBy = 'user',
+}) {
+  const { rows } = await pool.query(
+    `INSERT INTO outcome_records (
+       user_id, source_type, source_id, completed_at,
+       title_snapshot, raw_note, outcome_status,
+       follow_up_needed, follow_up_by, entered_by
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     RETURNING *`,
+    [
+      userId, sourceType, sourceId,
+      completedAt || new Date(),
+      titleSnapshot, rawNote, outcomeStatus,
+      followUpNeeded || false, followUpBy, enteredBy,
+    ],
+  );
+  return rows[0];
+}
+
+/** Paginated list of a user's outcome records, newest first. */
+async function getOutcomeRecordsForUser(userId, limit = 20, offset = 0) {
+  const { rows } = await pool.query(
+    `SELECT * FROM outcome_records
+     WHERE user_id = $1
+     ORDER BY completed_at DESC
+     LIMIT $2 OFFSET $3`,
+    [userId, limit, offset],
+  );
+  return rows;
+}
+
+/**
+ * Recent outcomes with narrative notes — fed into the Aria system prompt
+ * so responses reflect what actually happened on prior tasks/events.
+ */
+async function getRecentOutcomeContext(userId, limit = 5) {
+  const { rows } = await pool.query(
+    `SELECT title_snapshot, raw_note, outcome_status,
+            follow_up_needed, completed_at, source_type
+     FROM outcome_records
+     WHERE user_id = $1
+       AND raw_note IS NOT NULL
+       AND raw_note <> ''
+     ORDER BY completed_at DESC
+     LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
 module.exports = {
   pool,
   initTables,
@@ -5033,6 +5169,9 @@ module.exports = {
   deleteStaleCalendarEvents,
   getUsersWithGcalConnected,
   getMeetingsNeedingNotes,
+  createOutcomeRecord,
+  getOutcomeRecordsForUser,
+  getRecentOutcomeContext,
   seedEntitiesIfEmpty,
   getTaskById,
   getTasksForUser,

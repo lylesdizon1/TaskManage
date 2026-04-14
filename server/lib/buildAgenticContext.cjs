@@ -166,7 +166,7 @@ async function buildAgenticContext(opts) {
     return fetchCalendarWindow(opts);
   })();
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified] = await Promise.all([
+  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
@@ -176,6 +176,7 @@ async function buildAgenticContext(opts) {
     db.getUserLearnings ? db.getUserLearnings(userId).catch(() => []) : Promise.resolve([]),
     db.getImportantUnread ? db.getImportantUnread(userId, emailContextMinRank).catch(() => []) : Promise.resolve([]),
     db.getRecentClassifications ? db.getRecentClassifications(userId, recentClassifiedLimit).catch(() => []) : Promise.resolve([]),
+    db.getRecentOutcomeContext ? db.getRecentOutcomeContext(userId, 5).catch(() => []) : Promise.resolve([]),
   ]);
 
   const todayStr = getTodayLocal(tz);
@@ -243,15 +244,39 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     importantUnreadLimit, recentClassifiedLimit,
   });
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + contextBlock;
+  // Recent outcome narratives — feed back what actually happened on prior
+  // tasks/events so Aria can reference outcomes in future responses.
+  const outcomesBlock = buildOutcomesBlock(recentOutcomes, tz);
+
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + contextBlock;
 
   return {
     user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
-    importantUnread, recentClassified,
+    importantUnread, recentClassified, recentOutcomes,
     tz, todayStr, todayDate, currentTime, weekMapStr,
-    profileContext, contextBlock, learningsBlock, emailBlock, decisionInstructions: DECISION_INSTRUCTIONS,
+    profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };
+}
+
+/**
+ * Build the RECENT OUTCOMES block from outcome_records rows. Empty string
+ * when no outcomes exist so callers can concatenate blindly.
+ */
+function buildOutcomesBlock(outcomes, tz) {
+  if (!Array.isArray(outcomes) || outcomes.length === 0) return '';
+  const lines = outcomes.map((o) => {
+    let date = '';
+    try {
+      date = new Date(o.completed_at).toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric', timeZone: tz,
+      });
+    } catch {}
+    const status = o.outcome_status ? ` (${o.outcome_status})` : '';
+    const followUp = o.follow_up_needed ? ' · follow-up needed' : '';
+    return `- ${o.title_snapshot || 'Untitled'}${status}, ${date}: ${o.raw_note}${followUp}`;
+  });
+  return `\n\nRECENT OUTCOMES\n${lines.join('\n')}`;
 }
 
 // Email inbox context. Truncates recentClassified first, then
