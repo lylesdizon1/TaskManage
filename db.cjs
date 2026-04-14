@@ -5433,6 +5433,7 @@ async function getProjectContextForUser(userId, limit = 5) {
      LIMIT $2`,
     [userId, limit],
   );
+  console.log('[getProjectContextForUser] rows:', projects?.length, JSON.stringify(projects?.map((r) => r.title)));
   if (!projects.length) return [];
 
   const ids = projects.map((p) => p.id);
