@@ -86,6 +86,100 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
     }
   });
 
+  // ── Member management (Phase 3) ────────────────────────────────────────
+
+  /** Owner-only gate. Returns the role string when allowed, else null. */
+  async function ownerGate(entityId, userId) {
+    try {
+      const role = await db.getEntityMemberRole(entityId, userId);
+      return role === 'owner' ? role : null;
+    } catch { return null; }
+  }
+
+  router.get('/api/entities/:id/members', authenticateToken, async (req, res) => {
+    try {
+      // Visibility check via the canonical access query — if the entity
+      // doesn't surface for this user, treat as 404 (no enumeration).
+      const visible = await db.getEntitiesForUserWithMembership(req.user.id, req.user.orgId || null);
+      if (!visible.some((e) => e.id === req.params.id)) {
+        return res.status(404).json({ error: 'Entity not found' });
+      }
+      const members = await db.getEntityMembers(req.params.id);
+      return res.json({ members });
+    } catch (err) {
+      logger.error('entities.members.list.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/entities/:id/members', authenticateToken, async (req, res) => {
+    try {
+      const role = await ownerGate(req.params.id, req.user.id);
+      if (!role) return res.status(403).json({ error: 'Only the owner can invite members' });
+
+      const { userId: bodyUserId, identifier, role: bodyRole } = req.body || {};
+      const memberRole = bodyRole && ['editor', 'viewer'].includes(bodyRole) ? bodyRole : 'editor';
+
+      let resolvedUser = null;
+      if (identifier) {
+        resolvedUser = await db.getUserByIdentifier(identifier);
+        if (!resolvedUser) return res.status(404).json({ error: 'User not found' });
+      } else if (bodyUserId) {
+        resolvedUser = await db.getUserById(bodyUserId);
+        if (!resolvedUser) return res.status(404).json({ error: 'User not found' });
+      } else {
+        return res.status(400).json({ error: 'userId or identifier required' });
+      }
+
+      const member = await db.addEntityMember(req.params.id, resolvedUser.id, memberRole, req.user.id);
+      return res.json({ success: true, member });
+    } catch (err) {
+      logger.error('entities.members.add.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.put('/api/entities/:id/members/:userId', authenticateToken, async (req, res) => {
+    try {
+      const role = await ownerGate(req.params.id, req.user.id);
+      if (!role) return res.status(403).json({ error: 'Only the owner can change member roles' });
+      if (req.params.userId === req.user.id) {
+        return res.status(400).json({ error: 'Cannot change your own role' });
+      }
+      const { role: bodyRole } = req.body || {};
+      if (!bodyRole || !['editor', 'viewer', 'owner'].includes(bodyRole)) {
+        return res.status(400).json({ error: 'role must be one of: owner, editor, viewer' });
+      }
+      const member = await db.addEntityMember(req.params.id, req.params.userId, bodyRole, req.user.id);
+      return res.json({ success: true, member });
+    } catch (err) {
+      logger.error('entities.members.update.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.delete('/api/entities/:id/members/:userId', authenticateToken, async (req, res) => {
+    try {
+      const role = await ownerGate(req.params.id, req.user.id);
+      if (!role) return res.status(403).json({ error: 'Only the owner can remove members' });
+
+      // Sole-owner protection: if removing self AND no other owners exist, reject.
+      if (req.params.userId === req.user.id) {
+        const all = await db.getEntityMembers(req.params.id);
+        const otherOwners = all.filter((m) => m.role === 'owner' && m.userId !== req.user.id);
+        if (otherOwners.length === 0) {
+          return res.status(400).json({ error: 'Cannot remove the sole owner — transfer ownership first' });
+        }
+      }
+
+      const removed = await db.removeEntityMember(req.params.id, req.params.userId);
+      return res.json({ success: !!removed });
+    } catch (err) {
+      logger.error('entities.members.remove.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   router.delete('/api/entities/:id', authenticateToken, async (req, res) => {
     try {
       // Owner-only deletion — no admin/superadmin bypass.

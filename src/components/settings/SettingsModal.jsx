@@ -103,6 +103,159 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
   );
 }
 
+// ── MembersSection ─────────────────────────────────────────────────────
+// Per-entity member management (Phase 3). Owner-only — parent gates
+// rendering on isOwner. Lazy-fetches members on mount; invite + remove
+// hit the new /api/entities/:id/members routes.
+const ROLE_BADGE = {
+  owner:  { background: '#eeedfe', color: '#534ab7' },
+  editor: { background: '#eaf3de', color: '#3b6d11' },
+  viewer: { background: '#f1efe8', color: '#5f5e5a' },
+};
+
+function initialsFor(name) {
+  const s = String(name || '').trim();
+  if (!s) return '?';
+  const parts = s.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase() || '').join('') || '?';
+}
+
+function MembersSection({ entityId, currentUserId, apiFetch, authToken }) {
+  const [members, setMembers] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [inviteIdentifier, setInviteIdentifier] = useState('');
+  const [inviteRole, setInviteRole] = useState('editor');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const reload = async () => {
+    try {
+      const r = await apiFetch(`/api/entities/${entityId}/members`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await r.json();
+      setMembers(Array.isArray(data?.members) ? data.members : []);
+      setLoaded(true);
+    } catch {
+      setLoaded(true);
+    }
+  };
+
+  useEffect(() => { reload(); }, [entityId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const invite = async () => {
+    const id = inviteIdentifier.trim();
+    if (!id || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await apiFetch(`/api/entities/${entityId}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ identifier: id, role: inviteRole }),
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        setError(data.error || `HTTP ${r.status}`);
+        return;
+      }
+      setInviteIdentifier('');
+      await reload();
+    } catch (e) {
+      setError(e.message || 'Network error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (userId) => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await apiFetch(`/api/entities/${entityId}/members/${encodeURIComponent(userId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        setError(data.error || `HTTP ${r.status}`);
+        return;
+      }
+      await reload();
+    } catch (e) {
+      setError(e.message || 'Network error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pt-2 mt-1 border-t border-gray-200 space-y-2">
+      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Members</div>
+      {!loaded ? (
+        <div className="text-xs text-gray-400">Loading…</div>
+      ) : members.length === 0 ? (
+        <div className="text-xs text-gray-400 italic">No members yet</div>
+      ) : (
+        <div className="space-y-1">
+          {members.map((m) => {
+            const badge = ROLE_BADGE[m.role] || ROLE_BADGE.editor;
+            const isSelf = m.userId === currentUserId;
+            const label = m.displayName || m.username || m.email || m.userId;
+            return (
+              <div key={m.userId} className="flex items-center gap-2 text-xs">
+                <span className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-[10px] font-semibold flex-shrink-0">
+                  {initialsFor(label)}
+                </span>
+                <span className="flex-1 truncate text-gray-800">{label}{isSelf ? ' (you)' : ''}</span>
+                <span style={{ ...badge, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 6 }}>{m.role}</span>
+                {!isSelf && (
+                  <button
+                    onClick={() => remove(m.userId)}
+                    disabled={busy}
+                    className="text-[10px] text-red-500 hover:text-red-700 font-medium disabled:opacity-40"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex gap-1.5 pt-1">
+        <input
+          type="text"
+          value={inviteIdentifier}
+          onChange={(e) => setInviteIdentifier(e.target.value)}
+          placeholder="Username or email"
+          disabled={busy}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); invite(); } }}
+          className="flex-1 px-2 py-1 text-xs bg-white border border-gray-200 rounded text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        <select
+          value={inviteRole}
+          onChange={(e) => setInviteRole(e.target.value)}
+          disabled={busy}
+          className="px-2 py-1 text-xs bg-white border border-gray-200 rounded text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        >
+          <option value="editor">Editor</option>
+          <option value="viewer">Viewer</option>
+        </select>
+        <button
+          onClick={invite}
+          disabled={busy || !inviteIdentifier.trim()}
+          className="px-2.5 py-1 text-xs font-semibold text-white bg-indigo-600 rounded hover:bg-indigo-700 disabled:opacity-40"
+        >
+          {busy ? '…' : 'Invite'}
+        </button>
+      </div>
+      {error && <div className="text-[11px] text-red-500">{error}</div>}
+    </div>
+  );
+}
+
 function AlertsTabContent({ rules, onUpdateRules, emailSettings, tasks, firedAlertsRef, addToast, entities, envStatus, apiFetch, authToken, currentUser, EntitySelectOptions }) {
   const [showAdd, setShowAdd]       = useState(false);
   const [newRule, setNewRule]       = useState(EMPTY_NEW_RULE);
@@ -1799,6 +1952,14 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                           );
                         })}
                       </select>
+                    )}
+                    {e.isOwner && (
+                      <MembersSection
+                        entityId={e.id}
+                        currentUserId={currentUser?.id}
+                        apiFetch={apiFetch}
+                        authToken={authToken}
+                      />
                     )}
                   </div>
                   );

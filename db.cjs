@@ -3358,6 +3358,23 @@ async function getUserAuthContext(id) {
  * @returns {Promise<Object|null>} Full user record or null.
  * @throws {Error} If the database query fails.
  */
+/**
+ * Look up a user by username OR email (case-insensitive). Returns the
+ * minimal public-safe projection — no password hash. Used by the entity
+ * member invite endpoint so the UI can send a human-readable identifier.
+ */
+async function getUserByIdentifier(identifier) {
+  if (!identifier) return null;
+  const { rows } = await pool.query(
+    `SELECT id, username, display_name AS "displayName", email
+     FROM users
+     WHERE username ILIKE $1 OR email ILIKE $1
+     LIMIT 1`,
+    [String(identifier).trim()],
+  );
+  return rows[0] || null;
+}
+
 async function getUserById(id) {
   const { rows } = await pool.query(
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
@@ -5295,6 +5312,7 @@ module.exports = {
   updateTask,
   getUserAuthContext,
   getUserById,
+  getUserByIdentifier,
   updateUserPassword,
   seedUsersIfEmpty,
   runMigrations,
