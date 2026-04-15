@@ -16,41 +16,55 @@
  */
 
 const db = require('../../db.cjs');
+const { extractContactFacts } = require('./contactFactExtractor.cjs');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_SNIPPET_CHARS = 20;
 
-async function resolveOrCreateContact(userId, { email, name, source } = {}) {
+async function resolveOrCreateContact(userId, { email, name, source, snippet } = {}) {
   if (!userId) return null;
   const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
   if (!cleanEmail || !EMAIL_RE.test(cleanEmail)) return null;
 
+  let contact = null;
   try {
-    const existing = await db.resolveContactByEmail(cleanEmail, userId);
-    if (existing) return existing;
+    contact = await db.resolveContactByEmail(cleanEmail, userId);
   } catch (err) {
     console.error('[contactIngestion] resolve failed:', err.message);
     return null;
   }
 
-  const cleanName = typeof name === 'string' ? name.trim() : '';
-  const displayName = cleanName || cleanEmail;
-  try {
-    const created = await db.createContact(userId, {
-      displayName,
-      primaryEmail: cleanEmail,
-      source: source || 'ingestion',
-    });
-    return created;
-  } catch (err) {
-    // 23505 unique violation on (user_id, LOWER(primary_email)) — another
-    // concurrent ingestion created it first. Re-resolve and return.
-    if (err.code === '23505') {
-      try { return await db.resolveContactByEmail(cleanEmail, userId); }
-      catch { return null; }
+  if (!contact) {
+    const cleanName = typeof name === 'string' ? name.trim() : '';
+    const displayName = cleanName || cleanEmail;
+    try {
+      contact = await db.createContact(userId, {
+        displayName,
+        primaryEmail: cleanEmail,
+        source: source || 'ingestion',
+      });
+    } catch (err) {
+      // 23505 unique violation on (user_id, LOWER(primary_email)) — another
+      // concurrent ingestion created it first. Re-resolve and return.
+      if (err.code === '23505') {
+        try { contact = await db.resolveContactByEmail(cleanEmail, userId); }
+        catch { return null; }
+      } else {
+        console.error('[contactIngestion] create failed:', err.message);
+        return null;
+      }
     }
-    console.error('[contactIngestion] create failed:', err.message);
-    return null;
   }
+
+  // Optional fact extraction — fire-and-forget when a snippet is present
+  // and long enough to contain signal. Debounce + empty-output handling
+  // live inside the extractor.
+  if (contact?.id && typeof snippet === 'string' && snippet.trim().length >= MIN_SNIPPET_CHARS) {
+    extractContactFacts(userId, contact.id, contact.displayName, snippet.trim())
+      .catch((err) => console.error('[contactIngestion] extract:', err.message));
+  }
+
+  return contact;
 }
 
 module.exports = { resolveOrCreateContact };

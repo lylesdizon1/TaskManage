@@ -128,8 +128,12 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
         sender: `${f.fromName || ''} <${f.fromAddr}>`.trim(),
       });
       // Fire-and-forget contact ingestion — never await, never block.
-      resolveOrCreateContact(userId, { email: f.fromAddr, name: f.fromName, source: 'mail_scan' })
-        .catch((err) => console.error('[contactIngestion] mail:', err.message));
+      resolveOrCreateContact(userId, {
+        email: f.fromAddr,
+        name: f.fromName,
+        source: 'mail_scan',
+        snippet: `${f.msg.subject || ''}\n${f.msg.bodyPreview || ''}`.trim(),
+      }).catch((err) => console.error('[contactIngestion] mail:', err.message));
       newCount++;
     }
   }

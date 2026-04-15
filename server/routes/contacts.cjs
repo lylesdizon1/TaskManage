@@ -16,6 +16,7 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const { extractContactFacts } = require('../lib/contactFactExtractor.cjs');
 
 module.exports = function createContactsRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -138,6 +139,9 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       const text = String(req.body?.text || '').trim();
       if (!text) return res.status(400).json({ error: 'text required' });
       await db.addContactFact(req.user.id, req.params.id, text, 'note', 0.5);
+      // Fire-and-forget fact extraction — never await, never block.
+      extractContactFacts(req.user.id, req.params.id, existing.displayName, text)
+        .catch((err) => console.error('[contacts] fact extract:', err.message));
       res.json({ success: true });
     } catch (err) {
       logger.error('contacts.notes.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

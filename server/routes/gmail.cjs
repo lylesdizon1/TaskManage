@@ -390,8 +390,12 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
           // Fire-and-forget contact ingestion — never await, never block.
           if (f.type !== 'COMMITMENT') {
             const parsed = parseFromHeader(fromHeader);
-            resolveOrCreateContact(userId, { email: parsed.email, name: parsed.name, source: 'mail_scan' })
-              .catch((err) => console.error('[contactIngestion] gmail:', err.message));
+            resolveOrCreateContact(userId, {
+              email: parsed.email,
+              name: parsed.name,
+              source: 'mail_scan',
+              snippet: `${subject || ''}\n${f.msg.snippet || ''}`.trim(),
+            }).catch((err) => console.error('[contactIngestion] gmail:', err.message));
           }
           newCount++;
         }
