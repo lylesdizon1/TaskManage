@@ -4016,6 +4016,60 @@ async function runMigrations() {
     WHERE contact_id IS NOT NULL
   `).catch((err) => console.warn('[migration] memory_facts contact-scoped unique:', err.message));
 
+  // ── Daily Wrap + Ambient Capture V1 ────────────────────────────────────
+  // journal_entries: one row per user per local day. UPSERT on
+  // (user_id, entry_date); completed_at distinguishes a finished wrap
+  // from a work-in-progress draft.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS journal_entries (
+      id              SERIAL PRIMARY KEY,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entry_date      DATE NOT NULL,
+      wins            TEXT,
+      frustrations    TEXT,
+      tomorrow_focus  TEXT,
+      raw_freeform    TEXT,
+      completed_at    TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] journal_entries table:', err.message));
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS journal_entries_user_date_unique
+    ON journal_entries (user_id, entry_date)
+  `).catch((err) => console.warn('[migration] journal_entries unique:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS journal_entries_user_idx ON journal_entries (user_id, entry_date DESC)`).catch(() => {});
+
+  // pending_close_loop: event-driven queue of "we should ask about X"
+  // items. Written from task/event/project complete paths; read by
+  // /api/brief/context to populate the active-zone tile queue.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_close_loop (
+      id              SERIAL PRIMARY KEY,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_type     TEXT NOT NULL CHECK (source_type IN ('task','event','project_task')),
+      source_id       TEXT NOT NULL,
+      title_snapshot  TEXT,
+      triggered_at    TIMESTAMPTZ DEFAULT NOW(),
+      dismissed_at    TIMESTAMPTZ,
+      resolved_at     TIMESTAMPTZ
+    )
+  `).catch((err) => console.warn('[migration] pending_close_loop table:', err.message));
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS pending_close_loop_unique
+    ON pending_close_loop (user_id, source_type, source_id)
+  `).catch((err) => console.warn('[migration] pending_close_loop unique:', err.message));
+  // Hot path: open items per user, sorted by recency.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS pending_close_loop_open_idx
+    ON pending_close_loop (user_id, triggered_at DESC)
+    WHERE resolved_at IS NULL
+  `).catch(() => {});
+
+  // user_preferences: wrap_time HH:MM string. NULL disables the feature.
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS wrap_time TEXT DEFAULT NULL`)
+    .catch((err) => console.warn('[migration] user_preferences.wrap_time:', err.message));
+
   // ── Entity Workspace Projects V1 ────────────────────────────────────────
   // See docs/dizon-entity-workspace-spec-v1.md. Membership enforcement
   // lives at the route layer via canAccessEntity; SQL helpers stay
@@ -6037,6 +6091,197 @@ async function getSharedAccessSummary(userId) {
   };
 }
 
+// ── Daily Wrap + Ambient Capture helpers (V1) ─────────────────────────────
+
+const JOURNAL_FIELDS = `
+  id,
+  user_id AS "userId",
+  entry_date AS "entryDate",
+  wins, frustrations,
+  tomorrow_focus AS "tomorrowFocus",
+  raw_freeform AS "rawFreeform",
+  completed_at AS "completedAt",
+  created_at AS "createdAt",
+  updated_at AS "updatedAt"
+`;
+
+/**
+ * Upsert today's (or any specified) journal entry for a user. Merges
+ * patch fields in — a second call with only `tomorrow_focus` does NOT
+ * wipe previously-set `wins`. Pass completed=true to stamp completed_at.
+ */
+async function upsertJournalEntry(userId, entryDate, patch = {}) {
+  if (!userId || !entryDate) throw new Error('userId + entryDate required');
+  const hasWins = patch.wins !== undefined;
+  const hasFrust = patch.frustrations !== undefined;
+  const hasTF = patch.tomorrowFocus !== undefined;
+  const hasFree = patch.rawFreeform !== undefined;
+  const markComplete = patch.completed === true;
+  const { rows } = await pool.query(
+    `INSERT INTO journal_entries
+       (user_id, entry_date, wins, frustrations, tomorrow_focus, raw_freeform, completed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN NOW() ELSE NULL END)
+     ON CONFLICT (user_id, entry_date) DO UPDATE SET
+       wins            = CASE WHEN $8::bool THEN EXCLUDED.wins            ELSE journal_entries.wins            END,
+       frustrations    = CASE WHEN $9::bool THEN EXCLUDED.frustrations    ELSE journal_entries.frustrations    END,
+       tomorrow_focus  = CASE WHEN $10::bool THEN EXCLUDED.tomorrow_focus ELSE journal_entries.tomorrow_focus  END,
+       raw_freeform    = CASE WHEN $11::bool THEN EXCLUDED.raw_freeform   ELSE journal_entries.raw_freeform    END,
+       completed_at    = CASE WHEN $7 THEN NOW() ELSE journal_entries.completed_at END,
+       updated_at      = NOW()
+     RETURNING ${JOURNAL_FIELDS}`,
+    [
+      userId, entryDate,
+      hasWins ? patch.wins : null,
+      hasFrust ? patch.frustrations : null,
+      hasTF ? patch.tomorrowFocus : null,
+      hasFree ? patch.rawFreeform : null,
+      markComplete,
+      hasWins, hasFrust, hasTF, hasFree,
+    ],
+  );
+  return rows[0];
+}
+
+async function getJournalEntryByDate(userId, entryDate) {
+  const { rows } = await pool.query(
+    `SELECT ${JOURNAL_FIELDS}
+     FROM journal_entries
+     WHERE user_id = $1 AND entry_date = $2`,
+    [userId, entryDate],
+  );
+  return rows[0] || null;
+}
+
+async function listJournalEntries(userId, { limit = 20, offset = 0, sinceDate = null } = {}) {
+  const params = [userId];
+  let where = `WHERE user_id = $1`;
+  if (sinceDate) { params.push(sinceDate); where += ` AND entry_date >= $${params.length}`; }
+  params.push(limit); const limitIdx = params.length;
+  params.push(offset); const offsetIdx = params.length;
+  const { rows } = await pool.query(
+    `SELECT ${JOURNAL_FIELDS}
+     FROM journal_entries ${where}
+     ORDER BY entry_date DESC
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    params,
+  );
+  return rows;
+}
+
+/**
+ * Has this user completed a wrap for the given local date? Canonical
+ * check — both the cron and the web login trigger use this before
+ * firing any reminder.
+ */
+async function hasCompletedWrap(userId, entryDate) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM journal_entries
+     WHERE user_id = $1 AND entry_date = $2 AND completed_at IS NOT NULL
+     LIMIT 1`,
+    [userId, entryDate],
+  );
+  return rows.length > 0;
+}
+
+// ── Close-loop queue ──────────────────────────────────────────────────────
+
+const CLOSE_LOOP_FIELDS = `
+  id,
+  user_id AS "userId",
+  source_type AS "sourceType",
+  source_id AS "sourceId",
+  title_snapshot AS "titleSnapshot",
+  triggered_at AS "triggeredAt",
+  dismissed_at AS "dismissedAt",
+  resolved_at AS "resolvedAt"
+`;
+
+/**
+ * Emit a close-loop row. Idempotent on (user_id, source_type, source_id)
+ * via the partial unique index — a second emit clears prior dismiss/resolve
+ * so the item can resurface (e.g. reopened task).
+ */
+async function emitCloseLoopItem(userId, sourceType, sourceId, titleSnapshot) {
+  if (!userId || !sourceType || !sourceId) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO pending_close_loop
+       (user_id, source_type, source_id, title_snapshot)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, source_type, source_id) DO UPDATE SET
+       title_snapshot = EXCLUDED.title_snapshot,
+       triggered_at   = NOW(),
+       dismissed_at   = NULL,
+       resolved_at    = NULL
+     RETURNING ${CLOSE_LOOP_FIELDS}`,
+    [userId, sourceType, sourceId, titleSnapshot || null],
+  );
+  return rows[0];
+}
+
+/**
+ * Open close-loop items for today. "Open" = not resolved AND either
+ * never dismissed OR dismissed before today's local-midnight cutoff
+ * (i.e. dismiss-for-today-only, per spec decision 2).
+ */
+async function getOpenCloseLoopItems(userId, localMidnightUtc, limit = 5) {
+  const { rows } = await pool.query(
+    `SELECT ${CLOSE_LOOP_FIELDS}
+     FROM pending_close_loop
+     WHERE user_id = $1
+       AND resolved_at IS NULL
+       AND (dismissed_at IS NULL OR dismissed_at < $2)
+     ORDER BY triggered_at DESC
+     LIMIT $3`,
+    [userId, localMidnightUtc, limit],
+  );
+  return rows;
+}
+
+async function dismissCloseLoopItem(userId, sourceType, sourceId) {
+  const r = await pool.query(
+    `UPDATE pending_close_loop
+     SET dismissed_at = NOW()
+     WHERE user_id = $1 AND source_type = $2 AND source_id = $3
+       AND resolved_at IS NULL`,
+    [userId, sourceType, sourceId],
+  );
+  return r.rowCount > 0;
+}
+
+async function resolveCloseLoopItem(userId, sourceType, sourceId) {
+  const r = await pool.query(
+    `UPDATE pending_close_loop
+     SET resolved_at = NOW()
+     WHERE user_id = $1 AND source_type = $2 AND source_id = $3
+       AND resolved_at IS NULL`,
+    [userId, sourceType, sourceId],
+  );
+  return r.rowCount > 0;
+}
+
+// ── Wrap-time preference ──────────────────────────────────────────────────
+
+async function getWrapTimeForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT wrap_time AS "wrapTime"
+     FROM user_preferences WHERE user_id = $1`,
+    [userId],
+  );
+  return rows[0]?.wrapTime || null;
+}
+
+async function setWrapTimeForUser(userId, wrapTime) {
+  if (wrapTime && !/^\d{2}:\d{2}$/.test(wrapTime)) {
+    throw new Error('wrap_time must be HH:MM');
+  }
+  await pool.query(
+    `INSERT INTO user_preferences (user_id, wrap_time, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET wrap_time = EXCLUDED.wrap_time, updated_at = NOW()`,
+    [userId, wrapTime || null],
+  );
+}
+
 async function getContactFacts(contactId, userId) {
   const { rows } = await pool.query(
     `SELECT id, fact_text AS "factText", fact_type AS "factType",
@@ -6244,6 +6489,17 @@ module.exports = {
   getRelevantContacts,
   getTopContactFacts,
   getSharedAccessSummary,
+  // Daily Wrap + Ambient Capture (Phase 0)
+  upsertJournalEntry,
+  getJournalEntryByDate,
+  listJournalEntries,
+  hasCompletedWrap,
+  emitCloseLoopItem,
+  getOpenCloseLoopItems,
+  dismissCloseLoopItem,
+  resolveCloseLoopItem,
+  getWrapTimeForUser,
+  setWrapTimeForUser,
   // Entity workspace projects
   listProjectsForEntity,
   getProjectById,
