@@ -25,6 +25,7 @@ const { rediGet, rediSet } = require('./redis.cjs');
 const MODEL = 'claude-haiku-4-5-20251001';
 const DEBOUNCE_TTL_SEC = 6 * 60 * 60; // 6 hours
 const MAX_FACTS = 5;
+const MAX_FACT_CHARS = 500;
 const MIN_NOTE_CHARS = 20;
 
 let _client = null;
@@ -103,9 +104,12 @@ async function extractContactFacts(userId, contactId, contactName, noteContent) 
     }
 
     const body = response?.content?.[0]?.text || '';
+    // Cap each fact to bound memory_facts storage growth and keep the
+    // PEOPLE & RELATIONSHIPS block within its per-person budget (M-1).
     const facts = safeParseJsonArray(body)
       .map((f) => (typeof f === 'string' ? f.trim() : ''))
       .filter((f) => f.length > 0)
+      .map((f) => (f.length > MAX_FACT_CHARS ? f.slice(0, MAX_FACT_CHARS) : f))
       .slice(0, MAX_FACTS);
 
     if (!facts.length) {

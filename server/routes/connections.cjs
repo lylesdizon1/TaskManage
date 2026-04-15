@@ -38,6 +38,8 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
       const { peer_email: peerEmail, relationship } = req.body || {};
       if (!peerEmail || !String(peerEmail).trim()) return res.status(400).json({ error: 'peer_email required' });
 
+      // NOTE: getUserByIdentifier ILIKE-matches username OR email (see
+      // shared-access route for full invariant). UX implies email-only.
       const peer = await db.getUserByIdentifier(String(peerEmail).trim());
       if (!peer) return res.status(404).json({ error: 'User not on platform' });
       if (peer.id === req.user.id) return res.status(400).json({ error: 'Cannot connect to yourself' });
@@ -77,9 +79,10 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
         [id],
       );
       const row = rows[0];
-      if (!row) return res.status(404).json({ error: 'Connection not found' });
-      if (row.peerUserId !== req.user.id) {
-        return res.status(403).json({ error: 'Only the invited peer can accept' });
+      // Collapse 403/404 into a single 404 so a caller enumerating
+      // connection IDs can't learn which ones exist (H-1 hardening).
+      if (!row || row.peerUserId !== req.user.id) {
+        return res.status(404).json({ error: 'Connection not found' });
       }
 
       // Flip initiator's row to accepted so both sides see the update.
@@ -110,9 +113,10 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
         [id],
       );
       const row = rows[0];
-      if (!row) return res.status(404).json({ error: 'Connection not found' });
-      if (row.userId !== req.user.id && row.peerUserId !== req.user.id) {
-        return res.status(403).json({ error: 'Not involved in this connection' });
+      // Collapse 403/404 into a single 404 so a caller enumerating
+      // connection IDs can't learn which ones exist (H-1 hardening).
+      if (!row || (row.userId !== req.user.id && row.peerUserId !== req.user.id)) {
+        return res.status(404).json({ error: 'Connection not found' });
       }
       // The row owned by the blocker is the one they can flip via
       // updateConnectionStatus (scoped by user_id).
@@ -143,9 +147,10 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
         [id],
       );
       const row = rows[0];
-      if (!row) return res.status(404).json({ error: 'Connection not found' });
-      if (row.userId !== req.user.id && row.peerUserId !== req.user.id) {
-        return res.status(403).json({ error: 'Not involved in this connection' });
+      // Collapse 403/404 into a single 404 so a caller enumerating
+      // connection IDs can't learn which ones exist (H-1 hardening).
+      if (!row || (row.userId !== req.user.id && row.peerUserId !== req.user.id)) {
+        return res.status(404).json({ error: 'Connection not found' });
       }
       // Delete only the row owned by the current user. Mirror row (if
       // any) remains until the other side cleans it up — same semantics

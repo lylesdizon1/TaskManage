@@ -48,6 +48,10 @@ module.exports = function createSharedAccessRouter({ authenticateToken, db }) {
       if (!scope) return res.status(400).json({ error: 'scope required' });
       if (!VALID_SCOPES.has(scope)) return res.status(400).json({ error: `Invalid scope. Allowed: ${[...VALID_SCOPES].join(', ')}` });
 
+      // NOTE: getUserByIdentifier ILIKE-matches username OR email. When a
+      // user's username happens to collide with another user's email, the
+      // lookup order is indeterminate. UX implies email-only; we accept
+      // this preexisting helper behavior here and flag for future Phase.
       const grantee = await db.getUserByIdentifier(String(granteeEmail).trim());
       if (!grantee) return res.status(404).json({ error: 'User not on platform' });
       if (grantee.id === req.user.id) return res.status(400).json({ error: 'Cannot grant access to yourself' });
