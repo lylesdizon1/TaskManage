@@ -3903,6 +3903,119 @@ async function runMigrations() {
   // Unique index required by upsertMemoryFact's ON CONFLICT (user_id, fact_text).
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique ON memory_facts(user_id, fact_text)`).catch((err) => console.warn('[migration] memory_facts unique:', err.message));
 
+  // ── People Memory + Shared Access V1 ────────────────────────────────────
+  // Schema for contacts, identities, shared access grants, and connections.
+  // See docs/shared-access-and-people-memory-v1.md (TBD).
+  //
+  // memory_facts is extended with a nullable contact_id column so a single
+  // table carries both global (contact_id IS NULL) and person-scoped
+  // (contact_id IS NOT NULL) facts. The historical unique index is
+  // RESHAPED as a partial index so the two axes can coexist (a fact_text
+  // can exist once globally AND once per contact for the same user).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contacts (
+      id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      display_name   TEXT NOT NULL,
+      primary_email  TEXT,
+      primary_phone  TEXT,
+      company        TEXT,
+      role           TEXT,
+      notes          TEXT,
+      linked_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      source         TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] contacts table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS contacts_user_id_idx ON contacts(user_id)`).catch(() => {});
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS contacts_user_email_unique
+    ON contacts (user_id, LOWER(primary_email))
+    WHERE primary_email IS NOT NULL
+  `).catch((err) => console.warn('[migration] contacts unique email:', err.message));
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contact_identities (
+      id          SERIAL PRIMARY KEY,
+      contact_id  TEXT REFERENCES contacts(id) ON DELETE CASCADE,
+      kind        TEXT NOT NULL,
+      value       TEXT NOT NULL,
+      verified    BOOLEAN DEFAULT FALSE,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => console.warn('[migration] contact_identities table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS contact_identities_value_idx ON contact_identities (LOWER(value))`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shared_access_grants (
+      id                   SERIAL PRIMARY KEY,
+      grantor_user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      grantee_user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scope                TEXT NOT NULL,
+      resource_filter_json JSONB,
+      expires_at           TIMESTAMPTZ,
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      revoked_at           TIMESTAMPTZ
+    )
+  `).catch((err) => console.warn('[migration] shared_access_grants table:', err.message));
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS shared_access_grants_active_unique
+    ON shared_access_grants (grantor_user_id, grantee_user_id, scope)
+    WHERE revoked_at IS NULL
+  `).catch((err) => console.warn('[migration] shared_access_grants unique:', err.message));
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS shared_access_grants_grantee_idx
+    ON shared_access_grants (grantee_user_id)
+    WHERE revoked_at IS NULL
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS connections (
+      id              SERIAL PRIMARY KEY,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      peer_user_id    TEXT REFERENCES users(id) ON DELETE CASCADE,
+      peer_contact_id TEXT REFERENCES contacts(id) ON DELETE CASCADE,
+      relationship    TEXT,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      accepted_at     TIMESTAMPTZ
+    )
+  `).catch((err) => console.warn('[migration] connections table:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS connections_user_id_idx ON connections(user_id)`).catch(() => {});
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS connections_user_peer_user_unique
+    ON connections (user_id, peer_user_id)
+    WHERE peer_user_id IS NOT NULL
+  `).catch((err) => console.warn('[migration] connections peer_user unique:', err.message));
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS connections_user_peer_contact_unique
+    ON connections (user_id, peer_contact_id)
+    WHERE peer_contact_id IS NOT NULL
+  `).catch((err) => console.warn('[migration] connections peer_contact unique:', err.message));
+
+  // memory_facts: add contact_id, reshape the existing unique index to be
+  // partial so global and contact-scoped facts coexist without collision.
+  await pool.query(`ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS contact_id TEXT REFERENCES contacts(id) ON DELETE CASCADE`)
+    .catch((err) => console.warn('[migration] memory_facts.contact_id:', err.message));
+  await pool.query(`CREATE INDEX IF NOT EXISTS memory_facts_contact_id_idx ON memory_facts(contact_id) WHERE contact_id IS NOT NULL`).catch(() => {});
+  // Reshape: drop the non-partial global unique so global + per-contact can
+  // both hold the same fact_text. Recreate as a partial index on NULL rows.
+  // upsertMemoryFact is updated in this commit to match the new partial
+  // predicate on its ON CONFLICT clause. No-op on fresh DBs.
+  await pool.query(`DROP INDEX IF EXISTS memory_facts_user_fact_unique`)
+    .catch((err) => console.warn('[migration] drop memory_facts_user_fact_unique:', err.message));
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique
+    ON memory_facts (user_id, fact_text)
+    WHERE contact_id IS NULL
+  `).catch((err) => console.warn('[migration] memory_facts global unique (partial):', err.message));
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_contact_scoped_unique
+    ON memory_facts (user_id, contact_id, fact_text)
+    WHERE contact_id IS NOT NULL
+  `).catch((err) => console.warn('[migration] memory_facts contact-scoped unique:', err.message));
+
   // ── Entity Workspace Projects V1 ────────────────────────────────────────
   // See docs/dizon-entity-workspace-spec-v1.md. Membership enforcement
   // lives at the route layer via canAccessEntity; SQL helpers stay
@@ -5523,6 +5636,344 @@ async function getOpenProjectTasksForUser(userId, limit = 5) {
   return rows;
 }
 
+// ── People Memory + Shared Access helpers (Phase 0) ────────────────────────
+// Multi-tenant contract:
+//   • Every helper is scoped to the authenticated userId at the query level.
+//   • Cross-user reads only happen through shared_access_grants + hasActiveGrant.
+//   • No helper accepts a role or authz-shaped parameter (see CLAUDE.md Ray rules).
+
+const CONTACT_FIELDS = `
+  id, user_id AS "userId",
+  display_name AS "displayName",
+  primary_email AS "primaryEmail",
+  primary_phone AS "primaryPhone",
+  company, role, notes,
+  linked_user_id AS "linkedUserId",
+  source,
+  created_at AS "createdAt",
+  updated_at AS "updatedAt"
+`;
+
+async function getContactsForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT ${CONTACT_FIELDS}
+     FROM contacts WHERE user_id = $1
+     ORDER BY display_name ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function getContactById(contactId, userId) {
+  const { rows } = await pool.query(
+    `SELECT ${CONTACT_FIELDS}
+     FROM contacts WHERE id = $1 AND user_id = $2`,
+    [contactId, userId],
+  );
+  return rows[0] || null;
+}
+
+async function createContact(userId, data) {
+  const { displayName, primaryEmail, primaryPhone, company, role, notes, linkedUserId, source } = data || {};
+  if (!displayName) throw new Error('displayName required');
+  const { rows } = await pool.query(
+    `INSERT INTO contacts
+       (user_id, display_name, primary_email, primary_phone, company, role, notes, linked_user_id, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING ${CONTACT_FIELDS}`,
+    [
+      userId, displayName,
+      primaryEmail ? String(primaryEmail).toLowerCase() : null,
+      primaryPhone || null, company || null, role || null, notes || null,
+      linkedUserId || null, source || null,
+    ],
+  );
+  return rows[0];
+}
+
+async function updateContact(contactId, userId, patch) {
+  const sets = [];
+  const vals = [contactId, userId];
+  let i = 3;
+  const map = {
+    displayName: 'display_name',
+    primaryEmail: 'primary_email',
+    primaryPhone: 'primary_phone',
+    company: 'company',
+    role: 'role',
+    notes: 'notes',
+    linkedUserId: 'linked_user_id',
+    source: 'source',
+  };
+  for (const [k, col] of Object.entries(map)) {
+    if (patch[k] === undefined) continue;
+    let v = patch[k];
+    if (k === 'primaryEmail' && v) v = String(v).toLowerCase();
+    sets.push(`${col} = $${i++}`);
+    vals.push(v);
+  }
+  if (!sets.length) return getContactById(contactId, userId);
+  sets.push(`updated_at = NOW()`);
+  const { rows } = await pool.query(
+    `UPDATE contacts SET ${sets.join(', ')}
+     WHERE id = $1 AND user_id = $2
+     RETURNING ${CONTACT_FIELDS}`,
+    vals,
+  );
+  return rows[0] || null;
+}
+
+async function deleteContact(contactId, userId) {
+  const r = await pool.query(
+    `DELETE FROM contacts WHERE id = $1 AND user_id = $2`,
+    [contactId, userId],
+  );
+  return r.rowCount > 0;
+}
+
+/**
+ * Resolve a contact for a user by email. Checks contact_identities first
+ * (kind='email'), then falls back to contacts.primary_email. Case-insensitive.
+ * Scoped to userId — never crosses tenants.
+ */
+async function resolveContactByEmail(email, userId) {
+  if (!email) return null;
+  const lc = String(email).toLowerCase();
+  // Try identities table first (includes verified + unverified aliases).
+  const { rows: idRows } = await pool.query(
+    `SELECT c.id
+     FROM contact_identities ci
+     JOIN contacts c ON c.id = ci.contact_id
+     WHERE ci.kind = 'email'
+       AND LOWER(ci.value) = $1
+       AND c.user_id = $2
+     LIMIT 1`,
+    [lc, userId],
+  );
+  if (idRows.length) return getContactById(idRows[0].id, userId);
+  // Fallback: primary_email on contacts itself.
+  const { rows } = await pool.query(
+    `SELECT ${CONTACT_FIELDS}
+     FROM contacts
+     WHERE user_id = $1 AND LOWER(primary_email) = $2
+     LIMIT 1`,
+    [userId, lc],
+  );
+  return rows[0] || null;
+}
+
+async function resolveContactByName(name, userId) {
+  if (!name) return null;
+  const { rows } = await pool.query(
+    `SELECT ${CONTACT_FIELDS}
+     FROM contacts
+     WHERE user_id = $1 AND display_name ILIKE $2
+     ORDER BY display_name ASC
+     LIMIT 5`,
+    [userId, `%${name}%`],
+  );
+  return rows;
+}
+
+async function addContactIdentity(contactId, kind, value) {
+  if (!contactId || !kind || !value) throw new Error('contactId, kind, value required');
+  const { rows } = await pool.query(
+    `INSERT INTO contact_identities (contact_id, kind, value)
+     VALUES ($1, $2, $3)
+     RETURNING id, contact_id AS "contactId", kind, value, verified, created_at AS "createdAt"`,
+    [contactId, kind, String(value).toLowerCase()],
+  );
+  return rows[0];
+}
+
+async function getContactIdentities(contactId) {
+  const { rows } = await pool.query(
+    `SELECT id, contact_id AS "contactId", kind, value, verified, created_at AS "createdAt"
+     FROM contact_identities WHERE contact_id = $1
+     ORDER BY created_at ASC`,
+    [contactId],
+  );
+  return rows;
+}
+
+// ── Shared access grants ────────────────────────────────────────────────────
+
+const GRANT_FIELDS = `
+  id,
+  grantor_user_id AS "grantorUserId",
+  grantee_user_id AS "granteeUserId",
+  scope,
+  resource_filter_json AS "resourceFilter",
+  expires_at AS "expiresAt",
+  created_at AS "createdAt",
+  revoked_at AS "revokedAt"
+`;
+
+async function createGrant(grantorUserId, granteeUserId, scope, resourceFilterJson, expiresAt) {
+  if (!grantorUserId || !granteeUserId || !scope) throw new Error('grantor, grantee, scope required');
+  if (grantorUserId === granteeUserId) throw new Error('Cannot grant access to yourself');
+  const { rows } = await pool.query(
+    `INSERT INTO shared_access_grants
+       (grantor_user_id, grantee_user_id, scope, resource_filter_json, expires_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5)
+     RETURNING ${GRANT_FIELDS}`,
+    [
+      grantorUserId, granteeUserId, scope,
+      resourceFilterJson ? JSON.stringify(resourceFilterJson) : null,
+      expiresAt || null,
+    ],
+  );
+  return rows[0];
+}
+
+async function revokeGrant(grantId, grantorUserId) {
+  const r = await pool.query(
+    `UPDATE shared_access_grants
+     SET revoked_at = NOW()
+     WHERE id = $1 AND grantor_user_id = $2 AND revoked_at IS NULL`,
+    [grantId, grantorUserId],
+  );
+  return r.rowCount > 0;
+}
+
+async function getGrantsForGrantor(userId) {
+  const { rows } = await pool.query(
+    `SELECT ${GRANT_FIELDS}
+     FROM shared_access_grants
+     WHERE grantor_user_id = $1
+     ORDER BY revoked_at NULLS FIRST, created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function getGrantsForGrantee(userId) {
+  const { rows } = await pool.query(
+    `SELECT ${GRANT_FIELDS}
+     FROM shared_access_grants
+     WHERE grantee_user_id = $1
+       AND revoked_at IS NULL
+       AND (expires_at IS NULL OR expires_at > NOW())
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * Boolean check: does granteeUserId have an active grant from grantorUserId
+ * for the given scope? Active = not revoked, not expired.
+ */
+async function hasActiveGrant(granteeUserId, grantorUserId, scope) {
+  if (!granteeUserId || !grantorUserId || !scope) return false;
+  const { rows } = await pool.query(
+    `SELECT 1
+     FROM shared_access_grants
+     WHERE grantor_user_id = $1
+       AND grantee_user_id = $2
+       AND scope = $3
+       AND revoked_at IS NULL
+       AND (expires_at IS NULL OR expires_at > NOW())
+     LIMIT 1`,
+    [grantorUserId, granteeUserId, scope],
+  );
+  return rows.length > 0;
+}
+
+// ── Connections (person-to-person graph) ────────────────────────────────────
+
+const CONNECTION_FIELDS = `
+  id,
+  user_id AS "userId",
+  peer_user_id AS "peerUserId",
+  peer_contact_id AS "peerContactId",
+  relationship,
+  status,
+  created_at AS "createdAt",
+  accepted_at AS "acceptedAt"
+`;
+
+async function createConnection(userId, peerUserId, peerContactId, relationship) {
+  if (!userId) throw new Error('userId required');
+  if (!peerUserId && !peerContactId) throw new Error('peerUserId or peerContactId required');
+  if (peerUserId && peerContactId) throw new Error('Provide only one of peerUserId or peerContactId');
+  const { rows } = await pool.query(
+    `INSERT INTO connections
+       (user_id, peer_user_id, peer_contact_id, relationship, status)
+     VALUES ($1, $2, $3, $4, 'pending')
+     RETURNING ${CONNECTION_FIELDS}`,
+    [userId, peerUserId || null, peerContactId || null, relationship || null],
+  );
+  return rows[0];
+}
+
+async function updateConnectionStatus(connectionId, userId, status) {
+  const { rows } = await pool.query(
+    `UPDATE connections
+     SET status = $3,
+         accepted_at = CASE WHEN $3 = 'accepted' THEN NOW() ELSE accepted_at END
+     WHERE id = $1 AND user_id = $2
+     RETURNING ${CONNECTION_FIELDS}`,
+    [connectionId, userId, status],
+  );
+  return rows[0] || null;
+}
+
+async function getConnectionsForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT ${CONNECTION_FIELDS}
+     FROM connections WHERE user_id = $1
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function getConnectionByPeer(userId, peerUserId) {
+  if (!userId || !peerUserId) return null;
+  const { rows } = await pool.query(
+    `SELECT ${CONNECTION_FIELDS}
+     FROM connections
+     WHERE user_id = $1 AND peer_user_id = $2
+     LIMIT 1`,
+    [userId, peerUserId],
+  );
+  return rows[0] || null;
+}
+
+// ── Contact-scoped memory facts (targets the contact-scoped partial index) ──
+
+async function addContactFact(userId, contactId, factText, factType, strengthScore) {
+  if (!userId || !contactId || !factText) throw new Error('userId, contactId, factText required');
+  const start = Number.isFinite(strengthScore) ? Math.max(0, Math.min(1, strengthScore)) : 0.5;
+  await pool.query(
+    `INSERT INTO memory_facts
+       (user_id, contact_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at)
+     VALUES ($1, $2, $3, $4, 1, $5, NOW(), NOW())
+     ON CONFLICT (user_id, contact_id, fact_text) WHERE contact_id IS NOT NULL
+     DO UPDATE SET
+       supporting_count = memory_facts.supporting_count + 1,
+       strength_score   = LEAST(1.0, memory_facts.strength_score + 0.1),
+       last_seen_at     = NOW()`,
+    [userId, contactId, factText, factType || null, start],
+  );
+}
+
+async function getContactFacts(contactId, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, fact_text AS "factText", fact_type AS "factType",
+            supporting_count AS "supportingCount",
+            strength_score AS "strengthScore",
+            first_seen_at AS "firstSeenAt",
+            last_seen_at AS "lastSeenAt"
+     FROM memory_facts
+     WHERE contact_id = $1 AND user_id = $2
+     ORDER BY strength_score DESC, last_seen_at DESC`,
+    [contactId, userId],
+  );
+  return rows;
+}
+
 // ── Outcome Intelligence helpers (Phase 1) ─────────────────────────────────
 
 /**
@@ -5605,11 +6056,16 @@ async function updateOutcomeFollowUp(outcomeId, userId, followUpNeeded, suggesti
  * source column later if provenance becomes important.
  */
 async function upsertMemoryFact(userId, entityId, factText, factType /*, source */) {
+  // NOTE: the global unique index on (user_id, fact_text) is partial
+  // `WHERE contact_id IS NULL` so the ON CONFLICT inference needs the
+  // matching predicate. Rows inserted here have contact_id NULL and so
+  // target the global uniqueness axis only. Contact-scoped upserts live
+  // in addContactFact() below.
   await pool.query(
     `INSERT INTO memory_facts
        (user_id, entity_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at)
      VALUES ($1, $2, $3, $4, 1, 0.5, NOW(), NOW())
-     ON CONFLICT (user_id, fact_text)
+     ON CONFLICT (user_id, fact_text) WHERE contact_id IS NULL
      DO UPDATE SET
        supporting_count = memory_facts.supporting_count + 1,
        strength_score   = LEAST(1.0, memory_facts.strength_score + 0.1),
@@ -5681,6 +6137,27 @@ module.exports = {
   updateOutcomeFollowUp,
   upsertMemoryFact,
   getMemoryFactsForUser,
+  // People Memory + Shared Access (Phase 0)
+  getContactsForUser,
+  getContactById,
+  createContact,
+  updateContact,
+  deleteContact,
+  resolveContactByEmail,
+  resolveContactByName,
+  addContactIdentity,
+  getContactIdentities,
+  createGrant,
+  revokeGrant,
+  getGrantsForGrantor,
+  getGrantsForGrantee,
+  hasActiveGrant,
+  createConnection,
+  updateConnectionStatus,
+  getConnectionsForUser,
+  getConnectionByPeer,
+  addContactFact,
+  getContactFacts,
   // Entity workspace projects
   listProjectsForEntity,
   getProjectById,
