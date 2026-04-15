@@ -5959,6 +5959,84 @@ async function addContactFact(userId, contactId, factText, factType, strengthSco
   );
 }
 
+/**
+ * Most-relevant contacts for Aria context. Ranked by most-recent
+ * memory_fact activity (so contacts we've been learning about recently
+ * float up) with a stable tiebreaker on updated_at.
+ */
+async function getRelevantContacts(userId, limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT c.id, c.user_id AS "userId",
+            c.display_name AS "displayName",
+            c.primary_email AS "primaryEmail",
+            c.primary_phone AS "primaryPhone",
+            c.company, c.role, c.notes,
+            c.linked_user_id AS "linkedUserId",
+            c.source,
+            c.created_at AS "createdAt",
+            c.updated_at AS "updatedAt",
+            MAX(mf.last_seen_at) AS "lastFactAt"
+     FROM contacts c
+     LEFT JOIN memory_facts mf ON mf.contact_id = c.id
+     WHERE c.user_id = $1
+     GROUP BY c.id
+     ORDER BY MAX(mf.last_seen_at) DESC NULLS LAST,
+              c.updated_at DESC
+     LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
+/**
+ * Top N facts for a contact by strength, excluding free-form notes.
+ * Returns just the text strings for direct block formatting.
+ */
+async function getTopContactFacts(contactId, userId, limit = 3) {
+  const { rows } = await pool.query(
+    `SELECT fact_text AS "factText"
+     FROM memory_facts
+     WHERE contact_id = $1
+       AND user_id = $2
+       AND (fact_type IS NULL OR fact_type <> 'note')
+     ORDER BY strength_score DESC, last_seen_at DESC
+     LIMIT $3`,
+    [contactId, userId, limit],
+  );
+  return rows.map((r) => r.factText);
+}
+
+/**
+ * Summary of active shared-access grants touching this user, used by
+ * the Aria context block.
+ */
+async function getSharedAccessSummary(userId) {
+  const [givenRes, receivedRes] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*)::int AS n
+       FROM shared_access_grants
+       WHERE grantor_user_id = $1
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > NOW())`,
+      [userId],
+    ),
+    pool.query(
+      `SELECT scope
+       FROM shared_access_grants
+       WHERE grantee_user_id = $1
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > NOW())`,
+      [userId],
+    ),
+  ]);
+  const scopes = [...new Set(receivedRes.rows.map((r) => r.scope))];
+  return {
+    grantsGiven: givenRes.rows[0]?.n || 0,
+    grantsReceived: receivedRes.rows.length,
+    scopes,
+  };
+}
+
 async function getContactFacts(contactId, userId) {
   const { rows } = await pool.query(
     `SELECT id, fact_text AS "factText", fact_type AS "factType",
@@ -6158,6 +6236,9 @@ module.exports = {
   getConnectionByPeer,
   addContactFact,
   getContactFacts,
+  getRelevantContacts,
+  getTopContactFacts,
+  getSharedAccessSummary,
   // Entity workspace projects
   listProjectsForEntity,
   getProjectById,

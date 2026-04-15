@@ -15,6 +15,8 @@ const { rediGet, rediSet } = require('./redis.cjs');
 
 const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.\n\nYou have full access to the user's projects, tasks, checklist items, and notes within their entities. This data is provided to you in the ACTIVE PROJECTS context block above. When asked about projects, summarize from that context. Never say you don't have access to projects.
 
+You have access to the user's contacts and relationship memory in the PEOPLE & RELATIONSHIPS block above. When asked about a person by name, use this context. When asked "who is X", "prep me for my meeting with X", or "what do I know about X", use contact facts and notes to answer. When the SHARED ACCESS block shows granted access, you can reference data from connected users when relevant. Never say you don't have access to contact or relationship information.
+
 For project creation: when the user asks to "create a project", "set up a project", "make a project", etc., a separate intent classifier renders an inline draft tile in the Command Center for them to confirm — you do not need to call a tool. Just acknowledge the request. If the user has not specified an entity and there is no obvious match in their entity list, ask one short clarifying question: "Which entity should this project belong to?". Never invent an entity.`;
 
 // Cross-surface GCal cache — now Redis-backed for durability across
@@ -168,7 +170,7 @@ async function buildAgenticContext(opts) {
     return fetchCalendarWindow(opts);
   })();
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx] = await Promise.all([
+  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx, contactsData, sharedAccessData] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
@@ -181,6 +183,8 @@ async function buildAgenticContext(opts) {
     db.getRecentOutcomeContext ? db.getRecentOutcomeContext(userId, 5).catch(() => []) : Promise.resolve([]),
     db.getMemoryFactsForUser ? db.getMemoryFactsForUser(userId, 10).catch(() => []) : Promise.resolve([]),
     db.getProjectContextForUser ? db.getProjectContextForUser(userId, 5).catch(() => []) : Promise.resolve([]),
+    db.getRelevantContacts ? db.getRelevantContacts(userId, 10).catch(() => []) : Promise.resolve([]),
+    db.getSharedAccessSummary ? db.getSharedAccessSummary(userId).catch(() => ({ grantsGiven: 0, grantsReceived: 0, scopes: [] })) : Promise.resolve({ grantsGiven: 0, grantsReceived: 0, scopes: [] }),
   ]);
 
   const todayStr = getTodayLocal(tz);
@@ -259,13 +263,21 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // Active projects across every entity the user can access.
   const projectsBlock = buildProjectsBlock(projectsCtx);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + contextBlock;
+  // People + relationship memory + shared-access summary.
+  const peopleBlock = await buildPeopleBlock(contactsData, db, userId);
+  const sharedAccessBlock = buildSharedAccessBlock(sharedAccessData);
+
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + contextBlock;
+  console.log('[buildAgenticContext] prompt chars:', systemPrompt.length);
 
   return {
     user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
     importantUnread, recentClassified, recentOutcomes, memoryFacts, projects: projectsCtx,
+    contacts: contactsData, sharedAccess: sharedAccessData,
     tz, todayStr, todayDate, currentTime, weekMapStr,
-    profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock, decisionInstructions: DECISION_INSTRUCTIONS,
+    profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
+    peopleBlock, sharedAccessBlock,
+    decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };
 }
@@ -290,6 +302,50 @@ function buildProjectsBlock(projects) {
     return `${head}${tasks}${note}`;
   });
   return `\n\nACTIVE PROJECTS\n${lines.join('\n')}`;
+}
+
+/**
+ * Build PEOPLE & RELATIONSHIPS block. Fetches top facts per contact
+ * inline (small N) and truncates at PEOPLE_BLOCK_CHAR_CAP so we never
+ * starve the token budget in the rare case a user has 50+ contacts
+ * with rich facts.
+ *
+ * Contract: returns '' when the contact set is empty so callers can
+ * concatenate blindly.
+ */
+const PEOPLE_BLOCK_CHAR_CAP = 400;
+
+async function buildPeopleBlock(contacts, db, userId) {
+  if (!Array.isArray(contacts) || contacts.length === 0) return '';
+  const getFacts = db.getTopContactFacts
+    ? (cid) => db.getTopContactFacts(cid, userId, 3).catch(() => [])
+    : async () => [];
+  const lines = [];
+  let out = '\n\nPEOPLE & RELATIONSHIPS';
+  for (const c of contacts) {
+    const factTexts = await getFacts(c.id);
+    const parenBits = [c.role || c.relationship || 'contact'];
+    if (c.company) parenBits.push(c.company);
+    const head = `\n- ${c.displayName || 'Unknown'} (${parenBits.filter(Boolean).join(', ')})`;
+    const facts = factTexts.length ? `\n  Facts: ${factTexts.join('; ')}` : '';
+    const candidate = out + head + facts;
+    if (candidate.length > PEOPLE_BLOCK_CHAR_CAP) break;
+    out = candidate;
+    lines.push(head);
+  }
+  return out;
+}
+
+/**
+ * Build SHARED ACCESS block describing grants RECEIVED (data you can
+ * see from others). Silent on grants given — the grantor can see those
+ * in the dedicated panel; Aria doesn't need to repeat them.
+ */
+function buildSharedAccessBlock(summary) {
+  if (!summary || !summary.grantsReceived) return '';
+  const scopes = (summary.scopes || []).slice(0, 6).join(', ');
+  const block = `\n\nSHARED ACCESS\nYou have been granted access to data from ${summary.grantsReceived} connection(s): ${scopes}`;
+  return block.length > 150 ? block.slice(0, 147) + '...' : block;
 }
 
 /**
