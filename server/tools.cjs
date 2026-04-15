@@ -280,6 +280,127 @@ const ARIA_TOOLS = [
       },
     },
   },
+  // --- PEOPLE / CONTACTS / SHARED ACCESS ---
+  {
+    name: 'list_contacts',
+    group: 'people',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "List the user's contacts. Optionally filter by name/email substring via the query param.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Optional substring match on display_name or primary_email.' },
+      },
+    },
+  },
+  {
+    name: 'get_contact',
+    group: 'people',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Get full context for a contact including facts and notes. At least one of contact_id, email, or name is required.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contact_id: { type: 'string' },
+        email:      { type: 'string' },
+        name:       { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'create_contact',
+    group: 'people',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Create a new contact.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        display_name:  { type: 'string' },
+        primary_email: { type: 'string' },
+        primary_phone: { type: 'string' },
+        company:       { type: 'string' },
+        role:          { type: 'string' },
+        notes:         { type: 'string' },
+      },
+      required: ['display_name'],
+    },
+  },
+  {
+    name: 'update_contact',
+    group: 'people',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Update an existing contact.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contact_id:    { type: 'string' },
+        display_name:  { type: 'string' },
+        primary_email: { type: 'string' },
+        company:       { type: 'string' },
+        role:          { type: 'string' },
+        notes:         { type: 'string' },
+      },
+      required: ['contact_id'],
+    },
+  },
+  {
+    name: 'note_about_contact',
+    group: 'people',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Add a note or fact about a contact. Triggers background fact extraction.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contact_id: { type: 'string' },
+        content:    { type: 'string' },
+        note_type:  { type: 'string', description: "Defaults to 'memory' (treated as a note)." },
+      },
+      required: ['contact_id', 'content'],
+    },
+  },
+  {
+    name: 'list_shared_access',
+    group: 'people',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'List active shared access grants given and received.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'grant_shared_access',
+    group: 'people',
+    risk: 'medium',
+    requires_confirmation: true,
+    description: 'Grant another user read access to some of your data. Requires confirmation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        grantee_email: { type: 'string' },
+        scope:         { type: 'string', enum: ['calendar_read', 'tasks_read', 'inbox_read', 'people_read', 'full_read'] },
+        expires_at:    { type: 'string', description: 'Optional ISO timestamp.' },
+      },
+      required: ['grantee_email', 'scope'],
+    },
+  },
+  {
+    name: 'revoke_shared_access',
+    group: 'people',
+    risk: 'medium',
+    requires_confirmation: true,
+    description: 'Revoke a shared access grant you previously issued. Requires confirmation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        grant_id: { type: 'string' },
+      },
+      required: ['grant_id'],
+    },
+  },
   {
     name: 'bulk_archive_emails',
     group: 'communication',
@@ -916,6 +1037,156 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           dryRun: dry_run !== false, // default true
         });
         return { success: true, ...result };
+      }
+
+      // ── PEOPLE / CONTACTS / SHARED ACCESS ──────────────────────────────
+      case 'list_contacts': {
+        const all = await db.getContactsForUser(userId);
+        const q = String(toolInput.query || '').trim().toLowerCase();
+        const filtered = q
+          ? all.filter((c) =>
+              (c.displayName || '').toLowerCase().includes(q) ||
+              (c.primaryEmail || '').toLowerCase().includes(q))
+          : all;
+        return { success: true, contacts: filtered.slice(0, 50) };
+      }
+
+      case 'get_contact': {
+        let contact = null;
+        if (toolInput.contact_id) {
+          contact = await db.getContactById(toolInput.contact_id, userId);
+        }
+        if (!contact && toolInput.email) {
+          contact = await db.resolveContactByEmail(toolInput.email, userId);
+        }
+        if (!contact && toolInput.name) {
+          const matches = await db.resolveContactByName(toolInput.name, userId);
+          if (Array.isArray(matches) && matches.length === 1) contact = matches[0];
+          else if (Array.isArray(matches) && matches.length > 1) {
+            return {
+              success: false,
+              error: `Multiple contacts match "${toolInput.name}". Which one?`,
+              candidates: matches.map((m) => ({ id: m.id, displayName: m.displayName, primaryEmail: m.primaryEmail })),
+            };
+          }
+        }
+        if (!contact) return { success: false, error: 'Contact not found. Provide contact_id, email, or name.' };
+
+        const [allFacts, identities] = await Promise.all([
+          db.getContactFacts(contact.id, userId),
+          db.getContactIdentities(contact.id),
+        ]);
+        const notes = allFacts.filter((f) => f.factType === 'note').slice(0, 10);
+        const facts = allFacts.filter((f) => f.factType !== 'note');
+        return { success: true, contact, notes, facts, identities };
+      }
+
+      case 'create_contact': {
+        if (!toolInput.display_name) {
+          return { success: false, error: 'display_name is required' };
+        }
+        try {
+          const contact = await db.createContact(userId, {
+            displayName: String(toolInput.display_name).trim(),
+            primaryEmail: toolInput.primary_email || null,
+            primaryPhone: toolInput.primary_phone || null,
+            company: toolInput.company || null,
+            role: toolInput.role || null,
+            notes: toolInput.notes || null,
+            source: 'aria',
+          });
+          return { success: true, contact_id: contact.id, display_name: contact.displayName };
+        } catch (e) {
+          if (e.code === '23505') {
+            return { success: false, error: 'A contact with this email already exists' };
+          }
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'update_contact': {
+        if (!toolInput.contact_id) {
+          return { success: false, error: 'contact_id is required' };
+        }
+        const existing = await db.getContactById(toolInput.contact_id, userId);
+        if (!existing) return { success: false, error: 'Contact not found' };
+        const patch = {};
+        if (toolInput.display_name !== undefined) patch.displayName = toolInput.display_name;
+        if (toolInput.primary_email !== undefined) patch.primaryEmail = toolInput.primary_email || null;
+        if (toolInput.company !== undefined) patch.company = toolInput.company || null;
+        if (toolInput.role !== undefined) patch.role = toolInput.role || null;
+        if (toolInput.notes !== undefined) patch.notes = toolInput.notes || null;
+        try {
+          const contact = await db.updateContact(toolInput.contact_id, userId, patch);
+          return { success: true, contact_id: contact.id, display_name: contact.displayName };
+        } catch (e) {
+          if (e.code === '23505') {
+            return { success: false, error: 'A contact with this email already exists' };
+          }
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'note_about_contact': {
+        if (!toolInput.contact_id || !toolInput.content) {
+          return { success: false, error: 'contact_id and content are required' };
+        }
+        const existing = await db.getContactById(toolInput.contact_id, userId);
+        if (!existing) return { success: false, error: 'Contact not found' };
+        const text = String(toolInput.content).trim();
+        if (!text) return { success: false, error: 'content is empty' };
+        await db.addContactFact(userId, toolInput.contact_id, text, 'note', 0.5);
+        // Fire-and-forget fact extraction — never awaited, never blocks.
+        try {
+          const { extractContactFacts } = require('./lib/contactFactExtractor.cjs');
+          extractContactFacts(userId, toolInput.contact_id, existing.displayName, text)
+            .catch((err) => console.error('[tools] fact extract:', err.message));
+        } catch { /* extractor unavailable → skip silently */ }
+        return { success: true, contact_id: toolInput.contact_id };
+      }
+
+      case 'list_shared_access': {
+        const [given, received] = await Promise.all([
+          db.getGrantsForGrantor(userId),
+          db.getGrantsForGrantee(userId),
+        ]);
+        return { success: true, given, received };
+      }
+
+      case 'grant_shared_access': {
+        if (!toolInput.grantee_email || !toolInput.scope) {
+          return { success: false, error: 'grantee_email and scope are required' };
+        }
+        const VALID = new Set(['calendar_read', 'tasks_read', 'inbox_read', 'people_read', 'full_read']);
+        if (!VALID.has(toolInput.scope)) {
+          return { success: false, error: `Invalid scope. Allowed: ${[...VALID].join(', ')}` };
+        }
+        const grantee = await db.getUserByIdentifier(String(toolInput.grantee_email).trim());
+        if (!grantee) return { success: false, error: 'User not on platform' };
+        if (grantee.id === userId) return { success: false, error: 'Cannot grant access to yourself' };
+
+        const expiresAt = toolInput.expires_at ? new Date(toolInput.expires_at) : null;
+        if (toolInput.expires_at && Number.isNaN(expiresAt?.getTime())) {
+          return { success: false, error: 'expires_at must be a valid ISO timestamp' };
+        }
+        try {
+          const grant = await db.createGrant(userId, grantee.id, toolInput.scope, null, expiresAt);
+          return { success: true, grant_id: grant.id, scope: grant.scope, grantee_email: grantee.email || null };
+        } catch (e) {
+          if (e.code === '23505') {
+            return { success: false, error: 'Grant already exists for this grantee + scope' };
+          }
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'revoke_shared_access': {
+        const rawId = toolInput.grant_id;
+        const id = typeof rawId === 'number' ? rawId : parseInt(String(rawId || ''), 10);
+        if (!Number.isFinite(id)) return { success: false, error: 'grant_id is required' };
+        const ok = await db.revokeGrant(id, userId);
+        if (!ok) return { success: false, error: 'Grant not found' };
+        return { success: true, grant_id: id };
       }
 
       default:
