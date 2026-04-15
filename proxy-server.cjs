@@ -80,6 +80,7 @@ app.use('/', require('./server/routes/ariaDraft.cjs')({ authenticateToken }));
 app.use('/', require('./server/routes/tileExecute.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/outcomes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/projects.cjs')({ authenticateToken, db }));
+app.use('/', require('./server/routes/outlook.cjs')({ authenticateToken, db }));
 
 // ── Sentry error handler ────────────────────────────────────────────────────
 const Sentry = require('./guardrails/instrument.cjs');
@@ -339,6 +340,26 @@ cron.schedule('*/15 * * * *', async () => {
 });
 console.log('[cron] GCal sync scheduler started');
 
+// ── Outlook sync — every 15 min, same window as GCal ──────────────────────
+const { syncOutlookForUser } = require('./server/lib/outlookCalSync.cjs');
+const { scanOutlookMailForUser } = require('./server/lib/outlookMailScan.cjs');
+
+cron.schedule('*/15 * * * *', async () => {
+  try {
+    const users = await db.getUsersWithOutlookConnected();
+    for (const user of users) {
+      await syncOutlookForUser(user.id, user.timezone || 'America/Los_Angeles', db);
+      // Mail scan piggybacks the same cron tick so we don't double-schedule.
+      try { await scanOutlookMailForUser({ userId: user.id, db, requestId: `cron-outlook-${user.id}` }); }
+      catch (e) { cronLogger.error('outlook-mail-scan.user-failed', { userId: user.id, error: e.message }); }
+    }
+    cronLogger.info('outlook-sync.complete', { userCount: users.length });
+  } catch (e) {
+    cronLogger.error('outlook-sync.failed', { error: e.message });
+  }
+});
+console.log('[cron] Outlook sync scheduler started');
+
 // ── Startup sync — trigger one pass for all connected users on boot so
 // new deploys don't wait up to 15 min for the first tick. Non-blocking;
 // per-user failures are isolated to that user.
@@ -356,5 +377,21 @@ console.log('[cron] GCal sync scheduler started');
     cronLogger.info('gcal-sync.startup.complete', { userCount: users.length });
   } catch (e) {
     cronLogger.error('gcal-sync.startup.failed', { error: e.message });
+  }
+})();
+
+// ── Outlook startup sync — same shape as GCal startup sync ──────────────
+(async () => {
+  await new Promise((r) => setTimeout(r, 7000));
+  try {
+    const users = await db.getUsersWithOutlookConnected();
+    cronLogger.info('outlook-sync.startup.begin', { userCount: users.length });
+    for (const user of users) {
+      try { await syncOutlookForUser(user.id, user.timezone || 'America/Los_Angeles', db); }
+      catch (e) { cronLogger.error('outlook-sync.startup.user-failed', { userId: user.id, error: e.message }); }
+    }
+    cronLogger.info('outlook-sync.startup.complete', { userCount: users.length });
+  } catch (e) {
+    cronLogger.error('outlook-sync.startup.failed', { error: e.message });
   }
 })();

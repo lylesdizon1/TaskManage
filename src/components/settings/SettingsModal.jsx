@@ -1362,6 +1362,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     scanFrequency: '1h', scanWindow: '24h',
   });
   const [gmailLoading, setGmailLoading] = useState(false);
+  const [outlookAccounts, setOutlookAccounts] = useState([]);
+  const [outlookLoading, setOutlookLoading] = useState(false);
   const [newVip, setNewVip] = useState('');
   const [newKeyword, setNewKeyword] = useState('');
   const [newExclusion, setNewExclusion] = useState('');
@@ -1371,8 +1373,42 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
 
 
   useEffect(() => {
-    if (tab === 'gmail') loadGmailData();
+    if (tab === 'gmail') { loadGmailData(); loadOutlookAccounts(); }
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadOutlookAccounts() {
+    try {
+      const res = await apiFetch('/api/outlook/accounts', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      setOutlookAccounts(Array.isArray(data) ? data : []);
+    } catch {
+      setOutlookAccounts([]);
+    }
+  }
+
+  async function handleOutlookConnect() {
+    setOutlookLoading(true);
+    try {
+      const res = await apiFetch('/api/outlook/auth-url', { headers: { Authorization: `Bearer ${authToken}` } });
+      const { url, error } = await res.json();
+      if (url) { window.location.href = url; return; }
+      settingsToast.error(error || 'Outlook OAuth not configured');
+    } catch {
+      settingsToast.error('Outlook OAuth not configured');
+    } finally {
+      setOutlookLoading(false);
+    }
+  }
+
+  async function handleOutlookDisconnect(id) {
+    setOutlookLoading(true);
+    try {
+      await apiFetch(`/api/outlook/accounts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+      await loadOutlookAccounts();
+    } catch {} finally {
+      setOutlookLoading(false);
+    }
+  }
 
   async function loadGmailAccounts() {
     try {
@@ -2099,6 +2135,37 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                   >
                     <span className="text-base leading-none">+</span>
                     {gmailLoading ? 'Connecting\u2026' : 'Add Account'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Outlook Accounts */}
+              <div className="space-y-3 pt-4 border-t border-gray-100">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Outlook Accounts</h3>
+                <div className="space-y-2">
+                  {outlookAccounts.length === 0 && (
+                    <div className="text-xs text-gray-400 italic px-3 py-2">No accounts connected yet.</div>
+                  )}
+                  {outlookAccounts.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                        <span className="text-sm text-gray-700 truncate">{a.account_email || '(unknown email — reconnect to refresh)'}</span>
+                      </div>
+                      <button
+                        onClick={() => handleOutlookDisconnect(a.id)}
+                        disabled={outlookLoading}
+                        className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                      >Disconnect</button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={handleOutlookConnect}
+                    disabled={outlookLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-dashed border-gray-200 rounded-xl text-gray-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/20 transition-all text-sm font-medium disabled:opacity-50"
+                  >
+                    <span className="text-base leading-none">+</span>
+                    {outlookLoading ? 'Connecting\u2026' : 'Add Account'}
                   </button>
                 </div>
               </div>

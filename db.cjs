@@ -2081,6 +2081,24 @@ async function getUsersWithGcalConnected() {
 }
 
 /**
+ * Users with at least one active Outlook integration row. Outlook V1
+ * bundles both calendar + mail under a single integration_type='outlook'
+ * row (like Google bundles Calendar+Gmail under 'gmail').
+ */
+async function getUsersWithOutlookConnected() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT u.id, u.timezone
+     FROM users u
+     JOIN user_integrations ui ON ui.user_id = u.id
+     WHERE ui.integration_type = 'outlook'
+       AND ui.is_enabled = TRUE
+       AND ui.account_email IS NOT NULL
+       AND ui.account_email != ''`,
+  );
+  return rows;
+}
+
+/**
  * No-op placeholder preserved for backward compatibility with callers
  * that still invoke it during boot/migration.
  *
@@ -5654,6 +5672,7 @@ module.exports = {
   getCalendarEventsForUser,
   deleteStaleCalendarEvents,
   getUsersWithGcalConnected,
+  getUsersWithOutlookConnected,
   getMeetingsNeedingNotes,
   createOutcomeRecord,
   getOutcomeRecordsForUser,

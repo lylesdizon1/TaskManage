@@ -69,6 +69,15 @@ All JSDoc documentation complete for server/ and src/lib/ — see individual fil
 - Per-user GCal OAuth
 - Feature arc: task completion notes, entity tagging, image processing
 
+### Outlook integration (V1)
+- `integration_type='outlook'`, `provider='microsoft'` in `user_integrations`.
+- Direct HTTP against Microsoft Graph (no SDK); Node 18+ global fetch.
+- Calendar events stored in existing `calendar_events` — no new columns. Outlook rows distinguished by `account_email='outlook:<upn>'` prefix. Downstream readers (buildAgenticContext, CalendarPanel) are provider-agnostic and pick them up for free.
+- Mail routed through the existing `inbox_items` pipeline with `source='outlook'`. V1 shares the Gmail "Email Intelligence" config (VIP/keyword/exclusion rules) — no separate Outlook config UI yet.
+- Sync cadence: `*/15 * * * *` cron matches GCal. Mail scan piggybacks the same tick.
+- Tokens encrypted via `crypto.cjs` under `config_json.tokens` (same wrapper pattern as Gmail).
+- Env vars: `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, optional `OUTLOOK_REDIRECT_URI`. Route registration fails soft when absent.
+
 ## Engineering Rules — Non-Negotiable
 1. Diagnose before touching anything
 2. Surgical str_replace only — no full file rewrites
