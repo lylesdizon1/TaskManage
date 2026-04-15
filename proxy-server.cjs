@@ -81,6 +81,7 @@ app.use('/', require('./server/routes/tileExecute.cjs')({ authenticateToken, db 
 app.use('/', require('./server/routes/outcomes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/projects.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/outlook.cjs')({ authenticateToken, db }));
+app.use('/', require('./server/routes/contacts.cjs')({ authenticateToken, db }));
 
 // ── Sentry error handler ────────────────────────────────────────────────────
 const Sentry = require('./guardrails/instrument.cjs');
