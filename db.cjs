@@ -6152,12 +6152,17 @@ async function upsertMemoryFact(userId, entityId, factText, factType /*, source 
   );
 }
 
-/** Return strongest memory facts for a user, strength-first. */
+/**
+ * Return strongest global memory facts for a user, strength-first.
+ * Excludes contact-scoped rows (contact_id IS NOT NULL) — those surface
+ * in the PEOPLE & RELATIONSHIPS block via getTopContactFacts.
+ */
 async function getMemoryFactsForUser(userId, limit = 10) {
   const { rows } = await pool.query(
     `SELECT fact_text, fact_type, supporting_count, strength_score, last_seen_at
      FROM memory_facts
      WHERE user_id = $1
+       AND contact_id IS NULL
      ORDER BY strength_score DESC, last_seen_at DESC
      LIMIT $2`,
     [userId, limit],
