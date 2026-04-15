@@ -90,6 +90,8 @@ const CalendarPanel = lazy(() => import('./panels/CalendarPanel.jsx'));
 const InboxPanel = lazy(() => import('./panels/InboxPanel.jsx'));
 const NotesPanel = lazy(() => import('./panels/NotesPanel.jsx'));
 const ProjectsPanel = lazy(() => import('./panels/ProjectsPanel.jsx'));
+const PeoplePanel = lazy(() => import('./panels/PeoplePanel.jsx'));
+const SharedAccessPanel = lazy(() => import('./panels/SharedAccessPanel.jsx'));
 const AddTaskForm = lazy(() => import('./components/tasks/AddTaskForm.jsx'));
 const DashboardPanel = lazy(() => import('./panels/DashboardPanel.jsx'));
 const AdminPanel = lazy(() => import('./panels/AdminPanel.jsx'));
@@ -969,6 +971,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             { key: 'projects', label: 'Projects', icon: 'folder_open' },
             { key: 'calendar', label: 'Calendar', icon: 'calendar_today' },
             { key: 'notes', label: 'Notes', icon: 'sticky_note_2' },
+            { key: 'people', label: 'People', icon: 'group' },
+            { key: 'sharing', label: 'Sharing', icon: 'share' },
             { key: 'chat', label: 'Aria', icon: 'chat' },
             { key: 'activity', label: 'Activity', icon: 'history' },
             ...(currentUser?.role === 'superadmin' ? [{ key: 'admin', label: 'Admin', icon: 'admin_panel_settings' }] : []),
@@ -1109,6 +1113,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <InboxPanel authToken={authToken} apiFetch={apiFetch} onNavigate={setActiveView} onUnreadCountChange={setInboxUnread} />
           ) : activeView === 'projects' ? (
             <ProjectsPanel entities={userEntities} apiFetch={apiFetch} authToken={authToken} />
+          ) : activeView === 'people' ? (
+            <PeoplePanel apiFetch={apiFetch} authToken={authToken} />
+          ) : activeView === 'sharing' ? (
+            <SharedAccessPanel apiFetch={apiFetch} authToken={authToken} />
           ) : activeView === 'calendar' ? (
             <CalendarPanel currentUser={currentUser} authToken={authToken} addToast={addToast} apiFetch={apiFetch} />
           ) : activeView === 'notes' ? (
