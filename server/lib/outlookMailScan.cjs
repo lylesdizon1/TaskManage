@@ -19,6 +19,7 @@
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { GRAPH_BASE, listOutlookAccounts, withFreshAccessToken } = require('../utils/outlook.cjs');
+const { resolveOrCreateContact } = require('./contactIngestion.cjs');
 
 const NOREPLY_PATTERN = /noreply|no-reply|donotreply|do-not-reply|notifications@|mailer@/i;
 
@@ -126,6 +127,9 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
         gmailLink: f.msg.webLink || null,
         sender: `${f.fromName || ''} <${f.fromAddr}>`.trim(),
       });
+      // Fire-and-forget contact ingestion — never await, never block.
+      resolveOrCreateContact(userId, { email: f.fromAddr, name: f.fromName, source: 'mail_scan' })
+        .catch((err) => console.error('[contactIngestion] mail:', err.message));
       newCount++;
     }
   }

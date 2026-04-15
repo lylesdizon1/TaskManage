@@ -4,6 +4,18 @@ const express = require('express');
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('../utils/crypto.cjs');
+const { resolveOrCreateContact } = require('../lib/contactIngestion.cjs');
+
+/**
+ * Parse an RFC 5322 From header into {name, email}. Best-effort; falls
+ * back to treating the whole string as the email when no "<...>" form.
+ */
+function parseFromHeader(raw) {
+  if (!raw || typeof raw !== 'string') return { name: '', email: '' };
+  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  if (m) return { name: (m[1] || '').trim(), email: (m[2] || '').trim() };
+  return { name: '', email: raw.trim() };
+}
 
 const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -364,6 +376,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
           const f = result.value;
           const subject = getHeader(f.msg, 'Subject');
           const id = `inbox-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+          const fromHeader = getHeader(f.msg, 'From');
           await db.createInboxItem({
             id, userId, type: f.type,
             title: subject || '(no subject)',
@@ -372,8 +385,14 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
             sourceId: f.msg.id,
             gmailThreadId: f.msg.threadId || null,
             gmailLink: `https://mail.google.com/mail/u/0/#inbox/${f.msg.id}`,
-            sender: f.type !== 'COMMITMENT' ? getHeader(f.msg, 'From') : null,
+            sender: f.type !== 'COMMITMENT' ? fromHeader : null,
           });
+          // Fire-and-forget contact ingestion — never await, never block.
+          if (f.type !== 'COMMITMENT') {
+            const parsed = parseFromHeader(fromHeader);
+            resolveOrCreateContact(userId, { email: parsed.email, name: parsed.name, source: 'mail_scan' })
+              .catch((err) => console.error('[contactIngestion] gmail:', err.message));
+          }
           newCount++;
         }
       }

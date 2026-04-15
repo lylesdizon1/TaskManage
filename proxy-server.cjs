@@ -259,6 +259,7 @@ console.log('[cron] Pending-confirmations sweep scheduler started');
 
 // ── GCal sync — every 15 min, mirrors 14-day window into calendar_events ──
 const { localMidnightUtc } = require('./server/lib/buildAgenticContext.cjs');
+const { resolveOrCreateContact } = require('./server/lib/contactIngestion.cjs');
 
 async function syncGcalForUser(userId, tz) {
   try {
@@ -308,6 +309,15 @@ async function syncGcalForUser(userId, tz) {
         }));
 
         await db.upsertCalendarEvents(userId, googleEmail, events);
+
+        // Fire-and-forget contact ingestion for organizers. V1: organizer
+        // only, never attendees. Resolver dedups so repeat syncs no-op.
+        for (const ev of (res.data.items || [])) {
+          const orgEmail = ev.organizer?.email;
+          if (!orgEmail) continue;
+          resolveOrCreateContact(userId, { email: orgEmail, name: ev.organizer?.displayName || '', source: 'calendar_sync' })
+            .catch((err) => console.error('[contactIngestion] gcal:', err.message));
+        }
         // Invalidate the Redis cache for the common fetchCalendarWindow
         // window sizes so downstream reads pick up fresh DB data.
         try {

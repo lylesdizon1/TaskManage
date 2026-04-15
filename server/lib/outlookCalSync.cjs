@@ -11,6 +11,7 @@
 
 const { GRAPH_BASE, listOutlookAccounts, withFreshAccessToken } = require('../utils/outlook.cjs');
 const { localMidnightUtc } = require('./buildAgenticContext.cjs');
+const { resolveOrCreateContact } = require('./contactIngestion.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 async function syncOutlookForUser(userId, tz, db) {
@@ -24,7 +25,7 @@ async function syncOutlookForUser(userId, tz, db) {
         const qs = new URLSearchParams({
           startDateTime: timeMin.toISOString(),
           endDateTime: timeMax.toISOString(),
-          $select: 'id,subject,start,end,location,bodyPreview,isAllDay',
+          $select: 'id,subject,start,end,location,bodyPreview,isAllDay,organizer',
           $top: '100',
           $orderby: 'start/dateTime',
         });
@@ -68,6 +69,17 @@ async function syncOutlookForUser(userId, tz, db) {
           ? account.accountEmail
           : `outlook:${account.accountEmail || 'unknown'}`;
         await db.upsertCalendarEvents(userId, taggedEmail, events);
+
+        // Fire-and-forget contact ingestion for organizers. V1: organizer
+        // only, never attendees. Dedup by (userId, email) happens in the
+        // resolver via resolveContactByEmail → no-op on repeat syncs.
+        for (const ev of items) {
+          const org = ev.organizer?.emailAddress;
+          const orgEmail = org?.address;
+          if (!orgEmail) continue;
+          resolveOrCreateContact(userId, { email: orgEmail, name: org.name || '', source: 'calendar_sync' })
+            .catch((err) => console.error('[contactIngestion] outlook-cal:', err.message));
+        }
 
         // Redis invalidation — same keys GCal sync purges.
         try {
