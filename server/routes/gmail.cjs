@@ -4,18 +4,8 @@ const express = require('express');
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('../utils/crypto.cjs');
-const { resolveOrCreateContact } = require('../lib/contactIngestion.cjs');
-
-/**
- * Parse an RFC 5322 From header into {name, email}. Best-effort; falls
- * back to treating the whole string as the email when no "<...>" form.
- */
-function parseFromHeader(raw) {
-  if (!raw || typeof raw !== 'string') return { name: '', email: '' };
-  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
-  if (m) return { name: (m[1] || '').trim(), email: (m[2] || '').trim() };
-  return { name: '', email: raw.trim() };
-}
+// Contact auto-create from inbound mail disabled for V1 — contactIngestion
+// remains available for reply-based + manual flows.
 
 const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -387,16 +377,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
             gmailLink: `https://mail.google.com/mail/u/0/#inbox/${f.msg.id}`,
             sender: f.type !== 'COMMITMENT' ? fromHeader : null,
           });
-          // Fire-and-forget contact ingestion — never await, never block.
-          if (f.type !== 'COMMITMENT') {
-            const parsed = parseFromHeader(fromHeader);
-            resolveOrCreateContact(userId, {
-              email: parsed.email,
-              name: parsed.name,
-              source: 'mail_scan',
-              snippet: `${subject || ''}\n${f.msg.snippet || ''}`.trim(),
-            }).catch((err) => console.error('[contactIngestion] gmail:', err.message));
-          }
+          // Contact auto-create from inbound mail disabled for V1.
           newCount++;
         }
       }

@@ -19,7 +19,9 @@
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { GRAPH_BASE, listOutlookAccounts, withFreshAccessToken } = require('../utils/outlook.cjs');
-const { resolveOrCreateContact } = require('./contactIngestion.cjs');
+// Contact auto-create from inbound mail disabled for V1 — contacts are
+// created manually or from reply-based flows (handled elsewhere). The
+// contactIngestion module remains imported by other call sites.
 
 const NOREPLY_PATTERN = /noreply|no-reply|donotreply|do-not-reply|notifications@|mailer@/i;
 
@@ -127,13 +129,7 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
         gmailLink: f.msg.webLink || null,
         sender: `${f.fromName || ''} <${f.fromAddr}>`.trim(),
       });
-      // Fire-and-forget contact ingestion — never await, never block.
-      resolveOrCreateContact(userId, {
-        email: f.fromAddr,
-        name: f.fromName,
-        source: 'mail_scan',
-        snippet: `${f.msg.subject || ''}\n${f.msg.bodyPreview || ''}`.trim(),
-      }).catch((err) => console.error('[contactIngestion] mail:', err.message));
+      // Contact auto-create disabled for V1 — see module header.
       newCount++;
     }
   }

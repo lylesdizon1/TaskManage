@@ -77,6 +77,8 @@ async function syncOutlookForUser(userId, tz, db) {
           const org = ev.organizer?.emailAddress;
           const orgEmail = org?.address;
           if (!orgEmail) continue;
+          // No snippet passed → no fact extraction from calendar events;
+          // organizer resolution only (higher signal than mail senders).
           resolveOrCreateContact(userId, { email: orgEmail, name: org.name || '', source: 'calendar_sync' })
             .catch((err) => console.error('[contactIngestion] outlook-cal:', err.message));
         }
