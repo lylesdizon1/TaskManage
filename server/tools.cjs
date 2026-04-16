@@ -401,6 +401,46 @@ const ARIA_TOOLS = [
       required: ['grant_id'],
     },
   },
+  // --- JOURNAL / DAILY WRAP ---
+  {
+    name: 'create_journal_entry',
+    group: 'journal',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Save a journal entry or daily wrap. Can include wins, frustrations, tomorrow's focus, or freeform reflection. Set completed=true to stamp the wrap as finished for today.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        wins:           { type: 'string' },
+        frustrations:   { type: 'string' },
+        tomorrow_focus: { type: 'string' },
+        raw_freeform:   { type: 'string' },
+        completed:      { type: 'boolean' },
+      },
+    },
+  },
+  {
+    name: 'list_journal_entries',
+    group: 'journal',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'List recent journal entries, newest first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit:      { type: 'number' },
+        since_date: { type: 'string', description: 'YYYY-MM-DD lower bound.' },
+      },
+    },
+  },
+  {
+    name: 'get_today_close_loop_context',
+    group: 'journal',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Get today\'s close-the-loop context — pending items needing notes and whether the user has wrapped their day.',
+    input_schema: { type: 'object', properties: {} },
+  },
   {
     name: 'bulk_archive_emails',
     group: 'communication',
@@ -1196,6 +1236,71 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         const ok = await db.revokeGrant(id, userId);
         if (!ok) return { success: false, error: 'Grant not found' };
         return { success: true, grant_id: id };
+      }
+
+      // ── JOURNAL / DAILY WRAP ─────────────────────────────────────────────
+      case 'create_journal_entry': {
+        const zone = tz || 'America/Los_Angeles';
+        const entryDate = new Intl.DateTimeFormat('en-CA', {
+          timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date());
+        const patch = {};
+        const FIELD_MAX = 10_000;
+        const clamp = (v) => (typeof v === 'string' ? (v.length > FIELD_MAX ? v.slice(0, FIELD_MAX) : v) : undefined);
+        if (toolInput.wins !== undefined)            patch.wins = clamp(toolInput.wins) ?? '';
+        if (toolInput.frustrations !== undefined)    patch.frustrations = clamp(toolInput.frustrations) ?? '';
+        if (toolInput.tomorrow_focus !== undefined)  patch.tomorrowFocus = clamp(toolInput.tomorrow_focus) ?? '';
+        if (toolInput.raw_freeform !== undefined)    patch.rawFreeform = clamp(toolInput.raw_freeform) ?? '';
+        if (toolInput.completed === true)            patch.completed = true;
+        try {
+          const entry = await db.upsertJournalEntry(userId, entryDate, patch);
+          return { success: true, entry_date: entryDate, id: entry?.id || null, completed: !!entry?.completedAt };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'list_journal_entries': {
+        const limit = Number.isFinite(toolInput.limit) ? Math.min(Math.max(toolInput.limit, 1), 100) : 20;
+        const sinceDate = typeof toolInput.since_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(toolInput.since_date)
+          ? toolInput.since_date
+          : null;
+        try {
+          const entries = await db.listJournalEntries(userId, { limit, sinceDate });
+          return { success: true, entries };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'get_today_close_loop_context': {
+        const zone = tz || 'America/Los_Angeles';
+        const todayDateKey = new Intl.DateTimeFormat('en-CA', {
+          timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date());
+        try {
+          const { localMidnightUtc } = require('./lib/buildAgenticContext.cjs');
+          const boundary = localMidnightUtc(zone, 0);
+          const [pending, wrapped] = await Promise.all([
+            db.getOpenCloseLoopItems ? db.getOpenCloseLoopItems(userId, boundary, 10) : Promise.resolve([]),
+            db.hasCompletedWrap ? db.hasCompletedWrap(userId, todayDateKey) : Promise.resolve(false),
+          ]);
+          const pendingItems = (pending || []).map((p) => ({
+            source_type: p.sourceType,
+            source_id: p.sourceId,
+            title: p.titleSnapshot || null,
+            triggered_at: p.triggeredAt || null,
+          }));
+          return {
+            success: true,
+            wrapped_today: !!wrapped,
+            pending_items: pendingItems,
+            pending_count: pendingItems.length,
+            today_date: todayDateKey,
+          };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
       }
 
       default:
