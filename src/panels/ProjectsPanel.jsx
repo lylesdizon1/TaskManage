@@ -321,6 +321,22 @@ function TaskRow({ task, entity, apiFetch, authToken, onChange }) {
     } catch {}
   };
 
+  const deleteTask = async () => {
+    if (!window.confirm(`Delete task "${task.title}" and all its checklist items?`)) return;
+    try {
+      const r = await apiFetch(`/api/project-tasks/${task.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+      if (r.ok) onChange?.();
+    } catch {}
+  };
+
+  const deleteItem = async (id) => {
+    if (!window.confirm('Delete this checklist item?')) return;
+    try {
+      const r = await apiFetch(`/api/task-checklist-items/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+      if (r.ok) setItems((prev) => prev.filter((it) => it.id !== id));
+    } catch {}
+  };
+
   const allDone = items.length > 0 && items.every((it) => it.isDone);
 
   return (
@@ -331,13 +347,28 @@ function TaskRow({ task, entity, apiFetch, authToken, onChange }) {
         {task.status !== 'completed' && (
           <button onClick={(e) => { e.stopPropagation(); completeTask(); }} style={{ fontSize: 10, color: '#3b6d11', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 5, padding: '1px 6px', cursor: 'pointer' }}>Complete</button>
         )}
+        <button
+          onClick={(e) => { e.stopPropagation(); deleteTask(); }}
+          title="Delete task"
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, color: '#dc2626', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 5, cursor: 'pointer' }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
+        </button>
       </div>
       {expanded && (
         <div style={{ padding: '6px 10px 10px 28px', borderTop: '1px dashed #e5e7eb' }}>
           {items.map((it) => (
-            <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: it.isDone ? '#6b7280' : '#1f2937', padding: '2px 0' }}>
+            <div key={it.id} className="group" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: it.isDone ? '#6b7280' : '#1f2937', padding: '2px 0' }}>
               <input type="checkbox" checked={!!it.isDone} onChange={() => toggleItem(it.id)} />
-              <span style={{ textDecoration: it.isDone ? 'line-through' : 'none' }}>{it.text}</span>
+              <span style={{ flex: 1, textDecoration: it.isDone ? 'line-through' : 'none' }}>{it.text}</span>
+              <button
+                onClick={() => deleteItem(it.id)}
+                title="Delete item"
+                className="opacity-0 group-hover:opacity-100"
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, color: '#dc2626', background: 'transparent', border: 'none', cursor: 'pointer', transition: 'opacity 120ms' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>delete</span>
+              </button>
             </div>
           ))}
           {adding ? (
