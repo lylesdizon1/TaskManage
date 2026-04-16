@@ -110,6 +110,32 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     lines.push('');
     lines.push(`🔥 High priority: ${highPriority.length}`);
 
+    // Yesterday's wrap: forward-looking signal only (tomorrow_focus +
+    // frustrations carry-over). Wins and raw_freeform stay out — past
+    // wins aren't actionable; freeform is too noisy for the brief.
+    try {
+      if (db.getJournalEntryByDate) {
+        const yesterdayKey = new Intl.DateTimeFormat('en-CA', {
+          timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date(Date.now() - 86400000));
+        const yWrap = await db.getJournalEntryByDate(userId, yesterdayKey);
+        if (yWrap?.completedAt) {
+          const focus = (yWrap.tomorrowFocus || '').trim();
+          const unresolved = (yWrap.frustrations || '').trim();
+          if (focus || unresolved) {
+            const wrapLines = ['', '📔 *From yesterday\'s wrap*'];
+            if (focus) wrapLines.push(`Focus: ${focus}`);
+            if (unresolved) wrapLines.push(`Unresolved: ${unresolved}`);
+            let wrapBlock = wrapLines.join('\n');
+            if (wrapBlock.length > 200) wrapBlock = wrapBlock.slice(0, 197) + '...';
+            lines.push(wrapBlock);
+          }
+        }
+      }
+    } catch (e) {
+      logger.error('morningBrief.yesterdayWrap.failed', { requestId, userId, error: e.message });
+    }
+
     const text = lines.join('\n');
 
     const channels = [];
