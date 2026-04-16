@@ -1883,10 +1883,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const missedPct = Math.round(missedTasks/totalPerf*100);
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6 w-full" style={{ minHeight: 0 }}>
+    <div className="flex-1 overflow-y-auto px-0 md:px-8 py-0 md:py-4 space-y-4 md:space-y-6 w-full" style={{ minHeight: 0 }}>
 
-      {/* ROW 1: Greeting */}
-      <div style={{ marginBottom: '16px' }}>
+      {/* ROW 1: Greeting — hidden on mobile so the CC box starts
+          immediately below the top bar. */}
+      <div className="hidden md:block" style={{ marginBottom: '16px' }}>
         <h1 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '32px', fontWeight: 700, color: '#31323a', lineHeight: 1.1 }}>
           {greeting}, {firstName}.
         </h1>
@@ -1895,8 +1896,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </p>
       </div>
 
-      {/* ROW 2: Command Center */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-xl shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border border-primary/5 flex flex-col" style={{ maxHeight: '1485px', width: '100%' }}>
+      {/* ROW 2: Command Center. Mobile: edge-to-edge, fills remaining
+          viewport between top bar (56px) and bottom nav (64px). Desktop:
+          existing rounded card with max-height cap. */}
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col h-[calc(100vh-120px)] md:h-auto md:max-h-[1485px]" style={{ width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5" style={{ flexShrink: 0 }}>
           <div className="flex items-center gap-2">

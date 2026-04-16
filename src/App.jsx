@@ -333,8 +333,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
 
   const [gcalConnected, setGcalConnected]       = useState(false);
   const [envConfigured, setEnvConfigured]       = useState({});
-  const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'notes'
+  const [mobileView, setMobileView]            = useState('tasks'); // 'tasks' | 'chat' | 'calendar' | 'notes' | 'inbox' | 'more'
   const [mobileChatOpen, setMobileChatOpen]    = useState(false); // list vs chat view inside mobile Aria
+  const [moreDrawerOpen, setMoreDrawerOpen]    = useState(false);  // mobile More bottom-sheet
+  const [hideBottomNav, setHideBottomNav]      = useState(false);  // peek-a-boo on scroll
   const [entities, setEntities]                 = useState([]);
   // Quick Capture FAB state
   const [noteCategories, setNoteCategories]     = useState([]);
@@ -381,6 +383,23 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     };
     window.addEventListener('popstate', handlePop);
     return () => window.removeEventListener('popstate', handlePop);
+  }, []);
+
+  // Mobile bottom-nav peek-a-boo — hide on scroll down, reveal on scroll
+  // up. Always shown near the top and on desktop. Passive listener; no
+  // scroll math when the viewport hasn't moved more than 4px.
+  useEffect(() => {
+    let lastY = window.scrollY || 0;
+    const onScroll = () => {
+      const y = window.scrollY || 0;
+      if (Math.abs(y - lastY) < 4) return;
+      if (y < 10) setHideBottomNav(false);
+      else if (y > lastY) setHideBottomNav(true);
+      else setHideBottomNav(false);
+      lastY = y;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
   // Inbox unread badge: fetch once on mount and whenever the user
@@ -1571,31 +1590,82 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       </div>
 
       {/* ── Mobile bottom navigation ── */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-outline-variant/10 flex z-40 rounded-t-2xl shadow-[0px_-10px_30px_rgba(79,77,207,0.06)]">
-        {[
-          { key: 'tasks', label: 'Home', icon: <span className="material-symbols-outlined text-xl">dashboard</span> },
-          { key: 'daily', label: 'Tasks', icon: <span className="material-symbols-outlined text-xl">checklist</span> },
-          { key: 'calendar', label: 'Calendar', icon: <span className="material-symbols-outlined text-xl">calendar_today</span> },
-          { key: 'notes', label: 'Notes', icon: <span className="material-symbols-outlined text-xl">sticky_note_2</span> },
-          { key: 'chat', label: 'Aria', icon: <span className="material-symbols-outlined text-xl">chat</span> },
-        ].map(({ key, label, icon }) => (
-          <button
-            key={key}
-            onClick={() => {
-              setMobileView(key);
-              if (key !== 'chat') setMobileChatOpen(false);
-              if (key === 'tasks') setActiveView('dashboard');
-              else if (key === 'daily') setActiveView('daily');
-            }}
-            className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-bold transition-colors ${
-              mobileView === key ? 'text-primary' : 'text-slate-400'
-            }`}
-          >
-            {icon}
-            <span className="text-[9px] uppercase tracking-wider">{label}</span>
-          </button>
-        ))}
-      </nav>
+      {(() => {
+        // Views that live behind the More drawer. Active-highlight the
+        // "More" slot when the current activeView is one of these.
+        const drawerViewKeys = new Set(['projects', 'notes', 'people', 'sharing', 'chat', 'activity', 'admin']);
+        const moreIsActive = drawerViewKeys.has(activeView);
+        return (
+          <>
+            <nav
+              className={`md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-outline-variant/10 flex z-40 rounded-t-2xl shadow-[0px_-10px_30px_rgba(79,77,207,0.06)] transition-transform duration-300 md:translate-y-0 ${hideBottomNav ? 'translate-y-full' : 'translate-y-0'}`}
+            >
+              {[
+                { key: 'tasks',    label: 'Home',     icon: 'dashboard',       onActivate: () => { setActiveView('dashboard'); setMobileView('tasks'); setMobileChatOpen(false); } },
+                { key: 'inbox',    label: 'Inbox',    icon: 'inbox',           onActivate: () => { setActiveView('inbox'); setMobileView('inbox'); setMobileChatOpen(false); } },
+                { key: 'daily',    label: 'Tasks',    icon: 'checklist',       onActivate: () => { setActiveView('daily'); setMobileView('daily'); setMobileChatOpen(false); } },
+                { key: 'calendar', label: 'Calendar', icon: 'calendar_today', onActivate: () => { setActiveView('calendar'); setMobileView('calendar'); setMobileChatOpen(false); } },
+                { key: 'more',     label: 'More',     icon: 'more_horiz',     onActivate: () => setMoreDrawerOpen(true), isMore: true },
+              ].map(({ key, label, icon, onActivate, isMore }) => {
+                const active = isMore ? moreIsActive : (
+                  key === 'tasks'    ? (activeView === 'dashboard') :
+                  key === 'inbox'    ? (activeView === 'inbox') :
+                  key === 'daily'    ? (activeView === 'daily') :
+                  key === 'calendar' ? (activeView === 'calendar') :
+                  false
+                );
+                return (
+                  <button
+                    key={key}
+                    onClick={onActivate}
+                    className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-bold transition-colors ${active ? 'text-primary' : 'text-slate-400'}`}
+                  >
+                    <span className="material-symbols-outlined text-xl">{icon}</span>
+                    <span className="text-[9px] uppercase tracking-wider">{label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* More drawer — mobile only. Backdrop + slide-up sheet. */}
+            {moreDrawerOpen && (
+              <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
+                <button
+                  aria-label="Close menu"
+                  onClick={() => setMoreDrawerOpen(false)}
+                  className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+                />
+                <div className="relative bg-white rounded-t-3xl shadow-[0px_-10px_40px_rgba(0,0,0,0.15)] p-4 pb-8 space-y-1 animate-[slideup_200ms_ease-out]">
+                  <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3" />
+                  {[
+                    { view: 'projects', label: 'Projects', icon: 'folder_open' },
+                    { view: 'notes',    label: 'Notes',    icon: 'sticky_note_2' },
+                    { view: 'people',   label: 'People',   icon: 'group' },
+                    { view: 'sharing',  label: 'Sharing',  icon: 'share' },
+                    { view: 'chat',     label: 'Aria',     icon: 'chat' },
+                    { view: 'activity', label: 'Activity', icon: 'history' },
+                    ...(currentUser?.role === 'superadmin' ? [{ view: 'admin', label: 'Admin', icon: 'admin_panel_settings' }] : []),
+                  ].map(({ view, label, icon }) => (
+                    <button
+                      key={view}
+                      onClick={() => {
+                        setActiveView(view);
+                        if (view === 'chat') { setMobileView('chat'); setMobileChatOpen(true); }
+                        else setMobileView(view);
+                        setMoreDrawerOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeView === view ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-gray-50'}`}
+                    >
+                      <span className="material-symbols-outlined text-xl">{icon}</span>
+                      <span className="text-sm font-semibold">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* ── Modals ── */}
       {showCreateEvent && (
