@@ -67,6 +67,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const lastTimeStateRef = useRef(null);
   const lastActivityRef = useRef(Date.now());
   const firstBriefFetchRef = useRef(true);
+  // Once-per-session guard so the Daily Wrap proactive CC message fires
+  // exactly once. The server-side claim in checkAndLockDailyWrapWeb
+  // already enforces once-per-day system-wide; this ref covers the
+  // session-local case (e.g. repeated polls in the same window).
+  const wrapPromptFiredRef = useRef(false);
   // Last project task created via chat — enables "yes" / "add subtasks"
   // follow-ups to resolve to the right task without asking again. Stale
   // after 60 seconds.
@@ -115,6 +120,29 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             ts: Date.now(),
           });
           setActiveZoneState('daily_wrap');
+          // Proactive CC message — once per session. wrapReminderReady
+          // itself is once-per-day system-wide via the DB claim, so this
+          // ref is belt-and-suspenders against same-session fetch races.
+          if (!wrapPromptFiredRef.current) {
+            wrapPromptFiredRef.current = true;
+            const done = data.stats?.tasksCompletedToday || 0;
+            const highOpen = (data.tasks?.overdue?.filter((t) => t.priority === 'high') || []).length
+              + (data.tasks?.dueToday?.filter((t) => t.priority === 'high' && !t.completed) || []).length;
+            const parts = [];
+            if (done > 0) parts.push(`${done} task${done === 1 ? '' : 's'} done`);
+            if (highOpen > 0) parts.push(`${highOpen} high-priority still open`);
+            const summary = parts.length ? ` Today: ${parts.join(', ')}.` : '';
+            const now = new Date().toISOString();
+            setCcMessages((prev) => [
+              ...prev,
+              {
+                role: 'assistant',
+                content: `Ready to wrap your day?${summary} Want to capture how it went?`,
+                createdAt: now,
+                ts: Date.now(),
+              },
+            ]);
+          }
         } else if (data.activeZoneSuggestion === 'close_loop') {
           // Prefer a pending_close_loop row (task/project_task) when present,
           // else fall back to a meeting-needs-notes event.
@@ -1327,6 +1355,36 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const tile = activeTile;
     if (!tile) return;
     const p = tile.payload || {};
+
+    // Daily Wrap V1 save: persists raw_freeform + completed=true to
+    // /api/journal-entries. Stamps completed_at so hasCompletedWrap
+    // returns true and neither the cron push nor the web nudge fires
+    // again today. Multi-field capture ships in Phase 9.
+    if (tile.role === 'daily_wrap') {
+      const note = typeof extra === 'string' ? extra.trim() : '';
+      if (!note) { setActiveTile(null); setActiveZoneState('empty'); return; }
+      try {
+        const r = await apiFetch('/api/journal-entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ raw_freeform: note, completed: true }),
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${r.status}` } : prev));
+          return;
+        }
+        setCcMessages((prev) => [
+          ...prev,
+          { role: 'system', content: 'Wrap saved — nice close.', createdAt: new Date().toISOString(), ts: Date.now() },
+        ]);
+        setActiveZoneState('success');
+        setTimeout(() => { setActiveTile(null); setActiveZoneState('empty'); }, 1500);
+      } catch (err) {
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: err.message || 'Network error' } : prev));
+      }
+      return;
+    }
 
     // Close-loop save: persist the note to the appropriate endpoint,
     // then resolve the pending_close_loop row (fire-and-forget) and
@@ -2696,35 +2754,16 @@ function ActiveZone({
   }
 
   if (state === 'daily_wrap' && activeTile?.role === 'daily_wrap') {
-    // Placeholder — real multi-field DailyWrapTile ships next phase.
-    // Same cancel/confirm plumbing as close_loop so dismiss is non-destructive.
+    // V1 single-field capture. Full multi-field DailyWrapTile ships in
+    // Phase 9. Save POSTs raw_freeform + completed=true so the wrap is
+    // stamped and the reminder silences for the rest of the day.
     return (
       <div style={wrapperStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
-          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Daily wrap
-          </span>
-        </div>
-        <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 14, color: '#1f2937', marginBottom: 8 }}>
-          {activeTile.payload?.title || 'Ready to wrap your day?'}
-        </div>
-        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-          <button
-            onClick={() => onTileCancel?.()}
-            style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: 'pointer' }}
-          >
-            Not now
-          </button>
-          <button
-            onClick={() => onTileCancel?.()}
-            style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: 0.6 }}
-            title="Daily wrap capture ships next phase"
-            disabled
-          >
-            Coming soon
-          </button>
-        </div>
+        <DailyWrapTileV1
+          tile={activeTile}
+          onDismiss={onTileCancel}
+          onConfirm={onTileConfirm}
+        />
       </div>
     );
   }
@@ -2809,6 +2848,74 @@ function CloseLoopTile({ tile, onChange, onDismiss, onConfirm }) {
           style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: (!text.trim() || executing) ? 0.4 : 1 }}
         >
           {executing ? 'Saving…' : 'Save note'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * DailyWrapTileV1 — single-field wrap capture. V1 writes raw_freeform
+ * and stamps completed_at via POST /api/journal-entries. The full
+ * multi-field version (wins / frustrations / tomorrow_focus) lands in
+ * Phase 9. Confirm posts to the parent's executeActiveTile via onConfirm
+ * with the text as the extra arg so the parent handles the POST.
+ */
+function DailyWrapTileV1({ tile, onDismiss, onConfirm }) {
+  const [text, setText] = useState(tile?.payload?.draft || '');
+  const executing = tile?.status === 'executing';
+  const error = tile?.error;
+
+  const handleSave = () => {
+    const note = text.trim();
+    if (!note) return;
+    onConfirm?.(note);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
+        <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          Daily wrap
+        </span>
+      </div>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 14, color: '#1f2937', fontWeight: 600, marginBottom: 2 }}>
+        {tile?.payload?.title || 'Daily Wrap'}
+      </div>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+        How did your day go?
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSave(); }
+          else if (e.key === 'Escape') { e.preventDefault(); onDismiss?.(); }
+        }}
+        disabled={executing}
+        placeholder="Wins, frustrations, what's carrying to tomorrow…"
+        style={{
+          width: '100%', minHeight: 80, fontSize: 13, padding: '8px 10px',
+          border: '1px solid #e5e7eb', borderRadius: 8, outline: 'none',
+          resize: 'vertical', fontFamily: 'Manrope, sans-serif',
+        }}
+      />
+      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+        <button
+          onClick={() => onDismiss?.()}
+          disabled={executing}
+          style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: executing ? 'default' : 'pointer' }}
+        >
+          Not now
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={!text.trim() || executing}
+          style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: (!text.trim() || executing) ? 0.4 : 1 }}
+        >
+          {executing ? 'Saving…' : 'Start Wrap'}
         </button>
       </div>
     </div>
