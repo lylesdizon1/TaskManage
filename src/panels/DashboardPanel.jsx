@@ -1896,11 +1896,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </p>
       </div>
 
-      {/* ROW 2: Command Center. Mobile: edge-to-edge, fills remaining
-          viewport between top bar (56px) and bottom nav (64px), with
-          the input bar absolute-pinned to the bottom so it never
-          disappears. Desktop: existing rounded card with max-height cap. */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col relative md:relative h-[calc(100vh-120px)] md:h-auto md:max-h-[1485px]" style={{ width: '100%' }}>
+      {/* ROW 2: Command Center. Mobile: position fixed between the top
+          bar (56px / top-14) and the bottom nav (64px / bottom-16) so
+          the input stays above the nav regardless of browser-chrome
+          animations. Desktop: static flex-col card with max-height cap. */}
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:h-auto md:max-h-[1485px] z-30 md:z-auto" style={{ width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5" style={{ flexShrink: 0 }}>
           <div className="flex items-center gap-2">
@@ -2028,10 +2028,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           }}
         />
         {/* Messages — content stacks from the top and scrolls naturally
-            as it grows. pb-20 on mobile reserves space for the
-            absolute-positioned input bar below; desktop uses flex so
-            no extra padding is needed. */}
-        <div ref={ccScrollRef} className="flex-1 min-h-0 overflow-y-auto pb-20 md:pb-0" style={{ fontFamily: 'Manrope, sans-serif' }}>
+            as it grows. The CC container is fixed on mobile with a
+            static input bar below, so no bottom padding is needed. */}
+        <div ref={ccScrollRef} className="flex-1 min-h-0 overflow-y-auto" style={{ fontFamily: 'Manrope, sans-serif' }}>
          <div className="px-5 py-3 space-y-3">
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
@@ -2309,10 +2308,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           )}
          </div>
         </div>
-        {/* Input — pinned absolutely on mobile so it's always visible
-            regardless of message count; flex-shrink-0 on desktop keeps
-            its place in the flex-col flow. Hidden until brief is loaded. */}
-        {!ccLoading && <div className="absolute bottom-0 left-0 right-0 bg-white md:static md:bg-transparent flex-shrink-0 px-4 py-3 border-t border-primary/5 flex items-center gap-2">
+        {/* Input — static in the flex-col flow. CC container is
+            fixed-sized on mobile (top-14 to bottom-16), so the input
+            naturally sits above the bottom nav. Hidden until brief loads. */}
+        {!ccLoading && <div className="flex-shrink-0 px-4 py-3 border-t border-primary/5 flex items-center gap-2 bg-white">
           <input
             type="text"
             value={ccInput}
