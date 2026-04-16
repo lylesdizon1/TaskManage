@@ -19,7 +19,11 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../guardrails/logger.cjs');
 
-const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'checklist', 'clarify', 'default_chat']);
+const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'checklist', 'clarify', 'daily_wrap_chat', 'default_chat']);
+
+// Pre-LLM fast-path: obvious wrap-intent phrases → daily_wrap_chat without
+// spending a Haiku call. The DashboardPanel intercept handles the rest.
+const WRAP_INTENT_RE = /^(?:let'?s\s+)?(?:ready\s+to\s+)?(?:wrap|close\s*out)(?:\s+(?:my|the))?\s*(?:day|today)?[.!?\s]*$|daily\s+wrap/i;
 const VALID_PRIORITY = new Set(['low', 'medium', 'high']);
 const VALID_CONFIDENCE = new Set(['high', 'medium', 'low']);
 
@@ -44,6 +48,12 @@ module.exports = function createAriaDraftRouter({ authenticateToken }) {
   router.post('/api/aria/parse-draft', authenticateToken, async (req, res) => {
     const message = String(req.body?.message || '').trim();
     if (!message) return res.json({ type: 'default_chat' });
+
+    // Fast-path: explicit wrap phrases bypass the classifier so we don't
+    // burn a Haiku call on a deterministic intent.
+    if (WRAP_INTENT_RE.test(message)) {
+      return res.json({ type: 'daily_wrap_chat' });
+    }
 
     const client = _client();
     if (!client?.messages?.create) return res.json({ type: 'default_chat' });

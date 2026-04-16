@@ -949,7 +949,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // If the message is a task/event ask, render an inline editable
     // draft tile instead of running the agentic loop. default_chat
     // falls through to the normal flow below.
-    try {
+    // Skip the intercept entirely when the user is mid-wrap — Aria
+    // is conversing about reflection and short replies like "good
+    // day" shouldn't get re-classified as a task.
+    if (activeZoneStateRef.current === 'daily_wrap') {
+      // fall through to normal chat streaming below
+    } else try {
       const today = new Intl.DateTimeFormat('en-CA', {
         timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(new Date());
@@ -961,6 +966,22 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         entities, projects: briefContext?.projects,
         lastProjectTask: freshLastTask,
       });
+      // Daily Wrap: open the conversational flow. No tile, no tool call —
+      // Aria continues in chat using the DAILY WRAP context block + the
+      // journal/close-loop tools. Zone flips to 'daily_wrap' so the
+      // user's next "what went well" reply stays in-context and doesn't
+      // get caught by the tile intercept again.
+      if (draft && draft.type === 'daily_wrap_chat') {
+        const now = new Date().toISOString();
+        setCcMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: "Ready to wrap your day? Let's start — what went well today?", createdAt: now, ts: Date.now() },
+        ]);
+        setActiveZoneState('daily_wrap');
+        ccAbortRef.current = null;
+        setCcSending(false);
+        return;
+      }
       // Clarify: ambiguous task/project — ask and bail, no tile.
       if (draft && draft.type === 'clarify') {
         const now = new Date().toISOString();
