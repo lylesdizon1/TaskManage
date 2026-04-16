@@ -899,11 +899,11 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         ) : (
           <>
             <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-3 border-b border-gray-100">
-              <div className="flex items-center gap-2 min-w-0 flex-1">
-                <button onClick={() => setMobileShowThread(false)} className="md:hidden text-gray-400 flex-shrink-0" title="Back">
+              <div className="flex items-start gap-2 min-w-0 flex-1">
+                <button onClick={() => setMobileShowThread(false)} className="md:hidden text-gray-400 flex-shrink-0 mt-0.5" title="Back">
                   <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>arrow_back</span>
                 </button>
-                <h2 className="text-lg font-bold text-gray-900 truncate min-w-0" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                <h2 className="text-lg font-bold text-gray-900 whitespace-normal break-words min-w-0" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                   {thread?.messages?.[0]?.subject || '(no subject)'}
                 </h2>
               </div>
