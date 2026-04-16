@@ -2346,8 +2346,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>}
       </div>
 
-      {/* ROW 4: Timeline + Tasks + Upcoming */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+      {/* ROW 4: Timeline + Tasks + Upcoming — desktop-only; mobile
+          surfaces these via the dedicated Calendar / Tasks tabs. */}
+      <div className="hidden md:grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         <div className="space-y-4">
           <div className="flex justify-between items-end px-1">
             <h3 className="text-lg font-extrabold font-headline">Today&apos;s Timeline</h3>
@@ -2498,8 +2499,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>
       </div>
 
-      {/* ROW 5: Active Notes */}
-      <div className="space-y-4">
+      {/* ROW 5: Active Notes — desktop-only. */}
+      <div className="hidden md:block space-y-4">
         <div className="flex justify-between items-end px-1">
           <h3 className="text-lg font-extrabold font-headline">Active Notes</h3>
           <button onClick={() => onNavigate('notes')} className="text-primary font-bold text-[10px] hover:underline">See All Notes</button>
@@ -2526,8 +2527,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>
       </div>
 
-      {/* ROW 6: Task Performance */}
-      <div className="space-y-4">
+      {/* ROW 6: Task Performance — desktop-only. */}
+      <div className="hidden md:block space-y-4">
         <div className="flex justify-between items-end px-1">
           <h3 className="text-lg font-extrabold font-headline">Task Performance</h3>
           <span className="text-on-surface-variant text-[10px] font-bold uppercase tracking-wider">Last 30 days</span>
