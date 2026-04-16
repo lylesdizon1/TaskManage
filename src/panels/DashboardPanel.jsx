@@ -2026,11 +2026,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             ccSendRef.current?.(`Remind me to add notes for ${event.title || 'the meeting'} in 30 minutes`);
           }}
         />
-        {/* Messages — flex-col scroll container with inner mt-auto wrapper
-            so short content pins to the bottom (no dead space above the
-            input), and long content scrolls normally. */}
-        <div ref={ccScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col" style={{ fontFamily: 'Manrope, sans-serif' }}>
-         <div className="mt-auto px-5 py-3 space-y-3">
+        {/* Messages — content stacks from the top and scrolls naturally
+            as it grows. Dead space below with few messages is fine. */}
+        <div ref={ccScrollRef} className="flex-1 min-h-0 overflow-y-auto" style={{ fontFamily: 'Manrope, sans-serif' }}>
+         <div className="px-5 py-3 space-y-3">
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
               <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
