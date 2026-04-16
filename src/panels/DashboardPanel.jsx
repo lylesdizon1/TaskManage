@@ -319,6 +319,159 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const ccMessagesRef = useRef([]);    // mirror of ccMessages for stable reads inside callbacks
   const ccSendingRef = useRef(false);  // mirror of ccSending for reads inside fetchBriefContext
   const activeZoneStateRef = useRef('empty'); // mirror of activeZoneState for reads inside fetchBriefContext
+
+  // Inline-note capture: exactly one row's textarea is open at a time.
+  // Key format: `task:<id>` or `event:<id>` so we can share one state across
+  // both task and event rows without clashing ids.
+  const [inlineNoteRowKey, setInlineNoteRowKey] = useState(null);
+  const [inlineNoteDraft, setInlineNoteDraft] = useState('');
+
+  const openInlineNote = useCallback((key, initial = '') => {
+    setInlineNoteRowKey(key);
+    setInlineNoteDraft(initial || '');
+  }, []);
+  const closeInlineNote = useCallback(() => {
+    setInlineNoteRowKey(null);
+    setInlineNoteDraft('');
+  }, []);
+
+  const saveTaskInlineNote = useCallback(async (taskId) => {
+    const note = inlineNoteDraft.trim();
+    if (!note) { closeInlineNote(); return; }
+    closeInlineNote();
+    try {
+      await apiFetch(`/api/tasks/${taskId}/completion-note`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ completion_note: note }),
+      });
+      onReloadTasks?.();
+    } catch (err) {
+      console.error('[inlineNote] task save failed:', err.message);
+    }
+  }, [inlineNoteDraft, apiFetch, authToken, onReloadTasks, closeInlineNote]);
+
+  const saveEventInlineNote = useCallback(async (ev) => {
+    const note = inlineNoteDraft.trim();
+    if (!note) { closeInlineNote(); return; }
+    closeInlineNote();
+    try {
+      await apiFetch('/api/calendar-notes/post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          eventId: ev.id,
+          eventTitle: ev.title || null,
+          eventStart: ev.start || null,
+          eventEnd: ev.end || null,
+          accountEmail: ev.account || null,
+          postNote: note,
+        }),
+      });
+    } catch (err) {
+      console.error('[inlineNote] event save failed:', err.message);
+    }
+  }, [inlineNoteDraft, apiFetch, authToken, closeInlineNote]);
+
+  // Render helper — "Note" hover button for a task row. Keeps the
+  // existing row JSX otherwise untouched so every entrypoint (Today's /
+  // Upcoming / Floating) shares the same action wiring.
+  const renderTaskNoteAction = (t) => (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        const key = `task:${t.id}`;
+        if (inlineNoteRowKey === key) closeInlineNote();
+        else openInlineNote(key, t.completionNote || '');
+      }}
+      className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 text-[10px] font-bold text-primary hover:underline"
+      title="Add note"
+    >
+      Note
+    </button>
+  );
+
+  // Inline textarea row rendered directly under a task when its note is
+  // open. Enter submits, Escape closes. Empty submit silently closes.
+  const renderInlineTaskTextarea = (t) => (
+    inlineNoteRowKey === `task:${t.id}` ? (
+      <div className="px-3 pb-3 pl-10" onClick={(e) => e.stopPropagation()}>
+        <textarea
+          autoFocus
+          value={inlineNoteDraft}
+          onChange={(e) => setInlineNoteDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') { e.preventDefault(); closeInlineNote(); }
+            else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveTaskInlineNote(t.id); }
+          }}
+          placeholder="Quick note — outcome, follow-up, color…"
+          className="w-full text-[12px] p-2 rounded-md border border-surface-container-high bg-surface-container-lowest outline-none focus:border-primary resize-y min-h-[50px]"
+          style={{ fontFamily: 'Manrope, sans-serif' }}
+        />
+        <div className="flex gap-1.5 mt-1.5 justify-end">
+          <button onClick={closeInlineNote} className="text-[10px] font-bold text-on-surface-variant hover:underline">Cancel</button>
+          <button
+            onClick={() => saveTaskInlineNote(t.id)}
+            disabled={!inlineNoteDraft.trim()}
+            className="text-[10px] font-bold text-primary hover:underline disabled:opacity-40"
+          >Save</button>
+        </div>
+      </div>
+    ) : null
+  );
+
+  // Timeline row — same pattern, past-only guard lives at the caller
+  // because "past" depends on the event's start/end vs. now.
+  const renderEventNoteAction = (ev) => (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        const key = `event:${ev.id}`;
+        if (inlineNoteRowKey === key) closeInlineNote();
+        else openInlineNote(key, '');
+      }}
+      className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 text-[10px] font-bold text-primary hover:underline"
+      title="Add meeting notes"
+    >
+      Notes
+    </button>
+  );
+
+  const renderInlineEventTextarea = (ev) => (
+    inlineNoteRowKey === `event:${ev.id}` ? (
+      <div className="mt-2 pl-10" onClick={(e) => e.stopPropagation()}>
+        <textarea
+          autoFocus
+          value={inlineNoteDraft}
+          onChange={(e) => setInlineNoteDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') { e.preventDefault(); closeInlineNote(); }
+            else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEventInlineNote(ev); }
+          }}
+          placeholder="Meeting outcomes, decisions, follow-ups…"
+          className="w-full text-[12px] p-2 rounded-md border border-surface-container-high bg-surface-container-lowest outline-none focus:border-primary resize-y min-h-[50px]"
+          style={{ fontFamily: 'Manrope, sans-serif' }}
+        />
+        <div className="flex gap-1.5 mt-1.5 justify-end">
+          <button onClick={closeInlineNote} className="text-[10px] font-bold text-on-surface-variant hover:underline">Cancel</button>
+          <button
+            onClick={() => saveEventInlineNote(ev)}
+            disabled={!inlineNoteDraft.trim()}
+            className="text-[10px] font-bold text-primary hover:underline disabled:opacity-40"
+          >Save</button>
+        </div>
+      </div>
+    ) : null
+  );
+
+  // Past-event guard for timeline hover action. All-day events show the
+  // hover action only after midnight (their "end" has passed).
+  const isEventPast = (ev) => {
+    try {
+      if (ev.allDay) return ev.end && ev.end <= new Date().toISOString().slice(0, 10);
+      return new Date(ev.start).getTime() < Date.now();
+    } catch { return false; }
+  };
   const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
   const lastCheckedRef = useRef(new Date().toISOString());
@@ -1976,10 +2129,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     <div className={`absolute left-0 top-1 w-7 h-7 rounded-full ${bgMap[i]||'bg-surface-container-high'} flex items-center justify-center z-10 ring-4 ring-background group-hover:scale-110 transition-transform`}>
                       <span className={`material-symbols-outlined ${textMap[i]||'text-on-surface-variant'} text-base`}>{iconMap[i]||'event'}</span>
                     </div>
-                    <div className={`${i===1?'border-l-4 border-primary ':''} ${i===2?'bg-surface-container-low':'bg-surface-container-lowest'} p-3 rounded-xl shadow-sm hover:shadow-md transition-shadow`}>
-                      <span className={`text-[8px] font-bold uppercase tracking-widest ${i===0?'text-primary':'text-slate-400'}`}>{timeStr}</span>
-                      <h4 className="text-sm font-bold mt-1">{ev.title}</h4>
+                    <div className={`${i===1?'border-l-4 border-primary ':''} ${i===2?'bg-surface-container-low':'bg-surface-container-lowest'} p-3 rounded-xl shadow-sm hover:shadow-md transition-shadow flex items-start gap-2`}>
+                      <div className="flex-1 min-w-0">
+                        <span className={`text-[8px] font-bold uppercase tracking-widest ${i===0?'text-primary':'text-slate-400'}`}>{timeStr}</span>
+                        <h4 className="text-sm font-bold mt-1">{ev.title}</h4>
+                      </div>
+                      {isEventPast(ev) && renderEventNoteAction(ev)}
                     </div>
+                    {isEventPast(ev) && renderInlineEventTextarea(ev)}
                   </div>
                 );
               })}
@@ -1998,27 +2155,35 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               ) : (
                 <>
                   {overdueTasks.slice(0,2).map((t) => (
-                    <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
-                      <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-error flex items-center justify-center flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <h5 className="text-xs font-bold leading-tight text-error truncate">{t.title}</h5>
-                        <div className="flex gap-2 mt-1.5">
-                          <span className="flex items-center gap-1 text-[8px] font-bold text-error bg-error/5 px-1.5 py-0.5 rounded-full">
-                            <span className="material-symbols-outlined text-[10px]">timer</span> overdue
-                          </span>
+                    <div key={t.id}>
+                      <div className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
+                        <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-error flex items-center justify-center flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <h5 className="text-xs font-bold leading-tight text-error truncate">{t.title}</h5>
+                          <div className="flex gap-2 mt-1.5">
+                            <span className="flex items-center gap-1 text-[8px] font-bold text-error bg-error/5 px-1.5 py-0.5 rounded-full">
+                              <span className="material-symbols-outlined text-[10px]">timer</span> overdue
+                            </span>
+                          </div>
                         </div>
+                        {renderTaskNoteAction(t)}
                       </div>
+                      {renderInlineTaskTextarea(t)}
                     </div>
                   ))}
                   {todayTasks.slice(0,4).map((t) => (
-                    <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
-                      <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
-                        <div className="flex gap-2 mt-1.5">
-                          <span className="flex items-center gap-1 text-[8px] font-bold text-primary bg-primary/5 px-1.5 py-0.5 rounded-full">Due today</span>
+                    <div key={t.id}>
+                      <div className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
+                        <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
+                          <div className="flex gap-2 mt-1.5">
+                            <span className="flex items-center gap-1 text-[8px] font-bold text-primary bg-primary/5 px-1.5 py-0.5 rounded-full">Due today</span>
+                          </div>
                         </div>
+                        {renderTaskNoteAction(t)}
                       </div>
+                      {renderInlineTaskTextarea(t)}
                     </div>
                   ))}
                 </>
@@ -2038,16 +2203,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               ) : (
                 <>
                   {upcomingTasks.map((t) => (
-                    <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
-                      <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
-                        <div className="flex gap-2 mt-1.5">
-                          <span className="flex items-center gap-1 text-[8px] font-bold text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded-full">
-                            {(() => { const [y, m, d] = t.dueDate.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })()}
-                          </span>
+                    <div key={t.id}>
+                      <div className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
+                        <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
+                          <div className="flex gap-2 mt-1.5">
+                            <span className="flex items-center gap-1 text-[8px] font-bold text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded-full">
+                              {(() => { const [y, m, d] = t.dueDate.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })()}
+                            </span>
+                          </div>
                         </div>
+                        {renderTaskNoteAction(t)}
                       </div>
+                      {renderInlineTaskTextarea(t)}
                     </div>
                   ))}
                   {floatingTasks.length > 0 && (
@@ -2056,11 +2225,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                         <span className="text-[8px] font-bold text-on-surface-variant uppercase tracking-widest">No date</span>
                       </div>
                       {floatingTasks.map((t) => (
-                        <div key={t.id} className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
-                          <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
+                        <div key={t.id}>
+                          <div className="p-3 flex items-start gap-3 hover:bg-surface-container-low transition-colors group">
+                            <button onClick={() => onToggleTask(t.id)} className="mt-0.5 h-4 w-4 rounded-full border-2 border-outline-variant flex items-center justify-center hover:border-primary transition-colors flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
+                            </div>
+                            {renderTaskNoteAction(t)}
                           </div>
+                          {renderInlineTaskTextarea(t)}
                         </div>
                       ))}
                     </>
