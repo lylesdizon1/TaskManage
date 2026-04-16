@@ -725,10 +725,9 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             New Note
           </button>
         </div>
-        {/* Notes list grouped by date. min-h-0 unlocks flex overflow on
-            mobile browsers (Safari in particular); pb-20 clears the
-            bottom nav bar so the last note isn't clipped. */}
-        <div className="flex-1 overflow-y-auto min-h-0 pb-20 md:pb-0" style={{ WebkitOverflowScrolling: 'touch' }}>
+        {/* Notes list grouped by date. min-h-0 unlocks flex overflow;
+            pb-20 clears the bottom nav bar so the last note isn't clipped. */}
+        <div className="flex-1 overflow-y-auto min-h-0 pb-20 md:pb-0">
           {searchResults !== null && displayNotes.length === 0 ? (
             <div className="flex flex-col items-center text-gray-400 py-10 px-3">
               <p className="text-sm text-gray-500 mb-2">No notes found for '{searchQuery}'</p>

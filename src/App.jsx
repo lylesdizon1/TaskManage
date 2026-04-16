@@ -386,20 +386,27 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   }, []);
 
   // Mobile bottom-nav peek-a-boo — hide on scroll down, reveal on scroll
-  // up. Always shown near the top and on desktop. Passive listener; no
-  // scroll math when the viewport hasn't moved more than 4px.
+  // up. The actual scrolling container varies by view (each panel has
+  // its own `overflow-y-auto` div), so `window.scrollY` never changes.
+  // We listen on document in capture phase (scroll events don't bubble)
+  // and read scrollTop from the event target. lastY is tracked per
+  // element so switching views doesn't cause a spurious hide/show.
   useEffect(() => {
-    let lastY = window.scrollY || 0;
-    const onScroll = () => {
-      const y = window.scrollY || 0;
+    let lastY = 0;
+    let lastTarget = null;
+    const onScroll = (e) => {
+      const el = e.target;
+      if (!el || typeof el.scrollTop !== 'number') return;
+      if (el !== lastTarget) { lastTarget = el; lastY = el.scrollTop; return; }
+      const y = el.scrollTop;
       if (Math.abs(y - lastY) < 4) return;
       if (y < 10) setHideBottomNav(false);
       else if (y > lastY) setHideBottomNav(true);
       else setHideBottomNav(false);
       lastY = y;
     };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener('scroll', onScroll, { capture: true });
   }, []);
 
   // Inbox unread badge: fetch once on mount and whenever the user
