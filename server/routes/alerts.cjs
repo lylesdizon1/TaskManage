@@ -88,7 +88,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     lines.push('');
     lines.push(`📅 *TODAY (${todayTasks.length + calendarEvents.length})*`);
     calendarEvents.forEach((ev) => {
-      const time = ev.start.includes('T') ? new Date(ev.start).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : 'All day';
+      const time = ev.start.includes('T') ? new Date(ev.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz }) : 'All day';
       lines.push(`- ${time} — ${ev.title}`);
     });
     todayTasks.forEach((t) => lines.push(`- Task: ${t.title}`));
