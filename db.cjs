@@ -5384,16 +5384,26 @@ async function getCalendarNotesHistory(userId, { search, dateRange, limit } = {}
 }
 
 async function getCalendarNotesForAI(userId) {
+  // JOIN calendar_events so notes created via the Aria tool (which
+  // passes null for event_start/title/end) still surface by falling back
+  // to canonical event metadata. COALESCE picks note-side values first
+  // so legacy rows with their own denormalized copy still work.
   const { rows } = await pool.query(
-    `SELECT event_id AS "eventId", event_title AS "eventTitle",
-            event_start AS "eventStart", event_end AS "eventEnd", source_account AS "sourceAccount",
-            pre_note AS "preNote", post_note AS "postNote"
-     FROM calendar_notes
-     WHERE user_id = $1
-       AND event_start >= NOW() - INTERVAL '7 days'
-       AND event_start <= NOW() + INTERVAL '7 days'
-       AND (pre_note IS NOT NULL OR post_note IS NOT NULL)
-     ORDER BY event_start ASC
+    `SELECT cn.event_id AS "eventId",
+            COALESCE(NULLIF(cn.event_title, ''), ce.title) AS "eventTitle",
+            COALESCE(cn.event_start, ce.start_time)        AS "eventStart",
+            COALESCE(cn.event_end,   ce.end_time)          AS "eventEnd",
+            cn.source_account AS "sourceAccount",
+            cn.pre_note  AS "preNote",
+            cn.post_note AS "postNote"
+     FROM calendar_notes cn
+     LEFT JOIN calendar_events ce
+       ON ce.id = cn.event_id AND ce.user_id = cn.user_id
+     WHERE cn.user_id = $1
+       AND (cn.pre_note IS NOT NULL OR cn.post_note IS NOT NULL)
+       AND COALESCE(cn.event_start, ce.start_time, NOW()) >= NOW() - INTERVAL '7 days'
+       AND COALESCE(cn.event_start, ce.start_time, NOW()) <= NOW() + INTERVAL '7 days'
+     ORDER BY COALESCE(cn.event_start, ce.start_time, NOW()) ASC
      LIMIT 30`,
     [userId],
   );

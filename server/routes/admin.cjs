@@ -214,7 +214,9 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
   router.get('/api/admin/memory', async (req, res) => {
     try {
       const page = parseInt(req.query.page, 10) || 1;
-      const limit = 100;
+      // 20 rows/page to match the frontend's page size and give the
+      // "Prev / Next" controls a true server-paged backend.
+      const limit = 20;
       const offset = (page - 1) * limit;
       const userId = req.query.userId || null;
       const memories = await db.getAllMemories({ limit, offset, userId });

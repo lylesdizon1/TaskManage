@@ -1469,8 +1469,18 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         // Resolve pending_close_loop silently — do not block on failure.
         resolveCloseLoopSilent(sourceType, sourceId);
         if (sourceType === 'task') onReloadTasks?.();
-        setActiveTile(null);
-        setActiveZoneState('empty');
+        // Match daily_wrap UX: confirm with a system message + success flash
+        // then decay. Without this the tile just vanishes and users report
+        // "it didn't dismiss" even though state was cleared.
+        setCcMessages((prev) => [
+          ...prev,
+          { role: 'system', content: 'Note saved.', createdAt: new Date().toISOString(), ts: Date.now() },
+        ]);
+        setActiveZoneState('success');
+        setTimeout(() => {
+          setActiveTile(null);
+          setActiveZoneState('empty');
+        }, 1200);
       } catch (err) {
         setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: err.message || 'Network error' } : prev));
       }

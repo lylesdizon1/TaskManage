@@ -62,7 +62,7 @@ export default function AdminPanel({ authToken }) {
     else if (tab === 'users') { fetchUsers(); fetchOrgs(); }
     else if (tab === 'audit') fetchAuditLog(auditPage);
     else if (tab === 'memory') { fetchUsers(); fetchMemories(memoryPage, memoryUserFilter); }
-  }, [tab, auditPage]);
+  }, [tab, auditPage, memoryPage, memoryUserFilter]);
 
   async function handleCreateOrg(e) {
     e.preventDefault();
@@ -447,13 +447,8 @@ export default function AdminPanel({ authToken }) {
             </div>
           </div>
           {(() => {
-            const perPage = 20;
-            const total = memories.length;
-            const totalPages = Math.max(1, Math.ceil(total / perPage));
-            const safePage = Math.min(memoryPage, totalPages);
-            const startIdx = (safePage - 1) * perPage;
-            const endIdx = Math.min(startIdx + perPage, total);
-            const pageRows = memories.slice(startIdx, endIdx);
+            // Server pages at 20/row now; client just renders what came back.
+            const pageRows = memories;
             return (
               <>
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden" style={{ maxHeight: '600px', overflowY: 'auto' }}>
@@ -499,18 +494,18 @@ export default function AdminPanel({ authToken }) {
                     </tbody>
                   </table>
                 </div>
-                <div className="flex justify-between items-center pt-2">
+                <div className="flex justify-center gap-2 mt-4">
                   <button
-                    onClick={() => setMemoryPage(Math.max(1, safePage - 1))}
-                    disabled={safePage === 1}
-                    className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
-                  >&larr; Prev</button>
-                  <span className="text-xs text-gray-400">Showing {total === 0 ? 0 : startIdx + 1}–{endIdx} of {total} entries</span>
+                    onClick={() => setMemoryPage((p) => Math.max(1, p - 1))}
+                    disabled={memoryPage <= 1}
+                    className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 rounded-lg disabled:opacity-50"
+                  >Prev</button>
+                  <span className="px-3 py-1.5 text-sm text-gray-500">Page {memoryPage}</span>
                   <button
-                    onClick={() => setMemoryPage(Math.min(totalPages, safePage + 1))}
-                    disabled={safePage >= totalPages}
-                    className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-30"
-                  >Next &rarr;</button>
+                    onClick={() => { if (memories.length === 20) setMemoryPage((p) => p + 1); }}
+                    disabled={memories.length < 20}
+                    className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 rounded-lg disabled:opacity-50"
+                  >Next</button>
                 </div>
               </>
             );
