@@ -519,11 +519,26 @@ function getToolByName(name) {
 }
 
 /**
+ * Anthropic's server-hosted web search tool. Server-side tools have a
+ * different shape than function tools — `type` + `name` only, no schema.
+ * The API invokes + resolves these internally and the result blocks
+ * appear in the same response as the model's text, so our agentic loop
+ * doesn't need to dispatch anything for it.
+ */
+const WEB_SEARCH_TOOL = {
+  type: 'web_search_20250305',
+  name: 'web_search',
+  max_uses: 5,
+};
+
+/**
  * Strip metadata fields before sending tools to the Anthropic API. The
- * model should only see { name, description, input_schema }.
+ * model should only see { name, description, input_schema } for custom
+ * function tools. Server-hosted web_search is appended as-is.
  */
 function getToolSchemasForApi() {
-  return ARIA_TOOLS.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
+  const functionTools = ARIA_TOOLS.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
+  return [...functionTools, WEB_SEARCH_TOOL];
 }
 
 /** Resolve whether a tool requires user confirmation (server-authoritative). */
