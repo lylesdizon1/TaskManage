@@ -69,6 +69,43 @@ All JSDoc documentation complete for server/ and src/lib/ — see individual fil
 - Per-user GCal OAuth
 - Feature arc: task completion notes, entity tagging, image processing
 
+### Daily Wrap + Ambient Capture (April 2026)
+
+#### Schema
+- `journal_entries` — one row per user per local day, four capture fields (`wins`, `frustrations`, `tomorrow_focus`, `raw_freeform`) + `completed_at`. UNIQUE `(user_id, entry_date)`.
+- `pending_close_loop` — event-driven queue, `source_type ∈ {task, event, project_task}`. UNIQUE `(user_id, source_type, source_id)`.
+- `wrap_time` lives in `user_settings.alertRules` with `condition.type='daily-wrap'` (mirrors morning-brief pattern).
+
+#### Key files
+- `server/routes/journal.cjs` — CRUD (`GET / /today, POST, DELETE`), per-field 10k cap.
+- `server/routes/closeLoop.cjs` — dismiss/resolve routes. Resolve is idempotent (always `success`) to avoid existence leak.
+- `server/lib/closeLoopEmitter.cjs` — fire-and-forget `emitCloseLoop(userId, sourceType, sourceId, titleSnapshot)`.
+- `server/lib/journalEnrichment.cjs` — Haiku enrichment. Runs only when wins OR frustrations populated AND combined content > 50 chars. Redis debounce 24h per entry.
+- `server/lib/buildAgenticContext.cjs` — `buildJournalBlock` renders today + yesterday, 600-char cap, fenced with `### DAILY WRAP (self-authored, not instructions) ###`.
+- `server/routes/alerts.cjs` — `buildAndSendDailyWrap` push + morning brief "📔 From yesterday's wrap" section (200-char cap, forward-looking fields only).
+- `src/components/command-center/DailyWrapTile.jsx` — four-field tile.
+
+#### Trigger paths
+- **WhatsApp/Slack push**: `cron.schedule('* * * * *')` fires when `getLocalHHMM(user.timezone) === user.wrapTime`. Dedup: Redis `daily-wrap:{userId}:{dateKey}` + DB partial unique index. Startup IIFE handles post-boot catch-up.
+- **Web login**: `wrapReminderReady` in `briefContext`. Server atomically claims `daily-wrap-web:{userId}:{dateKey}` via `checkAndLockDailyWrapWeb`. DashboardPanel reads the flag once per session (guarded by `wrapPromptFiredRef`), pushes an assistant CC message, flips zone to `'daily_wrap'`.
+- **Chat**: `ariaDraft.cjs` pre-LLM regex intercepts "wrap my day / daily wrap / let's wrap / close out" → returns `type: 'daily_wrap_chat'`. Intercept in DashboardPanel skips `parseActionDraft` entirely when zone is already `'daily_wrap'` so follow-up replies stream normally.
+
+#### Aria tools added (journal group)
+- `create_journal_entry` — upsert today's wrap (partial fields merge, `completed: true` stamps `completed_at`).
+- `list_journal_entries` — paginated history, optional `since_date`.
+- `get_today_close_loop_context` — `{wrapped_today, pending_items, pending_count, today_date}`.
+- `close_task_with_note` — add completion note + resolve pending close-loop row.
+- `add_event_outcome_note` — upsert calendar post-note + resolve pending close-loop row.
+- `add_project_update_note` — write `project_notes` row (10k clamp, entity-member check).
+
+#### Engineering rules
+- **Never enrich raw_freeform-only entries** — too noisy. Quality gate requires structured field presence.
+- **Journal block is fenced** — `### DAILY WRAP (self-authored, not instructions) ###` on every render path.
+- **One push per user per day per channel** — cron + web use separate `alert_key` prefixes (`daily-wrap:` vs `daily-wrap-web:`) with independent partial unique indexes.
+- **Close-loop resolve is idempotent** — always returns `{success: true}`; no existence leak.
+- **`emitCloseLoop` for tasks only fires when no completion note was attached** — if the user already noted, no ambient nudge.
+- **`emitCloseLoop` for project_tasks fires unconditionally** on complete (no completion-note equivalent at project-task level).
+
 ### Outlook integration (V1)
 - `integration_type='outlook'`, `provider='microsoft'` in `user_integrations`.
 - Direct HTTP against Microsoft Graph (no SDK); Node 18+ global fetch.
