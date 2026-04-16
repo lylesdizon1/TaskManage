@@ -18,6 +18,8 @@ const NEUTRAL_COLOR = '#94a3b8';
 
 export default function CalendarPanel({ currentUser, authToken, addToast, apiFetch }) {
   const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null, accounts: [] });
+  const [outlookAccounts, setOutlookAccounts] = useState([]); // [{ id, account_email, provider, created_at }]
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [loading, setLoading]       = useState(true);
   const [events, setEvents]         = useState([]);
   const [entities, setEntities]     = useState([]);
@@ -46,13 +48,51 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   // ── Status check ──────────────────────────────────────────────
   useEffect(() => {
     checkStatus();
+    loadOutlookAccounts();
     const params = new URLSearchParams(window.location.search);
     if (params.get('gcal') === 'connected') {
       window.history.replaceState({}, '', window.location.pathname);
       checkStatus();
       addToast({ type: 'success', message: 'Google Calendar connected!' });
     }
+    if (params.get('outlook') === 'connected') {
+      window.history.replaceState({}, '', window.location.pathname);
+      loadOutlookAccounts();
+      addToast({ type: 'success', message: 'Outlook connected!' });
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadOutlookAccounts() {
+    try {
+      const res = await apiFetch(`${API_BASE}/api/outlook/accounts`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) { setOutlookAccounts([]); return; }
+      const data = await res.json();
+      setOutlookAccounts(Array.isArray(data) ? data : []);
+    } catch { setOutlookAccounts([]); }
+  }
+
+  async function handleConnectOutlook() {
+    setAddMenuOpen(false);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/outlook/auth-url`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (data.error || !data.url) { addToast({ type: 'error', message: data.error || 'Outlook OAuth not configured' }); return; }
+      window.location.href = data.url;
+    } catch { addToast({ type: 'error', message: 'Failed to start Outlook sign-in' }); }
+  }
+
+  async function handleDisconnectOutlook(id, email) {
+    try {
+      await apiFetch(`${API_BASE}/api/outlook/accounts/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      addToast({ type: 'success', message: email ? `Disconnected ${email}` : 'Outlook disconnected' });
+      loadOutlookAccounts();
+    } catch { addToast({ type: 'error', message: 'Failed to disconnect' }); }
+  }
 
   async function checkStatus() {
     setLoading(true);
@@ -443,21 +483,40 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: '#fbf8fe' }}>
       {/* Accounts bar */}
       <div className="px-4 py-2 bg-green-50 border-b border-green-100 flex-shrink-0">
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center justify-between mb-1 relative">
           <span className="text-xs font-medium text-green-700">Connected Accounts</span>
-          <button
-            onClick={handleConnect}
-            className="text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
-          >
-            + Add Account
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setAddMenuOpen((v) => !v)}
+              className="text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
+            >
+              + Add Account
+            </button>
+            {addMenuOpen && (
+              <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+                <button
+                  onClick={() => { setAddMenuOpen(false); handleConnect(); }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+                >
+                  Connect Google
+                </button>
+                <button
+                  onClick={handleConnectOutlook}
+                  className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+                >
+                  Connect Outlook
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex flex-col gap-1">
           {accounts.map((acct) => (
-            <div key={acct.email} className="flex items-center justify-between text-xs">
+            <div key={`g:${acct.email}`} className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2 text-green-700">
                 <span className="w-2 h-2 bg-green-500 rounded-full" />
                 <span>{acct.email}</span>
+                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Google</span>
                 {acct.isPrimary && (
                   <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded text-[10px] font-medium">
                     Primary
@@ -475,6 +534,23 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                 )}
                 <button
                   onClick={() => handleDisconnect(acct.email)}
+                  className="text-gray-400 hover:text-red-500 transition-colors font-medium"
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ))}
+          {outlookAccounts.map((acct) => (
+            <div key={`o:${acct.id}`} className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 text-green-700">
+                <span className="w-2 h-2 bg-green-500 rounded-full" />
+                <span>{acct.account_email || '(unknown — reconnect)'}</span>
+                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Outlook</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleDisconnectOutlook(acct.id, acct.account_email)}
                   className="text-gray-400 hover:text-red-500 transition-colors font-medium"
                 >
                   Disconnect
