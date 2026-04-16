@@ -1086,7 +1086,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         {/* ── Content ── */}
         <div className="flex flex-row flex-1 overflow-hidden pb-20 md:pb-0" style={{ minHeight: 0 }}>
         <section
-          className={`flex-col overflow-hidden w-full ${(mobileView === 'tasks' || mobileView === 'daily') ? 'flex' : 'hidden md:flex'}`}
+          className={`flex-col overflow-hidden w-full ${(mobileView === 'tasks' || mobileView === 'daily' || mobileView === 'inbox') ? 'flex' : 'hidden md:flex'}`}
           style={{ flex: chatPanelOpen && activeView !== 'chat' ? '0 0 75%' : '1 1 100%', transition: 'flex 0.2s', minHeight: 0 }}
         >
 
