@@ -14,6 +14,7 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const { emitCloseLoop } = require('../lib/closeLoopEmitter.cjs');
 
 module.exports = function createProjectsRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -170,6 +171,11 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       const task = await db.completeProjectTask(req.params.id);
       const out = { success: true, task };
       if (openCount > 0) out.warning = `${openCount} checklist item${openCount === 1 ? '' : 's'} still incomplete`;
+      // Ambient close-loop: emit unconditionally on project-task close.
+      // Project tasks don't currently carry a completion-note equivalent,
+      // so there's nothing to short-circuit against like tasks.cjs does.
+      emitCloseLoop(req.user.id, 'project_task', task.id, task.title || existing.title)
+        .catch((err) => console.error('[closeLoop] project_task hook failed:', err.message));
       return res.json(out);
     } catch (err) {
       logger.error('projects.tasks.complete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

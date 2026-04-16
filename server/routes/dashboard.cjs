@@ -478,6 +478,64 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       meetingsTotal: completed.length + live.length + upcoming.length,
     };
 
+    // ── Close-loop queue: open pending_close_loop rows for this user ──
+    // Dismissals are scoped to today's local-midnight boundary so a
+    // "not now" press resurfaces the item tomorrow (per Phase 0 decision).
+    let closeLoopQueue = [];
+    try {
+      if (db.getOpenCloseLoopItems) {
+        const localMidnightBoundary = localMidnightUtc(userTz, 0);
+        closeLoopQueue = await db.getOpenCloseLoopItems(userId, localMidnightBoundary, 5);
+      }
+    } catch (e) {
+      logger.error('brief.context.closeLoop.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+
+    // ── Daily Wrap web-trigger: atomic claim so two tabs can't both fire ──
+    // wrapReminderReady is TRUE on exactly the one response that won the
+    // claim insert; subsequent fetches (any tab, same day) see FALSE.
+    // DashboardPanel uses it to push a single assistant CC message.
+    let wrapReminderReady = false;
+    try {
+      // Locate the user's Daily Wrap alertRule (parallel to morning-brief).
+      let wrapTimeHHMM = null;
+      try {
+        const { rows } = await db.pool.query(
+          `SELECT value_json FROM user_settings WHERE user_id = $1 AND setting_key = 'alertRules'`,
+          [userId],
+        );
+        const rules = Array.isArray(rows[0]?.value_json) ? rows[0].value_json : [];
+        const rule = rules.find((r) => r?.condition?.type === 'daily-wrap' && r?.enabled !== false);
+        if (rule) wrapTimeHHMM = rule?.condition?.time || '18:00';
+      } catch { /* no rule → feature off for this user */ }
+
+      if (wrapTimeHHMM) {
+        const nowLocalHHMM = new Intl.DateTimeFormat('en-US', {
+          timeZone: userTz, hour: '2-digit', minute: '2-digit', hour12: false,
+        }).format(new Date()).replace(/\s/g, '');
+        const todayDateKey = new Intl.DateTimeFormat('en-CA', {
+          timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date());
+        const timeDue = nowLocalHHMM >= wrapTimeHHMM;
+        if (timeDue) {
+          const wrapped = db.hasCompletedWrap ? await db.hasCompletedWrap(userId, todayDateKey) : false;
+          if (!wrapped && db.checkAndLockDailyWrapWeb) {
+            const alreadyClaimed = await db.checkAndLockDailyWrapWeb(userId, todayDateKey);
+            wrapReminderReady = !alreadyClaimed;
+          }
+        }
+      }
+    } catch (e) {
+      logger.error('brief.context.wrapReminder.failed', { requestId: req.requestId, userId, error: e.message });
+    }
+
+    // Single-tile priority: daily_wrap > close_loop > null.
+    // DashboardPanel reads this once per fetch and surfaces the winning
+    // tile only when the zone is empty and the user isn't mid-send.
+    let activeZoneSuggestion = null;
+    if (wrapReminderReady) activeZoneSuggestion = 'daily_wrap';
+    else if (closeLoopQueue.length > 0 || meetingsNeedingNotes.length > 0) activeZoneSuggestion = 'close_loop';
+
     return res.json({
       timeState,
       localTime,
@@ -488,6 +546,9 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       projects,
       projectTasks: { open: openProjectTasks },
       stats,
+      closeLoopQueue,
+      wrapReminderReady,
+      activeZoneSuggestion,
     });
   });
 

@@ -99,29 +99,62 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       firstBriefFetchRef.current = false;
       if (data.timeState) lastTimeStateRef.current = data.timeState;
 
-      // Ambient capture: surface a close-loop tile for a meeting that
-      // recently ended without notes. Only when the zone is empty and
-      // the user isn't mid-send. First item only; no stacking.
-      if (
-        !ccSendingRef.current &&
-        activeZoneStateRef.current === 'empty' &&
-        Array.isArray(data.meetingsNeedingNotes) && data.meetingsNeedingNotes.length > 0
-      ) {
-        const ev = data.meetingsNeedingNotes[0];
-        setActiveTile({
-          role: 'close_loop',
-          type: 'event',
-          id: `close-${ev.id || ev.title || Date.now()}`,
-          status: 'draft',
-          payload: {
-            title: `How did "${ev.title || 'your meeting'}" go?`,
-            source_type: 'event',
-            source_id: ev.id || null,
-            event_title: ev.title || '',
-          },
-          ts: Date.now(),
-        });
-        setActiveZoneState('close_loop');
+      // Ambient capture: promote ONE tile at a time when the zone is
+      // empty and the user isn't mid-send. Priority comes from the
+      // server as data.activeZoneSuggestion ('daily_wrap' > 'close_loop'
+      // > null). meetingsNeedingNotes is the V1 close_loop source; the
+      // closeLoopQueue slot covers task/project-task follow-ups.
+      if (!ccSendingRef.current && activeZoneStateRef.current === 'empty') {
+        if (data.activeZoneSuggestion === 'daily_wrap' && data.wrapReminderReady) {
+          setActiveTile({
+            role: 'daily_wrap',
+            type: 'daily_wrap',
+            id: `dw-${Date.now()}`,
+            status: 'draft',
+            payload: { title: 'Ready to wrap your day?' },
+            ts: Date.now(),
+          });
+          setActiveZoneState('daily_wrap');
+        } else if (data.activeZoneSuggestion === 'close_loop') {
+          // Prefer a pending_close_loop row (task/project_task) when present,
+          // else fall back to a meeting-needs-notes event.
+          const queued = Array.isArray(data.closeLoopQueue) ? data.closeLoopQueue : [];
+          if (queued.length > 0) {
+            const it = queued[0];
+            setActiveTile({
+              role: 'close_loop',
+              type: it.sourceType === 'event' ? 'event' : 'task',
+              id: `close-${it.id}`,
+              status: 'draft',
+              payload: {
+                title: it.sourceType === 'event'
+                  ? `How did "${it.titleSnapshot || 'your meeting'}" go?`
+                  : `Any color on "${it.titleSnapshot || 'that task'}"?`,
+                source_type: it.sourceType,
+                source_id: it.sourceId,
+                event_title: it.sourceType === 'event' ? it.titleSnapshot || '' : '',
+              },
+              ts: Date.now(),
+            });
+            setActiveZoneState('close_loop');
+          } else if (Array.isArray(data.meetingsNeedingNotes) && data.meetingsNeedingNotes.length > 0) {
+            const ev = data.meetingsNeedingNotes[0];
+            setActiveTile({
+              role: 'close_loop',
+              type: 'event',
+              id: `close-${ev.id || ev.title || Date.now()}`,
+              status: 'draft',
+              payload: {
+                title: `How did "${ev.title || 'your meeting'}" go?`,
+                source_type: 'event',
+                source_id: ev.id || null,
+                event_title: ev.title || '',
+              },
+              ts: Date.now(),
+            });
+            setActiveZoneState('close_loop');
+          }
+        }
       }
     } catch { /* silent */ }
   }, [apiFetch, authToken]);
@@ -2494,7 +2527,8 @@ function ActiveZone({
 }) {
   const isVisible =
     state === 'tile' || state === 'email' || state === 'notes' ||
-    state === 'outcome' || state === 'success' || state === 'close_loop';
+    state === 'outcome' || state === 'success' || state === 'close_loop' ||
+    state === 'daily_wrap';
 
   if (!isVisible) {
     return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
@@ -2656,6 +2690,40 @@ function ActiveZone({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#059669' }}>
           <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>check_circle</span>
           <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600 }}>Done</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'daily_wrap' && activeTile?.role === 'daily_wrap') {
+    // Placeholder — real multi-field DailyWrapTile ships next phase.
+    // Same cancel/confirm plumbing as close_loop so dismiss is non-destructive.
+    return (
+      <div style={wrapperStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Daily wrap
+          </span>
+        </div>
+        <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 14, color: '#1f2937', marginBottom: 8 }}>
+          {activeTile.payload?.title || 'Ready to wrap your day?'}
+        </div>
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => onTileCancel?.()}
+            style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: 'pointer' }}
+          >
+            Not now
+          </button>
+          <button
+            onClick={() => onTileCancel?.()}
+            style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: 0.6 }}
+            title="Daily wrap capture ships next phase"
+            disabled
+          >
+            Coming soon
+          </button>
         </div>
       </div>
     );

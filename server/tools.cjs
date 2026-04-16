@@ -613,6 +613,15 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             metadata: { task_id: task.id, completion_note: !!toolInput.completion_note },
           });
         } catch (e) { console.error('[memory] log failed:', e.message); }
+        // Ambient close-loop: emit only when no note was supplied. Dup
+        // emit on a re-complete is idempotent per the unique index.
+        if (!toolInput.completion_note) {
+          try {
+            const { emitCloseLoop } = require('./lib/closeLoopEmitter.cjs');
+            emitCloseLoop(userId, 'task', task.id, task.title)
+              .catch((err) => console.error('[closeLoop] complete_task hook failed:', err.message));
+          } catch (e) { console.error('[closeLoop] require failed:', e.message); }
+        }
         return { success: true, task_id: task.id, title: task.title };
       }
 

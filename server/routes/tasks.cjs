@@ -3,6 +3,7 @@
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const { writeAudit } = require('../../guardrails/audit.cjs');
+const { emitCloseLoop } = require('../lib/closeLoopEmitter.cjs');
 
 module.exports = function createTasksRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -109,6 +110,15 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
             metadata: { task_id: req.params.id, completion_note: true },
           });
         } catch (e) { logger.error('memory.log.failed', { requestId: req.requestId, userId: req.user?.id, error: e.message }); }
+      }
+      // Ambient close-loop: when a task flips completed=true AND no note
+      // was attached, surface a "any color on <task>?" tile on next
+      // fetchBriefContext. Skip if the user already included a note.
+      const justCompleted = req.body.completed === true && !task.completed;
+      const hasNote = !!(req.body.completionNote && String(req.body.completionNote).trim());
+      if (justCompleted && !hasNote) {
+        emitCloseLoop(req.user.id, 'task', req.params.id, updated.title || task.title)
+          .catch((err) => console.error('[closeLoop] task hook failed:', err.message));
       }
       return res.json(updated);
     } catch (err) {

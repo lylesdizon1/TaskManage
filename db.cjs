@@ -3630,6 +3630,20 @@ async function runMigrations() {
       WHERE alert_key LIKE 'morning-brief:%'
   `).catch((err) => console.warn('[migration] scheduled_alerts morning-brief unique index:', err.message));
 
+  // Daily Wrap: two idempotency axes — push channel cron + web-login nudge.
+  // Both reuse the scheduled_alerts idempotency pattern via partial unique
+  // indexes so we never fire twice for the same (user, local date).
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS scheduled_alerts_daily_wrap_unique
+      ON scheduled_alerts(user_id, alert_key)
+      WHERE alert_key LIKE 'daily-wrap:%'
+  `).catch((err) => console.warn('[migration] scheduled_alerts daily-wrap unique index:', err.message));
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS scheduled_alerts_daily_wrap_web_unique
+      ON scheduled_alerts(user_id, alert_key)
+      WHERE alert_key LIKE 'daily-wrap-web:%'
+  `).catch((err) => console.warn('[migration] scheduled_alerts daily-wrap-web unique index:', err.message));
+
   // 11. Entity dedup: "Buyflip" → "BuyFlip" (canonical brand casing)
   await pool.query(`
     UPDATE tasks
@@ -5120,6 +5134,29 @@ async function checkAndLockMorningBriefSent(userId, dateKey) {
   );
   // rows.length === 1 → we just locked it, caller should send.
   // rows.length === 0 → another run already locked it, caller should skip.
+  return rows.length === 0;
+}
+
+/**
+ * Atomically claim the web-side Daily Wrap nudge for a (user, local day).
+ * Returns TRUE when a prior claim already exists (caller should suppress
+ * the UI prompt), FALSE when we just acquired the claim (caller should
+ * fire the nudge — typically by pushing an assistant CC message).
+ *
+ * Mirrors checkAndLockMorningBriefSent exactly — two-tab safety comes
+ * from the partial unique index on `alert_key LIKE 'daily-wrap-web:%'`.
+ */
+async function checkAndLockDailyWrapWeb(userId, dateKey) {
+  const alertKey = `daily-wrap-web:${userId}:${dateKey}`;
+  const { rows } = await pool.query(
+    `INSERT INTO scheduled_alerts (user_id, alert_key, message, channels, fire_at, fired, fired_at)
+     VALUES ($1, $2, 'daily-wrap-web', '[]'::jsonb, NOW(), TRUE, NOW())
+     ON CONFLICT (user_id, alert_key)
+     WHERE alert_key LIKE 'daily-wrap-web:%'
+     DO NOTHING
+     RETURNING id`,
+    [userId, alertKey]
+  );
   return rows.length === 0;
 }
 
@@ -6615,6 +6652,7 @@ module.exports = {
   getUnfiredAlerts,
   getUsersWithMorningBriefEnabled,
   checkAndLockMorningBriefSent,
+  checkAndLockDailyWrapWeb,
   markScheduledAlertFired,
   DEFAULT_CADENCE_CONFIGS,
   getCalendarNote,
