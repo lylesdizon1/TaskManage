@@ -2026,8 +2026,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             ccSendRef.current?.(`Remind me to add notes for ${event.title || 'the meeting'} in 30 minutes`);
           }}
         />
-        {/* Messages */}
-        <div ref={ccScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3" style={{ minHeight: '405px', fontFamily: 'Manrope, sans-serif' }}>
+        {/* Messages — flex-col scroll container with inner mt-auto wrapper
+            so short content pins to the bottom (no dead space above the
+            input), and long content scrolls normally. */}
+        <div ref={ccScrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col" style={{ fontFamily: 'Manrope, sans-serif' }}>
+         <div className="mt-auto px-5 py-3 space-y-3">
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
               <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
@@ -2302,9 +2305,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               )}
             </>
           )}
+         </div>
         </div>
         {/* Input — hidden until brief is loaded */}
-        {!ccLoading && <div className="px-4 py-3 border-t border-primary/5 flex items-center gap-2">
+        {!ccLoading && <div className="flex-shrink-0 px-4 py-3 border-t border-primary/5 flex items-center gap-2">
           <input
             type="text"
             value={ccInput}
