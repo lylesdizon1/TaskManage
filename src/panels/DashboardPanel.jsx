@@ -96,17 +96,33 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const data = await r.json();
       setBriefContext(data);
 
-      const noUserMessages = !ccMessagesRef.current.some((m) => m.role === 'user');
-      const prevTimeState = lastTimeStateRef.current;
-      const transitioned = prevTimeState && data.timeState && data.timeState !== prevTimeState;
-
-      if ((firstBriefFetchRef.current && noUserMessages) || transitioned) {
-        setActiveZoneState((s) =>
-          (s === 'tile' || s === 'email' || s === 'notes' || s === 'success') ? s : 'context'
-        );
-      }
       firstBriefFetchRef.current = false;
       if (data.timeState) lastTimeStateRef.current = data.timeState;
+
+      // Ambient capture: surface a close-loop tile for a meeting that
+      // recently ended without notes. Only when the zone is empty and
+      // the user isn't mid-send. First item only; no stacking.
+      if (
+        !ccSendingRef.current &&
+        activeZoneStateRef.current === 'empty' &&
+        Array.isArray(data.meetingsNeedingNotes) && data.meetingsNeedingNotes.length > 0
+      ) {
+        const ev = data.meetingsNeedingNotes[0];
+        setActiveTile({
+          role: 'close_loop',
+          type: 'event',
+          id: `close-${ev.id || ev.title || Date.now()}`,
+          status: 'draft',
+          payload: {
+            title: `How did "${ev.title || 'your meeting'}" go?`,
+            source_type: 'event',
+            source_id: ev.id || null,
+            event_title: ev.title || '',
+          },
+          ts: Date.now(),
+        });
+        setActiveZoneState('close_loop');
+      }
     } catch { /* silent */ }
   }, [apiFetch, authToken]);
 
@@ -118,13 +134,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       if (document.visibilityState !== 'visible') return;
       const idleMs = Date.now() - lastActivityRef.current;
       fetchBriefContext();
-      // 30+ min idle: summon cards + ask Aria for a fresh catch-up.
+      // 30+ min idle: ask Aria for a fresh catch-up. The active zone
+      // stays action-only now — context surfaces in Aria's chat reply,
+      // not a static card block.
       if (idleMs > 30 * 60 * 1000) {
         lastActivityRef.current = Date.now();
-        setActiveZoneState((s) =>
-          (s === 'tile' || s === 'email' || s === 'notes' || s === 'success') ? s : 'context'
-        );
-        // Small delay so fetch result lands before Aria's response streams in.
         setTimeout(() => ccSendRef.current?.('Catch me up on my day'), 400);
       }
     };
@@ -303,6 +317,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const ccStoppedRef = useRef(false);  // set true on user Stop so late events are ignored
   const ccSendRef    = useRef(null);   // holds latest handleCcSend for cross-surface triggers
   const ccMessagesRef = useRef([]);    // mirror of ccMessages for stable reads inside callbacks
+  const ccSendingRef = useRef(false);  // mirror of ccSending for reads inside fetchBriefContext
+  const activeZoneStateRef = useRef('empty'); // mirror of activeZoneState for reads inside fetchBriefContext
   const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
   const lastCheckedRef = useRef(new Date().toISOString());
@@ -344,6 +360,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // Mirror ccMessages into a ref so callbacks (handleCcSend) can read the
   // latest committed state without depending on ccMessages in their deps.
   useEffect(() => { ccMessagesRef.current = ccMessages; }, [ccMessages]);
+  useEffect(() => { ccSendingRef.current = ccSending; }, [ccSending]);
+  useEffect(() => { activeZoneStateRef.current = activeZoneState; }, [activeZoneState]);
 
   // Persist CC messages to localStorage on every change
   useEffect(() => {
@@ -634,14 +652,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     else if (eventIntent) setThinkingIntent('event');
     else                  setThinkingIntent('default');
 
-    // "Summon context" intent — show cards alongside Aria's prose. Every
-    // other message collapses the zone to give the chat full height.
-    // Preserve tile/email/notes/success — those have their own lifecycle.
+    // Active zone is action-only. Context/summary intents now flow through
+    // Aria's chat reply — we no longer render the static card block here.
+    // Tile/email/notes/outcome/close_loop/success have their own lifecycles
+    // and are preserved by not clearing the zone when one is active.
     const contextIntent = /what('s| is) (going on|happening|on my|my day)|catch me up|what do i have|good morning/i;
     const wantsContext = contextIntent.test(text);
     setActiveZoneState((s) => {
-      if (s === 'tile' || s === 'email' || s === 'notes' || s === 'success') return s;
-      return wantsContext ? 'context' : 'empty';
+      if (s === 'tile' || s === 'email' || s === 'notes' || s === 'outcome' || s === 'close_loop' || s === 'success') return s;
+      return 'empty';
     });
     if (wantsContext) fetchBriefContext();
 
@@ -1067,6 +1086,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const tile = activeTile;
     if (!tile) return;
     const p = tile.payload || {};
+
+    // Close-loop placeholder: persistence wires in with Daily Wrap build.
+    // For V1 we just dismiss the tile so the UI clears cleanly.
+    if (tile.role === 'close_loop') {
+      setActiveTile(null);
+      setActiveZoneState('empty');
+      return;
+    }
 
     // Checklist tiles batch-POST to /api/task-checklist-items.
     if (tile.type === 'checklist') {
@@ -2194,8 +2221,9 @@ function ActiveZone({
   onSaveMeetingNotes, onSkipMeetingNotes,
   onSaveOutcome, onSkipOutcome,
 }) {
-  const isContext = state === 'context' && briefContext;
-  const isVisible = isContext || state === 'tile' || state === 'email' || state === 'notes' || state === 'outcome' || state === 'success';
+  const isVisible =
+    state === 'tile' || state === 'email' || state === 'notes' ||
+    state === 'outcome' || state === 'success' || state === 'close_loop';
 
   if (!isVisible) {
     return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
@@ -2208,192 +2236,6 @@ function ActiveZone({
     background: '#fcfbff',
   };
 
-  if (isContext) {
-    const bc = briefContext;
-    const entityDot = (t) => {
-      const tag = (t.tags && t.tags[0]) || null;
-      return tag ? (entityColorMap[tag.toLowerCase()] || '#9ca3af') : '#9ca3af';
-    };
-    const formatTime = (iso) => {
-      try {
-        if (!iso) return '';
-        const d = new Date(iso);
-        return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
-      } catch { return ''; }
-    };
-
-    const Row = ({ dotColor, label, chip, chipColor, chipBg, onChipClick, actions }) => (
-      <div
-        style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: '#374151' }}
-        className="group"
-      >
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor || '#9ca3af', flexShrink: 0 }} />
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-        {chip && (
-          onChipClick
-            ? (
-              <button
-                onClick={onChipClick}
-                style={{ fontSize: 10, fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 600, color: chipColor || '#6b7280', background: chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, border: 'none', cursor: 'pointer', flexShrink: 0 }}
-              >
-                {chip}
-              </button>
-            )
-            : (
-              <span style={{ fontSize: 10, color: chipColor || '#6b7280', background: chipBg || 'rgba(156,163,175,0.15)', padding: '1px 6px', borderRadius: 8, flexShrink: 0 }}>{chip}</span>
-            )
-        )}
-        {actions && actions.length > 0 && (
-          <span
-            className="opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ display: 'flex', gap: 4, flexShrink: 0 }}
-          >
-            {actions.map((a, i) => (
-              <RowButton key={i} onClick={a.onClick}>{a.label}</RowButton>
-            ))}
-          </span>
-        )}
-      </div>
-    );
-
-    const Card = ({ title, children }) => (
-      <div style={{ flex: 1, minWidth: 140, background: '#f5f2fa', borderRadius: 10, padding: '10px 12px' }}>
-        <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{title}</div>
-        {children}
-      </div>
-    );
-
-    // STILL OPEN — overdue first, then dueToday, then open project tasks (cap 6)
-    const stillOpen = [
-      ...(bc.tasks?.overdue || []).slice(0, 2).map((t) => ({ t, chip: 'overdue', chipColor: '#b91c1c', chipBg: 'rgba(239,68,68,0.15)' })),
-      ...(bc.tasks?.dueToday || []).slice(0, 2).map((t) => ({ t, chip: 'today', chipColor: '#4f4dcf', chipBg: 'rgba(79,77,207,0.12)' })),
-    ].slice(0, 4);
-    const projectTasksOpen = (bc.projectTasks?.open || []).slice(0, 3);
-
-    const stillOpenRows = (stillOpen.length === 0 && projectTasksOpen.length === 0)
-      ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
-      : [
-          ...stillOpen.map(({ t, chip, chipColor, chipBg }, i) => (
-            <Row
-              key={`still-${i}`}
-              dotColor={entityDot(t)}
-              label={t.title}
-              chip={chip} chipColor={chipColor} chipBg={chipBg}
-              actions={[
-                { label: 'Done', onClick: () => onCompleteTask?.(t.id, t.title) },
-                { label: 'Reschedule', onClick: () => sendPrompt?.(`Reschedule ${t.title} to tomorrow`) },
-              ]}
-            />
-          )),
-          ...projectTasksOpen.map((pt, i) => (
-            <Row
-              key={`still-pt-${i}`}
-              dotColor={entityColorMap[(pt.entityName || '').toLowerCase()] || '#4f4dcf'}
-              label={`${pt.projectTitle}: ${pt.title}`}
-              chip={pt.entityName || 'project'} chipColor="#534ab7" chipBg="#eeedfe"
-            />
-          )),
-        ];
-
-    // DONE TODAY — completed tasks + completed events (cap 4)
-    const completedTasks = (bc.tasks?.completedToday || []).slice(0, 2);
-    const completedEvents = (bc.events?.completed || []).slice(0, 2);
-    const needsNotesList = bc.meetingsNeedingNotes || [];
-    const eventNeedsNotes = (event) =>
-      needsNotesList.some((m) => m.id === event.id || m.title === event.title);
-
-    const doneRows = (completedTasks.length + completedEvents.length) === 0
-      ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
-      : [
-          ...completedTasks.map((t, i) => (
-            <Row
-              key={`dt-t-${i}`}
-              dotColor={entityDot(t)}
-              label={t.title}
-              chip="✓" chipColor="#059669" chipBg="rgba(5,150,105,0.12)"
-            />
-          )),
-          ...completedEvents.map((ev, i) => {
-            const needsNotes = eventNeedsNotes(ev);
-            return (
-              <Row
-                key={`dt-e-${i}`}
-                dotColor="#10b981"
-                label={ev.title}
-                chip={needsNotes ? 'Add notes' : formatTime(ev.start)}
-                chipColor={needsNotes ? '#534ab7' : '#065f46'}
-                chipBg={needsNotes ? '#eeedfe' : 'rgba(5,150,105,0.08)'}
-                onChipClick={needsNotes ? () => onOpenMeetingNotes?.(ev) : undefined}
-                actions={[
-                  { label: 'Notes', onClick: () => onOpenMeetingNotes?.(ev) },
-                ]}
-              />
-            );
-          }),
-        ];
-
-    // UP NEXT — upcoming events + first important unread email (cap 3)
-    const upcomingEvents = (bc.events?.upcoming || []).slice(0, 2);
-    const topEmail = (bc.emails?.needsAttention || [])[0];
-    const upNextRows = (upcomingEvents.length === 0 && !topEmail)
-      ? <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>—</div>
-      : [
-          ...upcomingEvents.map((ev, i) => (
-            <Row
-              key={`un-e-${i}`}
-              dotColor="#4f4dcf"
-              label={ev.title}
-              chip={formatTime(ev.start)} chipColor="#4f4dcf" chipBg="rgba(79,77,207,0.1)"
-              actions={[
-                { label: 'Prep me', onClick: () => sendPrompt?.(`Prep me for ${ev.title}`) },
-              ]}
-            />
-          )),
-          ...(topEmail ? [(
-            <Row
-              key="un-m"
-              dotColor="#f59e0b"
-              label={(() => {
-                const raw = topEmail.summary || topEmail.vendor || 'Email';
-                return raw.length > 30 ? raw.slice(0, 30) + '…' : raw;
-              })()}
-              chip="action" chipColor="#92400e" chipBg="rgba(245,158,11,0.12)"
-              actions={[
-                { label: 'Reply', onClick: () => sendPrompt?.(`Help me reply to ${topEmail.summary || 'this email'} from ${topEmail.vendor || 'the sender'}`) },
-              ]}
-            />
-          )] : []),
-        ];
-
-    // ACTIVE PROJECTS — entity / title + X/Y chip; only when projects exist.
-    const activeProjects = (bc.projects || []).slice(0, 3);
-    const projectsRows = activeProjects.length === 0
-      ? null
-      : activeProjects.map((p, i) => {
-          const total = (p.openTasks || 0) + (p.completedTasks || 0);
-          const chip = `${p.completedTasks || 0}/${total} tasks`;
-          return (
-            <Row
-              key={`proj-${i}`}
-              dotColor={entityColorMap[(p.entityName || '').toLowerCase()] || '#4f4dcf'}
-              label={`${p.entityName} / ${p.title}`}
-              chip={chip} chipColor="#534ab7" chipBg="#eeedfe"
-              onChipClick={() => sendPrompt?.(`Summarize ${p.title} in ${p.entityName}`)}
-            />
-          );
-        });
-
-    return (
-      <div style={wrapperStyle}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <Card title="Still open">{stillOpenRows}</Card>
-          <Card title="Done today">{doneRows}</Card>
-          <Card title="Up next">{upNextRows}</Card>
-          {projectsRows && <Card title="Active projects">{projectsRows}</Card>}
-        </div>
-      </div>
-    );
-  }
 
   if (state === 'tile' && activeTile) {
     const Tile = activeTile.role === 'task_draft' ? TaskDraftTile
@@ -2548,7 +2390,68 @@ function ActiveZone({
     );
   }
 
+  if (state === 'close_loop' && activeTile?.role === 'close_loop') {
+    return (
+      <div style={wrapperStyle}>
+        <CloseLoopTile
+          tile={activeTile}
+          onDismiss={onTileCancel}
+          onConfirm={onTileConfirm}
+        />
+      </div>
+    );
+  }
+
   return <div style={{ height: 0, overflow: 'hidden', flexShrink: 0 }} />;
+}
+
+/**
+ * CloseLoopTile — placeholder for ambient capture follow-ups (meeting
+ * ended without notes, task completed without color, etc.). V1 renders
+ * a title + textarea + dismiss/confirm. Full note-persistence wires in
+ * with Daily Wrap build.
+ */
+function CloseLoopTile({ tile, onDismiss, onConfirm }) {
+  const [text, setText] = useState('');
+  const payload = tile?.payload || {};
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', animation: 'pulse 1.5s infinite' }} />
+        <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          Close the loop
+        </span>
+      </div>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 14, color: '#1f2937', fontWeight: 500, marginBottom: 8 }}>
+        {payload.title || 'Anything to capture?'}
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="A quick note — outcomes, decisions, follow-ups…"
+        style={{
+          width: '100%', minHeight: 60, fontSize: 13, padding: '8px 10px',
+          border: '1px solid #e5e7eb', borderRadius: 8, outline: 'none',
+          resize: 'vertical', fontFamily: 'Manrope, sans-serif',
+        }}
+      />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+        <button
+          onClick={() => onDismiss?.()}
+          style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: 'pointer' }}
+        >
+          Not now
+        </button>
+        <button
+          onClick={() => onConfirm?.({ note: text.trim() })}
+          disabled={!text.trim()}
+          style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: text.trim() ? 1 : 0.4 }}
+        >
+          Save note
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ── OutcomePrompt ───────────────────────────────────────────────────────
