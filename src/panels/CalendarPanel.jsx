@@ -45,20 +45,27 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
 
   const userTZ = currentUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+  // Refresh BOTH provider account lists. Used on mount and after either
+  // OAuth redirect so neither provider's display can be stale after the
+  // other reconnects. Individual failures inside each fetch preserve
+  // prior state rather than wiping it (see each fn's catch).
+  async function refreshAllAccounts() {
+    await Promise.all([checkStatus(), loadOutlookAccounts()]);
+  }
+
   // ── Status check ──────────────────────────────────────────────
   useEffect(() => {
-    checkStatus();
-    loadOutlookAccounts();
+    refreshAllAccounts();
     const params = new URLSearchParams(window.location.search);
-    if (params.get('gcal') === 'connected') {
+    const fromGcal = params.get('gcal') === 'connected';
+    const fromOutlook = params.get('outlook') === 'connected';
+    if (fromGcal || fromOutlook) {
       window.history.replaceState({}, '', window.location.pathname);
-      checkStatus();
-      addToast({ type: 'success', message: 'Google Calendar connected!' });
-    }
-    if (params.get('outlook') === 'connected') {
-      window.history.replaceState({}, '', window.location.pathname);
-      loadOutlookAccounts();
-      addToast({ type: 'success', message: 'Outlook connected!' });
+      // Always reload BOTH lists — an OAuth redirect on one provider
+      // shouldn't leave the other provider's UI display out of sync.
+      refreshAllAccounts();
+      if (fromGcal) addToast({ type: 'success', message: 'Google Calendar connected!' });
+      if (fromOutlook) addToast({ type: 'success', message: 'Outlook connected!' });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -67,10 +74,13 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       const res = await apiFetch(`${API_BASE}/api/outlook/accounts`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
-      if (!res.ok) { setOutlookAccounts([]); return; }
+      // Resilience: do NOT wipe prior state on transient fetch failures.
+      // A 5xx blip from the server or a cross-tab redirect-race must not
+      // clear accounts the user already had visible.
+      if (!res.ok) return;
       const data = await res.json();
-      setOutlookAccounts(Array.isArray(data) ? data : []);
-    } catch { setOutlookAccounts([]); }
+      if (Array.isArray(data)) setOutlookAccounts(data);
+    } catch { /* preserve prior state */ }
   }
 
   async function handleConnectOutlook() {
@@ -100,10 +110,14 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       const res = await apiFetch(`${API_BASE}/api/gcal/status`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
+      if (!res.ok) return; // preserve prior state on transient failure
       const data = await res.json();
-      setGcalStatus(data);
+      // Only overwrite state when we actually have an accounts array — a
+      // partial or malformed response must not clobber a good prior one.
+      if (data && Array.isArray(data.accounts)) setGcalStatus(data);
     } catch {
-      setGcalStatus({ connected: false, accounts: [] });
+      // preserve prior state — a transient network blip should not wipe
+      // the user's connected accounts from the UI.
     } finally {
       setLoading(false);
     }
@@ -517,7 +531,9 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                 <span className="w-2 h-2 bg-green-500 rounded-full" />
                 <span>{acct.email}</span>
                 <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Google</span>
-                {acct.isPrimary && (
+                {/* Primary badge is driven by gcal_tokens.is_primary on the
+                    server. Never inferred from array position here. */}
+                {acct.isPrimary === true && (
                   <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded text-[10px] font-medium">
                     Primary
                   </span>
