@@ -335,6 +335,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     setInlineNoteDraft('');
   }, []);
 
+  // Fire-and-forget close-loop resolve — silent on any failure; never
+  // surfaced to the user. The endpoint is idempotent server-side.
+  const resolveCloseLoopSilent = useCallback((sourceType, sourceId) => {
+    if (!sourceType || !sourceId) return;
+    apiFetch('/api/close-loop/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ source_type: sourceType, source_id: String(sourceId) }),
+    }).catch(() => {});
+  }, [apiFetch, authToken]);
+
   const saveTaskInlineNote = useCallback(async (taskId) => {
     const note = inlineNoteDraft.trim();
     if (!note) { closeInlineNote(); return; }
@@ -345,11 +356,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ completion_note: note }),
       });
+      resolveCloseLoopSilent('task', taskId);
       onReloadTasks?.();
     } catch (err) {
       console.error('[inlineNote] task save failed:', err.message);
     }
-  }, [inlineNoteDraft, apiFetch, authToken, onReloadTasks, closeInlineNote]);
+  }, [inlineNoteDraft, apiFetch, authToken, onReloadTasks, closeInlineNote, resolveCloseLoopSilent]);
 
   const saveEventInlineNote = useCallback(async (ev) => {
     const note = inlineNoteDraft.trim();
@@ -368,10 +380,30 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           postNote: note,
         }),
       });
+      resolveCloseLoopSilent('event', ev.id);
     } catch (err) {
       console.error('[inlineNote] event save failed:', err.message);
     }
-  }, [inlineNoteDraft, apiFetch, authToken, closeInlineNote]);
+  }, [inlineNoteDraft, apiFetch, authToken, closeInlineNote, resolveCloseLoopSilent]);
+
+  // Task delete — fires window.confirm, DELETEs, then reloads the task
+  // list. Backend cascades owner check at the route layer; UI does not
+  // assume success on failure.
+  const deleteTaskRow = useCallback(async (t) => {
+    if (!window.confirm(`Delete "${t.title}"?`)) return;
+    try {
+      const r = await apiFetch(`/api/tasks/${t.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (r.ok) {
+        resolveCloseLoopSilent('task', t.id); // vacate any pending close-loop
+        onReloadTasks?.();
+      }
+    } catch (err) {
+      console.error('[deleteTask] failed:', err.message);
+    }
+  }, [apiFetch, authToken, onReloadTasks, resolveCloseLoopSilent]);
 
   // Render helper — "Note" hover button for a task row. Keeps the
   // existing row JSX otherwise untouched so every entrypoint (Today's /
@@ -388,6 +420,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       title="Add note"
     >
       Note
+    </button>
+  );
+
+  const renderTaskDeleteAction = (t) => (
+    <button
+      onClick={(e) => { e.stopPropagation(); deleteTaskRow(t); }}
+      className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 text-on-surface-variant hover:text-error"
+      title="Delete task"
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
     </button>
   );
 
@@ -1230,21 +1272,73 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, []);
 
   const cancelActiveTile = useCallback(() => {
+    // Close-loop tiles: fire a dismiss POST so pending_close_loop stops
+    // resurfacing until tomorrow. Fire-and-forget; UI clears immediately.
+    const tile = activeTile;
+    if (tile?.role === 'close_loop') {
+      const { source_type: sourceType, source_id: sourceId } = tile.payload || {};
+      if (sourceType && sourceId) {
+        apiFetch('/api/close-loop/dismiss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ source_type: sourceType, source_id: String(sourceId) }),
+        }).catch(() => {});
+      }
+    }
     setActiveTile(null);
     setActiveZoneState('empty');
-  }, []);
+  }, [activeTile, apiFetch, authToken]);
 
-  const executeActiveTile = useCallback(async () => {
+  const executeActiveTile = useCallback(async (extra) => {
     setActiveTile((prev) => (prev ? { ...prev, status: 'executing', error: null } : prev));
     const tile = activeTile;
     if (!tile) return;
     const p = tile.payload || {};
 
-    // Close-loop placeholder: persistence wires in with Daily Wrap build.
-    // For V1 we just dismiss the tile so the UI clears cleanly.
+    // Close-loop save: persist the note to the appropriate endpoint,
+    // then resolve the pending_close_loop row (fire-and-forget) and
+    // clear the tile. Note text arrives via the `extra` arg from
+    // CloseLoopTile since payload mutation + re-invoke race on tick.
     if (tile.role === 'close_loop') {
-      setActiveTile(null);
-      setActiveZoneState('empty');
+      const sourceType = p.source_type;
+      const sourceId = p.source_id;
+      const note = typeof extra === 'string' ? extra.trim() : (p.note || '').trim();
+      if (!note) { setActiveTile(null); setActiveZoneState('empty'); return; }
+      if (!sourceType || !sourceId) {
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: 'Missing source for close-loop save' } : prev));
+        return;
+      }
+      try {
+        let r;
+        if (sourceType === 'event') {
+          r = await apiFetch('/api/calendar-notes/post', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ eventId: sourceId, eventTitle: p.event_title || null, postNote: note }),
+          });
+        } else if (sourceType === 'task') {
+          r = await apiFetch(`/api/tasks/${sourceId}/completion-note`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ completion_note: note }),
+          });
+        } else {
+          setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: `Unsupported source_type: ${sourceType}` } : prev));
+          return;
+        }
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${r.status}` } : prev));
+          return;
+        }
+        // Resolve pending_close_loop silently — do not block on failure.
+        resolveCloseLoopSilent(sourceType, sourceId);
+        if (sourceType === 'task') onReloadTasks?.();
+        setActiveTile(null);
+        setActiveZoneState('empty');
+      } catch (err) {
+        setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: err.message || 'Network error' } : prev));
+      }
       return;
     }
 
@@ -2167,6 +2261,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           </div>
                         </div>
                         {renderTaskNoteAction(t)}
+                        {renderTaskDeleteAction(t)}
                       </div>
                       {renderInlineTaskTextarea(t)}
                     </div>
@@ -2182,6 +2277,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           </div>
                         </div>
                         {renderTaskNoteAction(t)}
+                        {renderTaskDeleteAction(t)}
                       </div>
                       {renderInlineTaskTextarea(t)}
                     </div>
@@ -2215,6 +2311,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           </div>
                         </div>
                         {renderTaskNoteAction(t)}
+                        {renderTaskDeleteAction(t)}
                       </div>
                       {renderInlineTaskTextarea(t)}
                     </div>
@@ -2232,6 +2329,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                               <h5 className="text-xs font-bold leading-tight truncate">{t.title}</h5>
                             </div>
                             {renderTaskNoteAction(t)}
+                            {renderTaskDeleteAction(t)}
                           </div>
                           {renderInlineTaskTextarea(t)}
                         </div>
@@ -2568,6 +2666,7 @@ function ActiveZone({
       <div style={wrapperStyle}>
         <CloseLoopTile
           tile={activeTile}
+          onChange={onTileChange}
           onDismiss={onTileCancel}
           onConfirm={onTileConfirm}
         />
@@ -2584,9 +2683,21 @@ function ActiveZone({
  * a title + textarea + dismiss/confirm. Full note-persistence wires in
  * with Daily Wrap build.
  */
-function CloseLoopTile({ tile, onDismiss, onConfirm }) {
-  const [text, setText] = useState('');
+function CloseLoopTile({ tile, onChange, onDismiss, onConfirm }) {
+  const [text, setText] = useState(tile?.payload?.note || '');
   const payload = tile?.payload || {};
+  const status = tile?.status || 'draft';
+  const executing = status === 'executing';
+  const error = tile?.error;
+
+  const handleSave = () => {
+    const note = text.trim();
+    if (!note) return;
+    // Pass note directly — payload setState + confirm in same tick
+    // would race, so the parent's executeActiveTile reads from `extra`.
+    onConfirm?.(note);
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -2601,6 +2712,11 @@ function CloseLoopTile({ tile, onDismiss, onConfirm }) {
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSave(); }
+          else if (e.key === 'Escape') { e.preventDefault(); onDismiss?.(); }
+        }}
+        disabled={executing}
         placeholder="A quick note — outcomes, decisions, follow-ups…"
         style={{
           width: '100%', minHeight: 60, fontSize: 13, padding: '8px 10px',
@@ -2608,19 +2724,23 @@ function CloseLoopTile({ tile, onDismiss, onConfirm }) {
           resize: 'vertical', fontFamily: 'Manrope, sans-serif',
         }}
       />
+      {error && (
+        <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
         <button
           onClick={() => onDismiss?.()}
-          style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: 'pointer' }}
+          disabled={executing}
+          style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: executing ? 'default' : 'pointer' }}
         >
           Not now
         </button>
         <button
-          onClick={() => onConfirm?.({ note: text.trim() })}
-          disabled={!text.trim()}
-          style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: text.trim() ? 1 : 0.4 }}
+          onClick={handleSave}
+          disabled={!text.trim() || executing}
+          style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: (!text.trim() || executing) ? 0.4 : 1 }}
         >
-          Save note
+          {executing ? 'Saving…' : 'Save note'}
         </button>
       </div>
     </div>

@@ -117,6 +117,22 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
     }
   });
 
+  router.delete('/api/tasks/:id', authenticateToken, logger.tool('deleteTask'), async (req, res) => {
+    try {
+      const task = await db.getTaskById(req.params.id, req.user.id);
+      if (!task) return res.status(404).json({ error: 'Task not found or access denied' });
+      await db.pool.query(
+        `DELETE FROM tasks WHERE id = $1 AND owner = $2`,
+        [req.params.id, req.user.id],
+      );
+      try { await writeAudit({ userId: req.user.id, entityType: 'task', entityId: req.params.id, action: 'deleted', before: task, requestId: req.requestId }); } catch {}
+      return res.json({ success: true });
+    } catch (err) {
+      logger.error('tasks.delete.failed', { requestId: req.requestId, userId: req.user?.id, taskId: req.params.id, error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   router.patch('/api/tasks/:id/completion-note', authenticateToken, logger.tool('updateCompletionNote'), async (req, res) => {
     try {
       const task = await db.getTaskById(req.params.id, req.user.id);
