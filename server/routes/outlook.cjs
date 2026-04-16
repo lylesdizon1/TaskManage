@@ -111,13 +111,24 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
     }
   });
 
-  // Manual scan trigger — mirrors /api/gmail/scan. Returns same shape.
+  // Manual trigger — runs BOTH calendar sync and mail scan since one
+  // Outlook integration bundles both feeds. Useful for forcing a refresh
+  // after first connect without waiting for the next 15-min cron tick.
   router.post('/api/outlook/scan', authenticateToken, async (req, res) => {
     try {
       const { scanOutlookMailForUser } = require('../lib/outlookMailScan.cjs');
-      const result = await scanOutlookMailForUser({ userId: req.user.id, db, requestId: req.requestId });
-      if (result.error === 'not_connected') return res.status(401).json({ error: 'Outlook not connected' });
-      res.json(result);
+      const { syncOutlookForUser } = require('../lib/outlookCalSync.cjs');
+      const tz = req.user.timezone || 'America/Los_Angeles';
+
+      // Calendar sync runs first — never throws (internal try/catch).
+      await syncOutlookForUser(req.user.id, tz, db);
+
+      // Then mail scan.
+      const mailResult = await scanOutlookMailForUser({ userId: req.user.id, db, requestId: req.requestId });
+      if (mailResult.error === 'not_connected') {
+        return res.status(401).json({ error: 'Outlook not connected' });
+      }
+      return res.json({ calendar: 'synced', mail: mailResult });
     } catch (err) {
       logger.error('outlook.scan.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: err.message });
