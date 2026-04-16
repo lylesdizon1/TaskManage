@@ -26,6 +26,7 @@ const { GRAPH_BASE, listOutlookAccounts, withFreshAccessToken } = require('../ut
 const NOREPLY_PATTERN = /noreply|no-reply|donotreply|do-not-reply|notifications@|mailer@/i;
 
 async function scanOneOutlookAccount({ userId, account, config, db, requestId }) {
+  console.log('[outlookMailScan] starting for userId:', userId, 'accountEmail:', account.accountEmail);
   const { vipSenders = [], triggerKeywords = [], excludedSenders = [], autoExcludeNoreply = true, scanWindow = '24h' } = config;
   const hours = scanWindow === '6h' ? 6 : scanWindow === '48h' ? 48 : 24;
   const sinceIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
@@ -55,7 +56,9 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
     }
     const json = await res.json();
     messages = Array.isArray(json.value) ? json.value : [];
+    console.log('[outlookMailScan] messages fetched:', messages.length, 'since', sinceIso);
   } catch (err) {
+    console.error('[outlookMailScan] fetch threw', { userId, accountEmail: account.accountEmail, error: err.message });
     logger.error('outlookScan.fetch.threw', { requestId, userId, accountEmail: account.accountEmail, error: err.message });
     return { newItems: 0, error: err.message };
   }
@@ -82,6 +85,7 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
     const exists = await db.inboxItemExistsBySourceId(userId, f.msg.id);
     if (!exists) newFlagged.push(f);
   }
+  console.log('[outlookMailScan] flagged:', flagged.length, 'new:', newFlagged.length);
   if (!newFlagged.length) return { newItems: 0 };
 
   const apiKey = process.env.CLAUDE_API_KEY;
@@ -138,6 +142,7 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
 
 async function scanOutlookMailForUser({ userId, db, requestId }) {
   const accounts = await listOutlookAccounts(userId, db);
+  console.log('[outlookMailScan] scanOutlookMailForUser userId:', userId, 'accounts:', accounts.length);
   if (!accounts.length) return { error: 'not_connected', newItems: 0 };
 
   const config = (await db.getGmailConfigForUser(userId)) || {

@@ -15,8 +15,10 @@ const { resolveOrCreateContact } = require('./contactIngestion.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 async function syncOutlookForUser(userId, tz, db) {
+  console.log('[outlookCalSync] starting for userId:', userId, 'tz:', tz);
   try {
     const accounts = await listOutlookAccounts(userId, db);
+    console.log('[outlookCalSync] accounts:', accounts.length, accounts.map((a) => a.accountEmail));
     for (const account of accounts) {
       try {
         const tokens = await withFreshAccessToken(account, db, userId);
@@ -30,6 +32,7 @@ async function syncOutlookForUser(userId, tz, db) {
           $orderby: 'start/dateTime',
         });
         const url = `${GRAPH_BASE}/me/calendarView?${qs.toString()}`;
+        console.log('[outlookCalSync] fetching window', { userId, accountEmail: account.accountEmail, timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString() });
         const res = await fetch(url, {
           headers: {
             Authorization: `Bearer ${tokens.access_token}`,
@@ -38,11 +41,13 @@ async function syncOutlookForUser(userId, tz, db) {
         });
         if (!res.ok) {
           const body = await res.text().catch(() => '');
+          console.error('[outlookCalSync] fetch failed', { userId, accountEmail: account.accountEmail, status: res.status, body: body.slice(0, 500) });
           logger.error('outlook-sync.fetch.failed', { userId, accountEmail: account.accountEmail, status: res.status, body: body.slice(0, 500) });
           continue;
         }
         const json = await res.json();
         const items = Array.isArray(json.value) ? json.value : [];
+        console.log('[outlookCalSync] events fetched:', items.length, 'for', account.accountEmail);
         const events = items.map((ev) => {
           // Graph returns start/end as { dateTime: '2026-04-14T17:00:00.0000000', timeZone: 'UTC' }
           // With Prefer=UTC, dateTime is UTC; append Z so Postgres interprets it correctly.
@@ -68,6 +73,7 @@ async function syncOutlookForUser(userId, tz, db) {
         const taggedEmail = account.accountEmail?.startsWith('outlook:')
           ? account.accountEmail
           : `outlook:${account.accountEmail || 'unknown'}`;
+        console.log('[outlookCalSync] upserting', events.length, 'events under', taggedEmail);
         await db.upsertCalendarEvents(userId, taggedEmail, events);
 
         // Fire-and-forget contact ingestion for organizers. V1: organizer
@@ -89,6 +95,7 @@ async function syncOutlookForUser(userId, tz, db) {
           await Promise.all([1, 7, 14].map((d) => rediDel(`gcal:${userId}:${tz}:${d}`)));
         } catch { /* best-effort */ }
       } catch (e) {
+        console.error('[outlookCalSync] account failed', { userId, accountEmail: account.accountEmail, error: e.message, stack: e.stack?.split('\n').slice(0, 3).join(' | ') });
         logger.error('outlook-sync.account-failed', { userId, accountEmail: account.accountEmail, error: e.message });
       }
     }
