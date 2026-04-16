@@ -14,6 +14,7 @@
 
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
+const { enrichJournalEntry } = require('../lib/journalEnrichment.cjs');
 
 const FIELD_MAX = 10_000;
 
@@ -75,6 +76,13 @@ module.exports = function createJournalRouter({ authenticateToken, db }) {
       if (body.completed === true) patch.completed = true;
 
       const entry = await db.upsertJournalEntry(req.user.id, entryDate, patch);
+      // Fire-and-forget enrichment on wrap finalization. Gated inside
+      // enrichJournalEntry by content length + structured-field presence,
+      // so noisy partial saves never burn Haiku cost.
+      if (patch.completed === true && entry?.id) {
+        enrichJournalEntry(req.user.id, entry)
+          .catch((err) => console.error('[journal] enrich failed:', err.message));
+      }
       res.json({ entry });
     } catch (err) {
       logger.error('journal.upsert.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
