@@ -1394,7 +1394,10 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (!toolInput.project_id || !toolInput.note) {
           return { success: false, error: 'project_id and note are required' };
         }
-        const note = String(toolInput.note).trim();
+        // Clamp at 10k to match journal field hygiene and bound storage
+        // in case Aria hallucinates a wall of text (M-2 hardening).
+        const raw = String(toolInput.note).trim();
+        const note = raw.length > 10000 ? raw.slice(0, 10000) : raw;
         if (!note) return { success: false, error: 'note is empty' };
         const project = await db.getProjectById(toolInput.project_id);
         if (!project) return { success: false, error: 'Project not found' };
