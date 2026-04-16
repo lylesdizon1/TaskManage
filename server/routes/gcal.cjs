@@ -107,11 +107,20 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
           ).catch(() => {});
           acct.googleEmail = realEmail;
         }
-        validAccounts.push({ email: realEmail || acct.googleEmail, isPrimary: acct.isPrimary });
+        validAccounts.push({ email: realEmail || acct.googleEmail, isPrimary: acct.isPrimary, needsReconnect: false });
       } catch (err) {
-        logger.warn('gcal.status.failed', { requestId: req.requestId, userId, googleEmail: acct.googleEmail, error: err.message });
-        // Token revoked — remove this account
-        await db.deleteGcalTokensForUser(userId, acct.googleEmail);
+        // Do NOT hard-delete the token row on a transient Graph API error.
+        // A refresh hiccup, rate limit, or network blip would otherwise
+        // permanently remove a connected account until the user manually
+        // reconnects. Flag it needsReconnect so the UI can prompt, and
+        // only the explicit disconnect routes delete rows.
+        logger.warn('gcal.status.probe.failed', { requestId: req.requestId, userId, googleEmail: acct.googleEmail, error: err.message });
+        validAccounts.push({
+          email: acct.googleEmail,
+          isPrimary: acct.isPrimary,
+          needsReconnect: true,
+          error: err.message,
+        });
       }
     }
 
