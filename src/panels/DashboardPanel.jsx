@@ -2672,7 +2672,7 @@ function ActiveZone({
       : activeTile.role === 'checklist_draft' ? ChecklistDraftTile
       : EventDraftTile;
     return (
-      <div style={wrapperStyle}>
+      <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
           <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -2703,7 +2703,7 @@ function ActiveZone({
     const multiAccount = gmailAccounts.length > 1;
 
     return (
-      <div style={wrapperStyle}>
+      <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
           <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Email draft</span>
@@ -2756,7 +2756,7 @@ function ActiveZone({
   if (state === 'notes' && activeTile?.type === 'meeting_notes') {
     const event = activeTile.event || {};
     return (
-      <div style={wrapperStyle}>
+      <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
           <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: '#1f2937' }}>
@@ -2809,7 +2809,7 @@ function ActiveZone({
 
   if (state === 'success') {
     return (
-      <div style={wrapperStyle}>
+      <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#059669' }}>
           <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>check_circle</span>
           <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600 }}>Done</span>
@@ -2820,7 +2820,7 @@ function ActiveZone({
 
   if (state === 'daily_wrap' && activeTile?.role === 'daily_wrap') {
     return (
-      <div style={wrapperStyle}>
+      <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <DailyWrapTile
           payload={activeTile.payload || {}}
           status={activeTile.status || 'draft'}
@@ -2834,7 +2834,7 @@ function ActiveZone({
 
   if (state === 'close_loop' && activeTile?.role === 'close_loop') {
     return (
-      <div style={wrapperStyle}>
+      <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <CloseLoopTile
           tile={activeTile}
           onChange={onTileChange}
@@ -2971,7 +2971,7 @@ function OutcomePrompt({ tile, onSave, onSkip }) {
   };
 
   return (
-    <div style={wrapperStyle}>
+    <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
       <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: '#1f2937' }}>
         {tile.taskTitle || 'Task completed'}
       </div>

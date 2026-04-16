@@ -20,6 +20,8 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null, accounts: [] });
   const [outlookAccounts, setOutlookAccounts] = useState([]); // [{ id, account_email, provider, created_at }]
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [accountsExpanded, setAccountsExpanded] = useState(false); // Connected Accounts collapse
+  const swipeStartX = useRef(null); // Day-view swipe gesture x0
   const [loading, setLoading]       = useState(true);
   const [events, setEvents]         = useState([]);
   const [entities, setEntities]     = useState([]);
@@ -495,10 +497,20 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: '#fbf8fe' }}>
-      {/* Accounts bar */}
+      {/* Accounts bar. Collapsed by default to reclaim vertical space
+          on mobile; header row shows count + chevron, tap to expand. */}
       <div className="px-4 py-2 bg-green-50 border-b border-green-100 flex-shrink-0">
         <div className="flex items-center justify-between mb-1 relative">
-          <span className="text-xs font-medium text-green-700">Connected Accounts</span>
+          <button
+            onClick={() => setAccountsExpanded((v) => !v)}
+            className="flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-800"
+            aria-expanded={accountsExpanded}
+          >
+            <span>Connected Accounts ({accounts.length + outlookAccounts.length})</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+              {accountsExpanded ? 'expand_more' : 'chevron_right'}
+            </span>
+          </button>
           <div className="relative">
             <button
               onClick={() => setAddMenuOpen((v) => !v)}
@@ -524,7 +536,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             )}
           </div>
         </div>
-        <div className="flex flex-col gap-1">
+        {accountsExpanded && <div className="flex flex-col gap-1">
           {accounts.map((acct) => (
             <div key={`g:${acct.email}`} className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2 text-green-700">
@@ -574,11 +586,13 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
               </div>
             </div>
           ))}
-        </div>
+        </div>}
       </div>
 
-      {/* View toggle + calendar header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 flex-shrink-0">
+      {/* View toggle + calendar header. overflow-x-auto on mobile so
+          the Month/Week/Day/History pills don't get clipped on narrow
+          screens; desktop keeps the usual justify-between row. */}
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-100 flex-shrink-0 overflow-x-auto md:overflow-visible" style={{ scrollbarWidth: 'none' }}>
         <div className="flex items-center gap-2">
           <button
             onClick={() => { setCurrentDate(new Date()); if (view !== 'day') setView('day'); }}
@@ -622,7 +636,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           >
             + New Event
           </button>
-          <div className="flex bg-gray-100 rounded-lg p-0.5">
+          <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
           {['month', 'week', 'day', 'history'].map((v) => (
             <button
               key={v}
@@ -705,7 +719,21 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           )}
         </div>
       ) : (
-        <div className="flex-1 overflow-auto px-2 py-1 dizon-calendar">
+        <div
+          className="flex-1 overflow-auto px-2 py-1 dizon-calendar"
+          onTouchStart={(e) => {
+            if (view !== 'day') return;
+            swipeStartX.current = e.touches[0]?.clientX ?? null;
+          }}
+          onTouchEnd={(e) => {
+            if (view !== 'day' || swipeStartX.current == null) return;
+            const endX = e.changedTouches[0]?.clientX;
+            const delta = (endX ?? 0) - swipeStartX.current;
+            swipeStartX.current = null;
+            if (delta < -50) setCurrentDate((d) => addDays(d, 1));
+            else if (delta > 50) setCurrentDate((d) => subDays(d, 1));
+          }}
+        >
           <Calendar
             localizer={localizer}
             events={events}

@@ -677,13 +677,13 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         className={`border-r border-gray-100 flex-col h-full ${mobileShowThread ? 'hidden md:flex' : 'flex'}`}
         style={{ width: 320, minWidth: 320, flexShrink: 0, backgroundColor: '#fbf8fe', position: 'relative' }}
       >
-        <div className="px-5 pt-5 pb-3">
-          <h1 className="text-xl font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
-          <div className="mt-3">
+        <div className="px-4 md:px-5 pt-3 md:pt-5 pb-2 md:pb-3">
+          <h1 className="text-lg md:text-xl font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
+          <div className="mt-2 md:mt-3">
             <select
               value={accountFilter}
               onChange={(e) => setAccountFilter(e.target.value)}
-              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-2 md:px-3 py-1.5 md:py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-xs md:text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="">All accounts</option>
               {accounts.map(a => <option key={a.id} value={a.account_email}>{a.account_email}</option>)}
@@ -1309,7 +1309,7 @@ function renderThreadRow({ t, activeThreadId, classifications, openThread, archi
     >
       <button
         onClick={() => openThread(t)}
-        className="w-full text-left px-3 py-2.5"
+        className="w-full text-left px-3 py-1.5 md:py-2.5"
       >
         <div className="flex items-start gap-2">
           <span
