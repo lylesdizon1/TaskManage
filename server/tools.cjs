@@ -442,6 +442,51 @@ const ARIA_TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'close_task_with_note',
+    group: 'journal',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Add a completion note to a task. Use after completing a task to capture what happened. Resolves the pending close-loop queue item for that task.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id:         { type: 'string' },
+        completion_note: { type: 'string' },
+      },
+      required: ['task_id', 'completion_note'],
+    },
+  },
+  {
+    name: 'add_event_outcome_note',
+    group: 'journal',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Add an outcome note to a calendar event. Use after a meeting to capture decisions and follow-ups. Resolves the pending close-loop queue item for that event.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string' },
+        note:     { type: 'string' },
+      },
+      required: ['event_id', 'note'],
+    },
+  },
+  {
+    name: 'add_project_update_note',
+    group: 'journal',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Add a progress note to a project. Visible to all members of the project\'s entity.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string' },
+        note:       { type: 'string' },
+      },
+      required: ['project_id', 'note'],
+    },
+  },
+  {
     name: 'bulk_archive_emails',
     group: 'communication',
     risk: 'high',
@@ -1298,6 +1343,79 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             pending_count: pendingItems.length,
             today_date: todayDateKey,
           };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'close_task_with_note': {
+        if (!toolInput.task_id || !toolInput.completion_note) {
+          return { success: false, error: 'task_id and completion_note are required' };
+        }
+        const note = String(toolInput.completion_note).trim();
+        if (!note) return { success: false, error: 'completion_note is empty' };
+        const task = await db.getTaskById(toolInput.task_id, userId);
+        if (!task) return { success: false, error: 'Task not found or access denied' };
+        try {
+          await db.updateTask(task.id, userId, { completionNote: note });
+          // Resolve any pending close-loop row for this task (fire-and-forget
+          // — failure here must not surface as a tool error).
+          if (db.resolveCloseLoopItem) {
+            db.resolveCloseLoopItem(userId, 'task', task.id).catch(() => {});
+          }
+          return { success: true, task_id: task.id, title: task.title };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'add_event_outcome_note': {
+        if (!toolInput.event_id || !toolInput.note) {
+          return { success: false, error: 'event_id and note are required' };
+        }
+        const note = String(toolInput.note).trim();
+        if (!note) return { success: false, error: 'note is empty' };
+        const eventId = String(toolInput.event_id);
+        try {
+          // Helper takes (userId, eventId, title, start, end, accountEmail, postNote).
+          // Title/times/account are optional metadata — null is fine; the row
+          // already exists when the user booked/imported the event.
+          await db.upsertCalendarNotePost(userId, eventId, null, null, null, null, note);
+          if (db.resolveCloseLoopItem) {
+            db.resolveCloseLoopItem(userId, 'event', eventId).catch(() => {});
+          }
+          return { success: true, event_id: eventId };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
+      }
+
+      case 'add_project_update_note': {
+        if (!toolInput.project_id || !toolInput.note) {
+          return { success: false, error: 'project_id and note are required' };
+        }
+        const note = String(toolInput.note).trim();
+        if (!note) return { success: false, error: 'note is empty' };
+        const project = await db.getProjectById(toolInput.project_id);
+        if (!project) return { success: false, error: 'Project not found' };
+        // Canonical entity access check — userId scoped, no role branching.
+        try {
+          const visible = await db.getEntitiesForUserWithMembership(userId, null);
+          if (!visible.some((e) => e.id === project.entityId)) {
+            return { success: false, error: 'Not a member of this entity' };
+          }
+        } catch {
+          return { success: false, error: 'Access check failed' };
+        }
+        try {
+          const created = await db.createProjectNote({
+            projectId: project.id,
+            taskId: null,
+            entityId: project.entityId,
+            body: note,
+            createdBy: userId,
+          });
+          return { success: true, project_id: project.id, note_id: created?.id || null };
         } catch (e) {
           return { success: false, error: e.message };
         }
