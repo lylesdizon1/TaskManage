@@ -124,6 +124,77 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     return { ok: sent.length > 0, sent, failed };
   }
 
+  /**
+   * Build and send the end-of-day Daily Wrap push across the user's
+   * configured channels. Message is short by design — the wrap ritual
+   * itself happens on the web; the push is the nudge.
+   *
+   * Shared between the cron and (future) POST /api/alerts/daily-wrap.
+   */
+  async function buildAndSendDailyWrap(userId, opts = {}) {
+    const requestId = opts.requestId || null;
+    const status = await getIntegrationStatus(db, userId);
+    if (!status.slack && !status.whatsapp) {
+      return { ok: false, reason: 'no_channels', sent: [], failed: [] };
+    }
+
+    const user = await db.getUserById(userId);
+    const userEntities = (user?.entityIds || []);
+    const tasks = await db.getTasksForUser(userId, userEntities);
+
+    const tz = user?.timezone || 'America/Los_Angeles';
+    const todayStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+
+    // Completed today: completed === true AND completed_at falls within today local.
+    const completedToday = (tasks || []).filter((t) => {
+      if (!t.completed || !t.completedAt) return false;
+      try {
+        const d = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
+          .format(new Date(t.completedAt));
+        return d === todayStr;
+      } catch { return false; }
+    });
+    const pendingHighPriority = (tasks || []).filter((t) => !t.completed && t.priority === 'high');
+
+    const greetingName = user?.displayName || user?.username || 'there';
+    const lines = [`🌙 Ready to wrap your day, ${greetingName}?`, ''];
+
+    lines.push(`Here's a quick look at today:`);
+    lines.push('');
+    if (completedToday.length > 0) {
+      lines.push(`✅ *Completed (${completedToday.length})*`);
+      completedToday.slice(0, 3).forEach((t) => lines.push(`- ${t.title}`));
+      if (completedToday.length > 3) lines.push(`  (+${completedToday.length - 3} more)`);
+    } else {
+      lines.push(`✅ Nothing completed yet — tomorrow's a new run.`);
+    }
+
+    if (pendingHighPriority.length > 0) {
+      lines.push('');
+      lines.push(`🔥 *Still open — high priority (${pendingHighPriority.length})*`);
+      pendingHighPriority.slice(0, 2).forEach((t) => lines.push(`- ${t.title}`));
+      if (pendingHighPriority.length > 2) lines.push(`  (+${pendingHighPriority.length - 2} more)`);
+    }
+
+    lines.push('');
+    lines.push('Reply here or open Dizon to close the loop.');
+
+    const text = lines.join('\n');
+
+    const channels = [];
+    if (status.slack) channels.push(sendSlack(db, userId, text).then(r => ({ name: 'Slack', ...r })));
+    if (status.whatsapp) channels.push(sendWhatsApp(db, userId, text).then(r => ({ name: 'WhatsApp', ...r })));
+
+    const settled = await Promise.all(channels);
+    const sent = settled.filter(r => r.ok).map(r => r.name);
+    const failed = settled.filter(r => !r.ok).map(r => `${r.name}:${r.reason}`);
+    failed.forEach((msg) => logger.error('dailyWrap.channelFailed', { requestId, userId, error: msg }));
+
+    return { ok: sent.length > 0, sent, failed };
+  }
+
   router.post('/api/alerts/morning', authenticateToken, async (req, res) => {
     try {
       const userId = req.user.id;
@@ -246,5 +317,5 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     }
   });
 
-  return { router, buildAndSendMorningBrief };
+  return { router, buildAndSendMorningBrief, buildAndSendDailyWrap };
 };

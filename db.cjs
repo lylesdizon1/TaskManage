@@ -5138,6 +5138,56 @@ async function checkAndLockMorningBriefSent(userId, dateKey) {
 }
 
 /**
+ * Users who have an enabled Daily Wrap rule in their alertRules. Mirrors
+ * getUsersWithMorningBriefEnabled exactly — only the rule condition type
+ * differs. Returned shape: {id, timezone, displayName, username, wrapTime}.
+ */
+async function getUsersWithDailyWrapEnabled() {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.timezone, u.display_name AS "displayName", u.username,
+            s.value_json AS "alertRules"
+     FROM users u
+     JOIN user_settings s ON s.user_id = u.id AND s.setting_key = 'alertRules'
+     WHERE s.value_json IS NOT NULL`
+  );
+  return rows
+    .filter((u) => {
+      const rules = Array.isArray(u.alertRules) ? u.alertRules : [];
+      return rules.some((r) => r?.condition?.type === 'daily-wrap' && r?.enabled !== false);
+    })
+    .map((u) => {
+      const rules = u.alertRules;
+      const rule = rules.find((r) => r?.condition?.type === 'daily-wrap');
+      return {
+        id: u.id,
+        timezone: u.timezone || 'America/Los_Angeles',
+        displayName: u.displayName,
+        username: u.username,
+        wrapTime: rule?.condition?.time || '18:00',
+      };
+    });
+}
+
+/**
+ * Atomically claim the right to send today's Daily Wrap push for a user.
+ * Mirrors checkAndLockMorningBriefSent — returns TRUE when already sent,
+ * FALSE when we just acquired the claim (caller should send).
+ */
+async function checkAndLockDailyWrapSent(userId, dateKey) {
+  const alertKey = `daily-wrap:${userId}:${dateKey}`;
+  const { rows } = await pool.query(
+    `INSERT INTO scheduled_alerts (user_id, alert_key, message, channels, fire_at, fired, fired_at)
+     VALUES ($1, $2, 'daily-wrap', '[]'::jsonb, NOW(), TRUE, NOW())
+     ON CONFLICT (user_id, alert_key)
+     WHERE alert_key LIKE 'daily-wrap:%'
+     DO NOTHING
+     RETURNING id`,
+    [userId, alertKey]
+  );
+  return rows.length === 0;
+}
+
+/**
  * Atomically claim the web-side Daily Wrap nudge for a (user, local day).
  * Returns TRUE when a prior claim already exists (caller should suppress
  * the UI prompt), FALSE when we just acquired the claim (caller should
@@ -6653,6 +6703,8 @@ module.exports = {
   getUsersWithMorningBriefEnabled,
   checkAndLockMorningBriefSent,
   checkAndLockDailyWrapWeb,
+  getUsersWithDailyWrapEnabled,
+  checkAndLockDailyWrapSent,
   markScheduledAlertFired,
   DEFAULT_CADENCE_CONFIGS,
   getCalendarNote,

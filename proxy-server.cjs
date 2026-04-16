@@ -67,7 +67,7 @@ app.use('/', require('./server/routes/preferences.cjs')({ authenticateToken, db 
 app.use('/', require('./server/routes/chat.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/financial.cjs')({ authenticateToken, requireOwnership, db }));
 app.use('/', require('./server/routes/dashboard.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }));
-const { router: alertsRouter, buildAndSendMorningBrief } = require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google });
+const { router: alertsRouter, buildAndSendMorningBrief, buildAndSendDailyWrap } = require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google });
 app.use('/', alertsRouter);
 app.use('/', require('./server/routes/calendar-notes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
@@ -249,6 +249,79 @@ cron.schedule('* * * * *', async () => {
   }
 });
 console.log('[cron] Morning brief scheduler started');
+
+// ── Daily Wrap cron — runs every minute, fires per-user at HH:MM in their tz ──
+// Mirrors morning-brief exactly: Redis fast-path → DB atomic lock →
+// buildAndSendDailyWrap. The web-side nudge uses a separate alert_key
+// (`daily-wrap-web:…`) so the cron push and the web prompt are
+// independently idempotent per (user, local day).
+cron.schedule('* * * * *', async () => {
+  try {
+    const users = await db.getUsersWithDailyWrapEnabled();
+    for (const user of users) {
+      try {
+        const localTime = getLocalHHMM(user.timezone);
+        if (!localTime || localTime !== user.wrapTime) continue;
+
+        const dateKey = getLocalDateKey(user.timezone);
+        const redisKey = `daily-wrap:${user.id}:${dateKey}`;
+
+        // Redis fast-path short-circuits before the DB lock when possible.
+        const cachedSent = await _rediGet(redisKey);
+        if (cachedSent) continue;
+
+        const alreadySent = await db.checkAndLockDailyWrapSent(user.id, dateKey);
+        if (alreadySent) {
+          await _rediSet(redisKey, true, 86400);
+          continue;
+        }
+
+        await buildAndSendDailyWrap(user.id, {
+          requestId: `cron-daily-wrap-${user.id}`,
+        });
+        await _rediSet(redisKey, true, 86400);
+        cronLogger.info('daily-wrap-cron.sent', { userId: user.id });
+      } catch (e) {
+        cronLogger.error('daily-wrap-cron.user-failed', { userId: user.id, error: e.message });
+      }
+    }
+  } catch (e) {
+    cronLogger.error('daily-wrap-cron.failed', { error: e.message });
+  }
+});
+console.log('[cron] Daily Wrap scheduler started');
+
+// ── Daily Wrap startup catch-up — for any user whose wrap time already
+// passed today locally and who hasn't been sent the push, fire once on
+// boot. Mirrors the GCal/Outlook startup pattern — 8s delay so migrations
+// + route mounts are settled.
+(async () => {
+  await new Promise((r) => setTimeout(r, 8000));
+  try {
+    const users = await db.getUsersWithDailyWrapEnabled();
+    cronLogger.info('daily-wrap.startup.begin', { userCount: users.length });
+    for (const user of users) {
+      try {
+        const localTime = getLocalHHMM(user.timezone);
+        if (!localTime || localTime < user.wrapTime) continue; // wrap time hasn't hit yet today
+        const dateKey = getLocalDateKey(user.timezone);
+        // If user already completed the wrap on web, don't push.
+        const wrapped = db.hasCompletedWrap ? await db.hasCompletedWrap(user.id, dateKey) : false;
+        if (wrapped) continue;
+        const alreadySent = await db.checkAndLockDailyWrapSent(user.id, dateKey);
+        if (alreadySent) continue;
+        await buildAndSendDailyWrap(user.id, { requestId: `startup-daily-wrap-${user.id}` });
+        await _rediSet(`daily-wrap:${user.id}:${dateKey}`, true, 86400);
+        cronLogger.info('daily-wrap.startup.sent', { userId: user.id });
+      } catch (e) {
+        cronLogger.error('daily-wrap.startup.user-failed', { userId: user.id, error: e.message });
+      }
+    }
+    cronLogger.info('daily-wrap.startup.complete', { userCount: users.length });
+  } catch (e) {
+    cronLogger.error('daily-wrap.startup.failed', { error: e.message });
+  }
+})();
 
 // ── Pending-confirmations sweep — runs hourly ──────────────────────────────
 cron.schedule('0 * * * *', async () => {
