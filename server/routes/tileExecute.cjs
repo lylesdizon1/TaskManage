@@ -3,6 +3,7 @@
 const express = require('express');
 const { executeTool } = require('../tools.cjs');
 const logger = require('../../guardrails/logger.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 /**
  * Convert "h:MM AM/PM" (or bare "HH:MM") to the tool's expected 24-hour
@@ -42,7 +43,7 @@ module.exports = function createTileExecuteRouter({ authenticateToken, db }) {
   router.post('/api/tile/execute', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const entityIds = req.user.entityIds || [];
-    const tz = req.user.timezone || 'America/Los_Angeles';
+    const tz = req.user.timezone || DEFAULT_TIMEZONE;
     const { type, payload = {} } = req.body || {};
 
     try {

@@ -17,6 +17,7 @@
 const { google } = require('googleapis');
 const { loadGcalTokens, loadAllGcalAccounts, makeOAuth2Client, makeGmailOAuth2Client } = require('./utils/google.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('./utils/crypto.cjs');
+const { DEFAULT_TIMEZONE } = require('./utils/timezone.cjs');
 
 // ── Aria tool registry ─────────────────────────────────────────────────────
 
@@ -821,8 +822,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           calendarId: 'primary',
           requestBody: {
             summary: title,
-            start: { dateTime: startDt, timeZone: tz || 'America/Los_Angeles' },
-            end:   { dateTime: endDt,   timeZone: tz || 'America/Los_Angeles' },
+            start: { dateTime: startDt, timeZone: tz || DEFAULT_TIMEZONE },
+            end:   { dateTime: endDt,   timeZone: tz || DEFAULT_TIMEZONE },
             ...(eventDesc && { description: eventDesc }),
             ...(location  && { location }),
             ...(attendees?.length && { attendees: attendees.map(email => ({ email })) }),
@@ -848,8 +849,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             if (toolInput.title !== undefined) patch.summary = toolInput.title;
             if (toolInput.description !== undefined) patch.description = toolInput.description;
             if (toolInput.location !== undefined) patch.location = toolInput.location;
-            if (toolInput.start_time) patch.start = { dateTime: toolInput.start_time, timeZone: tz || 'America/Los_Angeles' };
-            if (toolInput.end_time)   patch.end   = { dateTime: toolInput.end_time,   timeZone: tz || 'America/Los_Angeles' };
+            if (toolInput.start_time) patch.start = { dateTime: toolInput.start_time, timeZone: tz || DEFAULT_TIMEZONE };
+            if (toolInput.end_time)   patch.end   = { dateTime: toolInput.end_time,   timeZone: tz || DEFAULT_TIMEZONE };
             const { data: updated } = await calendar.events.patch({ calendarId: 'primary', eventId: toolInput.event_id, requestBody: patch });
             try { await db.logMemory({ userId, tool: 'update_event', content: `Updated event: "${updated.summary}"`, metadata: { event_id: updated.id, changes: Object.keys(patch) } }); } catch {}
             return { success: true, event_id: updated.id, title: updated.summary, account_email: acct.googleEmail || null };
@@ -1300,7 +1301,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
 
       // ── JOURNAL / DAILY WRAP ─────────────────────────────────────────────
       case 'create_journal_entry': {
-        const zone = tz || 'America/Los_Angeles';
+        const zone = tz || DEFAULT_TIMEZONE;
         const entryDate = new Intl.DateTimeFormat('en-CA', {
           timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
         }).format(new Date());
@@ -1334,7 +1335,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       }
 
       case 'get_today_close_loop_context': {
-        const zone = tz || 'America/Los_Angeles';
+        const zone = tz || DEFAULT_TIMEZONE;
         const todayDateKey = new Intl.DateTimeFormat('en-CA', {
           timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
         }).format(new Date());

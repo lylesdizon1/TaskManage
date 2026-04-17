@@ -18,6 +18,7 @@
 const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../guardrails/logger.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 const VALID_TYPES = new Set(['task', 'event', 'project', 'project_task', 'checklist', 'clarify', 'daily_wrap_chat', 'default_chat']);
 
@@ -58,7 +59,7 @@ module.exports = function createAriaDraftRouter({ authenticateToken }) {
     const client = _client();
     if (!client?.messages?.create) return res.json({ type: 'default_chat' });
 
-    const tz = req.body?.timezone || req.user?.timezone || 'America/Los_Angeles';
+    const tz = req.body?.timezone || req.user?.timezone || DEFAULT_TIMEZONE;
     const today = req.body?.today || new Intl.DateTimeFormat('en-CA', {
       timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(new Date());

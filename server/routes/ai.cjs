@@ -61,6 +61,7 @@ const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { userRateLimit } = require('../middleware/userRateLimit.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 const chatExecuteLimit = userRateLimit({ key: 'chat-execute', limit: 50, windowSec: 3600 });
 
@@ -278,7 +279,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
     let finalizeStream = () => {};
 
     try {
-      const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
+      const userTz = timeZone || req.user.timezone || DEFAULT_TIMEZONE;
       const ctx = await buildAgenticContext({
         userId, entityIds, db, tz: userTz, contextHint: context_hint,
         loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens,

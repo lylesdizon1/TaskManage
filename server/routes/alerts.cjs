@@ -4,6 +4,7 @@ const express = require('express');
 const { sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus } = require('../utils/integrations.cjs');
 const { fetchCalendarWindow, localMidnightUtc } = require('../lib/buildAgenticContext.cjs');
 const logger = require('../../guardrails/logger.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
@@ -28,7 +29,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     const userEntities = (user?.entityIds || []);
     const tasks = await db.getTasksForUser(userId, userEntities);
 
-    const tz = user?.timezone || 'America/Los_Angeles';
+    const tz = user?.timezone || DEFAULT_TIMEZONE;
     const todayStr = new Intl.DateTimeFormat('en-CA', {
       timeZone: tz,
       year: 'numeric', month: '2-digit', day: '2-digit'
@@ -169,7 +170,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
     const userEntities = (user?.entityIds || []);
     const tasks = await db.getTasksForUser(userId, userEntities);
 
-    const tz = user?.timezone || 'America/Los_Angeles';
+    const tz = user?.timezone || DEFAULT_TIMEZONE;
     const todayStr = new Intl.DateTimeFormat('en-CA', {
       timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(new Date());

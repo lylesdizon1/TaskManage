@@ -17,6 +17,7 @@
  */
 
 const jwt = require('jsonwebtoken');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 /**
  * JWT signing secret. Required at startup — no fallback, since a per-process
@@ -68,7 +69,7 @@ async function authenticateToken(req, res, next) {
     try {
       const ctx = await _db.getUserAuthContext(payload.id);
       if (ctx) {
-        req.user.timezone = ctx.timezone || 'America/Los_Angeles';
+        req.user.timezone = ctx.timezone || DEFAULT_TIMEZONE;
         req.user.role = ctx.role || req.user.role;
         req.user.entityIds = ctx.entityIds || [];
         req.user.orgId = ctx.orgId || null;

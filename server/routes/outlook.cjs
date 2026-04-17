@@ -22,6 +22,7 @@ const {
   saveOutlookAccount, listOutlookAccounts, getClientConfig,
 } = require('../utils/outlook.cjs');
 const { mintState, consumeState } = require('../utils/oauthState.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 module.exports = function createOutlookRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -132,7 +133,7 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
     try {
       const { scanOutlookMailForUser } = require('../lib/outlookMailScan.cjs');
       const { syncOutlookForUser } = require('../lib/outlookCalSync.cjs');
-      const tz = req.user.timezone || 'America/Los_Angeles';
+      const tz = req.user.timezone || DEFAULT_TIMEZONE;
 
       // Calendar sync runs first — never throws (internal try/catch).
       await syncOutlookForUser(req.user.id, tz, db);

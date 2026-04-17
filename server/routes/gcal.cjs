@@ -4,6 +4,7 @@ const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const { writeAudit } = require('../../guardrails/audit.cjs');
 const { mintState, consumeState } = require('../utils/oauthState.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 const GCAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
 
@@ -408,7 +409,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       if (entityTag) descParts.push(`[${entityTag}]`);
       if (description) descParts.push(description);
       const requestBody = { summary: title, description: descParts.join('\n\n') };
-      const tz = req.user.timezone || 'America/Los_Angeles';
+      const tz = req.user.timezone || DEFAULT_TIMEZONE;
 
       if (start.date && !start.dateTime) {
         // All-day event

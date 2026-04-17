@@ -18,6 +18,7 @@ const db       = require('./db.cjs');
 
 // ── Utils & middleware ───────────────────────────────────────────────────────
 const { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership, setDb } = require('./server/middleware/auth.cjs');
+const { DEFAULT_TIMEZONE } = require('./server/utils/timezone.cjs');
 setDb(db);
 const { authLimiter, apiLimiter } = require('./server/middleware/rateLimit.cjs');
 const { makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, loadAllGcalAccounts: _loadAllGcalAccounts, mergeAndSaveGcalTokens: _mergeAndSaveGcalTokens } = require('./server/utils/google.cjs');
@@ -486,7 +487,7 @@ cron.schedule('*/15 * * * *', async () => {
   try {
     const users = await db.getUsersWithGcalConnected();
     for (const user of users) {
-      await syncGcalForUser(user.id, user.timezone || 'America/Los_Angeles');
+      await syncGcalForUser(user.id, user.timezone || DEFAULT_TIMEZONE);
     }
     cronLogger.info('gcal-sync.complete', { userCount: users.length });
   } catch (e) {
@@ -503,7 +504,7 @@ cron.schedule('*/15 * * * *', async () => {
   try {
     const users = await db.getUsersWithOutlookConnected();
     for (const user of users) {
-      await syncOutlookForUser(user.id, user.timezone || 'America/Los_Angeles', db);
+      await syncOutlookForUser(user.id, user.timezone || DEFAULT_TIMEZONE, db);
       // Mail scan piggybacks the same cron tick so we don't double-schedule.
       try { await scanOutlookMailForUser({ userId: user.id, db, requestId: `cron-outlook-${user.id}` }); }
       catch (e) { cronLogger.error('outlook-mail-scan.user-failed', { userId: user.id, error: e.message }); }
@@ -526,7 +527,7 @@ console.log('[cron] Outlook sync scheduler started');
     const users = await db.getUsersWithGcalConnected();
     cronLogger.info('gcal-sync.startup.begin', { userCount: users.length });
     for (const user of users) {
-      try { await syncGcalForUser(user.id, user.timezone || 'America/Los_Angeles'); }
+      try { await syncGcalForUser(user.id, user.timezone || DEFAULT_TIMEZONE); }
       catch (e) { cronLogger.error('gcal-sync.startup.user-failed', { userId: user.id, error: e.message }); }
     }
     cronLogger.info('gcal-sync.startup.complete', { userCount: users.length });
@@ -542,7 +543,7 @@ console.log('[cron] Outlook sync scheduler started');
     const users = await db.getUsersWithOutlookConnected();
     cronLogger.info('outlook-sync.startup.begin', { userCount: users.length });
     for (const user of users) {
-      try { await syncOutlookForUser(user.id, user.timezone || 'America/Los_Angeles', db); }
+      try { await syncOutlookForUser(user.id, user.timezone || DEFAULT_TIMEZONE, db); }
       catch (e) { cronLogger.error('outlook-sync.startup.user-failed', { userId: user.id, error: e.message }); }
     }
     cronLogger.info('outlook-sync.startup.complete', { userCount: users.length });

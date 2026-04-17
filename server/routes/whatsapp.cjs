@@ -51,6 +51,7 @@ const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
 const logger = require('../../guardrails/logger.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 /** Derive a short user-facing code from a confirmation ID. */
 function codeFromConfirmId(id) {
@@ -145,7 +146,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       const userId = user.id;
       const entityIds = user.entityIds || [];
-      const tzForUser = user.timezone || 'America/Los_Angeles';
+      const tzForUser = user.timezone || DEFAULT_TIMEZONE;
 
       // ── Check for YES/NO confirmation reply to a prior high-risk prompt ──
       const confirmMatch = (msgBody || '').trim().match(/^(YES|NO)\s+([A-Z0-9]{4})\s*$/i);

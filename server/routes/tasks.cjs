@@ -4,6 +4,7 @@ const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const { writeAudit } = require('../../guardrails/audit.cjs');
 const { emitCloseLoop } = require('../lib/closeLoopEmitter.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 module.exports = function createTasksRouter({ authenticateToken, db }) {
   const router = express.Router();
@@ -36,7 +37,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       }
 
       if (dateRange && dateRange !== 'all') {
-        const tz = req.user.timezone || 'America/Los_Angeles';
+        const tz = req.user.timezone || DEFAULT_TIMEZONE;
         if (dateRange === 'today') {
           conditions.push(`completed_at >= (NOW() AT TIME ZONE $${paramIdx})::date`);
           params.push(tz);

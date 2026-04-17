@@ -32,6 +32,7 @@
  */
 
 const { Pool } = require('pg');
+const { DEFAULT_TIMEZONE } = require('./server/utils/timezone.cjs');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -4987,7 +4988,7 @@ function getTimezoneOffset(tz) {
 async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, priority, tz) {
   // Load user for personalized messages and timezone fallback
   const user = await getUserById(userId);
-  if (!tz) tz = user?.timezone || 'America/Los_Angeles';
+  if (!tz) tz = user?.timezone || DEFAULT_TIMEZONE;
   const firstName = (user?.profileName || user?.displayName || '').split(' ')[0] || 'there';
 
   // Load cadence config for this user + priority
@@ -5107,7 +5108,7 @@ async function getUsersWithMorningBriefEnabled() {
       const rule = rules.find((r) => r?.condition?.type === 'morning-brief');
       return {
         id: u.id,
-        timezone: u.timezone || 'America/Los_Angeles',
+        timezone: u.timezone || DEFAULT_TIMEZONE,
         displayName: u.displayName,
         username: u.username,
         briefTime: rule?.condition?.time || '08:00',
@@ -5161,7 +5162,7 @@ async function getUsersWithDailyWrapEnabled() {
       const rule = rules.find((r) => r?.condition?.type === 'daily-wrap');
       return {
         id: u.id,
-        timezone: u.timezone || 'America/Los_Angeles',
+        timezone: u.timezone || DEFAULT_TIMEZONE,
         displayName: u.displayName,
         username: u.username,
         wrapTime: rule?.condition?.time || '18:00',

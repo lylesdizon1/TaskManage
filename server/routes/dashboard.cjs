@@ -50,6 +50,7 @@ const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { fetchCalendarWindow, localMidnightUtc } = require('../lib/buildAgenticContext.cjs');
 const { withRetry } = require('../lib/anthropicRetry.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 /**
  * Compute the user's local hour, human-readable time, and time-state label.
@@ -59,7 +60,7 @@ const { withRetry } = require('../lib/anthropicRetry.cjs');
  *   evening  18-20  wrapup  21-4
  */
 function getTimeState(tz) {
-  const zone = tz || 'America/Los_Angeles';
+  const zone = tz || DEFAULT_TIMEZONE;
   const hour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', hour12: false }).format(new Date()), 10);
   const localTime = new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date());
   let state = 'wrapup';
@@ -242,7 +243,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       // Fetch calendar events: DB cache first, live GCal fallback.
       let calendarEventStr = data?.events || 'None';
       try {
-        const userTz = req.user.timezone || 'America/Los_Angeles';
+        const userTz = req.user.timezone || DEFAULT_TIMEZONE;
         let allEvents = [];
         if (db.getCalendarEventsForUser) {
           try {
@@ -291,7 +292,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       // Time-aware prose — tone + framing shifts across the day. User tz drives
       // state so the morning-brief cron (which hits this endpoint at 8am local)
       // naturally gets the 'morning' treatment.
-      const userTz = req.user.timezone || 'America/Los_Angeles';
+      const userTz = req.user.timezone || DEFAULT_TIMEZONE;
       const { state: timeState } = getTimeState(userTz);
       const timePrompts = {
         morning:   "It's morning. Set the day. Lead with the most important thing ahead. Be direct — 2-3 sentences max.",
@@ -353,7 +354,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
    */
   router.get('/api/brief/context', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-    const userTz = req.user.timezone || 'America/Los_Angeles';
+    const userTz = req.user.timezone || DEFAULT_TIMEZONE;
     const { state: timeState, localTime } = getTimeState(userTz);
     const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     const nowMs = Date.now();

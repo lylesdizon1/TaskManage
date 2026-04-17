@@ -12,6 +12,7 @@
 
 const { getTodayLocal } = require('../utils/date.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.\n\nYou have full access to the user's projects, tasks, checklist items, and notes within their entities. This data is provided to you in the ACTIVE PROJECTS context block above. When asked about projects, summarize from that context. Never say you don't have access to projects.
 
@@ -56,7 +57,7 @@ const CALENDAR_CACHE_TTL_SEC = 5 * 60; // 5 minutes
  * window math) to stay DST-safe.
  */
 function localMidnightUtc(tz, offsetDays = 0) {
-  const userTz = tz || 'America/Los_Angeles';
+  const userTz = tz || DEFAULT_TIMEZONE;
   const todayLocal = new Intl.DateTimeFormat('en-CA', {
     timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
@@ -75,7 +76,7 @@ function localMidnightUtc(tz, offsetDays = 0) {
  *                                midnight today. Pass 1 for today-only.
  */
 async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google, logger, requestId }) {
-  const userTz = tz || 'America/Los_Angeles';
+  const userTz = tz || DEFAULT_TIMEZONE;
   const windowDays = Number.isFinite(days) && days > 0 ? days : 7;
 
   const cacheKey = `gcal:${userId}:${userTz}:${windowDays}`;
@@ -174,7 +175,7 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
  */
 async function buildAgenticContext(opts) {
   const { userId, db, contextHint } = opts;
-  const tz = opts.tz || 'America/Los_Angeles';
+  const tz = opts.tz || DEFAULT_TIMEZONE;
 
   // Inbox mode pulls a wider net so Aria can answer open-ended
   // questions about the user's mail.

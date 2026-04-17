@@ -15,11 +15,12 @@
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const { enrichJournalEntry } = require('../lib/journalEnrichment.cjs');
+const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 const FIELD_MAX = 10_000;
 
 function todayLocalDateStr(tz) {
-  const zone = tz || 'America/Los_Angeles';
+  const zone = tz || DEFAULT_TIMEZONE;
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
