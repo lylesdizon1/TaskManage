@@ -3,12 +3,14 @@
 /**
  * server/utils/crypto.cjs — AES-256-CBC encryption for secrets at rest.
  *
- * Used to encrypt OAuth tokens (GCal, Gmail) before storing in PostgreSQL.
- * If ENCRYPTION_KEY is not set, all functions gracefully pass data through
- * unencrypted — this supports local development and legacy unencrypted rows.
+ * Used to encrypt OAuth tokens (GCal, Gmail, Outlook) before storing in
+ * PostgreSQL. ENCRYPTION_KEY is required at startup — no silent
+ * pass-through, since first encryption call would otherwise throw a
+ * cryptic createCipheriv error long after boot.
  *
- * @note ENCRYPTION_KEY must be exactly 32 characters (256 bits). A shorter
- * key will cause createCipheriv to throw at runtime.
+ * Decryption still tolerates legacy unencrypted rows (the catch in
+ * decrypt() returns the input as-is on failure) so existing data keeps
+ * reading after the strict-key requirement lands.
  *
  * @note The encrypted format is "iv_hex:ciphertext_hex". decrypt() uses
  * the presence of a colon to distinguish encrypted from plaintext data,
@@ -18,7 +20,11 @@
 
 const crypto = require('crypto');
 
-/** @type {string|undefined} Must be exactly 32 characters for AES-256. */
+if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length !== 32) {
+  throw new Error('ENCRYPTION_KEY must be exactly 32 characters');
+}
+
+/** @type {string} Exactly 32 characters (256 bits) for AES-256. */
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
 /**

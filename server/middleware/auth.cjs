@@ -47,38 +47,39 @@ function setDb(db) { _db = db; }
  * user's timezone, role, and entityIds — so authorization decisions
  * always reflect the current DB state, not stale JWT claims.
  *
- * @note DB enrichment is best-effort. If the DB lookup fails,
- * the request proceeds with JWT-only claims — meaning role and
- * entityIds may be stale. This favors availability over strict
- * authorization freshness. Known tradeoff — revisit if stricter
- * auth guarantees are needed.
+ * Fails closed on enrichment failure: returns 503 rather than letting
+ * a request through with stale JWT-only claims. A DB blip degrading
+ * authorization freshness was a real risk worth catching loudly.
  */
 async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Authentication required' });
 
+  let payload;
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload;
-
-    // Enrich with fresh DB context (timezone, role) — non-blocking on failure
-    if (_db) {
-      try {
-        const ctx = await _db.getUserAuthContext(payload.id);
-        if (ctx) {
-          req.user.timezone = ctx.timezone || 'America/Los_Angeles';
-          req.user.role = ctx.role || req.user.role;
-          req.user.entityIds = ctx.entityIds || [];
-          req.user.orgId = ctx.orgId || null;
-        }
-      } catch {}
-    }
-
-    next();
+    payload = jwt.verify(token, JWT_SECRET);
   } catch {
     return res.status(403).json({ error: 'Invalid or expired token' });
   }
+  req.user = payload;
+
+  if (_db) {
+    try {
+      const ctx = await _db.getUserAuthContext(payload.id);
+      if (ctx) {
+        req.user.timezone = ctx.timezone || 'America/Los_Angeles';
+        req.user.role = ctx.role || req.user.role;
+        req.user.entityIds = ctx.entityIds || [];
+        req.user.orgId = ctx.orgId || null;
+      }
+    } catch (err) {
+      console.error('auth.context.enrichment.failed', { userId: payload.id, error: err.message });
+      return res.status(503).json({ error: 'Authentication context unavailable' });
+    }
+  }
+
+  next();
 }
 
 /**
