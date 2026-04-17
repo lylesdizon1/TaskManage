@@ -11,15 +11,22 @@
  */
 
 const db = require('../../db.cjs');
+const logger = require('../../guardrails/logger.cjs');
 
 async function emitCloseLoop(userId, sourceType, sourceId, titleSnapshot) {
   try {
     if (!userId || !sourceType || !sourceId) return null;
     const row = await db.emitCloseLoopItem(userId, sourceType, String(sourceId), titleSnapshot || null);
-    console.log('[closeLoop] emitted', { sourceType, sourceId: String(sourceId) });
+    logger.info('closeloop.emitted', { userId, sourceType, sourceId: String(sourceId) });
     return row;
   } catch (err) {
-    console.error('[closeLoop] emit failed:', err.message);
+    logger.error('closeloop.emit.failed', {
+      userId,
+      sourceType,
+      sourceId: String(sourceId),
+      error: err.message,
+      stack: err.stack,
+    });
     return null;
   }
 }

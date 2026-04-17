@@ -23,6 +23,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../../db.cjs');
+const logger = require('../../guardrails/logger.cjs');
 const { withRetry } = require('./anthropicRetry.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 
@@ -105,14 +106,18 @@ async function enrichJournalEntry(userId, entry) {
         'journal-enrichment',
       );
     } catch (err) {
-      console.error('[journalEnrichment] haiku call failed:', err.message);
+      logger.error('journal.enrichment.haiku.failed', {
+        userId, entryId: entry.id, error: err.message, stack: err.stack,
+      });
       return;
     }
 
     const body = response?.content?.[0]?.text || '';
     const parsed = safeParseJson(body);
     if (!parsed) {
-      console.error('[journalEnrichment] parse failed');
+      logger.error('journal.enrichment.parse.failed', {
+        userId, entryId: entry.id, bodyPreview: body.slice(0, 200),
+      });
       try { await rediSet(debounceKey, true, DEBOUNCE_TTL_SEC); } catch {}
       return;
     }
@@ -131,7 +136,9 @@ async function enrichJournalEntry(userId, entry) {
         await db.upsertMemoryFact(userId, null, fact, 'journal_pattern');
         factsWritten++;
       } catch (e) {
-        console.error('[journalEnrichment] upsertMemoryFact failed:', e.message);
+        logger.error('journal.enrichment.upsertMemoryFact.failed', {
+          userId, entryId: entry.id, error: e.message, stack: e.stack,
+        });
       }
     }
 
@@ -150,17 +157,21 @@ async function enrichJournalEntry(userId, entry) {
         await db.addContactFact(userId, contact.id, factText, 'journal_mention', 0.5);
         contactsTagged++;
       } catch (e) {
-        console.error('[journalEnrichment] contact tag failed:', e.message);
+        logger.error('journal.enrichment.contactTag.failed', {
+          userId, entryId: entry.id, name, error: e.message, stack: e.stack,
+        });
       }
     }
 
     try { await rediSet(debounceKey, true, DEBOUNCE_TTL_SEC); } catch {}
 
-    console.log('[journalEnrichment] complete', {
+    logger.info('journal.enrichment.complete', {
       userId, entryId: entry.id, factsWritten, contactsTagged,
     });
   } catch (err) {
-    console.error('[journalEnrichment] unexpected failure:', err.message);
+    logger.error('journal.enrichment.failed', {
+      userId, entryId: entry?.id, error: err.message, stack: err.stack,
+    });
   }
 }
 
