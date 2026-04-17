@@ -123,14 +123,55 @@ if (fs.existsSync(DIST_DIR)) {
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────
+let server = null;
+
 async function start() {
   await db.initTables();
   await db.seedUsersIfEmpty();
   try { await db.runMigrations(); } catch (err) { console.error('[migration]', err.message); }
-  app.listen(PORT, '0.0.0.0', () => console.log(`\n✓ Dizon.ai server running at http://localhost:${PORT}\n`));
+  server = app.listen(PORT, '0.0.0.0', () => console.log(`\n✓ Dizon.ai server running at http://localhost:${PORT}\n`));
 }
 
 start().catch((err) => { console.error('[startup] Fatal:', err.message); process.exit(1); });
+
+// ── Graceful shutdown ───────────────────────────────────────────────────────
+// Railway sends SIGTERM with ~30s grace before SIGKILL. Stop accepting new
+// connections, drain DB pool + Redis client, then exit. Hard timeout at 25s
+// so we exit cleanly before SIGKILL would force-kill mid-cleanup.
+let shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — draining…`);
+
+  const hardExit = setTimeout(() => {
+    console.error('[shutdown] grace period exceeded — forcing exit');
+    process.exit(1);
+  }, 25_000);
+  hardExit.unref();
+
+  if (server) {
+    await new Promise((resolve) => server.close((err) => {
+      if (err) console.error('[shutdown] server.close error:', err.message);
+      else console.log('[shutdown] http server closed');
+      resolve();
+    }));
+  }
+
+  try { await db.pool.end(); console.log('[shutdown] pg pool closed'); }
+  catch (err) { console.error('[shutdown] pg pool close error:', err.message); }
+
+  try {
+    const { getRedisClient } = require('./server/lib/redis.cjs');
+    const c = await getRedisClient();
+    if (c) { await c.quit(); console.log('[shutdown] redis client closed'); }
+  } catch (err) { console.error('[shutdown] redis close error:', err.message); }
+
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // ── Server-side alert cron — runs every minute ──────────────────────────────
 const cron = require('node-cron');
