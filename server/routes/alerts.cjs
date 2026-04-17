@@ -54,11 +54,12 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
         } catch { /* silent */ }
       }
       if (calendarEvents.length === 0) {
-        calendarEvents = await fetchCalendarWindow({
+        const fetchResult = await fetchCalendarWindow({
           userId, tz, days: 1,
           loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
           logger, requestId,
         });
+        calendarEvents = fetchResult.events || [];
       }
     } catch (calErr) {
       logger.error('morningBrief.calendarFetch.failed', { requestId, userId, error: calErr.message });

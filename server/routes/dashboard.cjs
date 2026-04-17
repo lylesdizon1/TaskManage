@@ -258,11 +258,12 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
           } catch { /* silent — fall through to live */ }
         }
         if (allEvents.length === 0) {
-          allEvents = await fetchCalendarWindow({
+          const fetchResult = await fetchCalendarWindow({
             userId, tz: userTz, days: 1,
             loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
             logger, requestId: req.requestId,
           });
+          allEvents = fetchResult.events || [];
         }
         if (allEvents.length > 0) {
           calendarEventStr = allEvents.map((e) => {
@@ -396,11 +397,12 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         } catch { /* silent fallback */ }
       }
       if (events.length === 0) {
-        events = await fetchCalendarWindow({
+        const fetchResult = await fetchCalendarWindow({
           userId, tz: userTz, days: 1,
           loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
           logger, requestId: req.requestId,
         });
+        events = fetchResult.events || [];
       }
       for (const ev of (events || [])) {
         const bucket = classifyEvent(ev, nowMs);

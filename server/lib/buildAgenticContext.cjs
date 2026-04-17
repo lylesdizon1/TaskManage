@@ -80,7 +80,12 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
 
   const cacheKey = `gcal:${userId}:${userTz}:${windowDays}`;
   const cached = await rediGet(cacheKey);
-  if (cached) return cached;
+  // Normalize old array-shape cache entries (pre-partial-failure-surfacing)
+  // so a deploy doesn't have to wait out the 5-min TTL to switch shapes.
+  if (cached) {
+    if (Array.isArray(cached)) return { events: cached, failedAccounts: [] };
+    return cached;
+  }
 
   try {
     let allAccounts = [];
@@ -90,7 +95,7 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
       const tokens = await loadGcalTokens(userId);
       if (tokens) allAccounts = [{ googleEmail: null, tokens }];
     }
-    if (!allAccounts.length || !makeOAuth2Client || !google) return [];
+    if (!allAccounts.length || !makeOAuth2Client || !google) return { events: [], failedAccounts: [] };
 
     const todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     const noonUtc = new Date(`${todayLocal}T12:00:00Z`);
@@ -125,20 +130,30 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
 
     const allEvents = [];
     const seen = new Set();
-    for (const r of results) {
+    const failedAccounts = [];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const acct = allAccounts[i];
       if (r.status === 'fulfilled') {
         for (const ev of r.value) {
           const key = `${ev.title}::${ev.start}`;
           if (!seen.has(key)) { seen.add(key); allEvents.push(ev); }
         }
+      } else {
+        const errMsg = r.reason?.message || String(r.reason);
+        failedAccounts.push({ accountEmail: acct?.googleEmail || null, error: errMsg });
+        logger?.error?.('context.calendarAccount.failed', {
+          requestId, userId, googleEmail: acct?.googleEmail || null, error: errMsg,
+        });
       }
     }
-    const sorted = allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-    await rediSet(cacheKey, sorted, CALENDAR_CACHE_TTL_SEC);
-    return sorted;
+    const sortedEvents = allEvents.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+    const result = { events: sortedEvents, failedAccounts };
+    await rediSet(cacheKey, result, CALENDAR_CACHE_TTL_SEC);
+    return result;
   } catch (err) {
     logger?.error?.('context.calendarFetch.failed', { requestId, userId, error: err.message });
-    return [];
+    return { events: [], failedAccounts: [] };
   }
 }
 
@@ -173,6 +188,9 @@ async function buildAgenticContext(opts) {
   // Calendar events: read from the synced calendar_events cache first
   // (populated by the 15-min sync cron). Fall back to live fetchCalendarWindow
   // if the cache is empty (e.g. user just connected GCal, sync hasn't run).
+  // Returns { events, failedAccounts } so partial sync failures can be
+  // surfaced to Aria — silent partial failure was misleading her into
+  // treating the surviving accounts as the user's complete calendar.
   const calendarEventsPromise = (async () => {
     if (db.getCalendarEventsForUser) {
       try {
@@ -180,12 +198,13 @@ async function buildAgenticContext(opts) {
         const endUtc   = localMidnightUtc(tz, 7);
         const cached = await db.getCalendarEventsForUser(userId, startUtc, endUtc);
         if (cached && cached.length > 0) {
-          return cached
+          const events = cached
             .map((ev) => ({
               title: (ev.title || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
               start: ev.startTime ? new Date(ev.startTime).toISOString() : '',
             }))
             .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+          return { events, failedAccounts: [] };
         }
       } catch { /* silent — fall through to live fetch */ }
     }
@@ -201,7 +220,7 @@ async function buildAgenticContext(opts) {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(Date.now() - 86400000));
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarEvents, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx, contactsData, sharedAccessData, todayJournal, yesterdayJournal] = await Promise.all([
+  const [user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx, contactsData, sharedAccessData, todayJournal, yesterdayJournal] = await Promise.all([
     db.getUserById(userId),
     db.getTasksForUser(userId, []),
     db.getPrivateNotesForAI(userId),
@@ -236,6 +255,16 @@ async function buildAgenticContext(opts) {
   const activeTasks = (tasks || []).filter(t => !t.completed);
   const recentCompleted = (tasks || []).filter(t => t.completed && t.completionNote);
 
+  // Normalize calendar fetch result. fetchCalendarWindow returns
+  // { events, failedAccounts }; the DB-cache fallback path also returns
+  // that shape now. failedAccounts surfaces a caveat in the calendar
+  // block so Aria knows her view may be incomplete.
+  const calendarEvents = calendarFetch?.events || [];
+  const calendarFailedAccounts = calendarFetch?.failedAccounts || [];
+  const calendarWarning = calendarFailedAccounts.length > 0
+    ? ` (WARNING: ${calendarFailedAccounts.length} calendar account(s) failed to sync — view may be incomplete)`
+    : '';
+
   const contextBlock = `\n\nCurrent time: ${currentTime} (${tz}). When setting due times, use the user's local timezone — NOT UTC.\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
     activeTasks.slice(0, 30).map(t =>
       `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
@@ -243,7 +272,7 @@ async function buildAgenticContext(opts) {
   }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
   }\nRecent notes: ${(notes || []).slice(0, 10).map(n => n.title).join(', ') || 'none'
   }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? new Date(cn.eventStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
-  }\nCalendar next 7 days: ${(calendarEvents || []).map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
+  }\nCalendar next 7 days${calendarWarning}: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
   }\nRecent Aria actions (last 10): ${
     recentMemories.length
       ? recentMemories.slice(0, 10).map(m =>
