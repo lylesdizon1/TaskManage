@@ -60,6 +60,9 @@ const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const logger = require('../../guardrails/logger.cjs');
+const { userRateLimit } = require('../middleware/userRateLimit.cjs');
+
+const chatExecuteLimit = userRateLimit({ key: 'chat-execute', limit: 50, windowSec: 3600 });
 
 // Confirmation waiters now use pg LISTEN/NOTIFY (db.listenForConfirmation /
 // db.notifyConfirmation). The DB's pending_confirmations row is the
@@ -260,7 +263,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
    * when the 'done' event is received or when the component
    * unmounts to prevent connection leaks.
    */
-  router.post('/api/chat/execute', authenticateToken, async (req, res) => {
+  router.post('/api/chat/execute', authenticateToken, chatExecuteLimit, async (req, res) => {
     const userId = req.user.id;
     const entityIds = req.user.entityIds || [];
     const apiKey = process.env.CLAUDE_API_KEY;

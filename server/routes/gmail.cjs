@@ -5,6 +5,9 @@ const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('../utils/crypto.cjs');
 const { mintState, consumeState } = require('../utils/oauthState.cjs');
+const { userRateLimit } = require('../middleware/userRateLimit.cjs');
+
+const gmailScanLimit = userRateLimit({ key: 'gmail-scan', limit: 12, windowSec: 3600 });
 // Contact auto-create from inbound mail disabled for V1 — contactIngestion
 // remains available for reply-based + manual flows.
 
@@ -412,7 +415,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
    * POST /api/gmail/scan — iterate all connected Gmail accounts, run the
    * flag/summarise/store pipeline against each, merge results.
    */
-  router.post('/api/gmail/scan', authenticateToken, async (req, res) => {
+  router.post('/api/gmail/scan', authenticateToken, gmailScanLimit, async (req, res) => {
     const userId = req.user.id;
     const accounts = await listGmailAccounts(userId);
     if (!accounts.length) return res.status(401).json({ error: 'Gmail not connected' });

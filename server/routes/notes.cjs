@@ -5,6 +5,9 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const logger = require('../../guardrails/logger.cjs');
+const { userRateLimit } = require('../middleware/userRateLimit.cjs');
+
+const imageUploadLimit = userRateLimit({ key: 'notes-image-upload', limit: 30, windowSec: 3600 });
 
 module.exports = function createNotesRouter({ authenticateToken, requireOwnership, db, imageUpload }) {
   const router = express.Router();
@@ -269,7 +272,7 @@ Respond in JSON only:
     }
   });
 
-  router.post('/api/notes/:id/images', authenticateToken, imageUpload.single('image'), async (req, res) => {
+  router.post('/api/notes/:id/images', authenticateToken, imageUploadLimit, imageUpload.single('image'), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: 'No image file provided' });
       const noteId = req.params.id;
