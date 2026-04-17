@@ -3,6 +3,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { GearIcon, XIcon } from '../icons/Icons.jsx';
 import { getRuleScope, conditionDescription, uid } from '../../utils/helpers.js';
 import { CONDITION_META, EMPTY_NEW_RULE, runAlertRules, buildPlainTextAlert } from '../alerts/alertUtils.js';
+import { isValidOAuthUrl } from '../../utils/oauthRedirect.js';
 import PersonaSettings from './PersonaSettings';
 
 function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange, onChannelChange, onConditionChange, onIntervalChange }) {
@@ -1391,7 +1392,14 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     try {
       const res = await apiFetch('/api/outlook/auth-url', { headers: { Authorization: `Bearer ${authToken}` } });
       const { url, error } = await res.json();
-      if (url) { window.location.href = url; return; }
+      if (url) {
+        if (!isValidOAuthUrl(url)) {
+          settingsToast.error('Invalid OAuth redirect rejected');
+          return;
+        }
+        window.location.href = url;
+        return;
+      }
       settingsToast.error(error || 'Outlook OAuth not configured');
     } catch {
       settingsToast.error('Outlook OAuth not configured');
@@ -1443,6 +1451,11 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
     try {
       const res = await apiFetch('/api/gmail/auth-url', { headers: { Authorization: `Bearer ${authToken}` } });
       const { url } = await res.json();
+      if (!isValidOAuthUrl(url)) {
+        settingsToast.error('Invalid OAuth redirect rejected');
+        setGmailLoading(false);
+        return;
+      }
       window.location.href = url;
     } catch {
       setGmailLoading(false);

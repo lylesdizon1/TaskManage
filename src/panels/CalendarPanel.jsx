@@ -4,6 +4,7 @@ import { format, parse, startOfWeek, getDay, startOfMonth, endOfMonth, addMonths
 import enUS from 'date-fns/locale/en-US';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import { SpinnerIcon, CalendarIcon } from '../components/icons/Icons.jsx';
+import { isValidOAuthUrl } from '../utils/oauthRedirect.js';
 
 const API_BASE = '';
 
@@ -91,6 +92,10 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       const res = await apiFetch(`${API_BASE}/api/outlook/auth-url`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
       if (data.error || !data.url) { addToast({ type: 'error', message: data.error || 'Outlook OAuth not configured' }); return; }
+      if (!isValidOAuthUrl(data.url)) {
+        addToast({ type: 'error', message: 'Invalid OAuth redirect rejected' });
+        return;
+      }
       window.location.href = data.url;
     } catch { addToast({ type: 'error', message: 'Failed to start Outlook sign-in' }); }
   }
@@ -296,6 +301,10 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       const res = await apiFetch(`${API_BASE}/api/gcal/auth-url`, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await res.json();
       if (data.error) { addToast({ type: 'error', message: data.error }); return; }
+      if (!isValidOAuthUrl(data.url)) {
+        addToast({ type: 'error', message: 'Invalid OAuth redirect rejected' });
+        return;
+      }
       window.location.href = data.url;
     } catch { addToast({ type: 'error', message: 'Failed to start Google sign-in' }); }
   }
