@@ -5,7 +5,7 @@ const { sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus } = requir
 const { fetchCalendarWindow, localMidnightUtc } = require('../lib/buildAgenticContext.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
-module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
+module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   /**
@@ -56,7 +56,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       if (calendarEvents.length === 0) {
         const fetchResult = await fetchCalendarWindow({
           userId, tz, days: 1,
-          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google,
           logger, requestId,
         });
         calendarEvents = fetchResult.events || [];

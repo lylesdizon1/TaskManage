@@ -111,4 +111,34 @@ const loadAllGcalAccounts = async (userId, db) => {
 // Gmail token helpers removed — tokens now live in user_integrations and are
 // read/written directly by server/routes/gmail.cjs and server/tools.cjs.
 
-module.exports = { getAppUrl, makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts };
+/**
+ * Per-key in-process save chain. Serializes load+merge+save for the same
+ * (userId, googleEmail) so concurrent oauth2.on('tokens') callbacks across
+ * cron ticks and request handlers can't race a stale spread over a
+ * freshly-rotated refresh_token.
+ *
+ * Single-instance deployment assumption (Railway). For multi-instance,
+ * upgrade to a Postgres advisory lock keyed on hash(userId, googleEmail).
+ */
+const _saveLocks = new Map();
+
+const mergeAndSaveGcalTokens = async (userId, newTokens, db, googleEmail) => {
+  const key = `${userId}:${(googleEmail || 'primary@placeholder').toLowerCase()}`;
+  const prior = _saveLocks.get(key) || Promise.resolve();
+  const next = (async () => {
+    // Don't let prior failures block subsequent saves; we still want to
+    // persist whatever fresh tokens we have.
+    try { await prior; } catch { /* prior failed; proceed */ }
+    const existing = await loadGcalTokens(userId, db, googleEmail);
+    const merged = { ...(existing || {}), ...newTokens };
+    await saveGcalTokens(userId, merged, db, googleEmail);
+  })();
+  _saveLocks.set(key, next);
+  // GC the slot once this chain idles so the map stays bounded.
+  next.finally(() => {
+    if (_saveLocks.get(key) === next) _saveLocks.delete(key);
+  }).catch(() => {});
+  return next;
+};
+
+module.exports = { getAppUrl, makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, mergeAndSaveGcalTokens };

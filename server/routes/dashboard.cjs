@@ -102,7 +102,7 @@ function classifyEvent(ev, nowMs) {
  * @param {Object} deps.db - Database helper module (db.cjs).
  * @returns {express.Router} Mounted by proxy-server.cjs.
  */
-module.exports = function createDashboardRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
+module.exports = function createDashboardRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   // ── Command Center ───────────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         if (allEvents.length === 0) {
           const fetchResult = await fetchCalendarWindow({
             userId, tz: userTz, days: 1,
-            loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+            loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google,
             logger, requestId: req.requestId,
           });
           allEvents = fetchResult.events || [];
@@ -399,7 +399,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       if (events.length === 0) {
         const fetchResult = await fetchCalendarWindow({
           userId, tz: userTz, days: 1,
-          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google,
+          loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google,
           logger, requestId: req.requestId,
         });
         events = fetchResult.events || [];

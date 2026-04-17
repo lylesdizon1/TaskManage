@@ -20,11 +20,12 @@ const db       = require('./db.cjs');
 const { JWT_SECRET, authenticateToken, requireAdmin, requireSuperAdmin, requireOwnership, setDb } = require('./server/middleware/auth.cjs');
 setDb(db);
 const { authLimiter, apiLimiter } = require('./server/middleware/rateLimit.cjs');
-const { makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, loadAllGcalAccounts: _loadAllGcalAccounts } = require('./server/utils/google.cjs');
+const { makeOAuth2Client, makeGmailOAuth2Client, saveGcalTokens: _saveGcalTokens, loadGcalTokens: _loadGcalTokens, loadAllGcalAccounts: _loadAllGcalAccounts, mergeAndSaveGcalTokens: _mergeAndSaveGcalTokens } = require('./server/utils/google.cjs');
 
 const saveGcalTokens  = (userId, tokens, googleEmail) => _saveGcalTokens(userId, tokens, db, googleEmail);
 const loadGcalTokens  = (userId, googleEmail) => _loadGcalTokens(userId, db, googleEmail);
 const loadAllGcalAccounts = (userId) => _loadAllGcalAccounts(userId, db);
+const mergeAndSaveGcalTokens = (userId, newTokens, googleEmail) => _mergeAndSaveGcalTokens(userId, newTokens, db, googleEmail);
 
 const imageUpload = multer({
   storage: multer.memoryStorage(),
@@ -76,10 +77,10 @@ app.use(logger.attachRequestId);
 app.use('/', require('./server/routes/auth.cjs')({ authenticateToken, JWT_SECRET, db }));
 app.use('/', require('./server/routes/users.cjs')({ authenticateToken, requireAdmin, db }));
 app.use('/', require('./server/routes/entities.cjs')({ authenticateToken, requireAdmin, db }));
-app.use('/', require('./server/routes/ai.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }));
+app.use('/', require('./server/routes/ai.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }));
 app.use('/', require('./server/routes/email.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/settings.cjs')({ authenticateToken, db }));
-app.use('/', require('./server/routes/gcal.cjs')({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, google }));
+app.use('/', require('./server/routes/gcal.cjs')({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, mergeAndSaveGcalTokens, google }));
 app.use('/', require('./server/routes/gmail.cjs')({ authenticateToken, db, makeGmailOAuth2Client, google }));
 app.use('/', require('./server/routes/inbox.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/tasks.cjs')({ authenticateToken, db }));
@@ -87,8 +88,8 @@ app.use('/', require('./server/routes/notes.cjs')({ authenticateToken, requireOw
 app.use('/', require('./server/routes/preferences.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/chat.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/financial.cjs')({ authenticateToken, requireOwnership, db }));
-app.use('/', require('./server/routes/dashboard.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }));
-const { router: alertsRouter, buildAndSendMorningBrief, buildAndSendDailyWrap } = require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google });
+app.use('/', require('./server/routes/dashboard.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }));
+const { router: alertsRouter, buildAndSendMorningBrief, buildAndSendDailyWrap } = require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google });
 app.use('/', alertsRouter);
 app.use('/', require('./server/routes/calendar-notes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/whatsapp.cjs')({ db, loadGcalTokens, makeOAuth2Client, google }));
@@ -418,8 +419,7 @@ async function syncGcalForUser(userId, tz) {
         // cron tick doesn't re-auth from a stale refresh_token.
         oauth2Client.on('tokens', async (newTokens) => {
           try {
-            const existing = await loadGcalTokens(userId, googleEmail);
-            await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
+            await mergeAndSaveGcalTokens(userId, newTokens, googleEmail);
           } catch (e) {
             cronLogger.error('gcal-sync.tokenRefresh.failed', { userId, googleEmail, error: e.message });
           }

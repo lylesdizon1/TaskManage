@@ -74,7 +74,7 @@ function localMidnightUtc(tz, offsetDays = 0) {
  * @param {number} [opts.days=7]  Window length in days starting at local
  *                                midnight today. Pass 1 for today-only.
  */
-async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, makeOAuth2Client, google, logger, requestId }) {
+async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google, logger, requestId }) {
   const userTz = tz || 'America/Los_Angeles';
   const windowDays = Number.isFinite(days) && days > 0 ? days : 7;
 
@@ -108,12 +108,10 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
       const oauth2 = makeOAuth2Client();
       if (!oauth2) return [];
       oauth2.setCredentials(acct.tokens);
-      if (saveGcalTokens && loadGcalTokens && acct.googleEmail) {
+      if (mergeAndSaveGcalTokens && acct.googleEmail) {
         oauth2.on('tokens', async (newTokens) => {
-          try {
-            const existing = await loadGcalTokens(userId, acct.googleEmail);
-            await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
-          } catch (e) { logger?.error?.('context.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
+          try { await mergeAndSaveGcalTokens(userId, newTokens, acct.googleEmail); }
+          catch (e) { logger?.error?.('context.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
         });
       }
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });

@@ -7,7 +7,7 @@ const { mintState, consumeState } = require('../utils/oauthState.cjs');
 
 const GCAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
 
-module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, google }) {
+module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Client, saveGcalTokens, loadGcalTokens, loadAllGcalAccounts, mergeAndSaveGcalTokens, google }) {
   const router = express.Router();
 
   /**
@@ -105,8 +105,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       const oauth2 = makeOAuth2Client();
       oauth2.setCredentials(acct.tokens);
       oauth2.on('tokens', async (newTokens) => {
-        const existing = await loadGcalTokens(userId, acct.googleEmail);
-        await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
+        try { await mergeAndSaveGcalTokens(userId, newTokens, acct.googleEmail); }
+        catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
       });
 
       try {
@@ -167,8 +167,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
     oauth2.setCredentials(tokens);
     oauth2.on('tokens', async (newTokens) => {
-      const existing = await loadGcalTokens(userId);
-      await saveGcalTokens(userId, { ...existing, ...newTokens });
+      try { await mergeAndSaveGcalTokens(userId, newTokens); }
+      catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, error: e.message }); }
     });
 
     try {
@@ -318,10 +318,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       if (!oauth2) return [];
       oauth2.setCredentials(acct.tokens);
       oauth2.on('tokens', async (newTokens) => {
-        try {
-          const existing = await loadGcalTokens(userId, acct.googleEmail);
-          await saveGcalTokens(userId, { ...existing, ...newTokens }, acct.googleEmail);
-        } catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
+        try { await mergeAndSaveGcalTokens(userId, newTokens, acct.googleEmail); }
+        catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, googleEmail: acct.googleEmail, error: e.message }); }
       });
 
       const calendar = google.calendar({ version: 'v3', auth: oauth2 });
@@ -400,10 +398,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
     oauth2.setCredentials(tokens);
     oauth2.on('tokens', async (newTokens) => {
-      try {
-        const existing = await loadGcalTokens(userId, googleEmail);
-        await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
-      } catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, error: e.message }); }
+      try { await mergeAndSaveGcalTokens(userId, newTokens, googleEmail); }
+      catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, error: e.message }); }
     });
 
     try {
@@ -455,10 +451,8 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
     oauth2.setCredentials(tokens);
     oauth2.on('tokens', async (newTokens) => {
-      try {
-        const existing = await loadGcalTokens(userId, googleEmail);
-        await saveGcalTokens(userId, { ...existing, ...newTokens }, googleEmail);
-      } catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, error: e.message }); }
+      try { await mergeAndSaveGcalTokens(userId, newTokens, googleEmail); }
+      catch (e) { logger.error('gcal.tokenRefresh.failed', { userId, error: e.message }); }
     });
 
     try {

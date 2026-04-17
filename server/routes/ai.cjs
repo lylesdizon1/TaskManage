@@ -84,7 +84,7 @@ const chatExecuteLimit = userRateLimit({ key: 'chat-execute', limit: 50, windowS
  * before being passed into agenticLoop. This module does not implement tool
  * logic directly; it injects executeTool into agenticLoop and handles transport.
  */
-function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, makeOAuth2Client, google }) {
+function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
   // ── GCal token cache (5-minute TTL per user) ───────────────────────────────
@@ -281,7 +281,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       const userTz = timeZone || req.user.timezone || 'America/Los_Angeles';
       const ctx = await buildAgenticContext({
         userId, entityIds, db, tz: userTz, contextHint: context_hint,
-        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens,
+        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens,
         makeOAuth2Client, google, logger, requestId: req.requestId,
       });
       const tz = ctx.tz;
