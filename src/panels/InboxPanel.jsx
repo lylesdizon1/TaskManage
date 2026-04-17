@@ -44,7 +44,11 @@ function cleanPlainText(body) {
 
 // Strip dangerous tags + their contents before we hand HTML to the DOM.
 // Keeps formatting/layout tags. Also strips inline event handlers and
-// javascript: URLs as a cheap second layer.
+// script-bearing URL schemes as a cheap second layer.
+//
+// This is regex sanitization — known to be bypassable by sufficiently
+// motivated payloads (HTML entity tricks, mixed encoding). DOMPurify is
+// the right long-term answer; tracking as a follow-up.
 function sanitizeHtml(raw) {
   if (!raw) return '';
   let out = String(raw);
@@ -55,12 +59,16 @@ function sanitizeHtml(raw) {
   out = out.replace(/<embed\b[\s\S]*?\/?>/gi, '');
   out = out.replace(/<link\b[^>]*>/gi, '');
   out = out.replace(/<meta\b[^>]*>/gi, '');
+  // Strip <form> + <input> tags only (not content) — neutralizes
+  // phishing forms without dropping legitimate text inside emails.
+  out = out.replace(/<\/?form\b[^>]*>/gi, '');
+  out = out.replace(/<input\b[^>]*\/?>/gi, '');
   // Strip on* event handlers (onclick, onload, …).
   out = out.replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '');
   out = out.replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '');
   out = out.replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '');
-  // Neutralize javascript: in href/src.
-  out = out.replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"');
+  // Neutralize script-bearing URL schemes in href/src.
+  out = out.replace(/(href|src)\s*=\s*(["'])\s*(?:javascript|data|vbscript):[^"']*\2/gi, '$1=$2#$2');
   return out;
 }
 
