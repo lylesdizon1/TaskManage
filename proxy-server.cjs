@@ -42,7 +42,11 @@ const DIST_DIR = path.join(__dirname, 'dist');
 
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'] }));
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean) || ['http://localhost:3000'],
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+}));
 app.use(express.json({ limit: '4mb' }));
 app.use('/api/auth/login', authLimiter);
 app.use('/api/', apiLimiter);
