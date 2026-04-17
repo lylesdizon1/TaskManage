@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { getIntegrationStatus } = require('../utils/integrations.cjs');
+const { getIntegrationStatus, wrapWebhookUrl, unwrapWebhookUrl } = require('../utils/integrations.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 const INTEGRATION_TYPES = new Set(['email_alerts', 'slack_webhook', 'ultramsg_whatsapp']);
@@ -27,7 +27,8 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
   function maskIntegrationConfig(type, cfg = {}) {
     const out = { ...cfg };
     if (type === 'slack_webhook' && out.webhookUrl) {
-      out.webhookUrl = maskSecret(out.webhookUrl);
+      const plain = unwrapWebhookUrl(out.webhookUrl);
+      out.webhookUrl = plain ? maskSecret(plain) : '';
     }
     if (type === 'ultramsg_whatsapp') {
       if (out.token) out.token = maskSecret(out.token);
@@ -167,6 +168,11 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       for (const [k, v] of Object.entries(config)) {
         if (typeof v === 'string' && v.includes('****')) continue;
         clean[k] = v;
+      }
+
+      // Encrypt-at-rest for Slack webhook URLs (mirrors Gmail/Outlook tokens).
+      if (type === 'slack_webhook' && typeof clean.webhookUrl === 'string') {
+        clean.webhookUrl = wrapWebhookUrl(clean.webhookUrl);
       }
 
       const row = await db.upsertUserIntegration(req.user.id, type, clean, isEnabled);

@@ -801,11 +801,12 @@ async function backfillSuperadminIntegrationsFromEnv() {
       );
     }
     if (process.env.SLACK_WEBHOOK_URL) {
+      const { wrapWebhookUrl } = require('./server/utils/integrations.cjs');
       await pool.query(
         `INSERT INTO user_integrations (user_id, integration_type, account_email, config_json, is_enabled)
          VALUES ($1, 'slack_webhook', '', $2::jsonb, TRUE)
          ON CONFLICT (user_id, integration_type, account_email) DO NOTHING`,
-        [u.id, JSON.stringify({ webhookUrl: process.env.SLACK_WEBHOOK_URL })],
+        [u.id, JSON.stringify({ webhookUrl: wrapWebhookUrl(process.env.SLACK_WEBHOOK_URL) })],
       );
     }
     if (process.env.ULTRAMSG_INSTANCE && process.env.ULTRAMSG_TOKEN) {

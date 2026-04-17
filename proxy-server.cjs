@@ -129,6 +129,11 @@ async function start() {
   await db.initTables();
   await db.seedUsersIfEmpty();
   try { await db.runMigrations(); } catch (err) { console.error('[migration]', err.message); }
+  try {
+    const { migrateSlackWebhooksToEncrypted } = require('./server/utils/integrations.cjs');
+    const migrated = await migrateSlackWebhooksToEncrypted(db);
+    if (migrated > 0) console.log(`[migration] Encrypted ${migrated} legacy Slack webhook(s)`);
+  } catch (err) { console.error('[migration] slack-webhook-encrypt:', err.message); }
   server = app.listen(PORT, '0.0.0.0', () => console.log(`\n✓ Dizon.ai server running at http://localhost:${PORT}\n`));
 }
 

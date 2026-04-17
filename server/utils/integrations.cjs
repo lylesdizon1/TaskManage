@@ -14,11 +14,35 @@
  */
 
 const { getResendClient, getFromEmail } = require('./email.cjs');
+const { encrypt, decrypt } = require('./crypto.cjs');
+
+/**
+ * Wrap a plaintext Slack webhook URL into the encrypted-at-rest shape
+ * used in user_integrations.config_json. Mirrors the {_enc: …} marker
+ * pattern used for Gmail/Outlook tokens.
+ */
+function wrapWebhookUrl(url) {
+  if (!url) return url;
+  return { _enc: encrypt(url) };
+}
+
+/**
+ * Unwrap a stored webhookUrl to plaintext. Tolerates three shapes:
+ *  - { _enc: 'iv:ciphertext' } — current format
+ *  - 'https://hooks.slack.com/...' — legacy plaintext (pre-migration)
+ *  - null / undefined — unconfigured
+ */
+function unwrapWebhookUrl(stored) {
+  if (!stored) return null;
+  if (typeof stored === 'string') return stored;
+  if (stored._enc) return decrypt(stored._enc);
+  return null;
+}
 
 async function sendSlack(db, userId, text) {
   const row = await db.getUserIntegration(userId, 'slack_webhook');
   if (!row || !row.isEnabled) return { ok: false, reason: 'not_configured' };
-  const url = row.config?.webhookUrl;
+  const url = unwrapWebhookUrl(row.config?.webhookUrl);
   if (!url) return { ok: false, reason: 'not_configured' };
 
   const r = await fetch(url, {
@@ -100,4 +124,35 @@ async function getIntegrationStatus(db, userId) {
   };
 }
 
-module.exports = { sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus };
+/**
+ * One-time encrypt-at-rest migration for legacy plaintext Slack webhook
+ * URLs. Idempotent: only touches rows where config_json.webhookUrl is
+ * still a JSON string (post-encryption rows have it as a {_enc:…} object,
+ * which jsonb_typeof reports as 'object' and the WHERE filter skips).
+ *
+ * Returns the count of rows migrated. Safe to run on every boot.
+ */
+async function migrateSlackWebhooksToEncrypted(db) {
+  const { rows } = await db.pool.query(`
+    SELECT id, config_json FROM user_integrations
+    WHERE integration_type = 'slack_webhook'
+      AND jsonb_typeof(config_json -> 'webhookUrl') = 'string'
+  `);
+  let migrated = 0;
+  for (const row of rows) {
+    const url = row.config_json?.webhookUrl;
+    if (!url || typeof url !== 'string') continue;
+    const nextConfig = { ...row.config_json, webhookUrl: wrapWebhookUrl(url) };
+    await db.pool.query(
+      `UPDATE user_integrations SET config_json = $1::jsonb WHERE id = $2`,
+      [JSON.stringify(nextConfig), row.id],
+    );
+    migrated++;
+  }
+  return migrated;
+}
+
+module.exports = {
+  sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus,
+  wrapWebhookUrl, unwrapWebhookUrl, migrateSlackWebhooksToEncrypted,
+};
