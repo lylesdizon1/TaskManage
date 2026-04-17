@@ -126,12 +126,11 @@ import {
 
 // fetchSuggestedTags moved to src/utils/aiHelpers.js
 
-async function callClaudeChat(messages, systemPrompt, apiKey, authToken) {
+async function callClaudeChat(messages, systemPrompt, authToken) {
   const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
-      apiKey,
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       system: systemPrompt,
@@ -146,12 +145,11 @@ async function callClaudeChat(messages, systemPrompt, apiKey, authToken) {
   return data.content?.[0]?.text || '(no response)';
 }
 
-async function callOpenAIChat(messages, systemPrompt, apiKey, authToken) {
+async function callOpenAIChat(messages, systemPrompt, authToken) {
   const res = await apiFetch('/api/openai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
-      apiKey,
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -608,9 +606,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     try {
       let reply;
       if (chatBackend === 'claude') {
-        reply = await callClaudeChat(updatedMessages, sysPrompt, apiKeys.claude, authToken);
+        reply = await callClaudeChat(updatedMessages, sysPrompt, authToken);
       } else {
-        reply = await callOpenAIChat(updatedMessages, sysPrompt, apiKeys.openai, authToken);
+        reply = await callOpenAIChat(updatedMessages, sysPrompt, authToken);
       }
       const assistantMsg = { role: 'assistant', content: reply, persona: { emoji: effectivePersona.emoji, name: effectivePersona.defaultName, id: effectivePersona.id } };
       setChatMessages((prev) => [...prev, assistantMsg]);
@@ -1737,7 +1735,6 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <Suspense fallback={null}>
             <AddTaskForm
               onAdd={(task) => { addTask(task); setShowTaskModal(false); }}
-              claudeKey={apiKeys.claude}
               currentUser={currentUser}
               entities={userEntities}
               authToken={authToken}

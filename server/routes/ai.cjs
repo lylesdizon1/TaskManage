@@ -104,20 +104,21 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
 
   /**
    * POST /api/claude — Thin proxy to the Anthropic Messages API.
-   * Body: { apiKey?: string, ...anthropicPayload }.
-   * Falls back to CLAUDE_API_KEY env var if apiKey not in body.
-   *
-   * @note The apiKey check `!bodyKey.includes('****')` prevents the
-   * frontend from accidentally sending a masked key placeholder.
+   * Body: anthropicPayload only. The API key is server-side only
+   * (CLAUDE_API_KEY env var); requests carrying an `apiKey` field
+   * are rejected to prevent client-supplied key injection / quota bypass.
    *
    * @note Authenticated but thin pass-through proxy. Caller-side
    * validation and rate limiting still matter — request bodies are
    * forwarded largely unchanged to the upstream LLM API.
    */
   router.post('/api/claude', authenticateToken, async (req, res) => {
-    const { apiKey: bodyKey, ...body } = req.body;
-    const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.CLAUDE_API_KEY;
-    if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
+    if (req.body.apiKey) {
+      return res.status(400).json({ error: 'API key must be configured server-side' });
+    }
+    const apiKey = process.env.CLAUDE_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
+    const body = req.body;
 
     try {
       const response = await axios.post(
@@ -144,17 +145,20 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
 
   /**
    * POST /api/chat/stream — SSE streaming proxy to Claude.
-   * Body: { apiKey?: string, ...anthropicPayload }.
-   * Falls back to CLAUDE_API_KEY env var if apiKey not in body.
+   * Body: anthropicPayload only. Key is server-side (CLAUDE_API_KEY);
+   * requests carrying `apiKey` are rejected.
    *
    * @note This endpoint does not inject Aria context, does not
    * execute tools, and does not emit tool progress events.
    * For Aria's agentic chat, use /api/chat/execute.
    */
   router.post('/api/chat/stream', authenticateToken, async (req, res) => {
-    const { apiKey: bodyKey, ...body } = req.body;
-    const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.CLAUDE_API_KEY;
-    if (!apiKey) return res.status(401).json({ error: 'Missing apiKey' });
+    if (req.body.apiKey) {
+      return res.status(400).json({ error: 'API key must be configured server-side' });
+    }
+    const apiKey = process.env.CLAUDE_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
+    const body = req.body;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -192,17 +196,20 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
 
   /**
    * POST /api/openai — Thin proxy to the OpenAI Chat Completions API.
-   * Body: { apiKey?: string, ...openaiPayload }.
-   * Falls back to OPENAI_API_KEY env var if apiKey not in body.
+   * Body: openaiPayload only. Key is server-side (OPENAI_API_KEY);
+   * requests carrying `apiKey` are rejected.
    *
    * @note Authenticated but thin pass-through proxy. Caller-side
    * validation and rate limiting still matter — request bodies are
    * forwarded largely unchanged to the upstream LLM API.
    */
   router.post('/api/openai', authenticateToken, async (req, res) => {
-    const { apiKey: bodyKey, ...body } = req.body;
-    const apiKey = (bodyKey && !bodyKey.includes('****')) ? bodyKey : process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(401).json({ error: 'Missing apiKey in request body' });
+    if (req.body.apiKey) {
+      return res.status(400).json({ error: 'API key must be configured server-side' });
+    }
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+    const body = req.body;
 
     try {
       const response = await axios.post(

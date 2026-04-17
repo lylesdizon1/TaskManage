@@ -4,7 +4,7 @@ import { getEntityStyle } from '../../constants/colors.js';
 import { XIcon, SpinnerIcon } from '../icons/Icons.jsx';
 import { fetchSuggestedTags } from '../../utils/aiHelpers.js';
 
-export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, authToken, gcalConnected, forceOpen, onClose, apiFetch }) {
+export default function AddTaskForm({ onAdd, currentUser, entities, authToken, gcalConnected, forceOpen, onClose, apiFetch }) {
   const userEntityNames = entities.map((e) => e.name);
   const emptyForm = {
     title: '',
@@ -26,10 +26,10 @@ export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, a
 
   const runSuggestion = useCallback(
     async (title, desc) => {
-      if (!claudeKey || !title.trim()) return;
+      if (!title.trim()) return;
       const callId = ++suggestionIdRef.current;
       setSuggesting(true);
-      const suggested = await fetchSuggestedTags(title, desc, claudeKey, userEntityNames, authToken, apiFetch);
+      const suggested = await fetchSuggestedTags(title, desc, userEntityNames, authToken, apiFetch);
       if (callId !== suggestionIdRef.current) return; // stale — a newer call superseded this one
       setSuggesting(false);
       if (suggested.length > 0) {
@@ -40,7 +40,7 @@ export default function AddTaskForm({ onAdd, claudeKey, currentUser, entities, a
         }));
       }
     },
-    [claudeKey, userEntityNames, authToken], // eslint-disable-line react-hooks/exhaustive-deps
+    [userEntityNames, authToken], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   function scheduleOrRunSuggestion(title, desc) {

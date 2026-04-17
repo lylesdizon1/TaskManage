@@ -1,5 +1,5 @@
-export async function fetchSuggestedTags(title, description, claudeKey, entityNames, authToken, apiFetch) {
-  if (!claudeKey || !title.trim() || entityNames.length === 0) return [];
+export async function fetchSuggestedTags(title, description, entityNames, authToken, apiFetch) {
+  if (!title.trim() || entityNames.length === 0) return [];
 
   const prompt =
     `Given these categories: ${entityNames.join(', ')}. ` +
@@ -12,7 +12,6 @@ export async function fetchSuggestedTags(title, description, claudeKey, entityNa
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({
-        apiKey: claudeKey,
         model: 'claude-sonnet-4-20250514',
         max_tokens: 100,
         messages: [{ role: 'user', content: prompt }],
