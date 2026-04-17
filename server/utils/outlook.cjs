@@ -36,7 +36,7 @@ function getClientConfig() {
   return { clientId, clientSecret, redirectUri };
 }
 
-function buildAuthUrl(userId) {
+function buildAuthUrl(state) {
   const cfg = getClientConfig();
   if (!cfg) return null;
   const params = new URLSearchParams({
@@ -45,7 +45,7 @@ function buildAuthUrl(userId) {
     redirect_uri: cfg.redirectUri,
     response_mode: 'query',
     scope: SCOPES.join(' '),
-    state: userId,
+    state,
     prompt: 'consent',
   });
   return `${AUTH_BASE}/authorize?${params.toString()}`;

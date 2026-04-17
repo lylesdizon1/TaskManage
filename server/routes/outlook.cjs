@@ -21,21 +21,35 @@ const {
   buildAuthUrl, exchangeCodeForTokens, fetchUserProfile,
   saveOutlookAccount, listOutlookAccounts, getClientConfig,
 } = require('../utils/outlook.cjs');
+const { mintState, consumeState } = require('../utils/oauthState.cjs');
 
 module.exports = function createOutlookRouter({ authenticateToken, db }) {
   const router = express.Router();
 
-  router.get('/api/outlook/auth-url', authenticateToken, (req, res) => {
-    const url = buildAuthUrl(req.user.id);
+  router.get('/api/outlook/auth-url', authenticateToken, async (req, res) => {
+    let state;
+    try {
+      state = await mintState(req.user.id);
+    } catch (e) {
+      logger.error('outlook.authUrl.stateMint.failed', { userId: req.user.id, error: e.message });
+      return res.status(503).json({ error: 'OAuth temporarily unavailable; please retry' });
+    }
+    const url = buildAuthUrl(state);
     if (!url) return res.status(500).json({ error: 'Outlook OAuth not configured (set OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET)' });
     res.json({ url });
   });
 
   router.get('/api/outlook/callback', async (req, res) => {
-    const { code, state: userId, error, error_description: errDesc } = req.query;
+    const { code, state, error, error_description: errDesc } = req.query;
     if (error) return res.status(400).send(`Outlook auth failed: ${errDesc || error}`);
-    if (!code || !userId) return res.status(400).send('Missing code or state');
+    if (!code || !state) return res.status(400).send('Missing code or state');
     if (!getClientConfig()) return res.status(500).send('Outlook OAuth not configured');
+
+    const userId = await consumeState(state);
+    if (!userId) {
+      logger.warn('outlook.callback.invalidState', { state: typeof state === 'string' ? state.slice(0, 8) : 'non-string' });
+      return res.status(400).send('Invalid or expired OAuth state');
+    }
 
     try {
       const tokens = await exchangeCodeForTokens(code);

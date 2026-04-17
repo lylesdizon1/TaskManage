@@ -4,6 +4,7 @@ const express = require('express');
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('../utils/crypto.cjs');
+const { mintState, consumeState } = require('../utils/oauthState.cjs');
 // Contact auto-create from inbound mail disabled for V1 — contactIngestion
 // remains available for reply-based + manual flows.
 
@@ -54,32 +55,47 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
   /**
    * GET /api/gmail/auth-url — Google OAuth consent URL (readonly scope).
    */
-  router.get('/api/gmail/auth-url', authenticateToken, (req, res) => {
+  router.get('/api/gmail/auth-url', authenticateToken, async (req, res) => {
     const oauth2 = makeGmailOAuth2Client();
     if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)' });
+
+    let state;
+    try {
+      state = await mintState(req.user.id);
+    } catch (e) {
+      logger.error('gmail.authUrl.stateMint.failed', { userId: req.user.id, error: e.message });
+      return res.status(503).json({ error: 'OAuth temporarily unavailable; please retry' });
+    }
 
     const url = oauth2.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
       scope: GMAIL_SCOPES,
-      state: req.user.id,
+      state,
     });
     res.json({ url });
   });
 
   /**
-   * GET /api/gmail/callback?code=...&state=userId
+   * GET /api/gmail/callback?code=...&state=...
    * Exchanges code for tokens, fetches the connected Google email, and
    * stores one row per (user_id, 'gmail', account_email) in user_integrations.
    * Reconnecting the same account updates tokens only; never overwrites a
-   * different account's row.
+   * different account's row. State is a one-time CSRF token bound to the
+   * initiating userId in Redis.
    */
   router.get('/api/gmail/callback', async (req, res) => {
     const oauth2 = makeGmailOAuth2Client();
     if (!oauth2) return res.status(500).send('Google OAuth not configured');
 
-    const { code, state: userId } = req.query;
-    if (!code || !userId) return res.status(400).send('Missing code or state');
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).send('Missing code or state');
+
+    const userId = await consumeState(state);
+    if (!userId) {
+      logger.warn('gmail.callback.invalidState', { state: typeof state === 'string' ? state.slice(0, 8) : 'non-string' });
+      return res.status(400).send('Invalid or expired OAuth state');
+    }
 
     try {
       const { tokens } = await oauth2.getToken(code);

@@ -3,6 +3,7 @@
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const { writeAudit } = require('../../guardrails/audit.cjs');
+const { mintState, consumeState } = require('../utils/oauthState.cjs');
 
 const GCAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
 
@@ -13,32 +14,45 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
    * GET /api/gcal/auth-url
    * Returns the Google OAuth consent URL.
    */
-  router.get('/api/gcal/auth-url', authenticateToken, (req, res) => {
+  router.get('/api/gcal/auth-url', authenticateToken, async (req, res) => {
     const oauth2 = makeOAuth2Client();
     if (!oauth2) return res.status(500).json({ error: 'Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)' });
 
-    const userId = req.user.id;
+    let state;
+    try {
+      state = await mintState(req.user.id);
+    } catch (e) {
+      logger.error('gcal.authUrl.stateMint.failed', { userId: req.user.id, error: e.message });
+      return res.status(503).json({ error: 'OAuth temporarily unavailable; please retry' });
+    }
 
     const url = oauth2.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
       scope: GCAL_SCOPES,
-      state: userId,
+      state,
     });
     res.json({ url });
   });
 
   /**
-   * GET /api/gcal/callback?code=...&state=userId
+   * GET /api/gcal/callback?code=...&state=...
    * Google redirects here after consent. Exchanges code for tokens,
-   * fetches the account email, and stores with dedup.
+   * fetches the account email, and stores with dedup. The state is a
+   * one-time CSRF token bound to the initiating userId in Redis.
    */
   router.get('/api/gcal/callback', async (req, res) => {
     const oauth2 = makeOAuth2Client();
     if (!oauth2) return res.status(500).send('Google OAuth not configured');
 
-    const { code, state: userId } = req.query;
-    if (!code || !userId) return res.status(400).send('Missing code or state');
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).send('Missing code or state');
+
+    const userId = await consumeState(state);
+    if (!userId) {
+      logger.warn('gcal.callback.invalidState', { state: typeof state === 'string' ? state.slice(0, 8) : 'non-string' });
+      return res.status(400).send('Invalid or expired OAuth state');
+    }
 
     try {
       const { tokens } = await oauth2.getToken(code);
