@@ -59,6 +59,8 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       }
 
       const maxRows = Math.min(parseInt(limit, 10) || 100, 500);
+      params.push(maxRows);
+      const limitIdx = paramIdx++;
 
       const sql = `SELECT id, title, description, priority, status, due_date AS "dueDate",
               due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
@@ -66,7 +68,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
        FROM tasks
        WHERE ${conditions.join(' AND ')}
        ORDER BY completed_at DESC NULLS LAST, created_at DESC
-       LIMIT ${maxRows}`;
+       LIMIT $${limitIdx}`;
 
       const { rows } = await db.pool.query(sql, params);
       return res.json(rows);
