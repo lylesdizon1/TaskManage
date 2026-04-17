@@ -16,16 +16,20 @@
  * db.cjs is loaded before route setup in proxy-server.cjs.
  */
 
-const jwt    = require('jsonwebtoken');
-const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 
 /**
- * JWT signing secret. Uses the JWT_SECRET env var in production.
- * Falls back to a random secret in development — tokens will not
- * survive server restarts, which is acceptable for local use.
+ * JWT signing secret. Required at startup — no fallback, since a per-process
+ * random secret silently invalidates every session on restart and masks a
+ * misconfigured deploy as "users keep getting logged out."
  * @type {string}
  */
-const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const JWT_SECRET = (() => {
+  if (!process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET environment variable is required');
+  }
+  return process.env.JWT_SECRET;
+})();
 
 /** @type {Object|null} Database module reference, set via setDb(). */
 let _db = null;
