@@ -937,7 +937,18 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               title="Filter by account"
             >
               <option value="">All accounts</option>
-              {accounts.map(a => <option key={a.id} value={a.account_email}>{shortAccount(a.account_email)}</option>)}
+              {accounts.map((a) => {
+                // Legacy placeholder rows can have empty account_email —
+                // showing a blank <option> is invisible and confusing.
+                // Fall back to a labeled "Account #id (reconnect)" so the
+                // user sees the integration exists and knows the action.
+                const label = (a.account_email && a.account_email.trim())
+                  ? shortAccount(a.account_email)
+                  : `Account #${a.id} (reconnect)`;
+                return (
+                  <option key={a.id} value={a.account_email || ''}>{label}</option>
+                );
+              })}
             </select>
           )}
         </div>
@@ -1827,7 +1838,11 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
         style={{
           transform: `translateX(${dragOffset}px)`,
           transition: touchStartX.current == null ? 'transform 160ms ease' : 'none',
-          backgroundColor: active ? '#ededff' : 'transparent',
+          // Solid background so the swipe drawer behind isn't visible
+          // through the row at rest. Match panel surface (#f5f2fa) when
+          // inactive, primary container (#ededff) when selected. The
+          // drawer only shows when this wrapper translates left.
+          backgroundColor: active ? '#ededff' : '#f5f2fa',
         }}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
