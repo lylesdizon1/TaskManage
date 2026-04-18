@@ -2747,6 +2747,453 @@ async function upsertFilingPattern({ userId, accountEmail, matchType, matchValue
   return rows[0] || null;
 }
 
+// ── Aria Intelligence System (Phase 0) ────────────────────────────────────
+//
+// All helpers user-scoped. Multi-tenant isolation: every query gates on
+// user_id at the SQL layer. Aria learning Lyle's patterns NEVER touches
+// Liz's rules — the userId param is the only tenant boundary and there is
+// no admin-bypass code path.
+//
+// Determinism: decision_log is append-only. The only mutation helper is
+// updateDecisionOutcome, and it only touches the `outcome` column.
+
+// ── behavior_rules ──
+
+/**
+ * Insert or update a behavior rule. (user_id, rule_text) treated as a
+ * natural key for upsert semantics — repeated insertion of the same rule
+ * text bumps strength + last_reinforced_at via reinforceRule, not via
+ * this helper. This helper is the explicit "I want this rule" path.
+ */
+async function upsertBehaviorRule(userId, rule) {
+  const {
+    ruleType,
+    triggerContext = null,
+    ruleText,
+    source,
+    strength = 0.5,
+  } = rule;
+  const { rows } = await pool.query(
+    `INSERT INTO behavior_rules
+       (user_id, rule_type, trigger_context, rule_text, source, strength,
+        last_reinforced_at, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW(), TRUE)
+     RETURNING id, user_id AS "userId", rule_type AS "ruleType",
+               trigger_context AS "triggerContext", rule_text AS "ruleText",
+               source, strength, times_reinforced AS "timesReinforced",
+               times_violated AS "timesViolated",
+               last_reinforced_at AS "lastReinforcedAt",
+               last_violated_at AS "lastViolatedAt",
+               is_active AS "isActive",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [userId, ruleType, triggerContext, ruleText, source, strength],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Active rules for a user, sorted by strength DESC. Used by both
+ * buildPreferencesBlock (Phase 1) and the decision engine (Phase 3).
+ * Filters by is_active and the 0.3 inject-into-context threshold.
+ */
+async function getActiveRulesForUser(userId, opts = {}) {
+  const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 10, 1), 50);
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", rule_type AS "ruleType",
+            trigger_context AS "triggerContext", rule_text AS "ruleText",
+            source, strength, times_reinforced AS "timesReinforced",
+            times_violated AS "timesViolated",
+            last_reinforced_at AS "lastReinforcedAt",
+            last_violated_at AS "lastViolatedAt",
+            is_active AS "isActive",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM behavior_rules
+      WHERE user_id = $1 AND is_active = TRUE AND strength >= 0.3
+      ORDER BY strength DESC, updated_at DESC
+      LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
+/**
+ * Bump strength +0.1 (cap 1.0), increment times_reinforced, refresh
+ * last_reinforced_at. Used by Phase 4 confirm signal. Scoped by userId
+ * so a stolen rule_id from another user can't be promoted.
+ */
+async function reinforceRule(userId, ruleId) {
+  const { rows } = await pool.query(
+    `UPDATE behavior_rules
+        SET strength = LEAST(1.0, strength + 0.1),
+            times_reinforced = times_reinforced + 1,
+            last_reinforced_at = NOW(),
+            updated_at = NOW()
+      WHERE id = $1 AND user_id = $2
+      RETURNING id, strength, times_reinforced AS "timesReinforced"`,
+    [ruleId, userId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Reduce strength -0.1 (floor 0.0), increment times_violated, refresh
+ * last_violated_at. Used by Phase 4 correction signal.
+ */
+async function violateRule(userId, ruleId) {
+  const { rows } = await pool.query(
+    `UPDATE behavior_rules
+        SET strength = GREATEST(0.0, strength - 0.1),
+            times_violated = times_violated + 1,
+            last_violated_at = NOW(),
+            updated_at = NOW()
+      WHERE id = $1 AND user_id = $2
+      RETURNING id, strength, times_violated AS "timesViolated"`,
+    [ruleId, userId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Apply the time-decay formula across all active rules for a user.
+ * strength = strength * (0.95 ^ days_since_reinforced)
+ * Falls back to created_at when last_reinforced_at is NULL. Returns the
+ * count of rows touched. Phase 2 nightly cron drives this.
+ */
+async function decayRules(userId) {
+  const { rowCount } = await pool.query(
+    `UPDATE behavior_rules
+        SET strength = strength
+              * POWER(0.95, EXTRACT(EPOCH FROM (NOW() - COALESCE(last_reinforced_at, created_at))) / 86400.0),
+            updated_at = NOW()
+      WHERE user_id = $1 AND is_active = TRUE`,
+    [userId],
+  );
+  return rowCount;
+}
+
+/**
+ * Auto-archive rules whose strength has decayed below 0.1. Returns the
+ * count archived. Run after decayRules in the same nightly tick.
+ */
+async function archiveWeakRules(userId) {
+  const { rowCount } = await pool.query(
+    `UPDATE behavior_rules
+        SET is_active = FALSE, updated_at = NOW()
+      WHERE user_id = $1 AND is_active = TRUE AND strength < 0.1`,
+    [userId],
+  );
+  return rowCount;
+}
+
+// ── user_preferences_v2 ──
+
+/**
+ * Upsert a key/value preference. JSONB stores arbitrary shape — caller
+ * is responsible for the value schema per key. Source 'explicit' = user
+ * stated; 'inferred' = pattern detection wrote it.
+ */
+async function setPreference(userId, key, value, source = 'explicit') {
+  const { rows } = await pool.query(
+    `INSERT INTO user_preferences_v2
+       (user_id, preference_key, preference_value, source,
+        confidence, last_confirmed_at)
+     VALUES ($1, $2, $3::jsonb, $4,
+             CASE WHEN $4 = 'explicit' THEN 1.0 ELSE 0.5 END,
+             CASE WHEN $4 = 'explicit' THEN NOW() ELSE NULL END)
+     ON CONFLICT (user_id, preference_key) DO UPDATE SET
+       preference_value  = EXCLUDED.preference_value,
+       source            = EXCLUDED.source,
+       confidence        = EXCLUDED.confidence,
+       last_confirmed_at = EXCLUDED.last_confirmed_at,
+       updated_at        = NOW()
+     RETURNING id, user_id AS "userId", preference_key AS "preferenceKey",
+               preference_value AS "preferenceValue",
+               source, confidence,
+               last_confirmed_at AS "lastConfirmedAt",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [userId, key, JSON.stringify(value), source],
+  );
+  return rows[0] || null;
+}
+
+async function getPreference(userId, key) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", preference_key AS "preferenceKey",
+            preference_value AS "preferenceValue",
+            source, confidence,
+            last_confirmed_at AS "lastConfirmedAt",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM user_preferences_v2
+      WHERE user_id = $1 AND preference_key = $2`,
+    [userId, key],
+  );
+  return rows[0] || null;
+}
+
+async function getAllPreferences(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, preference_key AS "preferenceKey",
+            preference_value AS "preferenceValue",
+            source, confidence,
+            last_confirmed_at AS "lastConfirmedAt",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM user_preferences_v2
+      WHERE user_id = $1
+      ORDER BY preference_key ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+// ── decision_log ──
+
+/**
+ * Append a decision row. Returns the created row including id so the
+ * caller can stash it for later updateDecisionOutcome calls. This is
+ * the only INSERT path; never UPDATE except via updateDecisionOutcome.
+ */
+async function logDecision(userId, data) {
+  const {
+    actionType,
+    toolCalled = null,
+    toolInput = null,
+    confidenceScore = null,
+    riskScore = null,
+    disposition,
+    outcome = null,
+    ruleIdsApplied = null,
+    conflictDetected = false,
+    conflictResolution = null,
+    correctionId = null,
+    contextSummary = null,
+  } = data;
+  const { rows } = await pool.query(
+    `INSERT INTO decision_log
+       (user_id, action_type, tool_called, tool_input,
+        confidence_score, risk_score, disposition, outcome,
+        rule_ids_applied, conflict_detected, conflict_resolution,
+        correction_id, context_summary)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     RETURNING id, user_id AS "userId", action_type AS "actionType",
+               tool_called AS "toolCalled", tool_input AS "toolInput",
+               confidence_score AS "confidenceScore",
+               risk_score AS "riskScore",
+               disposition, outcome,
+               rule_ids_applied AS "ruleIdsApplied",
+               conflict_detected AS "conflictDetected",
+               conflict_resolution AS "conflictResolution",
+               correction_id AS "correctionId",
+               context_summary AS "contextSummary",
+               created_at AS "createdAt"`,
+    [userId, actionType, toolCalled, toolInput ? JSON.stringify(toolInput) : null,
+     confidenceScore, riskScore, disposition, outcome,
+     ruleIdsApplied, conflictDetected, conflictResolution,
+     correctionId, contextSummary],
+  );
+  return rows[0] || null;
+}
+
+async function getDecisionHistory(userId, opts = {}) {
+  const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 20, 1), 200);
+  const { rows } = await pool.query(
+    `SELECT id, action_type AS "actionType", tool_called AS "toolCalled",
+            tool_input AS "toolInput",
+            confidence_score AS "confidenceScore",
+            risk_score AS "riskScore",
+            disposition, outcome,
+            rule_ids_applied AS "ruleIdsApplied",
+            conflict_detected AS "conflictDetected",
+            conflict_resolution AS "conflictResolution",
+            correction_id AS "correctionId",
+            context_summary AS "contextSummary",
+            created_at AS "createdAt"
+       FROM decision_log
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
+/**
+ * The ONLY mutation allowed on decision_log. Flips `outcome` only.
+ * Userid passed for safety — server should always know which user the
+ * decision belongs to before updating.
+ */
+async function updateDecisionOutcome(userId, decisionId, outcome) {
+  const { rows } = await pool.query(
+    `UPDATE decision_log
+        SET outcome = $3
+      WHERE id = $1 AND user_id = $2
+      RETURNING id, outcome`,
+    [decisionId, userId, outcome],
+  );
+  return rows[0] || null;
+}
+
+// ── trust_scores ──
+
+/**
+ * Default trust matrix per the Phase 0 spec. Seeded once per user via
+ * seedDefaultTrustScores. All start as confirm_required; auto_allowed
+ * is unlocked through Phase 4 trust building.
+ */
+const DEFAULT_TRUST_MATRIX = [
+  { actionType: 'create_task',            score: 0.6,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'complete_task',          score: 0.6,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'create_event',           score: 0.7,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'update_task',            score: 0.65, reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'delete_task',            score: 0.9,  reversible: false, impact: 'high',   disposition: 'confirm_required' },
+  { actionType: 'delete_event',           score: 0.9,  reversible: false, impact: 'high',   disposition: 'confirm_required' },
+  { actionType: 'archive_email',          score: 0.65, reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'mark_email_read',        score: 0.5,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'move_email',             score: 0.6,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'star_email',             score: 0.5,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'send_message',           score: 0.85, reversible: false, impact: 'high',   disposition: 'confirm_required' },
+  { actionType: 'create_journal_entry',   score: 0.6,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'close_task_with_note',   score: 0.7,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'add_event_outcome_note', score: 0.6,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'create_contact',         score: 0.7,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+  { actionType: 'update_contact',         score: 0.75, reversible: true,  impact: 'medium', disposition: 'confirm_required' },
+  { actionType: 'grant_shared_access',    score: 0.95, reversible: false, impact: 'high',   disposition: 'confirm_required' },
+  { actionType: 'create_project',         score: 0.7,  reversible: true,  impact: 'low',    disposition: 'confirm_required' },
+];
+
+async function getTrustScore(userId, actionType) {
+  const { rows } = await pool.query(
+    `SELECT id, action_type AS "actionType", trust_score AS "trustScore",
+            disposition, is_reversible AS "isReversible",
+            impact_level AS "impactLevel",
+            times_auto_executed AS "timesAutoExecuted",
+            times_confirmed AS "timesConfirmed",
+            times_rejected AS "timesRejected",
+            times_corrected AS "timesCorrected",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM trust_scores
+      WHERE user_id = $1 AND action_type = $2`,
+    [userId, actionType],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Apply a delta to trust_score (clamped 0.0–1.0). Returns the new row.
+ * Phase 4 signals call this with +0.02 / -0.05 / -0.1 etc.
+ */
+async function updateTrustScore(userId, actionType, delta) {
+  const { rows } = await pool.query(
+    `UPDATE trust_scores
+        SET trust_score = LEAST(1.0, GREATEST(0.0, trust_score + $3)),
+            updated_at = NOW()
+      WHERE user_id = $1 AND action_type = $2
+      RETURNING id, action_type AS "actionType",
+                trust_score AS "trustScore", disposition,
+                is_reversible AS "isReversible",
+                impact_level AS "impactLevel"`,
+    [userId, actionType, delta],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Idempotent — uses ON CONFLICT DO NOTHING so re-seeding never clobbers
+ * a trust_score the user has already moved through Phase 4 signals.
+ * Called per user at registration (wired in Phase 1).
+ */
+async function seedDefaultTrustScores(userId) {
+  let seeded = 0;
+  for (const row of DEFAULT_TRUST_MATRIX) {
+    const r = await pool.query(
+      `INSERT INTO trust_scores
+         (user_id, action_type, trust_score, disposition,
+          is_reversible, impact_level)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id, action_type) DO NOTHING`,
+      [userId, row.actionType, row.score, row.disposition, row.reversible, row.impact],
+    );
+    if (r.rowCount) seeded++;
+  }
+  return seeded;
+}
+
+/**
+ * Convenience read for the decision engine — returns just the
+ * disposition string ('auto_allowed' / 'confirm_required' / 'suggest_only')
+ * or null if no row exists for that action type.
+ */
+async function getDisposition(userId, actionType) {
+  const ts = await getTrustScore(userId, actionType);
+  return ts ? ts.disposition : null;
+}
+
+// ── correction_events ──
+
+/**
+ * Log a correction event. trust_score_adjusted defaults FALSE; Phase 4
+ * worker flips it after applying the trust score delta so corrections
+ * aren't double-counted across retries.
+ */
+async function logCorrection(userId, data) {
+  const {
+    decisionLogId = null,
+    originalAction,
+    originalToolInput = null,
+    correctionType,
+    correctedInput = null,
+    correctionNote = null,
+    inferredRuleViolation = null,
+    generatedRuleId = null,
+    trustScoreAdjusted = false,
+  } = data;
+  const { rows } = await pool.query(
+    `INSERT INTO correction_events
+       (user_id, decision_log_id, original_action, original_tool_input,
+        correction_type, corrected_input, correction_note,
+        inferred_rule_violation, generated_rule_id, trust_score_adjusted)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10)
+     RETURNING id, user_id AS "userId",
+               decision_log_id AS "decisionLogId",
+               original_action AS "originalAction",
+               original_tool_input AS "originalToolInput",
+               correction_type AS "correctionType",
+               corrected_input AS "correctedInput",
+               correction_note AS "correctionNote",
+               inferred_rule_violation AS "inferredRuleViolation",
+               generated_rule_id AS "generatedRuleId",
+               trust_score_adjusted AS "trustScoreAdjusted",
+               created_at AS "createdAt"`,
+    [userId, decisionLogId, originalAction,
+     originalToolInput ? JSON.stringify(originalToolInput) : null,
+     correctionType,
+     correctedInput ? JSON.stringify(correctedInput) : null,
+     correctionNote, inferredRuleViolation, generatedRuleId, trustScoreAdjusted],
+  );
+  return rows[0] || null;
+}
+
+async function getCorrections(userId, opts = {}) {
+  const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 20, 1), 200);
+  const { rows } = await pool.query(
+    `SELECT id, decision_log_id AS "decisionLogId",
+            original_action AS "originalAction",
+            original_tool_input AS "originalToolInput",
+            correction_type AS "correctionType",
+            corrected_input AS "correctedInput",
+            correction_note AS "correctionNote",
+            inferred_rule_violation AS "inferredRuleViolation",
+            generated_rule_id AS "generatedRuleId",
+            trust_score_adjusted AS "trustScoreAdjusted",
+            created_at AS "createdAt"
+       FROM correction_events
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -3821,6 +4268,117 @@ async function runMigrations() {
     )
   `).catch((err) => logger.warn('migration.warn', { label: 'email_filing_patterns table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_filing_patterns_user ON email_filing_patterns(user_id)`).catch(() => {});
+
+  // ── Aria Intelligence System (Phase 0) ───────────────────────────────────
+  // Five tables underpinning the deterministic decision engine + learning
+  // loop. All scoped by user_id with ON DELETE CASCADE so user deletion
+  // wipes the full intelligence trail. decision_log is append-only —
+  // updateDecisionOutcome is the only mutation path and only flips
+  // `outcome`. correction_events.decision_log_id and generated_rule_id use
+  // ON DELETE SET NULL so the audit trail survives source-row archival.
+
+  // 1. behavior_rules — explicit + inferred rules with strength + decay.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS behavior_rules (
+      id                   SERIAL PRIMARY KEY,
+      user_id              TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rule_type            TEXT NOT NULL CHECK (rule_type IN ('preference','constraint','pattern','schedule')),
+      trigger_context      TEXT,
+      rule_text            TEXT NOT NULL,
+      source               TEXT NOT NULL CHECK (source IN ('explicit','inferred')),
+      strength             FLOAT NOT NULL DEFAULT 0.5,
+      times_reinforced     INT DEFAULT 0,
+      times_violated       INT DEFAULT 0,
+      last_reinforced_at   TIMESTAMPTZ,
+      last_violated_at     TIMESTAMPTZ,
+      is_active            BOOLEAN DEFAULT TRUE,
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'behavior_rules table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS behavior_rules_user_active_idx ON behavior_rules(user_id, is_active, strength DESC)`).catch(() => {});
+
+  // 2. user_preferences_v2 — explicit key-value preference store. _v2
+  // namespace because the legacy user_preferences serves DND/cadence.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_preferences_v2 (
+      id                  SERIAL PRIMARY KEY,
+      user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      preference_key      TEXT NOT NULL,
+      preference_value    JSONB NOT NULL,
+      source              TEXT NOT NULL CHECK (source IN ('explicit','inferred')),
+      confidence          FLOAT DEFAULT 1.0,
+      last_confirmed_at   TIMESTAMPTZ,
+      created_at          TIMESTAMPTZ DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, preference_key)
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'user_preferences_v2 table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS user_preferences_v2_user_idx ON user_preferences_v2(user_id)`).catch(() => {});
+
+  // 3. decision_log — append-only audit trail of every action evaluation.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS decision_log (
+      id                  SERIAL PRIMARY KEY,
+      user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      action_type         TEXT NOT NULL,
+      tool_called         TEXT,
+      tool_input          JSONB,
+      confidence_score    FLOAT,
+      risk_score          FLOAT,
+      disposition         TEXT NOT NULL CHECK (disposition IN ('auto_allowed','confirm_required','suggest_only')),
+      outcome             TEXT CHECK (outcome IN ('executed','confirmed','rejected','corrected','timeout')),
+      rule_ids_applied    INT[],
+      conflict_detected   BOOLEAN DEFAULT FALSE,
+      conflict_resolution TEXT,
+      correction_id       INT,
+      context_summary     TEXT,
+      created_at          TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'decision_log table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS decision_log_user_idx ON decision_log(user_id, created_at DESC)`).catch(() => {});
+
+  // 4. trust_scores — per-(user, action_type) trust state driving disposition.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS trust_scores (
+      id                    SERIAL PRIMARY KEY,
+      user_id               TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      action_type           TEXT NOT NULL,
+      trust_score           FLOAT NOT NULL DEFAULT 0.5,
+      disposition           TEXT NOT NULL CHECK (disposition IN ('auto_allowed','confirm_required','suggest_only')),
+      is_reversible         BOOLEAN NOT NULL,
+      impact_level          TEXT NOT NULL CHECK (impact_level IN ('low','medium','high')),
+      times_auto_executed   INT DEFAULT 0,
+      times_confirmed       INT DEFAULT 0,
+      times_rejected        INT DEFAULT 0,
+      times_corrected       INT DEFAULT 0,
+      created_at            TIMESTAMPTZ DEFAULT NOW(),
+      updated_at            TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, action_type)
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'trust_scores table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS trust_scores_user_idx ON trust_scores(user_id)`).catch(() => {});
+
+  // 5. correction_events — when the user countermands an Aria action.
+  // FKs to decision_log + behavior_rules use ON DELETE SET NULL so the
+  // audit row survives if the source rule/decision is later archived.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS correction_events (
+      id                       SERIAL PRIMARY KEY,
+      user_id                  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      decision_log_id          INT REFERENCES decision_log(id) ON DELETE SET NULL,
+      original_action          TEXT NOT NULL,
+      original_tool_input      JSONB,
+      correction_type          TEXT NOT NULL CHECK (correction_type IN ('reversed','modified','rejected','flagged')),
+      corrected_input          JSONB,
+      correction_note          TEXT,
+      inferred_rule_violation  TEXT,
+      generated_rule_id        INT REFERENCES behavior_rules(id) ON DELETE SET NULL,
+      trust_score_adjusted     BOOLEAN DEFAULT FALSE,
+      created_at               TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'correction_events table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS correction_events_user_idx ON correction_events(user_id, created_at DESC)`).catch(() => {});
 
   // Morning brief idempotency lock. Scoped to the morning-brief:* key
   // prefix so the index can be added safely even if other alert_keys
@@ -6897,6 +7455,25 @@ module.exports = {
   getEmailLabelsForUser,
   updateLabelSemanticCategory,
   upsertFilingPattern,
+  // Aria Intelligence System (Phase 0)
+  upsertBehaviorRule,
+  getActiveRulesForUser,
+  reinforceRule,
+  violateRule,
+  decayRules,
+  archiveWeakRules,
+  setPreference,
+  getPreference,
+  getAllPreferences,
+  logDecision,
+  getDecisionHistory,
+  updateDecisionOutcome,
+  getTrustScore,
+  updateTrustScore,
+  seedDefaultTrustScores,
+  getDisposition,
+  logCorrection,
+  getCorrections,
   getUserByWhatsAppPhone,
   getOrgForUser,
   getOrganizations,
