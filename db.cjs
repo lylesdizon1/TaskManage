@@ -2966,14 +2966,16 @@ async function logDecision(userId, data) {
     conflictResolution = null,
     correctionId = null,
     contextSummary = null,
+    latencyMs = null,
+    conflictLevel = null,
   } = data;
   const { rows } = await pool.query(
     `INSERT INTO decision_log
        (user_id, action_type, tool_called, tool_input,
         confidence_score, risk_score, disposition, outcome,
         rule_ids_applied, conflict_detected, conflict_resolution,
-        correction_id, context_summary)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        correction_id, context_summary, latency_ms, conflict_level)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      RETURNING id, user_id AS "userId", action_type AS "actionType",
                tool_called AS "toolCalled", tool_input AS "toolInput",
                confidence_score AS "confidenceScore",
@@ -2984,11 +2986,13 @@ async function logDecision(userId, data) {
                conflict_resolution AS "conflictResolution",
                correction_id AS "correctionId",
                context_summary AS "contextSummary",
+               latency_ms AS "latencyMs",
+               conflict_level AS "conflictLevel",
                created_at AS "createdAt"`,
     [userId, actionType, toolCalled, toolInput ? JSON.stringify(toolInput) : null,
      confidenceScore, riskScore, disposition, outcome,
      ruleIdsApplied, conflictDetected, conflictResolution,
-     correctionId, contextSummary],
+     correctionId, contextSummary, latencyMs, conflictLevel],
   );
   return rows[0] || null;
 }
@@ -4647,6 +4651,12 @@ async function runMigrations() {
     )
   `).catch((err) => logger.warn('migration.warn', { label: 'decision_log table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS decision_log_user_idx ON decision_log(user_id, created_at DESC)`).catch(() => {});
+  // Phase 3 telemetry — wallclock for the 300ms budget + queryable
+  // conflict-level tier. Both nullable so historical rows stay valid.
+  await pool.query(`ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS latency_ms INT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'decision_log.latency_ms', error: err.message }));
+  await pool.query(`ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS conflict_level TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'decision_log.conflict_level', error: err.message }));
 
   // 4. trust_scores — per-(user, action_type) trust state driving disposition.
   await pool.query(`

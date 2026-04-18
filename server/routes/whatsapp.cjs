@@ -45,6 +45,7 @@
 
 const express   = require('express');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
+const { evaluateAction } = require('../lib/decisionEngine.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
@@ -332,12 +333,47 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // A later inbound message resolves the pending row.
       let waSentConfirmation = false;
       const gateToolExecution = async ({ tool, input, decision }) => {
-        if (!requiresConfirmation(tool, decision)) return { action: 'allow' };
+        // Phase 3 — same compose pattern as ai.cjs. Engine runs first.
+        // hard_stop short-circuits with explanation; auto_proceed
+        // delegates to the existing requires_confirmation gate; engine
+        // confirm/soft_confirm escalates to the WhatsApp YES/NO flow.
+        let engineDisposition = 'auto_proceed';
+        let engineReason = '';
+        let engineDecisionId = null;
+        try {
+          const result = await evaluateAction(userId, tool, input, tzForUser);
+          engineDisposition = result.disposition;
+          engineReason = result.reason;
+          engineDecisionId = result.decision_id;
+        } catch (err) {
+          logger.warn('whatsapp.decisionEngine.failed', { userId, tool, error: err.message });
+          engineDisposition = 'confirm_required';
+        }
+
+        if (engineDisposition === 'hard_stop') {
+          if (engineDecisionId) db.updateDecisionOutcome(userId, engineDecisionId, 'rejected').catch(() => {});
+          // WhatsApp doesn't have a confirmation-card UI — surface the
+          // hard stop as the assistant's textual reply by sending it
+          // directly to the user via UltraMsg.
+          await sendWhatsApp(db, userId, engineReason || `I can't do that — it conflicts with one of your rules.`, fromRaw).catch(() => {});
+          return { action: 'deny', reason: 'hard_stop', message: engineReason || 'Action blocked by rule.' };
+        }
+
+        const engineWantsConfirm = engineDisposition === 'confirm_required' || engineDisposition === 'soft_confirm';
+        const toolWantsConfirm = requiresConfirmation(tool, decision);
+        if (!engineWantsConfirm && !toolWantsConfirm) {
+          if (engineDecisionId) db.updateDecisionOutcome(userId, engineDecisionId, 'executed').catch(() => {});
+          return { action: 'allow' };
+        }
+
         try {
           const pending = await db.createPendingConfirmation({ userId, toolName: tool, params: input, channel: 'whatsapp' });
           const code = codeFromConfirmId(pending.id);
           const preview = summarizeParams(tool, input);
-          const prompt = `Confirm: ${preview}.\nReply YES ${code} or NO ${code} within 2 minutes.`;
+          // If the engine raised confirmation, prepend its reason so the
+          // user knows why we're asking (vs. baseline tool caution).
+          const prefix = engineWantsConfirm && engineReason ? `${engineReason}\n\n` : '';
+          const prompt = `${prefix}Confirm: ${preview}.\nReply YES ${code} or NO ${code} within 2 minutes.`;
           await sendWhatsApp(db, userId, prompt, fromRaw).catch(() => {});
           waSentConfirmation = true;
           await db.logAgentAction({ userId, eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id });

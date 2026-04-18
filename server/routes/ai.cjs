@@ -55,6 +55,7 @@ const express   = require('express');
 const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
+const { evaluateAction } = require('../lib/decisionEngine.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
@@ -356,7 +357,42 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       };
 
       const gateToolExecution = async ({ tool, input, decision }) => {
-        if (!requiresConfirmation(tool, decision)) return { action: 'allow' };
+        // Phase 3 — decision engine runs FIRST. Hard stops short-circuit.
+        // confirm_required / soft_confirm fall through to the existing
+        // pending-confirmation flow below; auto_proceed lets the
+        // tool-level requires_confirmation check have the final say.
+        // The engine can only INCREASE friction, never reduce it.
+        let engineDisposition = 'auto_proceed';
+        let engineReason = '';
+        let engineDecisionId = null;
+        try {
+          const result = await evaluateAction(userId, tool, input, req.user?.timezone);
+          engineDisposition = result.disposition;
+          engineReason = result.reason;
+          engineDecisionId = result.decision_id;
+        } catch (err) {
+          logger.warn('chat.decisionEngine.failed', { requestId: req.requestId, userId, tool, error: err.message });
+          // Fail-closed at this layer too — bias to confirm_required.
+          engineDisposition = 'confirm_required';
+          engineReason = '';
+        }
+
+        if (engineDisposition === 'hard_stop') {
+          logger.info('chat.decisionEngine.hardStop', { requestId: req.requestId, userId, tool, reason: engineReason });
+          if (engineDecisionId) {
+            db.updateDecisionOutcome(userId, engineDecisionId, 'rejected').catch(() => {});
+          }
+          return { action: 'deny', reason: 'hard_stop', message: engineReason || `I can't do ${tool} — it conflicts with one of your rules.` };
+        }
+
+        const engineWantsConfirm = engineDisposition === 'confirm_required' || engineDisposition === 'soft_confirm';
+        const toolWantsConfirm = requiresConfirmation(tool, decision);
+        if (!engineWantsConfirm && !toolWantsConfirm) {
+          if (engineDecisionId) {
+            db.updateDecisionOutcome(userId, engineDecisionId, 'executed').catch(() => {});
+          }
+          return { action: 'allow' };
+        }
 
         let pending;
         try {
@@ -380,8 +416,17 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
           });
         }
 
-        send('tool_confirm', { tool, params: input, confirm_id: pending.id, risk: getToolByName(tool)?.risk || 'high' });
-        logger.info('chat.gate.waiter.created', { requestId: req.requestId, userId, tool, confirmId: pending.id });
+        send('tool_confirm', {
+          tool, params: input, confirm_id: pending.id,
+          risk: getToolByName(tool)?.risk || 'high',
+          // Phase 3 — surface the engine's reason so the user knows
+          // WHY confirmation is being requested (rule conflict vs.
+          // baseline tool caution). Empty string when the confirmation
+          // came from the tool's own requires_confirmation flag.
+          reason: engineReason || '',
+          conflict_level: engineDisposition === 'soft_confirm' ? 'soft' : (engineWantsConfirm ? 'strong' : null),
+        });
+        logger.info('chat.gate.waiter.created', { requestId: req.requestId, userId, tool, confirmId: pending.id, engineDisposition });
         await logAction({ eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id, decision });
 
         // Abort the listener (releases its dedicated pg client) if the SSE
@@ -394,6 +439,13 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
           const resolution = await db.listenForConfirmation(pending.id, 2 * 60 * 1000, { signal: listenController.signal });
           res.removeListener('close', onResClose);
           logger.info('chat.gate.waiter.resolved', { requestId: req.requestId, userId, tool, confirmId: pending.id, action: resolution?.action, alreadyExecuted: !!resolution?.alreadyExecuted });
+          // Phase 3 — close the audit loop. confirmed/rejected/timeout map to
+          // decision_log.outcome; Phase 4 will use this for trust adjustment.
+          if (engineDecisionId) {
+            const outcome = resolution?.action === 'allow' ? 'confirmed'
+              : resolution?.action === 'deny' ? 'rejected' : 'executed';
+            db.updateDecisionOutcome(userId, engineDecisionId, outcome).catch(() => {});
+          }
           return resolution;
         } catch (err) {
           res.removeListener('close', onResClose);
