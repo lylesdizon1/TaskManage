@@ -124,8 +124,29 @@ app.get('/health', (_req, res) => res.json({ status: 'ok', port: PORT, time: new
 // ── Static files ─────────────────────────────────────────────────────────────
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 if (fs.existsSync(DIST_DIR)) {
-  app.use(express.static(DIST_DIR));
-  app.get('*', (_req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
+  // Hashed assets (Vite builds /assets/index-<hash>.js etc.) — safe to
+  // cache for a year because the filename itself changes on every build.
+  // index.html is NOT cached: Safari was serving stale copies that
+  // pointed at asset hashes Railway no longer had on disk, surfacing
+  // as "text/html is not a valid JavaScript MIME type" after deploys.
+  app.use(express.static(DIST_DIR, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+  // Asset 404s must NOT fall through to the SPA — a missing
+  // /assets/index-OldHash.js needs to return a real 404 so the browser
+  // refetches index.html and picks up the new hash. Returning HTML for
+  // an asset request is what created the MIME-type error.
+  app.get('/assets/*', (_req, res) => res.status(404).end());
+  app.get('*', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(path.join(DIST_DIR, 'index.html'));
+  });
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────
