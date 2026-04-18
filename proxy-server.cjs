@@ -66,7 +66,11 @@ app.use(cors({
   methods: ['GET','POST','PUT','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization'],
 }));
-app.use(express.json({ limit: '4mb' }));
+// Per-route body limits BEFORE the global default — order matters in
+// Express. The global parser claims req.body for whichever middleware
+// runs first; route-prefixed parsers must register earlier to win.
+app.use('/api/financial/import-csv', express.json({ limit: '5mb' })); // base64 PDF/Excel
+app.use(express.json({ limit: '1mb' })); // global default — was 4mb
 app.use('/api/auth/login', authLimiter);
 app.use('/api/', apiLimiter);
 app.use((req, _res, next) => { console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`); next(); });
