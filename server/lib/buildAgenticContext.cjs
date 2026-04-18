@@ -47,6 +47,20 @@ For project creation: when the user asks to "create a project", "set up a projec
 // behavior when REDIS_URL is unset (see server/lib/redis.cjs).
 const CALENDAR_CACHE_TTL_SEC = 5 * 60; // 5 minutes
 
+// Per-fetch timeout for the parallel context build. A slow DB query or
+// upstream API blip would otherwise hang /api/chat/execute indefinitely.
+// Worst case Aria responds 5s late with a degraded context block instead
+// of waiting forever.
+const FETCH_TIMEOUT_MS = 5_000;
+
+function withTimeout(promise, timeoutMs, name) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${name} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Return a Date corresponding to the start of the user's local day
  * (00:00 in `tz`) plus an optional offset in days. The returned Date
@@ -174,7 +188,7 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
  * @returns {Promise<{ user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, tz, todayStr, todayDate, currentTime, weekMapStr, profileContext, contextBlock, decisionInstructions, systemPrompt }>}
  */
 async function buildAgenticContext(opts) {
-  const { userId, db, contextHint } = opts;
+  const { userId, db, contextHint, logger } = opts;
   const tz = opts.tz || DEFAULT_TIMEZONE;
 
   // Inbox mode pulls a wider net so Aria can answer open-ended
@@ -219,24 +233,50 @@ async function buildAgenticContext(opts) {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(Date.now() - 86400000));
 
-  const [user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings, importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx, contactsData, sharedAccessData, todayJournal, yesterdayJournal] = await Promise.all([
-    db.getUserById(userId),
-    db.getTasksForUser(userId, []),
-    db.getPrivateNotesForAI(userId),
-    db.getRecentMemories(userId, 20).catch(() => []),
-    db.getCalendarNotesForAI(userId).catch(() => []),
-    calendarEventsPromise,
-    db.getUserLearnings ? db.getUserLearnings(userId).catch(() => []) : Promise.resolve([]),
-    db.getImportantUnread ? db.getImportantUnread(userId, emailContextMinRank).catch(() => []) : Promise.resolve([]),
-    db.getRecentClassifications ? db.getRecentClassifications(userId, recentClassifiedLimit).catch(() => []) : Promise.resolve([]),
-    db.getRecentOutcomeContext ? db.getRecentOutcomeContext(userId, 5).catch(() => []) : Promise.resolve([]),
-    db.getMemoryFactsForUser ? db.getMemoryFactsForUser(userId, 10).catch(() => []) : Promise.resolve([]),
-    db.getProjectContextForUser ? db.getProjectContextForUser(userId, 5).catch(() => []) : Promise.resolve([]),
-    db.getRelevantContacts ? db.getRelevantContacts(userId, 10).catch(() => []) : Promise.resolve([]),
-    db.getSharedAccessSummary ? db.getSharedAccessSummary(userId).catch(() => ({ grantsGiven: 0, grantsReceived: 0, scopes: [] })) : Promise.resolve({ grantsGiven: 0, grantsReceived: 0, scopes: [] }),
-    db.getJournalEntryByDate ? db.getJournalEntryByDate(userId, todayDateKey).catch(() => null) : Promise.resolve(null),
-    db.getJournalEntryByDate ? db.getJournalEntryByDate(userId, yesterdayDateKey).catch(() => null) : Promise.resolve(null),
-  ]);
+  // Each entry: [name, () => Promise, fallbackOnFailure]. Wrapped in
+  // Promise.allSettled + per-fetch timeout so a single slow DB query or
+  // upstream blip can't hang the whole context build. On timeout/failure
+  // the fetch's fallback is substituted and the failure is logged.
+  const sharedAccessDefault = { grantsGiven: 0, grantsReceived: 0, scopes: [] };
+  const fetchSpecs = [
+    ['user',             () => db.getUserById(userId),                                                                                                  null],
+    ['tasks',            () => db.getTasksForUser(userId, []),                                                                                          []],
+    ['notes',            () => db.getPrivateNotesForAI(userId),                                                                                         []],
+    ['recentMemories',   () => db.getRecentMemories(userId, 20),                                                                                        []],
+    ['calendarNotes',    () => db.getCalendarNotesForAI(userId),                                                                                        []],
+    ['calendarFetch',    () => calendarEventsPromise,                                                                                                   { events: [], failedAccounts: [] }],
+    ['learnings',        () => (db.getUserLearnings              ? db.getUserLearnings(userId)                              : Promise.resolve([])),     []],
+    ['importantUnread',  () => (db.getImportantUnread            ? db.getImportantUnread(userId, emailContextMinRank)       : Promise.resolve([])),     []],
+    ['recentClassified', () => (db.getRecentClassifications      ? db.getRecentClassifications(userId, recentClassifiedLimit): Promise.resolve([])),    []],
+    ['recentOutcomes',   () => (db.getRecentOutcomeContext       ? db.getRecentOutcomeContext(userId, 5)                    : Promise.resolve([])),     []],
+    ['memoryFacts',      () => (db.getMemoryFactsForUser         ? db.getMemoryFactsForUser(userId, 10)                     : Promise.resolve([])),     []],
+    ['projectsCtx',      () => (db.getProjectContextForUser      ? db.getProjectContextForUser(userId, 5)                   : Promise.resolve([])),     []],
+    ['contactsData',     () => (db.getRelevantContacts           ? db.getRelevantContacts(userId, 10)                       : Promise.resolve([])),     []],
+    ['sharedAccessData', () => (db.getSharedAccessSummary        ? db.getSharedAccessSummary(userId)                        : Promise.resolve(sharedAccessDefault)), sharedAccessDefault],
+    ['todayJournal',     () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, todayDateKey)           : Promise.resolve(null)),   null],
+    ['yesterdayJournal', () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, yesterdayDateKey)       : Promise.resolve(null)),   null],
+  ];
+
+  const settled = await Promise.allSettled(
+    fetchSpecs.map(([name, fn]) => withTimeout(fn(), FETCH_TIMEOUT_MS, name))
+  );
+  const ctxValues = {};
+  settled.forEach((res, i) => {
+    const [name, , fallback] = fetchSpecs[i];
+    if (res.status === 'fulfilled') {
+      ctxValues[name] = res.value;
+    } else {
+      logger?.error?.('context.fetch.failed', {
+        userId, fetch: name, error: res.reason?.message || String(res.reason),
+      });
+      ctxValues[name] = fallback;
+    }
+  });
+  const {
+    user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings,
+    importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx,
+    contactsData, sharedAccessData, todayJournal, yesterdayJournal,
+  } = ctxValues;
 
   const todayStr = getTodayLocal(tz);
   const todayDate = todayStr.split(', ')[1];
