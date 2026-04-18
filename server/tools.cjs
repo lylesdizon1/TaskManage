@@ -18,6 +18,8 @@ const { google } = require('googleapis');
 const { loadGcalTokens, loadAllGcalAccounts, makeOAuth2Client, makeGmailOAuth2Client } = require('./utils/google.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('./utils/crypto.cjs');
 const { DEFAULT_TIMEZONE } = require('./utils/timezone.cjs');
+const { toLocalIsoNoTz, addHoursLocalIso, compareLocalIso } = require('./utils/date.cjs');
+const logger = require('../guardrails/logger.cjs');
 const { inferRulesFromBehavior } = require('./lib/ruleEngine.cjs');
 const { invalidateRulesCache } = require('./lib/ruleCache.cjs');
 const { getEmailContent, searchGmail } = require('./lib/emailContent.cjs');
@@ -117,13 +119,13 @@ const ARIA_TOOLS = [
     group: 'calendar',
     risk: 'low',
     requires_confirmation: false,
-    description: 'Create a calendar event in the user\'s primary Google Calendar.',
+    description: 'Create a calendar event in the user\'s primary Google Calendar. Double-check the date matches the user\'s words against the week map in your context (e.g., if user says "Tuesday 4/21" and your week map shows Tue=Apr 21, send 2026-04-21).',
     input_schema: {
       type: 'object',
       properties: {
         title:          { type: 'string' },
-        start_datetime: { type: 'string', description: 'ISO 8601' },
-        end_datetime:   { type: 'string' },
+        start_datetime: { type: 'string', description: 'YYYY-MM-DDTHH:MM:SS in the user\'s LOCAL timezone — no Z suffix, no offset. Example: "2026-04-21T15:00:00" for 3pm on April 21 in the user\'s tz.' },
+        end_datetime:   { type: 'string', description: 'Same format as start_datetime — bare local YYYY-MM-DDTHH:MM:SS. Optional; defaults to start + 1 hour.' },
         description:    { type: 'string' },
         location:       { type: 'string' },
         attendees:      { type: 'array', items: { type: 'string' } },
@@ -976,32 +978,66 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         oauth2.setCredentials(tokens);
         const calendar = google.calendar({ version: 'v3', auth: oauth2 });
 
-        const startDt = start_datetime.includes('T') ? start_datetime : `${start_datetime}T00:00:00`;
-        const parsedStart = new Date(startDt);
-        if (isNaN(parsedStart.getTime())) return { success: false, error: `Invalid start_datetime: "${start_datetime}".` };
-        const pad = (n) => String(n).padStart(2, '0');
-        const formatLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        const userTz = tz || DEFAULT_TIMEZONE;
+        // Normalize start to bare-local YYYY-MM-DDTHH:MM:SS in the user's tz so
+        // the (dateTime, timeZone) pair Google receives is unambiguous. If
+        // Aria sends a Z- or offset-suffixed string, we re-express it in the
+        // user's tz; if bare-local, we treat it as already user-local.
+        const startDt = toLocalIsoNoTz(start_datetime, userTz);
+        if (!startDt) return { success: false, error: `Invalid start_datetime: "${start_datetime}".` };
+
         let endDt;
         if (end_datetime) {
-          endDt = end_datetime.includes('T') ? end_datetime : `${end_datetime}T00:00:00`;
-          const parsedEnd = new Date(endDt);
-          if (isNaN(parsedEnd.getTime())) return { success: false, error: `Invalid end_datetime: "${end_datetime}".` };
-          if (parsedEnd <= parsedStart) return { success: false, error: 'end_datetime must be after start_datetime.' };
+          endDt = toLocalIsoNoTz(end_datetime, userTz);
+          if (!endDt) return { success: false, error: `Invalid end_datetime: "${end_datetime}".` };
+          if (compareLocalIso(endDt, startDt) <= 0) return { success: false, error: 'end_datetime must be after start_datetime.' };
         } else {
-          const d = new Date(parsedStart.getTime()); d.setHours(d.getHours() + 1);
-          endDt = formatLocal(d);
+          // Wall-clock +1h on the local string — independent of server tz.
+          // Old impl used new Date() arithmetic on a UTC server which produced
+          // wrong end times when start carried a Z or offset.
+          endDt = addHoursLocalIso(startDt, 1);
         }
-        const { data: created } = await calendar.events.insert({
-          calendarId: 'primary',
-          requestBody: {
-            summary: title,
-            start: { dateTime: startDt, timeZone: tz || DEFAULT_TIMEZONE },
-            end:   { dateTime: endDt,   timeZone: tz || DEFAULT_TIMEZONE },
-            ...(eventDesc && { description: eventDesc }),
-            ...(location  && { location }),
-            ...(attendees?.length && { attendees: attendees.map(email => ({ email })) }),
-          },
+
+        const googlePayload = {
+          summary: title,
+          start: { dateTime: startDt, timeZone: userTz },
+          end:   { dateTime: endDt,   timeZone: userTz },
+          ...(eventDesc && { description: eventDesc }),
+          ...(location  && { location }),
+          ...(attendees?.length && { attendees: attendees.map(email => ({ email })) }),
+        };
+
+        // Diagnostic log — captures raw input vs. what we sent. If a future
+        // user reports a wrong-day event, this single line shows whether the
+        // model picked the wrong date (raw_start mismatch) or the tool
+        // mangled it (sent_start mismatch).
+        logger.info('tools.create_event.input', {
+          userId, tz: userTz,
+          raw_start: start_datetime, raw_end: end_datetime || null,
+          sent_start: startDt, sent_end: endDt,
+          end_defaulted: !end_datetime,
         });
+
+        let created;
+        try {
+          const resp = await calendar.events.insert({ calendarId: 'primary', requestBody: googlePayload });
+          created = resp.data;
+        } catch (err) {
+          logger.error('tools.create_event.failed', {
+            userId, raw_start: start_datetime, sent_start: startDt, error: err.message,
+          });
+          return { success: false, error: `Calendar API failed: ${err.message}` };
+        }
+
+        // Pair-line with the input log: confirms what Google actually stored.
+        logger.info('tools.create_event.success', {
+          userId, event_id: created.id,
+          sent_start: startDt, sent_end: endDt,
+          returned_start: created.start?.dateTime || created.start?.date || null,
+          returned_end:   created.end?.dateTime   || created.end?.date   || null,
+          returned_tz: created.start?.timeZone || null,
+        });
+
         try {
           await db.logMemory({ userId, tool: 'create_event', content: `Created event: "${title}" at ${startDt}`, metadata: { event_id: created.id, title, start: startDt } });
         } catch {}
