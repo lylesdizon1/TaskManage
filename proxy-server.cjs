@@ -134,7 +134,15 @@ let server = null;
 async function start() {
   await db.initTables();
   await db.seedUsersIfEmpty();
-  try { await db.runMigrations(); } catch (err) { console.error('[migration]', err.message); }
+  try {
+    await db.runMigrations();
+  } catch (err) {
+    // criticalMigration throws here. Schema is in an unknown state —
+    // refuse to start so ops can investigate rather than serving traffic
+    // against a half-migrated DB.
+    logger.error('migration.failed.fatal', { error: err.message });
+    process.exit(1);
+  }
   try {
     const { migrateSlackWebhooksToEncrypted } = require('./server/utils/integrations.cjs');
     const migrated = await migrateSlackWebhooksToEncrypted(db);

@@ -33,6 +33,7 @@
 
 const { Pool } = require('pg');
 const { DEFAULT_TIMEZONE } = require('./server/utils/timezone.cjs');
+const logger = require('./guardrails/logger.cjs');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -47,6 +48,33 @@ const pool = new Pool({
   // Fail fast instead of hanging indefinitely when the pool is exhausted.
   connectionTimeoutMillis: 5000,
 });
+
+/**
+ * Run a migration whose silent failure would leave the schema in an
+ * inconsistent state that breaks runtime queries (e.g. SET NOT NULL
+ * after a backfill, ADD CONSTRAINT UNIQUE, schema restructures).
+ *
+ * On failure: logs structured + throws an annotated error. The boot
+ * path in proxy-server.cjs catches the throw and crashes the process
+ * via process.exit(1) — forcing manual intervention rather than
+ * letting the server start with a broken schema.
+ *
+ * For idempotent operations (ADD COLUMN IF NOT EXISTS, CREATE INDEX
+ * IF NOT EXISTS, CREATE TABLE IF NOT EXISTS), keep the existing
+ * `pool.query(...).catch(...)` pattern — those are safe to swallow.
+ *
+ * @param {string} sql - The migration SQL to execute.
+ * @param {string} label - Stable identifier for logs (e.g.
+ *   'user_integrations.account_email.notNull').
+ */
+async function criticalMigration(sql, label) {
+  try {
+    await pool.query(sql);
+  } catch (err) {
+    logger.error('migration.critical.failed', { label, error: err.message });
+    throw new Error(`Critical migration failed: ${label} — ${err.message}`);
+  }
+}
 
 /**
  * Create all core tables if they don't exist yet. Called once at server
@@ -3504,7 +3532,7 @@ async function runMigrations() {
     `ALTER TABLE entities ADD COLUMN IF NOT EXISTS shared BOOLEAN DEFAULT FALSE`,
   ];
   for (const sql of entityColAlters) {
-    await pool.query(sql).catch((err) => console.warn('[migration] entity col:', err.message));
+    await pool.query(sql).catch((err) => logger.warn('migration.warn', { label: 'entity col', error: err.message }));
   }
 
   // Add FK constraint separately (safe if already exists)
@@ -3515,7 +3543,7 @@ async function runMigrations() {
     EXCEPTION
       WHEN duplicate_object THEN NULL;
     END $$;
-  `).catch((err) => console.warn('[migration] entity FK:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'entity FK', error: err.message }));
 
   // Seed entity types for existing entities (idempotent)
   await pool.query(`
@@ -3534,9 +3562,14 @@ async function runMigrations() {
   // existing operators). Idempotent — never overwrites a configured row.
   // ── user_integrations: add account_email + composite UNIQUE (multi-account) ──
   await pool.query(`ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS account_email TEXT DEFAULT ''`)
-    .catch((err) => console.warn('[migration] user_integrations.account_email:', err.message));
+    .catch((err) => logger.warn('migration.warn', { label: 'user_integrations.account_email', error: err.message }));
   await pool.query(`UPDATE user_integrations SET account_email = '' WHERE account_email IS NULL`).catch(() => {});
-  await pool.query(`ALTER TABLE user_integrations ALTER COLUMN account_email SET NOT NULL`).catch(() => {});
+  // SET NOT NULL relies on the preceding backfill; if NULLs remain the
+  // schema is broken and we crash boot rather than continue silently.
+  await criticalMigration(
+    `ALTER TABLE user_integrations ALTER COLUMN account_email SET NOT NULL`,
+    'user_integrations.account_email.notNull',
+  );
   await pool.query(`ALTER TABLE user_integrations ALTER COLUMN account_email SET DEFAULT ''`).catch(() => {});
   await pool.query(`ALTER TABLE user_integrations DROP CONSTRAINT IF EXISTS user_integrations_user_id_integration_type_key`).catch(() => {});
   // Pre-check via pg_catalog — the older EXCEPTION-based guard only
@@ -3553,28 +3586,28 @@ async function runMigrations() {
           UNIQUE (user_id, integration_type, account_email);
       END IF;
     END $$;
-  `).catch((err) => console.warn('[migration] user_integrations UNIQUE:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'user_integrations UNIQUE', error: err.message }));
 
   // ── user_integrations: provider column (for future multi-provider routing) ──
   await pool.query(`ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'google'`)
-    .catch((err) => console.warn('[migration] user_integrations.provider:', err.message));
+    .catch((err) => logger.warn('migration.warn', { label: 'user_integrations.provider', error: err.message }));
   // Explicit backfill — no-op under the default but makes intent clear.
   await pool.query(`UPDATE user_integrations SET provider = 'google' WHERE integration_type = 'gmail' AND provider = 'google'`).catch(() => {});
 
   // ── Drop legacy gmail_tokens table (tokens now live in user_integrations) ──
   // Any rows were copied into user_integrations by a prior deploy's migration.
   await pool.query(`DROP TABLE IF EXISTS gmail_tokens`).catch((err) =>
-    console.warn('[migration] drop gmail_tokens:', err.message),
+    logger.warn('migration.warn', { label: 'drop gmail_tokens', error: err.message }),
   );
 
   await backfillSuperadminIntegrationsFromEnv()
-    .catch((err) => console.warn('[migration] backfill integrations:', err.message));
+    .catch((err) => logger.warn('migration.warn', { label: 'backfill integrations', error: err.message }));
 
   // Backfill per-user settings (apiKeys, alertRules) for superadmins from
   // the legacy global `settings` table. Safe to run repeatedly — never
   // overwrites a per-user row the user has already written.
   await backfillSuperadminSettingsFromGlobal()
-    .catch((err) => console.warn('[migration] backfill user_settings:', err.message));
+    .catch((err) => logger.warn('migration.warn', { label: 'backfill user_settings', error: err.message }));
 
   // 5. Add new columns to notes table (idempotent)
   const noteCols = [
@@ -3630,7 +3663,7 @@ async function runMigrations() {
     CREATE UNIQUE INDEX IF NOT EXISTS scheduled_alerts_morning_brief_unique
       ON scheduled_alerts(user_id, alert_key)
       WHERE alert_key LIKE 'morning-brief:%'
-  `).catch((err) => console.warn('[migration] scheduled_alerts morning-brief unique index:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'scheduled_alerts morning-brief unique index', error: err.message }));
 
   // Daily Wrap: two idempotency axes — push channel cron + web-login nudge.
   // Both reuse the scheduled_alerts idempotency pattern via partial unique
@@ -3639,12 +3672,12 @@ async function runMigrations() {
     CREATE UNIQUE INDEX IF NOT EXISTS scheduled_alerts_daily_wrap_unique
       ON scheduled_alerts(user_id, alert_key)
       WHERE alert_key LIKE 'daily-wrap:%'
-  `).catch((err) => console.warn('[migration] scheduled_alerts daily-wrap unique index:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'scheduled_alerts daily-wrap unique index', error: err.message }));
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS scheduled_alerts_daily_wrap_web_unique
       ON scheduled_alerts(user_id, alert_key)
       WHERE alert_key LIKE 'daily-wrap-web:%'
-  `).catch((err) => console.warn('[migration] scheduled_alerts daily-wrap-web unique index:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'scheduled_alerts daily-wrap-web unique index', error: err.message }));
 
   // 11. Entity dedup: "Buyflip" → "BuyFlip" (canonical brand casing)
   await pool.query(`
@@ -3706,11 +3739,16 @@ async function runMigrations() {
       console.log('[migration] gcal_tokens: PK migration complete');
     }
   } catch (err) {
-    console.warn('[migration] gcal_tokens PK check/migration:', err.message);
+    logger.warn('migration.warn', { label: 'gcal_tokens PK check/migration', error: err.message });
   }
 
-  // Ensure google_email is NOT NULL even if PK migration was already done
-  await pool.query(`ALTER TABLE gcal_tokens ALTER COLUMN google_email SET NOT NULL`).catch(() => {});
+  // Ensure google_email is NOT NULL even if PK migration was already done.
+  // The PK migration above already backfilled NULLs to 'primary@placeholder';
+  // if any NULLs remain here, the table is in an unexpected state — crash.
+  await criticalMigration(
+    `ALTER TABLE gcal_tokens ALTER COLUMN google_email SET NOT NULL`,
+    'gcal_tokens.google_email.notNull',
+  );
 
   // ── audit_log table ──────────────────────────────────────────────────────
   await pool.query(`
@@ -3727,7 +3765,7 @@ async function runMigrations() {
       metadata      JSONB DEFAULT '{}'::jsonb,
       source        TEXT DEFAULT 'api'
     )
-  `).catch((err) => console.warn('[migration] audit_log table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'audit_log table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_user   ON audit_log(user_id, created_at DESC)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_req    ON audit_log(request_id)`).catch(() => {});
@@ -3742,7 +3780,7 @@ async function runMigrations() {
       role        TEXT NOT NULL,
       content     TEXT NOT NULL
     );
-  `).catch((err) => console.warn('[migration] whatsapp_conversations table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'whatsapp_conversations table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_conv_phone ON whatsapp_conversations(phone, created_at DESC)`).catch(() => {});
 
   // ── entity calendar mapping columns ─────────────────────────────────────
@@ -3758,13 +3796,13 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS visibility TEXT
       NOT NULL DEFAULT 'private'
       CHECK (visibility IN ('private', 'org', 'members'))
-  `).catch((err) => console.warn('[migration] entities.visibility:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'entities.visibility', error: err.message }));
 
   await pool.query(`
     ALTER TABLE entities
       ADD COLUMN IF NOT EXISTS org_id TEXT
       REFERENCES organizations(id) ON DELETE SET NULL
-  `).catch((err) => console.warn('[migration] entities.org_id:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'entities.org_id', error: err.message }));
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entity_members (
@@ -3777,7 +3815,7 @@ async function runMigrations() {
       created_at  TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(entity_id, user_id)
     )
-  `).catch((err) => console.warn('[migration] entity_members table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'entity_members table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS entity_members_user_id ON entity_members(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS entity_members_entity_id ON entity_members(entity_id)`).catch(() => {});
 
@@ -3787,7 +3825,7 @@ async function runMigrations() {
   await pool.query(`
     UPDATE entities SET visibility = 'org'
     WHERE shared = TRUE AND visibility = 'private'
-  `).catch((err) => console.warn('[migration] entities.visibility backfill:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'entities.visibility backfill', error: err.message }));
 
   // Backfill: creator is always a member (role=owner) of their own entity.
   // ON CONFLICT DO NOTHING makes this idempotent.
@@ -3797,7 +3835,7 @@ async function runMigrations() {
     FROM entities
     WHERE created_by IS NOT NULL
     ON CONFLICT (entity_id, user_id) DO NOTHING
-  `).catch((err) => console.warn('[migration] entity_members creator backfill:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'entity_members creator backfill', error: err.message }));
 
   // Second pass: entities with created_by IS NULL (pre-migration/seed era).
   // Only assign an owner when there is exactly one user whose entity_ids
@@ -3813,7 +3851,7 @@ async function runMigrations() {
     WHERE e.created_by IS NULL
       AND (SELECT COUNT(*) FROM users u WHERE u.entity_ids::jsonb ? e.id) = 1
     ON CONFLICT (entity_id, user_id) DO NOTHING
-  `).catch((err) => console.warn('[migration] entity_members null-created_by backfill:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'entity_members null-created_by backfill', error: err.message }));
 
   // ── calendar_events cache (Session 1) ──────────────────────────────────
   // Local mirror of each user's GCal events so dashboard / brief / context
@@ -3835,7 +3873,7 @@ async function runMigrations() {
       synced_at     TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (user_id, account_email, id)
     )
-  `).catch((err) => console.warn('[migration] calendar_events table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'calendar_events table', error: err.message }));
   await pool.query(`
     CREATE INDEX IF NOT EXISTS calendar_events_user_start
     ON calendar_events(user_id, start_time)
@@ -3853,7 +3891,7 @@ async function runMigrations() {
         )),
       ADD COLUMN IF NOT EXISTS follow_up_needed BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS follow_up_by TIMESTAMPTZ
-  `).catch((err) => console.warn('[migration] tasks.outcome cols:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'tasks.outcome cols', error: err.message }));
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS outcome_records (
@@ -3874,7 +3912,7 @@ async function runMigrations() {
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] outcome_records table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'outcome_records table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS outcome_records_user_id ON outcome_records(user_id, completed_at DESC)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS outcome_records_source  ON outcome_records(source_type, source_id)`).catch(() => {});
 
@@ -3888,7 +3926,7 @@ async function runMigrations() {
       confidence  NUMERIC(3,2),
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] outcome_entities table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'outcome_entities table', error: err.message }));
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS outcome_signals (
@@ -3900,7 +3938,7 @@ async function runMigrations() {
       model_name      TEXT,
       created_at      TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] outcome_signals table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'outcome_signals table', error: err.message }));
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS memory_facts (
@@ -3914,10 +3952,10 @@ async function runMigrations() {
       first_seen_at    TIMESTAMPTZ DEFAULT NOW(),
       last_seen_at     TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] memory_facts table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'memory_facts table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS memory_facts_user_id ON memory_facts(user_id, strength_score DESC)`).catch(() => {});
   // Unique index required by upsertMemoryFact's ON CONFLICT (user_id, fact_text).
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique ON memory_facts(user_id, fact_text)`).catch((err) => console.warn('[migration] memory_facts unique:', err.message));
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique ON memory_facts(user_id, fact_text)`).catch((err) => logger.warn('migration.warn', { label: 'memory_facts unique', error: err.message }));
 
   // ── People Memory + Shared Access V1 ────────────────────────────────────
   // Schema for contacts, identities, shared access grants, and connections.
@@ -3943,13 +3981,13 @@ async function runMigrations() {
       created_at     TIMESTAMPTZ DEFAULT NOW(),
       updated_at     TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] contacts table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'contacts table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS contacts_user_id_idx ON contacts(user_id)`).catch(() => {});
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS contacts_user_email_unique
     ON contacts (user_id, LOWER(primary_email))
     WHERE primary_email IS NOT NULL
-  `).catch((err) => console.warn('[migration] contacts unique email:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'contacts unique email', error: err.message }));
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS contact_identities (
@@ -3960,7 +3998,7 @@ async function runMigrations() {
       verified    BOOLEAN DEFAULT FALSE,
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] contact_identities table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'contact_identities table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS contact_identities_value_idx ON contact_identities (LOWER(value))`).catch(() => {});
 
   await pool.query(`
@@ -3974,12 +4012,12 @@ async function runMigrations() {
       created_at           TIMESTAMPTZ DEFAULT NOW(),
       revoked_at           TIMESTAMPTZ
     )
-  `).catch((err) => console.warn('[migration] shared_access_grants table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'shared_access_grants table', error: err.message }));
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS shared_access_grants_active_unique
     ON shared_access_grants (grantor_user_id, grantee_user_id, scope)
     WHERE revoked_at IS NULL
-  `).catch((err) => console.warn('[migration] shared_access_grants unique:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'shared_access_grants unique', error: err.message }));
   await pool.query(`
     CREATE INDEX IF NOT EXISTS shared_access_grants_grantee_idx
     ON shared_access_grants (grantee_user_id)
@@ -3997,40 +4035,40 @@ async function runMigrations() {
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       accepted_at     TIMESTAMPTZ
     )
-  `).catch((err) => console.warn('[migration] connections table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'connections table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS connections_user_id_idx ON connections(user_id)`).catch(() => {});
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS connections_user_peer_user_unique
     ON connections (user_id, peer_user_id)
     WHERE peer_user_id IS NOT NULL
-  `).catch((err) => console.warn('[migration] connections peer_user unique:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'connections peer_user unique', error: err.message }));
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS connections_user_peer_contact_unique
     ON connections (user_id, peer_contact_id)
     WHERE peer_contact_id IS NOT NULL
-  `).catch((err) => console.warn('[migration] connections peer_contact unique:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'connections peer_contact unique', error: err.message }));
 
   // memory_facts: add contact_id, reshape the existing unique index to be
   // partial so global and contact-scoped facts coexist without collision.
   await pool.query(`ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS contact_id TEXT REFERENCES contacts(id) ON DELETE CASCADE`)
-    .catch((err) => console.warn('[migration] memory_facts.contact_id:', err.message));
+    .catch((err) => logger.warn('migration.warn', { label: 'memory_facts.contact_id', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS memory_facts_contact_id_idx ON memory_facts(contact_id) WHERE contact_id IS NOT NULL`).catch(() => {});
   // Reshape: drop the non-partial global unique so global + per-contact can
   // both hold the same fact_text. Recreate as a partial index on NULL rows.
   // upsertMemoryFact is updated in this commit to match the new partial
   // predicate on its ON CONFLICT clause. No-op on fresh DBs.
   await pool.query(`DROP INDEX IF EXISTS memory_facts_user_fact_unique`)
-    .catch((err) => console.warn('[migration] drop memory_facts_user_fact_unique:', err.message));
+    .catch((err) => logger.warn('migration.warn', { label: 'drop memory_facts_user_fact_unique', error: err.message }));
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique
     ON memory_facts (user_id, fact_text)
     WHERE contact_id IS NULL
-  `).catch((err) => console.warn('[migration] memory_facts global unique (partial):', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'memory_facts global unique (partial)', error: err.message }));
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_contact_scoped_unique
     ON memory_facts (user_id, contact_id, fact_text)
     WHERE contact_id IS NOT NULL
-  `).catch((err) => console.warn('[migration] memory_facts contact-scoped unique:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'memory_facts contact-scoped unique', error: err.message }));
 
   // ── Daily Wrap + Ambient Capture V1 ────────────────────────────────────
   // journal_entries: one row per user per local day. UPSERT on
@@ -4049,11 +4087,11 @@ async function runMigrations() {
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] journal_entries table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'journal_entries table', error: err.message }));
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS journal_entries_user_date_unique
     ON journal_entries (user_id, entry_date)
-  `).catch((err) => console.warn('[migration] journal_entries unique:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'journal_entries unique', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS journal_entries_user_idx ON journal_entries (user_id, entry_date DESC)`).catch(() => {});
 
   // pending_close_loop: event-driven queue of "we should ask about X"
@@ -4070,11 +4108,11 @@ async function runMigrations() {
       dismissed_at    TIMESTAMPTZ,
       resolved_at     TIMESTAMPTZ
     )
-  `).catch((err) => console.warn('[migration] pending_close_loop table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'pending_close_loop table', error: err.message }));
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS pending_close_loop_unique
     ON pending_close_loop (user_id, source_type, source_id)
-  `).catch((err) => console.warn('[migration] pending_close_loop unique:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'pending_close_loop unique', error: err.message }));
   // Hot path: open items per user, sorted by recency.
   await pool.query(`
     CREATE INDEX IF NOT EXISTS pending_close_loop_open_idx
@@ -4084,7 +4122,7 @@ async function runMigrations() {
 
   // user_preferences: wrap_time HH:MM string. NULL disables the feature.
   await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS wrap_time TEXT DEFAULT NULL`)
-    .catch((err) => console.warn('[migration] user_preferences.wrap_time:', err.message));
+    .catch((err) => logger.warn('migration.warn', { label: 'user_preferences.wrap_time', error: err.message }));
 
   // ── Entity Workspace Projects V1 ────────────────────────────────────────
   // See docs/dizon-entity-workspace-spec-v1.md. Membership enforcement
@@ -4103,7 +4141,7 @@ async function runMigrations() {
       created_at   TIMESTAMPTZ DEFAULT NOW(),
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] projects table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'projects table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS projects_entity_id  ON projects(entity_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS projects_created_by ON projects(created_by)`).catch(() => {});
 
@@ -4121,7 +4159,7 @@ async function runMigrations() {
       created_at   TIMESTAMPTZ DEFAULT NOW(),
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] project_tasks table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'project_tasks table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS project_tasks_project_id ON project_tasks(project_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS project_tasks_entity_id  ON project_tasks(entity_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS project_tasks_created_by ON project_tasks(created_by)`).catch(() => {});
@@ -4138,7 +4176,7 @@ async function runMigrations() {
       created_at   TIMESTAMPTZ DEFAULT NOW(),
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] task_checklist_items table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'task_checklist_items table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS task_checklist_items_task_id    ON task_checklist_items(task_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS task_checklist_items_entity_id  ON task_checklist_items(entity_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS task_checklist_items_created_by ON task_checklist_items(created_by)`).catch(() => {});
@@ -4154,7 +4192,7 @@ async function runMigrations() {
       created_at   TIMESTAMPTZ DEFAULT NOW(),
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch((err) => console.warn('[migration] project_notes table:', err.message));
+  `).catch((err) => logger.warn('migration.warn', { label: 'project_notes table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_project_id ON project_notes(project_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_task_id    ON project_notes(task_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_entity_id  ON project_notes(entity_id)`).catch(() => {});
