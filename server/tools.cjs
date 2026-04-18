@@ -289,7 +289,7 @@ const ARIA_TOOLS = [
     group: 'communication',
     risk: 'low',
     requires_confirmation: false,
-    description: "Retrieve the full body, headers, and snippet of a single email. Use when you need the actual content of a message — to summarize, extract details, decide on archival, or answer questions about what's in it. Cached server-side for 5 minutes.",
+    description: "Retrieve the full body, headers, and snippet of a single email. Use when you need the actual content of a message — to summarize, extract details, decide on archival, or answer questions about what's in it. Typical latency: 2–5 seconds cached/warm, up to 15 seconds for large emails (AmEx statements, marketing with heavy HTML). If the full body fetch times out the tool falls back to metadata-only and returns body_unavailable: true — tell the user honestly instead of inventing body content. On rate_limit or timeout failure, retry_after_seconds is included in the response; mirror that number to the user. Cached server-side for 5 minutes.",
     input_schema: {
       type: 'object',
       properties: {
@@ -320,7 +320,7 @@ const ARIA_TOOLS = [
     group: 'communication',
     risk: 'low',
     requires_confirmation: false,
-    description: "Search the user's Gmail mailbox for messages matching a query. Uses Gmail's native search syntax: scope aggressively with from:<sender> / subject:<text> / newer_than:7d / has:attachment / label:<name> / is:unread to keep results fast and relevant. Returns thread-level matches; follow up with get_email_content for a specific thread id. Use when the user asks to find an email and no message_id is known — this is the wide-mailbox equivalent of search_inbox (which only sees classified/flagged emails).",
+    description: "Search the user's Gmail mailbox for messages matching a query. Uses Gmail's native search syntax: scope aggressively with from:<sender> / subject:<text> / newer_than:7d / has:attachment / label:<name> / is:unread to keep results fast and relevant. Typical latency: 5–10 seconds for well-scoped queries (newer_than + from/subject), 10–20 seconds for broader searches. Queue the user with a realistic estimate before you call this ('Searching your Gmail for X from the last 30 days — about 10 seconds'). If multiple accounts are connected, searches run in parallel. Results cached 10 minutes. On timeout/rate_limit failure, retry_after_seconds is included — mirror that number to the user. Returns thread-level matches; follow up with get_email_content for a specific thread id. Use when the user asks to find an email and no message_id is known — this is the wide-mailbox equivalent of search_inbox (which only sees classified/flagged emails).",
     input_schema: {
       type: 'object',
       properties: {
