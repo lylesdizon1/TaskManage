@@ -135,6 +135,49 @@ function initials(name) {
   if (!parts.length) return '?';
   return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
 }
+
+// Stable avatar palette — 9 hues spanning the design system + complementary
+// accents. Hashed deterministically per sender so the same sender always
+// renders the same color across refreshes.
+const AVATAR_PALETTE = [
+  { bg: '#ededff', fg: '#4f4dcf' }, // primary container
+  { bg: '#dcfce7', fg: '#166534' }, // emerald
+  { bg: '#fef3c7', fg: '#b45309' }, // amber
+  { bg: '#fce7f3', fg: '#be185d' }, // pink
+  { bg: '#cffafe', fg: '#0e7490' }, // cyan
+  { bg: '#ede9fe', fg: '#6d28d9' }, // violet
+  { bg: '#ffe4e6', fg: '#be123c' }, // rose
+  { bg: '#dbeafe', fg: '#1d4ed8' }, // blue
+  { bg: '#f1f5f9', fg: '#475569' }, // slate
+];
+function avatarColorForSender(seed) {
+  if (!seed) return AVATAR_PALETTE[0];
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
+}
+
+// Color tokens per semantic category. Maps 1:1 to the 14 categories
+// labelMapper.cjs assigns to Gmail labels / Outlook folders.
+const LABEL_CATEGORY_STYLES = {
+  finance:       { bg: 'rgba(217,119,6,0.10)',  fg: '#b45309' },
+  legal:         { bg: 'rgba(220,38,38,0.10)',  fg: '#b91c1c' },
+  clients:       { bg: 'rgba(13,148,136,0.10)', fg: '#0f766e' },
+  vendors:       { bg: 'rgba(180,83,9,0.10)',   fg: '#9a3412' },
+  personal:      { bg: 'rgba(219,39,119,0.10)', fg: '#be185d' },
+  team:          { bg: 'rgba(79,77,207,0.10)',  fg: '#4f4dcf' },
+  receipts:      { bg: 'rgba(217,119,6,0.10)',  fg: '#b45309' },
+  newsletters:   { bg: 'rgba(107,114,128,0.10)',fg: '#4b5563' },
+  notifications: { bg: 'rgba(107,114,128,0.10)',fg: '#4b5563' },
+  travel:        { bg: 'rgba(2,132,199,0.10)',  fg: '#0369a1' },
+  hr:            { bg: 'rgba(124,58,237,0.10)', fg: '#6d28d9' },
+  projects:      { bg: 'rgba(147,51,234,0.10)', fg: '#7e22ce' },
+  archive:       { bg: 'rgba(71,85,105,0.10)',  fg: '#475569' },
+  other:         { bg: 'rgba(156,163,175,0.10)',fg: '#6b7280' },
+};
+function labelStyleFor(category) {
+  return LABEL_CATEGORY_STYLES[category] || LABEL_CATEGORY_STYLES.other;
+}
 function relTime(iso) {
   const t = Date.parse(iso || '');
   if (!Number.isFinite(t)) return '';
@@ -572,16 +615,25 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   }
 
   // Move-to picker state — shown from the thread detail action bar.
-  // Loaded lazily when the user opens the picker so first-paint stays fast.
+  // Loaded once at mount so row label chips can render immediately and
+  // the picker has data on first open.
   const [movePickerOpen, setMovePickerOpen] = useState(false);
   const [moveLabels, setMoveLabels] = useState([]);
   const [moveLabelsLoading, setMoveLabelsLoading] = useState(false);
   const [moveSelectedLabel, setMoveSelectedLabel] = useState(null);
 
-  async function openMovePicker() {
-    setMovePickerOpen(true);
-    setMoveSelectedLabel(null);
-    if (moveLabels.length) return;
+  // O(1) lookup keyed by `${accountEmail}::${labelId}` so each ThreadRow
+  // can resolve its first mapped Gmail label to a colored chip without
+  // scanning the full label list.
+  const labelLookup = useMemo(() => {
+    const map = {};
+    for (const l of moveLabels) {
+      map[`${l.accountEmail}::${l.labelId}`] = l;
+    }
+    return map;
+  }, [moveLabels]);
+
+  const loadLabels = useCallback(async () => {
     setMoveLabelsLoading(true);
     try {
       const r = await apiFetch('/api/inbox/labels', { headers: { Authorization: `Bearer ${authToken}` } });
@@ -589,6 +641,13 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       setMoveLabels(Array.isArray(data?.labels) ? data.labels : []);
     } catch { setMoveLabels([]); }
     finally { setMoveLabelsLoading(false); }
+  }, [apiFetch, authToken]);
+  useEffect(() => { loadLabels(); }, [loadLabels]);
+
+  function openMovePicker() {
+    setMovePickerOpen(true);
+    setMoveSelectedLabel(null);
+    if (!moveLabels.length && !moveLabelsLoading) loadLabels();
   }
 
   async function moveCurrent(scope) {
@@ -792,40 +851,49 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         .email-html-body table { max-width: 100%; }
         .email-html-body pre { white-space: pre-wrap; }
       `}</style>
-      {/* Left — zoned thread list */}
+      {/* Left panel — w-96 (384px) per V2 design comp. */}
       <div
-        className={`border-r border-gray-100 flex-col h-full ${mobileShowThread ? 'hidden md:flex' : 'flex'}`}
-        style={{ width: 320, minWidth: 320, flexShrink: 0, backgroundColor: '#fbf8fe', position: 'relative' }}
+        className={`flex-col h-full ${mobileShowThread ? 'hidden md:flex' : 'flex'}`}
+        style={{ width: 384, minWidth: 384, flexShrink: 0, backgroundColor: '#f5f2fa', borderRight: '1px solid rgba(0,0,0,0.08)', position: 'relative' }}
       >
-        <div className="px-4 md:px-5 pt-3 md:pt-5 pb-2 md:pb-3">
-          <h1 className="text-lg md:text-xl font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
-          <div className="mt-2 md:mt-3">
-            <select
-              value={accountFilter}
-              onChange={(e) => setAccountFilter(e.target.value)}
-              className="w-full px-2 md:px-3 py-1.5 md:py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-xs md:text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">All accounts</option>
-              {accounts.map(a => <option key={a.id} value={a.account_email}>{a.account_email}</option>)}
-            </select>
+        {/* Header: Inbox title + unread count badge */}
+        <div className="px-5 pt-5 pb-3">
+          <div className="flex items-baseline gap-2">
+            <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
+            {(() => {
+              const unread = threads.filter(t => !t.isRead).length;
+              if (!unread) return null;
+              return (
+                <span
+                  className="px-2 py-0.5 rounded-full text-[11px] font-bold"
+                  style={{ backgroundColor: '#ededff', color: '#4f4dcf' }}
+                >
+                  {unread}
+                </span>
+              );
+            })()}
           </div>
-          {/* V2: search forwarded as Gmail q= via /api/inbox/threads?query=... */}
-          <div className="mt-2 relative">
-            <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" style={{ fontSize: 16 }}>search</span>
+        </div>
+
+        {/* Search — full width, icon left */}
+        <div className="px-5 pb-2">
+          <div className="relative">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" style={{ fontSize: 18 }}>search</span>
             <input
               type="search"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') setSearchQuery(searchInput.trim()); }}
               placeholder="Search emails..."
-              className="w-full pl-7 pr-7 py-1.5 md:py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-xs md:text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full pl-10 pr-9 py-2 bg-white text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              style={{ borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)' }}
             />
             {(searchInput || searchQuery) && (
               <button
                 type="button"
                 onClick={clearSearch}
                 aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
               </button>
@@ -838,27 +906,42 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 : <>{threads.length} result{threads.length === 1 ? '' : 's'} for <span className="font-semibold text-gray-700">&ldquo;{searchQuery}&rdquo;</span></>}
             </div>
           )}
-          <div className="mt-2 flex items-center gap-1">
+        </div>
+
+        {/* Filter pills + account dropdown right-aligned */}
+        <div className="px-5 pb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1">
             {[
               { key: 'all',    label: 'All' },
               { key: 'unread', label: 'Unread' },
-              { key: 'action', label: 'Action Required' },
+              { key: 'action', label: 'Action' },
             ].map(({ key, label }) => (
               <button
                 key={key}
                 onClick={() => setPillFilter(key)}
-                className={`px-2.5 py-1 text-[11px] font-semibold rounded-full transition-colors`}
+                className="px-2.5 py-1 text-[11px] font-semibold rounded-full transition-colors"
                 style={pillFilter === key
                   ? { backgroundColor: '#4f4dcf', color: '#fff' }
-                  : { backgroundColor: 'transparent', color: '#6b7280', border: '1px solid #e5e7eb' }}
+                  : { backgroundColor: 'transparent', color: '#6b7280', border: '1px solid rgba(0,0,0,0.08)' }}
               >
                 {label}
               </button>
             ))}
           </div>
-
+          {accounts.length > 0 && (
+            <select
+              value={accountFilter}
+              onChange={(e) => setAccountFilter(e.target.value)}
+              className="text-[11px] text-gray-700 bg-white px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              style={{ borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', maxWidth: 140 }}
+              title="Filter by account"
+            >
+              <option value="">All accounts</option>
+              {accounts.map(a => <option key={a.id} value={a.account_email}>{shortAccount(a.account_email)}</option>)}
+            </select>
+          )}
         </div>
-        <div className="flex-1 overflow-y-auto px-2 pb-3">
+        <div className="flex-1 overflow-y-auto px-3 pb-3">
           {threadsLoading ? (
             <ZonedSkeleton />
           ) : threadsError ? (
@@ -891,7 +974,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="Nothing urgent right now."
                 showCountSuffix
               >
-                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
+                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
               </Zone>
 
               {/* Zone 2 — For Your Review */}
@@ -905,7 +988,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="No emails to review."
                 showCountSuffix
               >
-                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
+                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
               </Zone>
 
               {/* Zone 3 — Low Priority */}
@@ -933,7 +1016,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   )
                 }
               >
-                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
+                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
               </Zone>
 
               {/* Zone 4 — Read */}
@@ -946,39 +1029,42 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 onToggle={() => toggleZone('read')}
                 emptyText="No read threads."
               >
-                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
+                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
               </Zone>
             </>
           )}
-          {/* V2 cursor pagination. Newer pops the local cursor stack;
-              Older advances using the server-issued nextCursor. Disabled
-              when no further pages exist in that direction. */}
-          {!threadsLoading && !threadsError && (cursorStack.length > 0 || nextCursor) && (
-            <div className="mt-3 mx-1 flex items-center justify-between text-[12px]">
-              <button
-                type="button"
-                onClick={goNewer}
-                disabled={cursorStack.length === 0}
-                className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ color: '#4f4dcf' }}
-              >
-                ← Newer
-              </button>
-              <span className="text-gray-400">
-                {cursorStack.length === 0 ? 'Showing latest 25' : `Page ${cursorStack.length + 1}`}
-              </span>
-              <button
-                type="button"
-                onClick={goOlder}
-                disabled={!nextCursor}
-                className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ color: '#4f4dcf' }}
-              >
-                Older →
-              </button>
-            </div>
-          )}
         </div>
+
+        {/* V2 pagination — pinned to the bottom of the panel (not inline
+            at the end of the scroll list, per the design comp). */}
+        {!threadsLoading && !threadsError && (cursorStack.length > 0 || nextCursor) && (
+          <div
+            className="px-4 py-2 flex items-center justify-between text-[12px]"
+            style={{ backgroundColor: '#f5f2fa', borderTop: '1px solid rgba(0,0,0,0.08)' }}
+          >
+            <button
+              type="button"
+              onClick={goNewer}
+              disabled={cursorStack.length === 0}
+              className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ color: '#4f4dcf' }}
+            >
+              ← Newer
+            </button>
+            <span className="text-gray-500">
+              {cursorStack.length === 0 ? 'Showing latest 25' : `Page ${cursorStack.length + 1}`}
+            </span>
+            <button
+              type="button"
+              onClick={goOlder}
+              disabled={!nextCursor}
+              className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ color: '#4f4dcf' }}
+            >
+              Older →
+            </button>
+          </div>
+        )}
 
         {/* Bulk auto-clean confirmation — dry-run result shown here */}
         {cleanScan && (
@@ -1075,24 +1161,74 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
           </>
         ) : (
           <>
-            <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-3 border-b border-gray-100">
-              <div className="flex items-start gap-2 min-w-0 flex-1">
-                <button onClick={() => setMobileShowThread(false)} className="md:hidden text-gray-400 flex-shrink-0 mt-0.5" title="Back">
-                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>arrow_back</span>
-                </button>
-                <h2 className="text-lg font-bold text-gray-900 whitespace-normal break-words min-w-0" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                  {thread?.messages?.[0]?.subject || '(no subject)'}
-                </h2>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {activeAccount && (() => { const tint = tintForAccount(activeAccount); return (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>{shortAccount(activeAccount)}</span>
-                ); })()}
-                <button onClick={archiveCurrent} disabled={!thread} title="Archive"
-                  className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-gray-100 disabled:opacity-30">
-                  <span className="material-symbols-outlined text-gray-500" style={{ fontSize: '18px' }}>archive</span>
-                </button>
-              </div>
+            {/* Thread header: back (mobile), subject, sender row */}
+            <div className="px-6 pt-5 pb-4 bg-white" style={{ borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
+              <button
+                onClick={() => setMobileShowThread(false)}
+                className="md:hidden flex items-center gap-1 text-gray-500 mb-2 text-xs font-semibold"
+                title="Back"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>arrow_back</span>
+                Back
+              </button>
+              <h2
+                className="text-[18px] font-semibold text-gray-900 leading-snug break-words"
+                style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+              >
+                {thread?.messages?.[0]?.subject || '(no subject)'}
+              </h2>
+              {(() => {
+                const latest = thread?.messages?.[thread.messages.length - 1];
+                if (!latest) return null;
+                const senderRaw = senderName(latest.from) || senderEmail(latest.from);
+                const av = avatarColorForSender(senderEmail(latest.from) || senderRaw);
+                return (
+                  <div className="mt-3 flex items-center gap-3">
+                    <div
+                      className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+                      style={{ backgroundColor: av.bg, color: av.fg, fontSize: 12, fontWeight: 700, fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+                    >
+                      {initials(senderRaw)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-gray-900 truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                        {senderRaw}
+                      </div>
+                      <div className="text-[11px] text-gray-500 truncate">
+                        to {latest.to || activeAccount || 'me'} · {absTime(latest.date)}
+                      </div>
+                    </div>
+                    {activeAccount && (() => { const tint = tintForAccount(activeAccount); return (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: tint.bg, color: tint.fg }}>
+                        {shortAccount(activeAccount)}
+                      </span>
+                    ); })()}
+                  </div>
+                );
+              })()}
+              {/* Label chips row — Gmail labels on the latest message, semantic-colored */}
+              {(() => {
+                const latest = thread?.messages?.[thread.messages.length - 1];
+                if (!latest || !Array.isArray(latest.labelIds) || !latest.labelIds.length) return null;
+                const SYS = /^(UNREAD|INBOX|STARRED|IMPORTANT|SENT|DRAFT|TRASH|SPAM|CHAT|CATEGORY_)/;
+                const chips = latest.labelIds
+                  .filter((lid) => !SYS.test(lid))
+                  .map((lid) => labelLookup?.[`${activeAccount}::${lid}`])
+                  .filter(Boolean);
+                if (!chips.length) return null;
+                return (
+                  <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+                    {chips.map((c) => {
+                      const ls = labelStyleFor(c.semanticCategory);
+                      return (
+                        <span key={c.labelId} className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: ls.bg, color: ls.fg }}>
+                          {c.labelName}
+                        </span>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
@@ -1159,29 +1295,53 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               ) : null}
             </div>
 
-            {thread && (
-              <div className="border-t border-gray-100 px-4 py-2.5 flex items-center gap-2 flex-wrap" style={{ backgroundColor: '#fbf8fe' }}>
-                <ActionBtn icon="reply"     label="Reply"     onClick={() => openCompose('reply')} />
-                <ActionBtn icon="reply_all" label="Reply All" onClick={() => openCompose('replyAll')} />
-                <ActionBtn icon="forward"   label="Forward"   onClick={() => openCompose('forward')} />
-                <span className="mx-1 h-5 w-px bg-gray-200" />
-                <ActionBtn icon="archive" label="Archive" onClick={archiveCurrent} />
-                <ActionBtn
-                  icon="mark_email_read"
-                  label="Mark read"
-                  onClick={() => {
-                    const t = threads.find((x) => x.id === thread.id);
-                    if (t) markThreadRead(t);
-                  }}
-                />
-                <ActionBtn
-                  icon={(threads.find((x) => x.id === thread.id)?.starred) ? 'star' : 'star_outline'}
-                  label={(threads.find((x) => x.id === thread.id)?.starred) ? 'Unstar' : 'Star'}
-                  onClick={starCurrent}
-                />
-                <ActionBtn icon="drive_file_move" label="Move to..." onClick={openMovePicker} />
-              </div>
-            )}
+            {thread && (() => {
+              // "Reply in Gmail" deeplink — opens this thread in Gmail web
+              // so the user can reply with their normal compose UX. We
+              // skip the inline ComposeDrawer for this primary action.
+              const gmailUrl = activeAccount && thread.id
+                ? `https://mail.google.com/mail/u/0/#inbox/${thread.id}`
+                : null;
+              const currentRow = threads.find((x) => x.id === thread.id);
+              return (
+                <div className="px-4 py-2.5 space-y-1.5" style={{ backgroundColor: '#f5f2fa', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+                  {/* Row 1: Reply / Reply All / Forward + primary "Reply in Gmail" */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <ActionBtn icon="reply"     label="Reply"     onClick={() => openCompose('reply')} />
+                    <ActionBtn icon="reply_all" label="Reply All" onClick={() => openCompose('replyAll')} />
+                    <ActionBtn icon="forward"   label="Forward"   onClick={() => openCompose('forward')} />
+                    {gmailUrl && (
+                      <a
+                        href={gmailUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold rounded-lg shadow-sm"
+                        style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+                        title="Open this thread in Gmail to reply"
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 15 }}>open_in_new</span>
+                        Reply in Gmail
+                      </a>
+                    )}
+                  </div>
+                  {/* Row 2: Archive / Mark read / Star / Move to */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <ActionBtn icon="archive" label="Archive" onClick={archiveCurrent} />
+                    <ActionBtn
+                      icon="mark_email_read"
+                      label="Mark read"
+                      onClick={() => { if (currentRow) markThreadRead(currentRow); }}
+                    />
+                    <ActionBtn
+                      icon={currentRow?.starred ? 'star' : 'star_outline'}
+                      label={currentRow?.starred ? 'Unstar' : 'Star'}
+                      onClick={starCurrent}
+                    />
+                    <ActionBtn icon="drive_file_move" label="Move to..." onClick={openMovePicker} />
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Move-to picker — modal-ish overlay anchored to the thread detail. */}
             {movePickerOpen && (
@@ -1548,23 +1708,39 @@ function renderThreadRow(props) {
 const SWIPE_THRESHOLD = 60;
 const SWIPE_DRAWER_WIDTH = 140; // px — width of the revealed action panel
 
-function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }) {
+function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }) {
   const tint = tintForAccount(t.accountEmail);
   const active = t.id === activeThreadId;
   const mid = t.latestMessageId || t.id;
   const cls = classifications[mid];
   const impStyle = cls ? IMPORTANCE_STYLES[cls.importance] : null;
+  const senderDisplay = senderName(t.from) || shortAccount(t.accountEmail);
+  const avatar = avatarColorForSender(senderEmail(t.from) || senderDisplay);
 
-  // Dot: critical=red, high=amber, unclassified unread=blue, read=none.
-  let dotBg = 'transparent';
-  let dotBorder = 'none';
+  // Unread dot color (rendered as a small overlay on the avatar):
+  // critical=red, high=amber, otherwise primary.
+  let unreadDotBg = null;
   if (!t.isRead) {
-    if (impStyle && cls.importance === 'critical') dotBg = '#ef4444';
-    else if (impStyle && cls.importance === 'high') dotBg = '#f59e0b';
-    else dotBg = '#4f4dcf';
+    if (impStyle && cls.importance === 'critical') unreadDotBg = '#ef4444';
+    else if (impStyle && cls.importance === 'high') unreadDotBg = '#f59e0b';
+    else unreadDotBg = '#4f4dcf';
   }
 
-  const showPill = cls && cls.importanceRank >= 3 && !SUPPRESS_PILL.has(cls.category);
+  // Find the first user-mapped Gmail label on this thread to render as
+  // a colored category chip. Skip system labels (UNREAD, INBOX, STARRED,
+  // CATEGORY_*, IMPORTANT) — those aren't filing intent.
+  const SYSTEM_LABEL_RE = /^(UNREAD|INBOX|STARRED|IMPORTANT|SENT|DRAFT|TRASH|SPAM|CHAT|CATEGORY_)/;
+  const labelChip = (() => {
+    if (!labelLookup || !Array.isArray(t.labelIds)) return null;
+    for (const lid of t.labelIds) {
+      if (SYSTEM_LABEL_RE.test(lid)) continue;
+      const found = labelLookup[`${t.accountEmail}::${lid}`];
+      if (found) return found;
+    }
+    return null;
+  })();
+  const labelStyle = labelChip ? labelStyleFor(labelChip.semanticCategory) : null;
+  const showClsChip = cls && cls.importanceRank >= 3 && !SUPPRESS_PILL.has(cls.category);
 
   // Swipe state — touch-only (mobile). Desktop uses the hover actions.
   const touchStartX = useRef(null);
@@ -1613,8 +1789,12 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
   return (
     <div
       key={`${t.accountEmail}:${t.id}`}
-      className={`group relative rounded-xl mb-1 transition-colors overflow-hidden ${active ? 'bg-primary/5' : 'hover:bg-white'}`}
-      style={active ? { borderLeft: '3px solid #4f4dcf' } : { borderLeft: '3px solid transparent' }}
+      className="group relative mb-1 transition-colors overflow-hidden"
+      style={{
+        borderRadius: 10,
+        backgroundColor: active ? '#ededff' : 'transparent',
+        borderLeft: active ? '3px solid #4f4dcf' : '3px solid transparent',
+      }}
     >
       {/* Mobile swipe drawer — sits behind the row, revealed on left-swipe. */}
       <div
@@ -1643,37 +1823,86 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
       </div>
 
       <div
-        className="relative bg-inherit"
-        style={{ transform: `translateX(${dragOffset}px)`, transition: touchStartX.current == null ? 'transform 160ms ease' : 'none' }}
+        className="relative"
+        style={{
+          transform: `translateX(${dragOffset}px)`,
+          transition: touchStartX.current == null ? 'transform 160ms ease' : 'none',
+          backgroundColor: active ? '#ededff' : 'transparent',
+        }}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
       <button
         onClick={() => { if (drawerOpen) { setDrawerOpen(false); setDragOffset(0); return; } openThread(t); }}
-        className="w-full text-left px-3 py-1.5 md:py-2.5 bg-inherit"
+        className="w-full text-left px-3 py-2.5 transition-colors hover:bg-[#f5f2fa]"
+        style={{ backgroundColor: 'transparent' }}
       >
-        <div className="flex items-start gap-2">
-          <span
-            className="flex-shrink-0 mt-1.5 w-2 h-2 rounded-full"
-            style={{ backgroundColor: dotBg, border: dotBorder }}
-          />
+        <div className="flex items-start gap-3">
+          {/* Avatar — 36×36 circle, initials, hashed color, with unread dot overlay */}
+          <div className="relative flex-shrink-0">
+            <div
+              className="w-9 h-9 rounded-full flex items-center justify-center"
+              style={{
+                backgroundColor: avatar.bg,
+                color: avatar.fg,
+                fontSize: 12,
+                fontWeight: 700,
+                fontFamily: "'Plus Jakarta Sans', sans-serif",
+              }}
+            >
+              {initials(senderDisplay)}
+            </div>
+            {unreadDotBg && (
+              <span
+                className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full"
+                style={{ backgroundColor: unreadDotBg, border: '2px solid #f5f2fa' }}
+                aria-label="unread"
+              />
+            )}
+            {t.starred && (
+              <span
+                className="absolute -top-0.5 -right-0.5 material-symbols-outlined"
+                style={{ fontSize: 12, color: '#f59e0b' }}
+                aria-label="starred"
+              >
+                star
+              </span>
+            )}
+          </div>
+
           <div className="flex-1 min-w-0">
+            {/* Sender + timestamp */}
             <div className="flex items-center justify-between gap-2">
-              <span className={`text-sm truncate ${t.isRead ? 'text-gray-600' : 'text-gray-900 font-semibold'}`} style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                {senderName(t.from) || shortAccount(t.accountEmail)}
+              <span
+                className={`text-sm truncate ${t.isRead ? 'text-gray-600' : 'text-gray-900 font-bold'}`}
+                style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+              >
+                {senderDisplay}
               </span>
               <span className="text-[10px] text-gray-400 flex-shrink-0">{relTime(t.date)}</span>
             </div>
+            {/* Subject */}
             <div className={`text-[13px] truncate mt-0.5 ${t.isRead ? 'text-gray-500' : 'text-gray-800 font-semibold'}`}>
               {decodeHtmlEntities(t.subject) || '(no subject)'}
             </div>
+            {/* Snippet */}
             <div className="text-xs text-gray-400 truncate mt-0.5">{decodeHtmlEntities(t.snippet)}</div>
-            <div className="mt-1.5 flex items-center gap-1.5">
-              <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: tint.bg, color: tint.fg }}>
+            {/* Tags row: account chip + label chip + classification chip */}
+            <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+              <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: '#ededff', color: '#4f4dcf' }}>
                 {shortAccount(t.accountEmail)}{t.messageCount > 1 ? ` · ${t.messageCount}` : ''}
               </span>
-              {showPill && (
+              {labelChip && (
+                <span
+                  className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full truncate"
+                  style={{ backgroundColor: labelStyle.bg, color: labelStyle.fg, maxWidth: 120 }}
+                  title={`${labelChip.labelName} → ${labelChip.semanticCategory || 'unmapped'}`}
+                >
+                  {labelChip.labelName}
+                </span>
+              )}
+              {showClsChip && (
                 <span
                   className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full truncate"
                   style={{ backgroundColor: impStyle.bg, color: impStyle.fg, maxWidth: 120 }}
