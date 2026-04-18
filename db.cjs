@@ -667,6 +667,31 @@ async function initTables() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_integrations_user ON user_integrations(user_id)`).catch(() => {});
 
+  // ── entity_qb_connections — QuickBooks OAuth per (user, entity, realm) ──
+  // One row per QB company a user has connected to a given entity. realm_id
+  // is QB's company ID (returned in the OAuth callback); a single entity may
+  // theoretically connect to multiple QB companies, but typical usage is
+  // 1 entity ↔ 1 realm. environment is 'sandbox' | 'production' so the same
+  // entity can move between sandbox and prod by adding a new row.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS entity_qb_connections (
+      id                 SERIAL PRIMARY KEY,
+      user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id          TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      realm_id           TEXT NOT NULL,
+      environment        TEXT NOT NULL DEFAULT 'sandbox',
+      company_name       TEXT DEFAULT '',
+      encrypted_tokens   TEXT NOT NULL,
+      scope              TEXT DEFAULT '',
+      last_refreshed_at  TIMESTAMPTZ,
+      created_at         TIMESTAMPTZ DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, entity_id, realm_id, environment)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_conn_user ON entity_qb_connections(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_conn_entity ON entity_qb_connections(entity_id)`).catch(() => {});
+
   // Legacy "Dizon Household" seed org intentionally removed — founder-specific.
   // Production org_members rows remain intact; new deployments start with
   // no default org.
@@ -801,6 +826,94 @@ async function deleteUserIntegration(userId, type) {
     `DELETE FROM user_integrations WHERE user_id = $1 AND integration_type = $2`,
     [userId, type],
   );
+}
+
+// ── entity_qb_connections (QuickBooks OAuth per entity) ──────────────────────
+
+/**
+ * Upsert a QB connection by (user_id, entity_id, realm_id, environment).
+ * Tokens are caller-encrypted JSON (see server/utils/quickbooks.cjs). Returns
+ * the upserted row id.
+ */
+async function upsertQbConnection({ userId, entityId, realmId, environment, companyName, encryptedTokens, scope }) {
+  const { rows } = await pool.query(
+    `INSERT INTO entity_qb_connections
+       (user_id, entity_id, realm_id, environment, company_name, encrypted_tokens, scope, last_refreshed_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+     ON CONFLICT (user_id, entity_id, realm_id, environment) DO UPDATE SET
+       company_name      = EXCLUDED.company_name,
+       encrypted_tokens  = EXCLUDED.encrypted_tokens,
+       scope             = EXCLUDED.scope,
+       last_refreshed_at = NOW(),
+       updated_at        = NOW()
+     RETURNING id`,
+    [userId, entityId, realmId, environment, companyName || '', encryptedTokens, scope || ''],
+  );
+  return rows[0]?.id;
+}
+
+/** All QB connections for a user across entities. */
+async function getQbConnectionsByUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", entity_id AS "entityId", realm_id AS "realmId",
+            environment, company_name AS "companyName", encrypted_tokens AS "encryptedTokens",
+            scope, last_refreshed_at AS "lastRefreshedAt",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM entity_qb_connections
+      WHERE user_id = $1
+      ORDER BY created_at ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+/** Single connection by id, scoped to userId for authorization. */
+async function getQbConnectionById(id, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", entity_id AS "entityId", realm_id AS "realmId",
+            environment, company_name AS "companyName", encrypted_tokens AS "encryptedTokens",
+            scope, last_refreshed_at AS "lastRefreshedAt",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM entity_qb_connections
+      WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rows[0] || null;
+}
+
+/** Replace tokens after a refresh — touches updated_at + last_refreshed_at. */
+async function updateQbConnectionTokens(id, userId, encryptedTokens) {
+  await pool.query(
+    `UPDATE entity_qb_connections
+        SET encrypted_tokens = $1, last_refreshed_at = NOW(), updated_at = NOW()
+      WHERE id = $2 AND user_id = $3`,
+    [encryptedTokens, id, userId],
+  );
+}
+
+/** Delete a connection by id, scoped to userId. */
+async function deleteQbConnectionById(id, userId) {
+  const result = await pool.query(
+    `DELETE FROM entity_qb_connections WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return result.rowCount > 0;
+}
+
+/**
+ * All QB connections across every user — used by background refresh cron.
+ * Caller is responsible for refreshing+persisting per row. Not exposed via
+ * any HTTP route.
+ */
+async function getAllQbConnections() {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", entity_id AS "entityId", realm_id AS "realmId",
+            environment, company_name AS "companyName", encrypted_tokens AS "encryptedTokens",
+            scope, last_refreshed_at AS "lastRefreshedAt"
+       FROM entity_qb_connections
+      ORDER BY id ASC`,
+  );
+  return rows;
 }
 
 /**
@@ -7851,6 +7964,12 @@ module.exports = {
   upsertUserIntegration,
   deleteUserIntegration,
   deleteUserIntegrationById,
+  upsertQbConnection,
+  getQbConnectionsByUser,
+  getQbConnectionById,
+  updateQbConnectionTokens,
+  deleteQbConnectionById,
+  getAllQbConnections,
   backfillSuperadminIntegrationsFromEnv,
   getUserSetting,
   getUserSettings,

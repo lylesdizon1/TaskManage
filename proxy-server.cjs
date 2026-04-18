@@ -108,6 +108,7 @@ app.use('/', require('./server/routes/tileExecute.cjs')({ authenticateToken, db 
 app.use('/', require('./server/routes/outcomes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/projects.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/outlook.cjs')({ authenticateToken, db }));
+app.use('/', require('./server/routes/quickbooks.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/contacts.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/sharedAccess.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/connections.cjs')({ authenticateToken, db }));
