@@ -291,5 +291,105 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
     }
   });
 
+  /**
+   * GET /api/inbox/labels
+   * Returns the user's Gmail labels + Outlook folders for use in the
+   * "Move to..." picker. Newest-known labels first.
+   */
+  router.get('/api/inbox/labels', authenticateToken, async (req, res) => {
+    try {
+      const labels = await db.getEmailLabelsForUser(req.user.id);
+      // Sort by message count desc as a rough proxy for "labels the user actually files into"
+      labels.sort((a, b) => (Number(b.messageCount) || 0) - (Number(a.messageCount) || 0));
+      res.json({ labels });
+    } catch (err) {
+      logger.error('inbox.labels.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * POST /api/inbox/star
+   * body: { account_email, message_id, starred: bool }
+   * Toggles the Gmail STARRED label. The frontend passes the desired
+   * post-state explicitly so optimistic UI doesn't have to read first.
+   */
+  router.post('/api/inbox/star', authenticateToken, async (req, res) => {
+    try {
+      const { account_email, message_id, starred } = req.body || {};
+      if (!account_email || !message_id) return res.status(400).json({ error: 'account_email and message_id required' });
+      const row = await db.getGmailIntegrationByEmail(req.user.id, account_email);
+      if (!row) return res.status(404).json({ error: 'Account not found' });
+      const provider = providerFor(row);
+      if (!provider || !provider.starMessage) return res.status(400).json({ error: 'Unsupported provider' });
+      await provider.starMessage({ db, userId: req.user.id, accountEmail: row.accountEmail, messageId: message_id, starred: starred !== false });
+      res.json({ success: true, starred: starred !== false });
+    } catch (err) {
+      logger.error('inbox.star.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * POST /api/inbox/move
+   * body: { account_email, message_id, target_label_id, target_label_name,
+   *         scope: 'thread'|'sender'|'domain' }
+   * Adds target label, removes INBOX. When scope extends beyond this thread,
+   * upserts an email_filing_patterns row (Aria suggests automation at 0.8+).
+   */
+  router.post('/api/inbox/move', authenticateToken, async (req, res) => {
+    try {
+      const { account_email, message_id, target_label_id, target_label_name, scope } = req.body || {};
+      if (!account_email || !message_id || !target_label_id) {
+        return res.status(400).json({ error: 'account_email, message_id, and target_label_id required' });
+      }
+      const validScopes = new Set(['thread', 'sender', 'domain']);
+      const useScope = validScopes.has(scope) ? scope : 'thread';
+
+      const row = await db.getGmailIntegrationByEmail(req.user.id, account_email);
+      if (!row) return res.status(404).json({ error: 'Account not found' });
+      const provider = providerFor(row);
+      if (!provider || !provider.moveMessage) return res.status(400).json({ error: 'Unsupported provider' });
+
+      const result = await provider.moveMessage({
+        db, userId: req.user.id, accountEmail: row.accountEmail,
+        messageId: message_id, targetLabelId: target_label_id,
+      });
+
+      let pattern = null;
+      if (useScope === 'sender' || useScope === 'domain') {
+        const fromHeader = result?.fromHeader || '';
+        const emailMatch = fromHeader.match(/<([^>]+)>/);
+        const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).trim().toLowerCase();
+        const matchValue = useScope === 'sender'
+          ? senderEmail
+          : (senderEmail.split('@')[1] || senderEmail);
+        if (matchValue) {
+          try {
+            pattern = await db.upsertFilingPattern({
+              userId: req.user.id, accountEmail: row.accountEmail,
+              matchType: useScope, matchValue,
+              targetLabelId: target_label_id,
+              targetLabelName: target_label_name || target_label_id,
+            });
+          } catch (e) {
+            logger.warn('inbox.move.patternUpsert.failed', { requestId: req.requestId, userId: req.user.id, error: e.message });
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        moved_to: target_label_name || target_label_id,
+        scope: useScope,
+        pattern_confidence: pattern?.confidence ?? null,
+        pattern_times_applied: pattern?.times_applied ?? null,
+      });
+    } catch (err) {
+      logger.error('inbox.move.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   return router;
 };

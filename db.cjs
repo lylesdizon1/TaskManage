@@ -2709,6 +2709,44 @@ async function updateLabelSemanticCategory(userId, labelId, category) {
   );
 }
 
+// ── Email filing patterns (Inbox V2 — behavioral learning hook) ──────────
+
+/**
+ * Upsert a filing pattern row. Same (user_id, account_email, match_type,
+ * match_value) increments times_applied and bumps last_applied_at.
+ *
+ * Confidence ladder (per docs/inbox-v2.md):
+ *   1 application → 0.5 (initial)
+ *   3 applications → 0.8 (Aria suggests automation)
+ *   5 applications → 0.95
+ * Caller can pass an explicit confidence to seed; otherwise computed from
+ * times_applied via the SQL CASE below.
+ */
+async function upsertFilingPattern({ userId, accountEmail, matchType, matchValue, targetLabelId, targetLabelName }) {
+  const { rows } = await pool.query(
+    `INSERT INTO email_filing_patterns
+       (user_id, account_email, match_type, match_value,
+        target_label_id, target_label_name,
+        confidence, times_applied, last_applied_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 0.5, 1, NOW())
+     ON CONFLICT (user_id, account_email, match_type, match_value)
+     DO UPDATE SET
+       times_applied = email_filing_patterns.times_applied + 1,
+       last_applied_at = NOW(),
+       updated_at = NOW(),
+       confidence = CASE
+         WHEN email_filing_patterns.times_applied + 1 >= 5 THEN 0.95
+         WHEN email_filing_patterns.times_applied + 1 >= 3 THEN 0.8
+         ELSE 0.5
+       END,
+       target_label_id = EXCLUDED.target_label_id,
+       target_label_name = EXCLUDED.target_label_name
+     RETURNING id, confidence, times_applied, user_approved`,
+    [userId, accountEmail || '', matchType, matchValue, targetLabelId, targetLabelName],
+  );
+  return rows[0] || null;
+}
+
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -3760,6 +3798,29 @@ async function runMigrations() {
   `).catch((err) => logger.warn('migration.warn', { label: 'user_email_labels table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_email_labels_user ON user_email_labels(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_email_labels_unmapped ON user_email_labels(user_id) WHERE semantic_category IS NULL`).catch(() => {});
+
+  // ── email_filing_patterns (Inbox V2 Phase 2 — behavioral learning) ─────
+  // Tracks when a user files emails matching the same predicate so Aria
+  // can suggest automation at confidence ≥ 0.8 (3+ applications).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_filing_patterns (
+      id                SERIAL PRIMARY KEY,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      account_email     TEXT NOT NULL,
+      match_type        TEXT NOT NULL CHECK (match_type IN ('sender','domain','subject')),
+      match_value       TEXT NOT NULL,
+      target_label_id   TEXT NOT NULL,
+      target_label_name TEXT NOT NULL,
+      confidence        FLOAT DEFAULT 0.5,
+      times_applied     INT DEFAULT 1,
+      last_applied_at   TIMESTAMPTZ DEFAULT NOW(),
+      user_approved     BOOLEAN DEFAULT FALSE,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, account_email, match_type, match_value)
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'email_filing_patterns table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_filing_patterns_user ON email_filing_patterns(user_id)`).catch(() => {});
 
   // Morning brief idempotency lock. Scoped to the morning-brief:* key
   // prefix so the index can be added safely even if other alert_keys
@@ -6835,6 +6896,7 @@ module.exports = {
   upsertEmailLabel,
   getEmailLabelsForUser,
   updateLabelSemanticCategory,
+  upsertFilingPattern,
   getUserByWhatsAppPhone,
   getOrgForUser,
   getOrganizations,

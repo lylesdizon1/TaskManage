@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import DOMPurify from 'dompurify';
 import { useToast } from '../contexts/ToastContext';
 
 // Minimal HTML detection — good enough to pick a render mode.
@@ -42,34 +43,30 @@ function cleanPlainText(body) {
   return collapsed.join('\n');
 }
 
-// Strip dangerous tags + their contents before we hand HTML to the DOM.
-// Keeps formatting/layout tags. Also strips inline event handlers and
-// script-bearing URL schemes as a cheap second layer.
-//
-// This is regex sanitization — known to be bypassable by sufficiently
-// motivated payloads (HTML entity tricks, mixed encoding). DOMPurify is
-// the right long-term answer; tracking as a follow-up.
+// HTML email sanitization — handed to dangerouslySetInnerHTML below.
+// Backed by DOMPurify (browser DOM-aware parser). Replaces the previous
+// hand-rolled regex pass which was bypassable via HTML entity / mixed-
+// encoding tricks. Allowlist covers what real emails legitimately use;
+// scripts, forms, iframes, and inline event handlers are stripped.
+const SANITIZE_CONFIG = {
+  ALLOWED_TAGS: [
+    'p', 'br', 'b', 'i', 'u', 'a', 'ul', 'ol', 'li', 'div', 'span',
+    'table', 'tr', 'td', 'th', 'thead', 'tbody', 'h1', 'h2', 'h3',
+    'h4', 'h5', 'h6', 'img', 'strong', 'em', 'blockquote', 'pre',
+    'code', 'hr', 'small', 'sub', 'sup',
+  ],
+  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'style', 'width', 'height', 'colspan', 'rowspan', 'border', 'cellpadding', 'cellspacing'],
+  FORBID_TAGS: ['script', 'style', 'form', 'input', 'iframe', 'object', 'embed', 'link', 'meta'],
+  FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit'],
+  // Defense-in-depth — DOMPurify already blocks javascript:/vbscript: by
+  // default, but we name them explicitly so a future config tweak can't
+  // re-open the hole silently.
+  ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel|cid):/i,
+};
+
 function sanitizeHtml(raw) {
   if (!raw) return '';
-  let out = String(raw);
-  out = out.replace(/<script\b[\s\S]*?<\/script>/gi, '');
-  out = out.replace(/<style\b[\s\S]*?<\/style>/gi, '');
-  out = out.replace(/<iframe\b[\s\S]*?<\/iframe>/gi, '');
-  out = out.replace(/<object\b[\s\S]*?<\/object>/gi, '');
-  out = out.replace(/<embed\b[\s\S]*?\/?>/gi, '');
-  out = out.replace(/<link\b[^>]*>/gi, '');
-  out = out.replace(/<meta\b[^>]*>/gi, '');
-  // Strip <form> + <input> tags only (not content) — neutralizes
-  // phishing forms without dropping legitimate text inside emails.
-  out = out.replace(/<\/?form\b[^>]*>/gi, '');
-  out = out.replace(/<input\b[^>]*\/?>/gi, '');
-  // Strip on* event handlers (onclick, onload, …).
-  out = out.replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '');
-  out = out.replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '');
-  out = out.replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '');
-  // Neutralize script-bearing URL schemes in href/src.
-  out = out.replace(/(href|src)\s*=\s*(["'])\s*(?:javascript|data|vbscript):[^"']*\2/gi, '$1=$2#$2');
-  return out;
+  return DOMPurify.sanitize(String(raw), SANITIZE_CONFIG);
 }
 
 // Deterministic color per account_email so each account gets a stable
@@ -555,6 +552,79 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     } catch {}
   }
 
+  // Star toggle. Tracked on the thread row optimistically so swipe-right
+  // gives instant feedback even before the server round-trip completes.
+  async function starSingle(t, nextState) {
+    const messageId = t.latestMessageId || t.id;
+    if (!messageId) return;
+    const desired = typeof nextState === 'boolean' ? nextState : !t.starred;
+    setThreads((prev) => prev.map(x => x.id === t.id ? { ...x, starred: desired } : x));
+    try {
+      await apiFetch('/api/inbox/star', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ account_email: t.accountEmail, message_id: messageId, starred: desired }),
+      });
+    } catch {
+      // Revert optimistic flip on failure.
+      setThreads((prev) => prev.map(x => x.id === t.id ? { ...x, starred: !desired } : x));
+    }
+  }
+
+  // Move-to picker state — shown from the thread detail action bar.
+  // Loaded lazily when the user opens the picker so first-paint stays fast.
+  const [movePickerOpen, setMovePickerOpen] = useState(false);
+  const [moveLabels, setMoveLabels] = useState([]);
+  const [moveLabelsLoading, setMoveLabelsLoading] = useState(false);
+  const [moveSelectedLabel, setMoveSelectedLabel] = useState(null);
+
+  async function openMovePicker() {
+    setMovePickerOpen(true);
+    setMoveSelectedLabel(null);
+    if (moveLabels.length) return;
+    setMoveLabelsLoading(true);
+    try {
+      const r = await apiFetch('/api/inbox/labels', { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await r.json();
+      setMoveLabels(Array.isArray(data?.labels) ? data.labels : []);
+    } catch { setMoveLabels([]); }
+    finally { setMoveLabelsLoading(false); }
+  }
+
+  async function moveCurrent(scope) {
+    if (!thread || !moveSelectedLabel || !activeAccount) return;
+    const lastMsg = thread.messages?.[thread.messages.length - 1];
+    if (!lastMsg) return;
+    try {
+      await apiFetch('/api/inbox/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          account_email: activeAccount,
+          message_id: lastMsg.id,
+          target_label_id: moveSelectedLabel.labelId,
+          target_label_name: moveSelectedLabel.labelName,
+          scope,
+        }),
+      });
+      toast.success(`Moved to ${moveSelectedLabel.labelName}`);
+      removeThreadFromZones(thread.id);
+      setThreads((prev) => prev.filter(x => x.id !== thread.id));
+      setThread(null);
+      setActiveThreadId(null);
+      setMobileShowThread(false);
+      setMovePickerOpen(false);
+    } catch {
+      toast.error('Move failed');
+    }
+  }
+
+  async function starCurrent() {
+    if (!thread) return;
+    const t = threads.find((x) => x.id === thread.id);
+    if (t) await starSingle(t);
+  }
+
   // Auto-clean runner: dry-run scan first, show confirmation, then execute.
   const DEFAULT_CLEAN_POLICY = {
     archivePromos: true,      promosOlderThanH: 24,
@@ -821,7 +891,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="Nothing urgent right now."
                 showCountSuffix
               >
-                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
               </Zone>
 
               {/* Zone 2 — For Your Review */}
@@ -835,7 +905,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="No emails to review."
                 showCountSuffix
               >
-                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
               </Zone>
 
               {/* Zone 3 — Low Priority */}
@@ -863,7 +933,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   )
                 }
               >
-                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
               </Zone>
 
               {/* Zone 4 — Read */}
@@ -876,7 +946,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 onToggle={() => toggleZone('read')}
                 emptyText="No read threads."
               >
-                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
+                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }))}
               </Zone>
             </>
           )}
@@ -1094,6 +1164,83 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 <ActionBtn icon="reply"     label="Reply"     onClick={() => openCompose('reply')} />
                 <ActionBtn icon="reply_all" label="Reply All" onClick={() => openCompose('replyAll')} />
                 <ActionBtn icon="forward"   label="Forward"   onClick={() => openCompose('forward')} />
+                <span className="mx-1 h-5 w-px bg-gray-200" />
+                <ActionBtn icon="archive" label="Archive" onClick={archiveCurrent} />
+                <ActionBtn
+                  icon="mark_email_read"
+                  label="Mark read"
+                  onClick={() => {
+                    const t = threads.find((x) => x.id === thread.id);
+                    if (t) markThreadRead(t);
+                  }}
+                />
+                <ActionBtn
+                  icon={(threads.find((x) => x.id === thread.id)?.starred) ? 'star' : 'star_outline'}
+                  label={(threads.find((x) => x.id === thread.id)?.starred) ? 'Unstar' : 'Star'}
+                  onClick={starCurrent}
+                />
+                <ActionBtn icon="drive_file_move" label="Move to..." onClick={openMovePicker} />
+              </div>
+            )}
+
+            {/* Move-to picker — modal-ish overlay anchored to the thread detail. */}
+            {movePickerOpen && (
+              <div className="absolute inset-0 z-20 flex items-end md:items-center md:justify-center bg-black/30" onClick={() => setMovePickerOpen(false)}>
+                <div
+                  className="w-full md:w-[420px] bg-white rounded-t-2xl md:rounded-2xl shadow-xl p-4 max-h-[70vh] overflow-y-auto"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Move to label</h3>
+                    <button onClick={() => setMovePickerOpen(false)} className="text-gray-400 hover:text-gray-600">
+                      <span className="material-symbols-outlined" style={{ fontSize: 18 }}>close</span>
+                    </button>
+                  </div>
+                  {moveLabelsLoading ? (
+                    <div className="py-6 text-center text-xs text-gray-500">Loading labels…</div>
+                  ) : moveLabels.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-gray-500">No labels found. Create one in Gmail first.</div>
+                  ) : !moveSelectedLabel ? (
+                    <div className="space-y-1">
+                      {moveLabels.map((l) => (
+                        <button
+                          key={`${l.accountEmail}::${l.labelId}`}
+                          onClick={() => setMoveSelectedLabel(l)}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 flex items-center justify-between"
+                        >
+                          <div>
+                            <div className="text-sm font-semibold text-gray-800">{l.labelName}</div>
+                            <div className="text-[10px] text-gray-400">
+                              {l.semanticCategory || 'unmapped'}{l.messageCount ? ` · ${l.messageCount} msgs` : ''}
+                            </div>
+                          </div>
+                          <span className="material-symbols-outlined text-gray-400" style={{ fontSize: 16 }}>chevron_right</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-xs text-gray-500 mb-2">
+                        Move to <span className="font-semibold text-gray-800">{moveSelectedLabel.labelName}</span>:
+                      </div>
+                      <div className="space-y-1">
+                        <button onClick={() => moveCurrent('thread')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-gray-50 border border-gray-200">
+                          <div className="text-sm font-semibold text-gray-800">Just this email</div>
+                          <div className="text-[11px] text-gray-500">One-off move; no future filing.</div>
+                        </button>
+                        <button onClick={() => moveCurrent('sender')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-gray-50 border border-gray-200">
+                          <div className="text-sm font-semibold text-gray-800">All emails from this sender</div>
+                          <div className="text-[11px] text-gray-500">Records a filing pattern. Aria can later auto-file.</div>
+                        </button>
+                        <button onClick={() => moveCurrent('domain')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-gray-50 border border-gray-200">
+                          <div className="text-sm font-semibold text-gray-800">All emails from this domain</div>
+                          <div className="text-[11px] text-gray-500">Records a domain-wide filing pattern.</div>
+                        </button>
+                      </div>
+                      <button onClick={() => setMoveSelectedLabel(null)} className="mt-3 text-xs font-semibold text-gray-500">← Back</button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1390,7 +1537,18 @@ function ZonedSkeleton() {
   );
 }
 
-function renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }) {
+// Wrapper so call sites stay readable; the real swipe + render lives in
+// <ThreadRow /> below.
+function renderThreadRow(props) {
+  return <ThreadRow key={`${props.t.accountEmail}:${props.t.id}`} {...props} />;
+}
+
+// SWIPE_THRESHOLD: minimum horizontal travel (px) before we commit to
+// revealing the action drawer. Below this we treat the gesture as a tap.
+const SWIPE_THRESHOLD = 60;
+const SWIPE_DRAWER_WIDTH = 140; // px — width of the revealed action panel
+
+function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle }) {
   const tint = tintForAccount(t.accountEmail);
   const active = t.id === activeThreadId;
   const mid = t.latestMessageId || t.id;
@@ -1408,15 +1566,92 @@ function renderThreadRow({ t, activeThreadId, classifications, openThread, archi
 
   const showPill = cls && cls.importanceRank >= 3 && !SUPPRESS_PILL.has(cls.category);
 
+  // Swipe state — touch-only (mobile). Desktop uses the hover actions.
+  const touchStartX = useRef(null);
+  const touchDeltaX = useRef(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
+
+  function onTouchStart(e) {
+    touchStartX.current = e.touches[0].clientX;
+    touchDeltaX.current = 0;
+  }
+  function onTouchMove(e) {
+    if (touchStartX.current == null) return;
+    touchDeltaX.current = e.touches[0].clientX - touchStartX.current;
+    // Live-track left swipes only when the drawer is closed; clamp.
+    if (!drawerOpen && touchDeltaX.current < 0) {
+      setDragOffset(Math.max(touchDeltaX.current, -SWIPE_DRAWER_WIDTH));
+    }
+  }
+  function onTouchEnd() {
+    const delta = touchDeltaX.current;
+    touchStartX.current = null;
+    touchDeltaX.current = 0;
+
+    if (drawerOpen) {
+      // Any tap on the row body while drawer is open: close it (the action
+      // buttons themselves stop propagation in their own onClick handlers).
+      setDrawerOpen(false);
+      setDragOffset(0);
+      return;
+    }
+    if (delta <= -SWIPE_THRESHOLD) {
+      // Commit to revealed drawer — Archive + Mark Read.
+      setDrawerOpen(true);
+      setDragOffset(-SWIPE_DRAWER_WIDTH);
+    } else if (delta >= SWIPE_THRESHOLD) {
+      // Right swipe → toggle star.
+      starSingle?.(t);
+      setDragOffset(0);
+    } else {
+      // Below threshold — snap back; tap-through to onClick handles open.
+      setDragOffset(0);
+    }
+  }
+
   return (
     <div
       key={`${t.accountEmail}:${t.id}`}
-      className={`group relative rounded-xl mb-1 transition-colors ${active ? 'bg-primary/5' : 'hover:bg-white'}`}
+      className={`group relative rounded-xl mb-1 transition-colors overflow-hidden ${active ? 'bg-primary/5' : 'hover:bg-white'}`}
       style={active ? { borderLeft: '3px solid #4f4dcf' } : { borderLeft: '3px solid transparent' }}
     >
+      {/* Mobile swipe drawer — sits behind the row, revealed on left-swipe. */}
+      <div
+        className="md:hidden absolute inset-y-0 right-0 flex items-stretch"
+        style={{ width: SWIPE_DRAWER_WIDTH }}
+        aria-hidden={!drawerOpen}
+      >
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); markThreadRead(t); setDrawerOpen(false); setDragOffset(0); }}
+          className="flex-1 flex flex-col items-center justify-center text-white text-[10px] font-semibold"
+          style={{ backgroundColor: '#3b82f6' }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>mark_email_read</span>
+          Read
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); archiveSingle(t); setDrawerOpen(false); setDragOffset(0); }}
+          className="flex-1 flex flex-col items-center justify-center text-white text-[10px] font-semibold"
+          style={{ backgroundColor: '#6b7280' }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>archive</span>
+          Archive
+        </button>
+      </div>
+
+      <div
+        className="relative bg-inherit"
+        style={{ transform: `translateX(${dragOffset}px)`, transition: touchStartX.current == null ? 'transform 160ms ease' : 'none' }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
       <button
-        onClick={() => openThread(t)}
-        className="w-full text-left px-3 py-1.5 md:py-2.5"
+        onClick={() => { if (drawerOpen) { setDrawerOpen(false); setDragOffset(0); return; } openThread(t); }}
+        className="w-full text-left px-3 py-1.5 md:py-2.5 bg-inherit"
       >
         <div className="flex items-start gap-2">
           <span
@@ -1450,7 +1685,9 @@ function renderThreadRow({ t, activeThreadId, classifications, openThread, archi
           </div>
         </div>
       </button>
-      {/* Hover actions — desktop only */}
+      </div>
+      {/* Hover actions — desktop only. Outside the swipe transform so
+          they stay anchored regardless of mobile drawer state. */}
       <div className="hidden md:flex absolute top-1 right-1 gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={(e) => { e.stopPropagation(); archiveSingle(t); }}
@@ -1466,6 +1703,17 @@ function renderThreadRow({ t, activeThreadId, classifications, openThread, archi
             className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
           >
             <span className="material-symbols-outlined text-gray-500" style={{ fontSize: '15px' }}>mark_email_read</span>
+          </button>
+        )}
+        {starSingle && (
+          <button
+            onClick={(e) => { e.stopPropagation(); starSingle(t); }}
+            title={t.starred ? 'Unstar' : 'Star'}
+            className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: t.starred ? '#f59e0b' : '#9ca3af' }}>
+              {t.starred ? 'star' : 'star_outline'}
+            </span>
           </button>
         )}
       </div>

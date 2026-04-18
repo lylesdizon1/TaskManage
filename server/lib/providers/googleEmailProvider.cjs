@@ -164,6 +164,43 @@ async function archiveMessage({ db, userId, accountEmail, messageId }) {
   return { success: true };
 }
 
+async function starMessage({ db, userId, accountEmail, messageId, starred }) {
+  const gmail = await _gmailClient(db, userId, accountEmail);
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: starred
+      ? { addLabelIds: ['STARRED'] }
+      : { removeLabelIds: ['STARRED'] },
+  });
+  return { success: true, starred };
+}
+
+/**
+ * Move a message to a label and remove it from INBOX. Returns the From
+ * header so the caller (route) can extract sender/domain for filing
+ * pattern recording without a second round-trip.
+ */
+async function moveMessage({ db, userId, accountEmail, messageId, targetLabelId }) {
+  const gmail = await _gmailClient(db, userId, accountEmail);
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: {
+      addLabelIds: [targetLabelId],
+      removeLabelIds: ['INBOX'],
+    },
+  });
+  let fromHeader = '';
+  try {
+    const msg = await gmail.users.messages.get({
+      userId: 'me', id: messageId, format: 'metadata', metadataHeaders: ['From'],
+    });
+    fromHeader = (msg.data.payload?.headers || []).find(h => h.name?.toLowerCase() === 'from')?.value || '';
+  } catch { /* fromHeader stays empty — pattern record will skip */ }
+  return { success: true, fromHeader };
+}
+
 /**
  * Sync the user's Gmail labels into user_email_labels.
  * Skips system labels (INBOX, SPAM, IMPORTANT, …) — only user-created
@@ -187,4 +224,4 @@ async function syncLabels({ db, userId, accountEmail }) {
   }
 }
 
-module.exports = { listThreads, getThread, markRead, archiveMessage, syncLabels };
+module.exports = { listThreads, getThread, markRead, archiveMessage, starMessage, moveMessage, syncLabels };

@@ -18,6 +18,8 @@ const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool
 
 You have access to the user's contacts and relationship memory in the PEOPLE & RELATIONSHIPS block above. When asked about a person by name, use this context. When asked "who is X", "prep me for my meeting with X", or "what do I know about X", use contact facts and notes to answer. When the SHARED ACCESS block shows granted access, you can reference data from connected users when relevant. Never say you don't have access to contact or relationship information.
 
+You have access to the user's Gmail labels and Outlook folders in the EMAIL LABELS block above. Reference labels naturally when discussing emails ("you've got 3 unread in Clients"). Prioritize unread in high-signal labels (clients, legal, finance) when triaging. Suggest existing labels when helping the user file an email — don't invent new ones. When you observe a filing pattern (same sender or domain repeatedly going to one label), note it; the move_email tool with scope='sender' or 'domain' lets the user formalize it.
+
 You have access to the user's daily wrap and journal entries in the DAILY WRAP block above. When the user says "wrap my day", "how did my day go", "daily wrap", or similar — use the create_journal_entry tool to capture their reflection. Ask one follow-up at a time:
 1. What went well today?
 2. Any frustrations or blockers?
@@ -255,6 +257,7 @@ async function buildAgenticContext(opts) {
     ['sharedAccessData', () => (db.getSharedAccessSummary        ? db.getSharedAccessSummary(userId)                        : Promise.resolve(sharedAccessDefault)), sharedAccessDefault],
     ['todayJournal',     () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, todayDateKey)           : Promise.resolve(null)),   null],
     ['yesterdayJournal', () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, yesterdayDateKey)       : Promise.resolve(null)),   null],
+    ['emailLabels',      () => (db.getEmailLabelsForUser          ? db.getEmailLabelsForUser(userId)                         : Promise.resolve([])),     []],
   ];
 
   const settled = await Promise.allSettled(
@@ -275,7 +278,7 @@ async function buildAgenticContext(opts) {
   const {
     user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings,
     importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx,
-    contactsData, sharedAccessData, todayJournal, yesterdayJournal,
+    contactsData, sharedAccessData, todayJournal, yesterdayJournal, emailLabels,
   } = ctxValues;
 
   const todayStr = getTodayLocal(tz);
@@ -368,20 +371,24 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   const peopleBlock = await buildPeopleBlock(contactsData, db, userId);
   const sharedAccessBlock = buildSharedAccessBlock(sharedAccessData);
 
+  // Gmail labels + Outlook folders mapped by labelMapper.cjs.
+  const labelsBlock = buildLabelsBlock(emailLabels);
+
   // Today's + yesterday's journal / daily wrap (fenced — user-authored
   // content, not instructions; see buildJournalBlock header).
   const journalBlock = buildJournalBlock(todayJournal, todayDateKey, yesterdayJournal);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + journalBlock + contextBlock;
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + journalBlock + contextBlock;
   console.log('[buildAgenticContext] prompt chars:', systemPrompt.length);
 
   return {
     user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
     importantUnread, recentClassified, recentOutcomes, memoryFacts, projects: projectsCtx,
     contacts: contactsData, sharedAccess: sharedAccessData, todayJournal, yesterdayJournal,
+    emailLabels,
     tz, todayStr, todayDate, todayDateKey, yesterdayDateKey, currentTime, weekMapStr,
     profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
-    peopleBlock, sharedAccessBlock, journalBlock,
+    peopleBlock, sharedAccessBlock, labelsBlock, journalBlock,
     decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };
@@ -512,6 +519,36 @@ function buildJournalBlock(todayEntry, todayDateKey, yesterdayEntry) {
     body = body.slice(0, JOURNAL_BLOCK_CHAR_CAP - 3) + '...';
   }
   return body;
+}
+
+/**
+ * Build the EMAIL LABELS block from user_email_labels. Filters out labels
+ * the user/Aria likely doesn't care about for prioritization decisions
+ * (semantic_category 'other' or 'notifications', or unmapped). Sorts by
+ * message_count DESC, top 12, hard-capped at 300 chars to keep the prompt
+ * lean since labels are reference signal not core context.
+ */
+const LABELS_BLOCK_CHAR_CAP = 300;
+const LABELS_BLOCK_TOP_N = 12;
+const LABELS_BLOCK_SKIP = new Set(['other', 'notifications']);
+
+function buildLabelsBlock(labels) {
+  if (!Array.isArray(labels) || labels.length === 0) return '';
+  const filtered = labels.filter((l) => l.semanticCategory && !LABELS_BLOCK_SKIP.has(l.semanticCategory));
+  if (!filtered.length) return '';
+  filtered.sort((a, b) => (Number(b.messageCount) || 0) - (Number(a.messageCount) || 0));
+  const top = filtered.slice(0, LABELS_BLOCK_TOP_N);
+
+  const header = '\n\n### EMAIL LABELS ###\n';
+  let body = '';
+  for (const l of top) {
+    const count = Number(l.messageCount) || 0;
+    const line = `${l.labelName} → ${l.semanticCategory}${count ? ` (${count} msgs)` : ''}\n`;
+    if ((body.length + line.length) > LABELS_BLOCK_CHAR_CAP) break;
+    body += line;
+  }
+  if (!body) return '';
+  return header + body.trimEnd();
 }
 
 /**

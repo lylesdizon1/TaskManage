@@ -511,6 +511,35 @@ const ARIA_TOOLS = [
       required: ['account_email', 'criteria'],
     },
   },
+  {
+    name: 'list_email_labels',
+    group: 'communication',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "List the user's Gmail labels and Outlook folders with semantic categories and message counts. Use to reference labels by name or to suggest where to file an email.",
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'move_email',
+    group: 'communication',
+    risk: 'low',
+    requires_confirmation: true,
+    description: "Move an email to a Gmail label or Outlook folder. scope='thread' moves only this email; scope='sender' or 'domain' also records a filing pattern so future emails matching the same predicate can be auto-filed (after user approval).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        message_id:        { type: 'string', description: 'Gmail message id to move.' },
+        account_email:     { type: 'string', description: 'Receiving inbox account.' },
+        target_label_id:   { type: 'string', description: 'Gmail label id to apply.' },
+        target_label_name: { type: 'string', description: 'Human-readable label name (for the filing pattern record).' },
+        scope:             { type: 'string', enum: ['thread', 'sender', 'domain'], description: 'thread = just this email; sender = future emails from this sender; domain = future emails from this domain.' },
+      },
+      required: ['message_id', 'account_email', 'target_label_id', 'target_label_name', 'scope'],
+    },
+  },
 ];
 
 const ALWAYS_CONFIRM = new Set(['send_email', 'reply_email', 'delete_task', 'delete_event']);
@@ -1147,6 +1176,97 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           dryRun: dry_run !== false, // default true
         });
         return { success: true, ...result };
+      }
+
+      case 'list_email_labels': {
+        const labels = await db.getEmailLabelsForUser(userId);
+        // Group by semantic_category for cleaner read at the model layer.
+        const grouped = {};
+        for (const l of labels) {
+          const cat = l.semanticCategory || 'unmapped';
+          if (!grouped[cat]) grouped[cat] = [];
+          grouped[cat].push({
+            label_name: l.labelName,
+            label_id: l.labelId,
+            account_email: l.accountEmail,
+            provider: l.provider,
+            message_count: l.messageCount || 0,
+          });
+        }
+        return { success: true, labels, by_category: grouped };
+      }
+
+      case 'move_email': {
+        const { message_id, account_email, target_label_id, target_label_name, scope } = toolInput || {};
+        if (!message_id || !account_email || !target_label_id || !scope) {
+          return { success: false, error: 'message_id, account_email, target_label_id, and scope are required' };
+        }
+        const validScopes = new Set(['thread', 'sender', 'domain']);
+        if (!validScopes.has(scope)) {
+          return { success: false, error: `Invalid scope: ${scope}. Must be thread, sender, or domain.` };
+        }
+        const { tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'move_email');
+        if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}.` };
+        const oauth2 = makeGmailOAuth2Client();
+        if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
+        oauth2.setCredentials(tokens);
+        oauth2.on('tokens', async (nt) => {
+          await saveGmailTokensForAccount(db, userId, account_email, { ...tokens, ...nt }).catch(() => {});
+        });
+        const gmail = google.gmail({ version: 'v1', auth: oauth2 });
+        try {
+          // Apply the target label and remove INBOX so the email leaves the
+          // active triage list. Same shape Gmail's "Move to" UI uses.
+          await gmail.users.messages.modify({
+            userId: 'me',
+            id: message_id,
+            requestBody: {
+              addLabelIds: [target_label_id],
+              removeLabelIds: ['INBOX'],
+            },
+          });
+
+          // Filing pattern: only record when scope extends beyond this thread.
+          // Sender / domain scope means "remember this preference". Past
+          // matching emails are NOT bulk-moved here — that's Phase 3.
+          let pattern = null;
+          if (scope === 'sender' || scope === 'domain') {
+            try {
+              const msg = await gmail.users.messages.get({ userId: 'me', id: message_id, format: 'metadata', metadataHeaders: ['From'] });
+              const fromHeader = (msg.data.payload?.headers || []).find(h => h.name?.toLowerCase() === 'from')?.value || '';
+              const emailMatch = fromHeader.match(/<([^>]+)>/);
+              const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).trim().toLowerCase();
+              const matchValue = scope === 'sender'
+                ? senderEmail
+                : (senderEmail.split('@')[1] || senderEmail);
+              if (matchValue) {
+                pattern = await db.upsertFilingPattern({
+                  userId, accountEmail: account_email,
+                  matchType: scope, matchValue,
+                  targetLabelId: target_label_id,
+                  targetLabelName: target_label_name || target_label_id,
+                });
+              }
+            } catch (err) {
+              // Pattern recording is best-effort — the move itself succeeded.
+              try { await db.logMemory({ userId, tool: 'move_email', content: `Pattern record failed: ${err.message}`, metadata: { message_id, scope } }); } catch {}
+            }
+          }
+
+          try { await db.logMemory({ userId, tool: 'move_email', content: `Moved email to ${target_label_name || target_label_id} (scope=${scope})`, metadata: { message_id, account_email, target_label_id, scope } }); } catch {}
+          return {
+            success: true,
+            moved_to: target_label_name || target_label_id,
+            scope,
+            pattern_confidence: pattern?.confidence ?? null,
+            pattern_times_applied: pattern?.times_applied ?? null,
+          };
+        } catch (err) {
+          if (err.code === 403 || err.message?.includes('insufficient')) {
+            return { success: false, error: 'Gmail account is missing modify permission. Reconnect in Settings.' };
+          }
+          return { success: false, error: err.message };
+        }
       }
 
       // ── PEOPLE / CONTACTS / SHARED ACCESS ──────────────────────────────
