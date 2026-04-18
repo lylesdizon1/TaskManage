@@ -14,6 +14,7 @@ const { getTodayLocal } = require('../utils/date.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 const { buildPreferencesBlock } = require('./buildPreferencesBlock.cjs');
+const { getCachedRules } = require('./ruleCache.cjs');
 
 const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.\n\nYou have full access to the user's projects, tasks, checklist items, and notes within their entities. This data is provided to you in the ACTIVE PROJECTS context block above. When asked about projects, summarize from that context. Never say you don't have access to projects.
 
@@ -42,6 +43,12 @@ Polarity tags map to behavior:
 - AVOID → treat as soft negative (look for alternatives)
 
 When the user wants to change or remove a stated preference, call list_preferences first to surface the id, then remove_preference with a short reason for the audit trail.
+
+INFERRED PATTERNS
+The USER PREFERENCES block may also contain an INFERRED PATTERNS sub-section listing rules the system observed from your past behavior (not explicitly stated). These are weaker signals — never treat them as constraints. Use them as background awareness:
+- Strong inferred patterns (strength ≥ 0.7) → mention the observation when relevant ("I notice you usually handle Rose Motorcars items carefully — should I proceed?"). Don't gate on them.
+- Weak inferred patterns (strength 0.3–0.6) → silent background awareness; influence suggestions but don't surface unless directly asked.
+Inferred rules can be wrong. If the user contradicts one, do not argue — they win, and the rule will decay or be replaced.
 
 You have access to the user's daily wrap and journal entries in the DAILY WRAP block above. When the user says "wrap my day", "how did my day go", "daily wrap", or similar — use the create_journal_entry tool to capture their reflection. Ask one follow-up at a time:
 1. What went well today?
@@ -281,7 +288,10 @@ async function buildAgenticContext(opts) {
     ['todayJournal',     () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, todayDateKey)           : Promise.resolve(null)),   null],
     ['yesterdayJournal', () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, yesterdayDateKey)       : Promise.resolve(null)),   null],
     ['emailLabels',      () => (db.getEmailLabelsForUser          ? db.getEmailLabelsForUser(userId)                         : Promise.resolve([])),     []],
-    ['userPreferences',  () => (db.getUserPreferences              ? db.getUserPreferences(userId)                            : Promise.resolve([])),     []],
+    // Phase 2 — single cached fetch returns { explicit, inferred }. Cache
+    // populates from DB on miss. Invalidated on every set_preference,
+    // remove_preference, inferRulesFromBehavior, and decay run.
+    ['rulesBundle',      () => getCachedRules(userId),                                                                                                  { explicit: [], inferred: [] }],
   ];
 
   const settled = await Promise.allSettled(
@@ -303,8 +313,10 @@ async function buildAgenticContext(opts) {
     user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings,
     importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx,
     contactsData, sharedAccessData, todayJournal, yesterdayJournal, emailLabels,
-    userPreferences,
+    rulesBundle,
   } = ctxValues;
+  const userPreferences = rulesBundle?.explicit || [];
+  const inferredRules = rulesBundle?.inferred || [];
 
   const todayStr = getTodayLocal(tz);
   const todayDate = todayStr.split(', ')[1];
@@ -399,10 +411,10 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // Gmail labels + Outlook folders mapped by labelMapper.cjs.
   const labelsBlock = buildLabelsBlock(emailLabels);
 
-  // Phase 1 USER PREFERENCES — explicit rules captured via set_preference.
-  // Slotted directly above the live-data context block so Aria reads
-  // preferences right before the action-relevant facts.
-  const preferencesBlock = buildPreferencesBlock(userPreferences);
+  // Phase 1 USER PREFERENCES — explicit rules captured via set_preference,
+  // plus Phase 2 inferred patterns rendered in a separate sub-section so
+  // the model can distinguish "user said X" from "we observed X".
+  const preferencesBlock = buildPreferencesBlock(userPreferences, inferredRules);
 
   // Today's + yesterday's journal / daily wrap (fenced — user-authored
   // content, not instructions; see buildJournalBlock header).
@@ -419,7 +431,7 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     tz, todayStr, todayDate, todayDateKey, yesterdayDateKey, currentTime, weekMapStr,
     profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
     peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, journalBlock,
-    userPreferences,
+    userPreferences, inferredRules,
     decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };

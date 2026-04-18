@@ -18,6 +18,8 @@ const { google } = require('googleapis');
 const { loadGcalTokens, loadAllGcalAccounts, makeOAuth2Client, makeGmailOAuth2Client } = require('./utils/google.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('./utils/crypto.cjs');
 const { DEFAULT_TIMEZONE } = require('./utils/timezone.cjs');
+const { inferRulesFromBehavior } = require('./lib/ruleEngine.cjs');
+const { invalidateRulesCache } = require('./lib/ruleCache.cjs');
 
 // ── Aria tool registry ─────────────────────────────────────────────────────
 
@@ -788,6 +790,10 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             await db.scheduleTaskAlerts(userId, id, toolInput.title, toolInput.due_date, toolInput.due_time || null, toolInput.priority || 'medium', tz);
           } catch (e) { console.error('[schedule] alert scheduling failed:', e.message); }
         }
+        // Phase 2 — fire-and-forget pattern inference, never blocks return.
+        setImmediate(() => {
+          inferRulesFromBehavior(userId, 'task_created', { taskId: id, entityName: toolInput.entity_name }, 'success').catch(() => {});
+        });
         return { success: true, task_id: id, title: toolInput.title, due_date: toolInput.due_date || null, due_time: toolInput.due_time || null, priority: toolInput.priority || 'medium', entity_name: toolInput.entity_name || null };
       }
 
@@ -829,6 +835,10 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
               .catch((err) => console.error('[closeLoop] complete_task hook failed:', err.message));
           } catch (e) { console.error('[closeLoop] require failed:', e.message); }
         }
+        // Phase 2 — fire-and-forget pattern inference.
+        setImmediate(() => {
+          inferRulesFromBehavior(userId, 'task_completed', { taskId: task.id, hasNote: !!toolInput.completion_note }, 'success').catch(() => {});
+        });
         return { success: true, task_id: task.id, title: task.title };
       }
 
@@ -1117,6 +1127,12 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         try {
           await gmail.users.messages.modify({ userId: 'me', id: message_id, requestBody: { removeLabelIds: ['INBOX'] } });
           try { await db.logMemory({ userId, tool: 'archive_email', content: `Archived email ${message_id}`, metadata: { message_id, account_email } }); } catch {}
+          // Phase 2 — fire-and-forget pattern inference (frequency_pattern
+          // detector is stubbed today; this hook is the data-collection
+          // entry point for when it lands).
+          setImmediate(() => {
+            inferRulesFromBehavior(userId, 'email_archived', { messageId: message_id, accountEmail: account_email }, 'success').catch(() => {});
+          });
           return { success: true, message_id, account_email };
         } catch (err) {
           if (err.code === 403 || err.message?.includes('insufficient')) {
@@ -1286,6 +1302,9 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           );
           if (!row) return { success: false, error: 'Failed to create preference' };
           try { await db.logMemory({ userId, tool: 'set_preference', content: `Captured preference: ${preference_type.toUpperCase()} ${description}`, metadata: { preference_id: row.id, category, preference_type, strength: row.strength } }); } catch {}
+          // Phase 2 — drop the rule cache so the next chat turn picks up
+          // the new preference immediately (vs waiting out the 5-min TTL).
+          invalidateRulesCache(userId).catch(() => {});
           return {
             success: true,
             preference_id: row.id,
@@ -1335,6 +1354,9 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           const result = await db.removeUserPreference(userId, preference_id, reason);
           if (!result) return { success: false, error: 'Removal failed' };
           try { await db.logMemory({ userId, tool: 'remove_preference', content: `Removed preference: ${existing.preferenceType?.toUpperCase()} ${existing.description}`, metadata: { preference_id, reason } }); } catch {}
+          // Phase 2 — invalidate cache so the removed preference disappears
+          // from the next system prompt immediately.
+          invalidateRulesCache(userId).catch(() => {});
           return { success: true, preference_id, removed_reason: reason };
         } catch (err) {
           return { success: false, error: err.message };
@@ -1399,6 +1421,10 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           }
 
           try { await db.logMemory({ userId, tool: 'move_email', content: `Moved email to ${target_label_name || target_label_id} (scope=${scope})`, metadata: { message_id, account_email, target_label_id, scope } }); } catch {}
+          // Phase 2 — pattern inference hook for email-action sequences.
+          setImmediate(() => {
+            inferRulesFromBehavior(userId, 'email_moved', { messageId: message_id, accountEmail: account_email, targetLabel: target_label_name, scope }, 'success').catch(() => {});
+          });
           return {
             success: true,
             moved_to: target_label_name || target_label_id,

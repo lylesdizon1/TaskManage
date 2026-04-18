@@ -3340,6 +3340,124 @@ async function removeUserPreference(userId, preferenceId, reason) {
   return rows[0] || null;
 }
 
+// ── Aria Intelligence System (Phase 2) — Inferred Rules ──────────────────
+
+/**
+ * Upsert an inferred rule keyed by (user_id, pattern_type, rule_text).
+ * If a matching rule exists: bump signal_count, refresh last_reinforced_at,
+ * and gently increase strength toward 1.0 (cap +0.05 per signal).
+ * If new: insert with the supplied initial strength.
+ *
+ * NEVER infers constraints — Phase 2 spec is explicit. rule_type is
+ * always 'preference' or 'pattern'; source is always 'inferred'.
+ *
+ * Returns { row, isNew, signalCount }.
+ */
+async function upsertInferredRule(userId, rule) {
+  const {
+    ruleType,             // 'preference' | 'pattern' (NEVER 'constraint')
+    patternType,          // 'time_preference' | 'entity_affinity' | etc.
+    category = null,
+    triggerContext = null,
+    contextData = null,
+    ruleText,
+    initialStrength = 0.5,
+  } = rule;
+  if (ruleType === 'constraint') {
+    throw new Error('Phase 2: inference must not produce constraints');
+  }
+  const safeRuleType = ruleType === 'preference' ? 'preference' : 'pattern';
+
+  // Check for existing rule with same pattern + text. Scope by userId.
+  const { rows: existing } = await pool.query(
+    `SELECT id, signal_count, strength
+       FROM behavior_rules
+      WHERE user_id = $1
+        AND pattern_type = $2
+        AND rule_text = $3
+        AND source = 'inferred'
+      LIMIT 1`,
+    [userId, patternType, ruleText],
+  );
+
+  if (existing.length) {
+    const cur = existing[0];
+    const { rows } = await pool.query(
+      `UPDATE behavior_rules
+          SET signal_count = signal_count + 1,
+              strength = LEAST(1.0, strength + 0.05),
+              last_reinforced_at = NOW(),
+              is_active = TRUE,
+              context_data = COALESCE($3::jsonb, context_data),
+              updated_at = NOW()
+        WHERE id = $1 AND user_id = $2
+        RETURNING id, signal_count AS "signalCount", strength,
+                  last_reinforced_at AS "lastReinforcedAt"`,
+      [cur.id, userId, contextData ? JSON.stringify(contextData) : null],
+    );
+    return { row: rows[0], isNew: false, signalCount: rows[0]?.signalCount };
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO behavior_rules
+       (user_id, rule_type, source, pattern_type, category,
+        trigger_context, context_data, rule_text, strength,
+        signal_count, last_reinforced_at, is_active)
+     VALUES ($1, $2, 'inferred', $3, $4, $5, $6::jsonb, $7, $8, 1, NOW(), TRUE)
+     RETURNING id, signal_count AS "signalCount", strength,
+               last_reinforced_at AS "lastReinforcedAt"`,
+    [
+      userId, safeRuleType, patternType, category, triggerContext,
+      contextData ? JSON.stringify(contextData) : null,
+      ruleText, initialStrength,
+    ],
+  );
+  return { row: rows[0], isNew: true, signalCount: 1 };
+}
+
+/**
+ * Read inferred rules for a user. Filters source='inferred', is_active,
+ * and the 0.3 inject-into-context threshold by default. Used by
+ * buildAgenticContext + the cache layer.
+ */
+async function getInferredRulesForUser(userId, opts = {}) {
+  const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 20, 1), 100);
+  const minStrength = typeof opts.minStrength === 'number' ? opts.minStrength : 0.3;
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", rule_type AS "ruleType",
+            pattern_type AS "patternType",
+            category, trigger_context AS "triggerContext",
+            context_data AS "contextData",
+            rule_text AS "ruleText",
+            source, strength,
+            signal_count AS "signalCount",
+            times_reinforced AS "timesReinforced",
+            times_violated AS "timesViolated",
+            last_reinforced_at AS "lastReinforcedAt",
+            last_violated_at AS "lastViolatedAt",
+            is_active AS "isActive",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM behavior_rules
+      WHERE user_id = $1
+        AND source = 'inferred'
+        AND is_active = TRUE
+        AND strength >= $2
+      ORDER BY strength DESC, last_reinforced_at DESC NULLS LAST
+      LIMIT $3`,
+    [userId, minStrength, limit],
+  );
+  return rows;
+}
+
+/**
+ * Read every user id. Used by the nightly decay cron to iterate all
+ * users. Returns just the id column to keep the result small.
+ */
+async function getAllUserIds() {
+  const { rows } = await pool.query(`SELECT id FROM users`);
+  return rows.map((r) => r.id);
+}
+
 async function getCorrections(userId, opts = {}) {
   const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 20, 1), 200);
   const { rows } = await pool.query(
@@ -4476,6 +4594,19 @@ async function runMigrations() {
     .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.preference_type', error: err.message }));
   await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS removed_reason TEXT`)
     .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.removed_reason', error: err.message }));
+  // Phase 2 — pattern inference axes. context_data is JSONB structured
+  // pattern context (sender, hour buckets, entity ids); trigger_context
+  // (Phase 0) stays for free-form scope. signal_count is the
+  // automatic-observation counter, distinct from times_reinforced
+  // (which counts explicit user confirms in Phase 4).
+  // last_reinforced (per spec) intentionally not added — reuses existing
+  // last_reinforced_at column.
+  await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS pattern_type TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.pattern_type', error: err.message }));
+  await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS context_data JSONB`)
+    .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.context_data', error: err.message }));
+  await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS signal_count INT DEFAULT 1`)
+    .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.signal_count', error: err.message }));
 
   // 2. user_preferences_v2 — explicit key-value preference store. _v2
   // namespace because the legacy user_preferences serves DND/cadence.
@@ -7658,6 +7789,10 @@ module.exports = {
   getUserPreferences,
   getUserPreferenceById,
   removeUserPreference,
+  // Aria Intelligence System (Phase 2) — Inferred Rules
+  upsertInferredRule,
+  getInferredRulesForUser,
+  getAllUserIds,
   getUserByWhatsAppPhone,
   getOrgForUser,
   getOrganizations,

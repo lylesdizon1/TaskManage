@@ -415,6 +415,22 @@ cron.schedule('0 * * * *', async () => {
 });
 console.log('[cron] Pending-confirmations sweep scheduler started');
 
+// ── Aria Intelligence rule decay — 3am daily ─────────────────────────────
+// Applies the 0.95^days decay formula to every active behavior_rule row,
+// archives anything that drops below the 0.1 floor, invalidates the rule
+// cache for affected users. Sequential per-user — fire-soft, never
+// blocks anything.
+const { processRuleDecay } = require('./server/lib/ruleDecay.cjs');
+cron.schedule('0 3 * * *', async () => {
+  try {
+    const stats = await processRuleDecay();
+    cronLogger.info('ruleDecay.cron.done', stats);
+  } catch (e) {
+    cronLogger.error('ruleDecay.cron.failed', { error: e.message });
+  }
+});
+console.log('[cron] Aria rule decay scheduler started');
+
 // ── GCal sync — every 15 min, mirrors 14-day window into calendar_events ──
 const { localMidnightUtc } = require('./server/lib/buildAgenticContext.cjs');
 const { resolveOrCreateContact } = require('./server/lib/contactIngestion.cjs');
