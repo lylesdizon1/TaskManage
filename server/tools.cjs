@@ -1298,7 +1298,19 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         try {
           const content = await getEmailContent(userId, message_id, account_email, db);
           if (!content?.hasContent) {
-            return { success: false, error: 'Could not retrieve email content (no tokens or Gmail error).' };
+            // Surface the classified failure reason so Aria can explain
+            // the outcome to the user (rate limit, timeout, etc.) instead
+            // of a generic "couldn't retrieve".
+            const reason = content?.reason || 'unknown';
+            const userMsg = {
+              timeout:    'Gmail is taking too long to respond; try again in a minute.',
+              rate_limit: 'Gmail rate limit hit; will retry after a short cooldown.',
+              auth:       'Gmail connection needs reconnecting — visit Settings.',
+              not_found:  'That email no longer exists or was deleted.',
+              unknown:    'Could not retrieve email content.',
+              invalid_args: 'Missing message_id or account_email.',
+            }[reason] || 'Could not retrieve email content.';
+            return { success: false, error: userMsg, reason, retry_after_seconds: (reason === 'timeout' || reason === 'rate_limit' || reason === 'unknown') ? 60 : null };
           }
           // Cap body at 8000 chars so we don't blow the model's token budget
           // on enormous newsletter HTML. The full body is in the cache for
@@ -1315,6 +1327,11 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             snippet: content.snippet,
             body,
             body_truncated: (content.body || '').length > 8000,
+            // When metadata-only fallback kicked in, let the model know
+            // so it can tell the user "I can see the subject but the
+            // body wasn't available" rather than inventing content.
+            body_unavailable: !!content.bodyFallback,
+            note: content.bodyFallback ? 'Full body fetch timed out; showing headers + snippet only.' : undefined,
           };
         } catch (err) {
           return { success: false, error: err.message };

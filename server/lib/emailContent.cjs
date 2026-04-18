@@ -32,7 +32,39 @@ const { decryptTokens } = require('../utils/crypto.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 const CACHE_TTL_SEC = 5 * 60;
+const FAIL_CACHE_TTL_SEC = 60;          // don't retry-storm a failing message
+const GMAIL_FULL_TIMEOUT_MS = 15_000;   // ceiling for format: 'full' fetch
+const GMAIL_META_TIMEOUT_MS = 5_000;    // metadata-only fallback — much smaller payload
 const cacheKey = (userId, messageId) => `email:${userId}:${messageId}`;
+
+/**
+ * Wrap a promise in a race against a timeout. On timeout, the underlying
+ * operation keeps running (can't cancel Gmail's fetch) but the caller
+ * gets a synchronous rejection so we don't hang the request chain.
+ */
+function withTimeout(p, ms, label) {
+  let timer;
+  return Promise.race([
+    p.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]);
+}
+
+/**
+ * Classify a Gmail API error so the failure cache + caller can decide
+ * how to react. Keeps the category set intentionally small.
+ */
+function _classifyGmailError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  const code = err?.code;
+  if (msg.includes('timed out') || msg.includes('timeout')) return 'timeout';
+  if (code === 429 || msg.includes('rate limit') || msg.includes('quota')) return 'rate_limit';
+  if (code === 401 || code === 403 || msg.includes('invalid_grant') || msg.includes('insufficient')) return 'auth';
+  if (code === 404) return 'not_found';
+  return 'unknown';
+}
 
 // Headers we extract from the Gmail payload — keep this list small,
 // every entry costs us a header iteration.
@@ -77,20 +109,21 @@ function _extractBody(payload) {
   return '';
 }
 
-async function _fetchFromGmail(userId, messageId, accountEmail, db) {
+async function _fetchFromGmail(userId, messageId, accountEmail, db, opts = {}) {
+  const format = opts.format || 'full';
+  const timeoutMs = opts.timeoutMs || GMAIL_FULL_TIMEOUT_MS;
   const row = await db.getGmailIntegrationByEmail(userId, accountEmail);
   const stored = row?.config?.tokens || null;
-  if (!stored) return null;
+  if (!stored) { const e = new Error('no_tokens'); e.code = 401; throw e; }
   const tokens = stored._enc ? decryptTokens(stored._enc) : stored;
   const oauth2 = makeGmailOAuth2Client();
-  if (!oauth2) return null;
+  if (!oauth2) { const e = new Error('oauth_not_configured'); e.code = 500; throw e; }
   oauth2.setCredentials(tokens);
   const gmail = google.gmail({ version: 'v1', auth: oauth2 });
-  const { data } = await gmail.users.messages.get({
-    userId: 'me',
-    id: messageId,
-    format: 'full',
-  });
+  const req = format === 'metadata'
+    ? gmail.users.messages.get({ userId: 'me', id: messageId, format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date'] })
+    : gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
+  const { data } = await withTimeout(req, timeoutMs, `gmail.messages.get(${format})`);
   const headers = data.payload?.headers || [];
   return {
     messageId: data.id,
@@ -100,34 +133,96 @@ async function _fetchFromGmail(userId, messageId, accountEmail, db) {
     to: _headerVal(headers, 'To'),
     date: _headerVal(headers, 'Date'),
     snippet: data.snippet || '',
-    body: _extractBody(data.payload),
+    // Metadata responses have no body payload; return empty so downstream
+    // heuristics don't match on noise.
+    body: format === 'full' ? _extractBody(data.payload) : '',
+    bodyFallback: format !== 'full',
     labelIds: data.labelIds || [],
     hasContent: true,
   };
 }
 
 /**
- * Fetch a single Gmail message's content. Returns { hasContent: false }
- * on any failure path so callers can branch cleanly without try/catch.
+ * Fetch a single Gmail message's content with a timeout / fallback ladder:
+ *   1. Cache check (success or recent failure) — returns immediately
+ *   2. Full-content fetch with 15s ceiling
+ *   3. On timeout (or retryable error), fall back to metadata-only fetch
+ *      (5s ceiling). Returns { hasContent: true, bodyFallback: true }.
+ *   4. On total failure, cache the failure shape for 60s so repeat
+ *      "try again" calls don't replay the slow Gmail path.
+ *
+ * @param {string} userId
+ * @param {string} messageId
+ * @param {string} accountEmail
+ * @param {Object} db
+ * @param {Object} [opts]
+ * @param {boolean} [opts.allowMetadataFallback=true] - Set false to skip
+ *   the metadata-only retry. Decision engine uses this when it only
+ *   wants a fast-or-nothing answer.
+ * @returns {Promise<Object>} Always returns an object. On failure:
+ *   { hasContent: false, failed: true, reason: 'timeout'|'rate_limit'|
+ *   'auth'|'not_found'|'unknown' }.
  */
-async function getEmailContent(userId, messageId, accountEmail, db) {
-  if (!userId || !messageId || !accountEmail || !db) return { hasContent: false };
+async function getEmailContent(userId, messageId, accountEmail, db, opts = {}) {
+  if (!userId || !messageId || !accountEmail || !db) {
+    return { hasContent: false, failed: true, reason: 'invalid_args' };
+  }
+  const allowFallback = opts.allowMetadataFallback !== false;
   const key = cacheKey(userId, messageId);
+
+  // 1. Cache check — return both success and recent-failure shapes so
+  //    subsequent calls within the failure TTL don't retry-storm.
   try {
     const cached = await rediGet(key);
-    if (cached && cached.hasContent) return cached;
+    if (cached) return cached;
   } catch { /* cache miss path */ }
-  let content;
+
+  let content = null;
+  let reason = null;
+
+  // 2. Full-content fetch.
   try {
-    content = await _fetchFromGmail(userId, messageId, accountEmail, db);
+    content = await _fetchFromGmail(userId, messageId, accountEmail, db, {
+      format: 'full',
+      timeoutMs: opts.fullTimeoutMs || GMAIL_FULL_TIMEOUT_MS,
+    });
   } catch (err) {
-    logger.warn('emailContent.fetch.failed', { userId, messageId, error: err.message });
-    return { hasContent: false };
+    reason = _classifyGmailError(err);
+    logger.warn('emailContent.fullFetch.failed', { userId, messageId, reason, error: err.message });
   }
-  if (!content) return { hasContent: false };
-  // Best-effort cache write — never blocks the caller.
-  rediSet(key, content, CACHE_TTL_SEC).catch(() => {});
-  return content;
+
+  // 3. Metadata fallback — only worth trying for transient errors.
+  //    Auth / not_found / invalid_args won't be fixed by a smaller request.
+  if (!content && allowFallback && (reason === 'timeout' || reason === 'rate_limit' || reason === 'unknown')) {
+    try {
+      content = await _fetchFromGmail(userId, messageId, accountEmail, db, {
+        format: 'metadata',
+        timeoutMs: opts.metadataTimeoutMs || GMAIL_META_TIMEOUT_MS,
+      });
+    } catch (err) {
+      // Metadata failure doesn't change the reason — the full-fetch
+      // classification stays as the root cause surface.
+      logger.warn('emailContent.metadataFetch.failed', { userId, messageId, error: err.message });
+    }
+  }
+
+  // 4. Cache + return.
+  if (content) {
+    rediSet(key, content, CACHE_TTL_SEC).catch(() => {});
+    return content;
+  }
+  const failed = {
+    hasContent: false,
+    failed: true,
+    reason: reason || 'unknown',
+    failedAt: Date.now(),
+  };
+  // Don't cache auth/not_found failures — those are permanent and
+  // warrant immediate visibility, not a 60s silence.
+  if (reason === 'timeout' || reason === 'rate_limit' || reason === 'unknown') {
+    rediSet(key, failed, FAIL_CACHE_TTL_SEC).catch(() => {});
+  }
+  return failed;
 }
 
 // ── Risk heuristics ──

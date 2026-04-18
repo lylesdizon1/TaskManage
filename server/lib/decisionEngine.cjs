@@ -202,16 +202,30 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     // codes / OTP magic links → hard_stop because archiving them can
     // lock the user out. Financial content → bumps risk + escalates
     // to soft_confirm if the action would otherwise auto-proceed.
+    //
+    // Hard 250ms race on this branch so a slow Gmail fetch can't blow
+    // the 300ms decision-engine budget. On timeout we fall through to
+    // baseline tiers (no content-aware signal this turn); next turn
+    // rides the cache populated in the background.
     let contentFlags = null;
     if (CONTENT_AWARE_EMAIL_TOOLS.has(toolName) && toolInput?.message_id && toolInput?.account_email) {
       try {
-        const content = await getEmailContent(userId, toolInput.message_id, toolInput.account_email, db);
-        contentFlags = assessEmailContentRisk(content);
-        if (contentFlags.hasConfirmationCode) {
-          disposition = 'hard_stop';
-          conflictLevel = 'content_otp';
-          conflictedRules = [];
-          reason = `This email looks like a verification or confirmation code. Archiving it could lock you out of an account — handle it manually if you're sure.`;
+        const content = await Promise.race([
+          getEmailContent(userId, toolInput.message_id, toolInput.account_email, db, {
+            allowMetadataFallback: false, // skip fallback when we're time-budget-bound
+          }),
+          new Promise((resolve) => setTimeout(() => resolve({ hasContent: false, timedOut: true }), 250)),
+        ]);
+        if (content?.timedOut) {
+          logger.warn('decisionEngine.contentCheck.timeout', { userId, toolName });
+        } else {
+          contentFlags = assessEmailContentRisk(content);
+          if (contentFlags.hasConfirmationCode) {
+            disposition = 'hard_stop';
+            conflictLevel = 'content_otp';
+            conflictedRules = [];
+            reason = `This email looks like a verification or confirmation code. Archiving it could lock you out of an account — handle it manually if you're sure.`;
+          }
         }
       } catch (err) {
         // Content fetch failures are non-fatal — fall through to baseline tiers.
