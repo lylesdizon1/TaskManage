@@ -164,4 +164,27 @@ async function archiveMessage({ db, userId, accountEmail, messageId }) {
   return { success: true };
 }
 
-module.exports = { listThreads, getThread, markRead, archiveMessage };
+/**
+ * Sync the user's Gmail labels into user_email_labels.
+ * Skips system labels (INBOX, SPAM, IMPORTANT, …) — only user-created
+ * labels carry filing intent and benefit from semantic mapping.
+ *
+ * Idempotent — every call upserts and bumps last_seen_at.
+ * Returns the count of labels touched, or 0 on any failure (never throws).
+ */
+async function syncLabels({ db, userId, accountEmail }) {
+  try {
+    const gmail = await _gmailClient(db, userId, accountEmail);
+    const { data } = await gmail.users.labels.list({ userId: 'me' });
+    const labels = (data.labels || []).filter((l) => l.type !== 'system');
+    for (const l of labels) {
+      try { await db.upsertEmailLabel(userId, accountEmail, 'gmail', l.id, l.name); }
+      catch { /* per-label failures are isolated; keep going */ }
+    }
+    return labels.length;
+  } catch {
+    return 0;
+  }
+}
+
+module.exports = { listThreads, getThread, markRead, archiveMessage, syncLabels };

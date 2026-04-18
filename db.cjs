@@ -2627,6 +2627,88 @@ async function updateInboxItemAction(id, action) {
   );
 }
 
+// ── Email labels (Gmail labels + Outlook folders) ─────────────────────────
+
+/**
+ * Search inbox_items by ILIKE across title/summary/sender.
+ * Used by the AI-summary card path; the live-thread search hits Gmail
+ * directly via the provider's listThreads({ query }).
+ *
+ * @param {string} userId
+ * @param {string} q - Search string (raw — caller responsible for trimming).
+ * @returns {Promise<Array<Object>>} Matching inbox_items rows, newest first, capped at 50.
+ */
+async function searchInboxItems(userId, q) {
+  const needle = `%${q}%`;
+  const { rows } = await pool.query(
+    `SELECT * FROM inbox_items
+       WHERE user_id = $1
+         AND (title ILIKE $2 OR summary ILIKE $2 OR sender ILIKE $2)
+     ORDER BY created_at DESC
+     LIMIT 50`,
+    [userId, needle],
+  );
+  return rows;
+}
+
+/**
+ * Insert or update one Gmail label / Outlook folder. Idempotent via the
+ * (user_id, account_email, label_id) UNIQUE. Bumps last_seen_at + label_name
+ * on every call so renamed labels are reflected.
+ */
+async function upsertEmailLabel(userId, accountEmail, provider, labelId, labelName) {
+  await pool.query(
+    `INSERT INTO user_email_labels
+       (user_id, account_email, provider, label_id, label_name, last_seen_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+     ON CONFLICT (user_id, account_email, label_id)
+     DO UPDATE SET label_name = EXCLUDED.label_name,
+                   last_seen_at = NOW(),
+                   updated_at = NOW()`,
+    [userId, accountEmail || '', provider, labelId, labelName],
+  );
+}
+
+/**
+ * Read all email labels for a user.
+ * @param {string} userId
+ * @param {Object} [opts]
+ * @param {boolean} [opts.unmappedOnly=false] - Only return labels with no semantic_category yet.
+ * @returns {Promise<Array<{id, accountEmail, provider, labelId, labelName, semanticCategory, messageCount}>>}
+ */
+async function getEmailLabelsForUser(userId, opts = {}) {
+  const cond = opts.unmappedOnly ? 'AND semantic_category IS NULL' : '';
+  const { rows } = await pool.query(
+    `SELECT id,
+            account_email AS "accountEmail",
+            provider,
+            label_id      AS "labelId",
+            label_name    AS "labelName",
+            semantic_category AS "semanticCategory",
+            message_count AS "messageCount",
+            last_seen_at  AS "lastSeenAt"
+       FROM user_email_labels
+      WHERE user_id = $1 ${cond}
+      ORDER BY label_name ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * Set the semantic category for a label. Idempotent — safe to call
+ * repeatedly with the same value. Scoped by userId so a stolen label_id
+ * from another user can't update this user's row.
+ */
+async function updateLabelSemanticCategory(userId, labelId, category) {
+  await pool.query(
+    `UPDATE user_email_labels
+        SET semantic_category = $3, updated_at = NOW()
+      WHERE user_id = $1 AND label_id = $2`,
+    [userId, labelId, category],
+  );
+}
+
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -3655,6 +3737,29 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_user_id ON inbox_items(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_scheduled_alerts_user_id ON scheduled_alerts(user_id)`).catch(() => {});
+
+  // ── user_email_labels (Inbox V2 — Gmail labels + Outlook folders) ──────
+  // Synced from each provider on every scan tick. Semantic_category is
+  // populated by labelMapper.cjs via a single Haiku call (Redis-debounced).
+  // Aria reads from this to reference labels by name in conversation.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_email_labels (
+      id                SERIAL PRIMARY KEY,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      account_email     TEXT NOT NULL,
+      provider          TEXT NOT NULL CHECK (provider IN ('gmail','outlook')),
+      label_id          TEXT NOT NULL,
+      label_name        TEXT NOT NULL,
+      semantic_category TEXT,
+      message_count     INT DEFAULT 0,
+      last_seen_at      TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, account_email, label_id)
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'user_email_labels table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_email_labels_user ON user_email_labels(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_email_labels_unmapped ON user_email_labels(user_id) WHERE semantic_category IS NULL`).catch(() => {});
 
   // Morning brief idempotency lock. Scoped to the morning-brief:* key
   // prefix so the index can be added safely even if other alert_keys
@@ -6726,6 +6831,10 @@ module.exports = {
   createInboxItem,
   inboxItemExistsBySourceId,
   updateInboxItemAction,
+  searchInboxItems,
+  upsertEmailLabel,
+  getEmailLabelsForUser,
+  updateLabelSemanticCategory,
   getUserByWhatsAppPhone,
   getOrgForUser,
   getOrganizations,

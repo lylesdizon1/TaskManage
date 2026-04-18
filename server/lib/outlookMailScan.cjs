@@ -19,6 +19,7 @@
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { GRAPH_BASE, listOutlookAccounts, withFreshAccessToken } = require('../utils/outlook.cjs');
+const { mapLabelsToCategories } = require('./labelMapper.cjs');
 // Contact auto-create from inbound mail disabled for V1 — contacts are
 // created manually or from reply-based flows (handled elsewhere). The
 // contactIngestion module remains imported by other call sites.
@@ -140,6 +141,33 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
   return { newItems: newCount };
 }
 
+/**
+ * Sync the user's Outlook mail folders into user_email_labels. Mirrors
+ * the Gmail label sync — same shape so labelMapper can map either source.
+ *
+ * Fire-and-forget; never throws. Returns count of folders synced or 0.
+ */
+async function syncOutlookFolders({ userId, account, db, requestId }) {
+  try {
+    let tokens;
+    try { tokens = await withFreshAccessToken(account, db, userId); }
+    catch { return 0; }
+    const url = `${GRAPH_BASE}/me/mailFolders?$top=100`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${tokens.access_token}` } });
+    if (!res.ok) return 0;
+    const json = await res.json();
+    const folders = Array.isArray(json.value) ? json.value : [];
+    for (const f of folders) {
+      try { await db.upsertEmailLabel(userId, account.accountEmail || '', 'outlook', f.id, f.displayName || ''); }
+      catch { /* per-folder failures isolated */ }
+    }
+    return folders.length;
+  } catch (err) {
+    logger.warn('outlookScan.folderSync.failed', { requestId, userId, accountEmail: account?.accountEmail, error: err.message });
+    return 0;
+  }
+}
+
 async function scanOutlookMailForUser({ userId, db, requestId }) {
   const accounts = await listOutlookAccounts(userId, db);
   console.log('[outlookMailScan] scanOutlookMailForUser userId:', userId, 'accounts:', accounts.length);
@@ -157,7 +185,11 @@ async function scanOutlookMailForUser({ userId, db, requestId }) {
     const r = await scanOneOutlookAccount({ userId, account: acct, config, db, requestId });
     perAccount.push({ accountEmail: acct.accountEmail || '', ...r });
     total += r.newItems || 0;
+    // Fire-and-forget folder sync per account — keeps user_email_labels current.
+    syncOutlookFolders({ userId, account: acct, db, requestId }).catch(() => {});
   }
+  // Single Haiku call per scan tick (Redis-debounced 24h inside the mapper).
+  mapLabelsToCategories(userId).catch(() => {});
   logger.info('outlookScan.complete', { requestId, userId, total, accounts: accounts.length });
   return { newItems: total, accounts: perAccount };
 }

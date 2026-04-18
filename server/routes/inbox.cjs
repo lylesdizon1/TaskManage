@@ -23,7 +23,8 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
 
   /**
    * GET /api/inbox/items
-   * Returns all inbox_items for the authenticated user.
+   * Returns all inbox_items for the authenticated user (AI-flagged
+   * triage items only — the live thread list is /api/inbox/threads).
    */
   router.get('/api/inbox/items', authenticateToken, async (req, res) => {
     try {
@@ -31,6 +32,24 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json(items);
     } catch (err) {
       logger.error('inbox.fetch.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/inbox/search?q=...
+   * ILIKE search against inbox_items (AI-flagged triage rows). The live
+   * full-text search across the user's actual inbox happens via
+   * /api/inbox/threads?query=... which forwards to Gmail's native search.
+   */
+  router.get('/api/inbox/search', authenticateToken, async (req, res) => {
+    try {
+      const q = (req.query.q || '').toString().trim();
+      if (!q || q.length < 2) return res.json({ items: [] });
+      const items = await db.searchInboxItems(req.user.id, q);
+      res.json({ items });
+    } catch (err) {
+      logger.error('inbox.search.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -74,45 +93,83 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
     }
   });
 
+  /**
+   * Decode a compound pagination cursor into a per-account pageToken map.
+   * Cursor format: base64-encoded JSON object { "<accountEmail>": "<pageToken>" }.
+   * Empty / missing / malformed cursor → {} (page 1 from each account).
+   */
+  function decodeCursor(raw) {
+    if (!raw || typeof raw !== 'string') return {};
+    try {
+      const json = Buffer.from(raw, 'base64').toString('utf8');
+      const parsed = JSON.parse(json);
+      return (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch { return {}; }
+  }
+
+  /**
+   * Build a compound cursor from a {email -> nextPageToken} map. Returns
+   * null when all accounts are exhausted (no more pages anywhere).
+   */
+  function encodeCursor(perAccountTokens) {
+    const filtered = {};
+    for (const [email, token] of Object.entries(perAccountTokens)) {
+      if (token) filtered[email] = token;
+    }
+    if (Object.keys(filtered).length === 0) return null;
+    return Buffer.from(JSON.stringify(filtered)).toString('base64');
+  }
+
   router.get('/api/inbox/threads', authenticateToken, async (req, res) => {
     try {
       const userId = req.user.id;
-      const { account_email: accountEmail, query } = req.query;
-      const maxResults = Math.min(parseInt(req.query.max_results, 10) || 20, 50);
+      const { account_email: accountEmail, query, cursor } = req.query;
+      const maxResults = Math.min(parseInt(req.query.max_results, 10) || 25, 50);
+      const tokenMap = decodeCursor(cursor);
 
       const allRows = await db.getUserIntegrationsByType(userId, 'gmail');
       const targets = accountEmail
         ? allRows.filter(r => (r.accountEmail || '').toLowerCase() === String(accountEmail).toLowerCase())
         : allRows;
-      if (!targets.length) return res.json({ threads: [] });
+      if (!targets.length) return res.json({ threads: [], nextCursor: null });
 
       const results = await Promise.allSettled(targets.map(async (row) => {
         const provider = providerFor(row);
-        if (!provider) return { threads: [] };
+        if (!provider) return { accountEmail: row.accountEmail, threads: [], nextPageToken: null };
         const perAccountMax = accountEmail ? maxResults : Math.min(maxResults, 20);
         const r = await provider.listThreads({
           db, userId,
           accountEmail: row.accountEmail,
           maxResults: perAccountMax,
+          pageToken: tokenMap[row.accountEmail] || undefined,
           query,
         });
-        return (r.threads || []).map(t => ({
-          ...t,
+        return {
           accountEmail: row.accountEmail,
           provider: row.provider || 'google',
-        }));
+          threads: (r.threads || []).map(t => ({
+            ...t,
+            accountEmail: row.accountEmail,
+            provider: row.provider || 'google',
+          })),
+          nextPageToken: r.nextPageToken || null,
+        };
       }));
 
       const merged = [];
+      const nextTokens = {};
       for (const r of results) {
-        if (r.status === 'fulfilled' && Array.isArray(r.value)) merged.push(...r.value);
-        else if (r.status === 'rejected') {
+        if (r.status === 'fulfilled' && r.value) {
+          merged.push(...r.value.threads);
+          if (r.value.nextPageToken) nextTokens[r.value.accountEmail] = r.value.nextPageToken;
+        } else if (r.status === 'rejected') {
           logger.error('inbox.listThreads.accountFailed', { requestId: req.requestId, userId, error: r.reason?.message });
         }
       }
       merged.sort((a, b) => parseDate(b.date) - parseDate(a.date));
       const finalThreads = merged.slice(0, maxResults);
-      res.json({ threads: finalThreads });
+      const nextCursor = encodeCursor(nextTokens);
+      res.json({ threads: finalThreads, nextCursor });
 
       // Fire-and-forget: classify any thread we don't already have a
       // classification for. Uses snippet as body source and keys off

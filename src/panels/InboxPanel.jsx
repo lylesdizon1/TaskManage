@@ -205,6 +205,18 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [compose, setCompose] = useState(null);
   const [mobileShowThread, setMobileShowThread] = useState(false);
 
+  // V2 Phase 1A: search + cursor pagination over /api/inbox/threads.
+  // searchQuery is the active query forwarded to the route (Gmail's native
+  // q= syntax — supports operators like from:, subject:, has:attachment).
+  // searchInput is the debounced input buffer.
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  // Cursor stack: each entry is the cursor that loaded the page currently
+  // visible. Top of stack = current page. Pop to go Newer; push current +
+  // navigate with nextCursor to go Older. Empty stack = at first page.
+  const [cursorStack, setCursorStack] = useState([]);
+  const [nextCursor, setNextCursor] = useState(null);
+
   const loadAccounts = useCallback(async () => {
     try {
       const r = await apiFetch('/api/inbox/accounts', { headers: { Authorization: `Bearer ${authToken}` } });
@@ -215,26 +227,56 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     }
   }, [apiFetch, authToken]);
 
+  // currentCursor is the cursor used for the page in view (top of the
+  // cursorStack), or '' for page 1. Passed to /api/inbox/threads.
+  const currentCursor = cursorStack.length ? cursorStack[cursorStack.length - 1] : '';
   const loadThreads = useCallback(async () => {
     setThreadsLoading(true);
     setThreadsError(null);
     try {
       const qs = new URLSearchParams();
       if (accountFilter) qs.set('account_email', accountFilter);
-      qs.set('max_results', '20');
+      qs.set('max_results', '25');
+      if (searchQuery) qs.set('query', searchQuery);
+      if (currentCursor) qs.set('cursor', currentCursor);
       const r = await apiFetch(`/api/inbox/threads?${qs.toString()}`, { headers: { Authorization: `Bearer ${authToken}` } });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       const list = Array.isArray(data?.threads) ? data.threads : [];
       setThreads(list);
+      setNextCursor(data?.nextCursor || null);
       onUnreadCountChange?.(list.filter(t => !t.isRead).length);
     } catch (err) {
       setThreadsError(err.message || 'Failed');
       setThreads([]);
+      setNextCursor(null);
     } finally {
       setThreadsLoading(false);
     }
-  }, [accountFilter, apiFetch, authToken, onUnreadCountChange]);
+  }, [accountFilter, apiFetch, authToken, onUnreadCountChange, searchQuery, currentCursor]);
+
+  // Reset pagination whenever the search query or account filter changes —
+  // staying on a deep cursor across a context shift returns nonsense.
+  useEffect(() => { setCursorStack([]); }, [searchQuery, accountFilter]);
+
+  // 400ms debounce on the search input. Enter triggers immediately via
+  // the input's onKeyDown handler below.
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput.trim()), 400);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  function goOlder() {
+    if (!nextCursor) return;
+    setCursorStack((prev) => [...prev, nextCursor]);
+  }
+  function goNewer() {
+    setCursorStack((prev) => prev.slice(0, -1));
+  }
+  function clearSearch() {
+    setSearchInput('');
+    setSearchQuery('');
+  }
 
   const loadThread = useCallback(async (threadId, accountEmail) => {
     setThreadLoading(true);
@@ -697,6 +739,35 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               {accounts.map(a => <option key={a.id} value={a.account_email}>{a.account_email}</option>)}
             </select>
           </div>
+          {/* V2: search forwarded as Gmail q= via /api/inbox/threads?query=... */}
+          <div className="mt-2 relative">
+            <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" style={{ fontSize: 16 }}>search</span>
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') setSearchQuery(searchInput.trim()); }}
+              placeholder="Search emails..."
+              className="w-full pl-7 pr-7 py-1.5 md:py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-xs md:text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            {(searchInput || searchQuery) && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
+              </button>
+            )}
+          </div>
+          {searchQuery && !threadsLoading && (
+            <div className="mt-1.5 text-[11px] text-gray-500">
+              {threads.length === 0
+                ? <>No results for <span className="font-semibold text-gray-700">&ldquo;{searchQuery}&rdquo;</span></>
+                : <>{threads.length} result{threads.length === 1 ? '' : 's'} for <span className="font-semibold text-gray-700">&ldquo;{searchQuery}&rdquo;</span></>}
+            </div>
+          )}
           <div className="mt-2 flex items-center gap-1">
             {[
               { key: 'all',    label: 'All' },
@@ -808,6 +879,34 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead }))}
               </Zone>
             </>
+          )}
+          {/* V2 cursor pagination. Newer pops the local cursor stack;
+              Older advances using the server-issued nextCursor. Disabled
+              when no further pages exist in that direction. */}
+          {!threadsLoading && !threadsError && (cursorStack.length > 0 || nextCursor) && (
+            <div className="mt-3 mx-1 flex items-center justify-between text-[12px]">
+              <button
+                type="button"
+                onClick={goNewer}
+                disabled={cursorStack.length === 0}
+                className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ color: '#4f4dcf' }}
+              >
+                ← Newer
+              </button>
+              <span className="text-gray-400">
+                {cursorStack.length === 0 ? 'Showing latest 25' : `Page ${cursorStack.length + 1}`}
+              </span>
+              <button
+                type="button"
+                onClick={goOlder}
+                disabled={!nextCursor}
+                className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ color: '#4f4dcf' }}
+              >
+                Older →
+              </button>
+            </div>
           )}
         </div>
 

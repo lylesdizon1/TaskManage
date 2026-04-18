@@ -6,6 +6,8 @@ const logger = require('../../guardrails/logger.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('../utils/crypto.cjs');
 const { mintState, consumeState } = require('../utils/oauthState.cjs');
 const { userRateLimit } = require('../middleware/userRateLimit.cjs');
+const googleEmailProvider = require('../lib/providers/googleEmailProvider.cjs');
+const { mapLabelsToCategories } = require('../lib/labelMapper.cjs');
 
 const gmailScanLimit = userRateLimit({ key: 'gmail-scan', limit: 12, windowSec: 3600 });
 // Contact auto-create from inbound mail disabled for V1 — contactIngestion
@@ -435,7 +437,15 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       perAccount.push({ accountEmail: acct.accountEmail || '', ...r });
       total += r.newItems || 0;
       if (r.error === 'invalid_grant') anyInvalidGrant = true;
+      // Fire-and-forget: keep user_email_labels current with each scan tick.
+      // Never blocks the scan response — failures are logged inside syncLabels.
+      googleEmailProvider.syncLabels({ db, userId, accountEmail: acct.accountEmail || '' })
+        .catch(() => {});
     }
+    // After all accounts have synced their labels, kick the Haiku semantic
+    // mapper. Internal Redis debounce (24h) keeps this from being a per-tick
+    // cost — typically runs once per day per user.
+    mapLabelsToCategories(userId).catch(() => {});
 
     logger.info('gmailScan.complete', { requestId: req.requestId, userId, total, accounts: accounts.length });
     if (anyInvalidGrant && total === 0) {
