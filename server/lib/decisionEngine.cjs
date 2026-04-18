@@ -42,6 +42,11 @@ const db = require('../../db.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { getCachedRules } = require('./ruleCache.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
+const { getEmailContent, assessEmailContentRisk } = require('./emailContent.cjs');
+
+// Email tools that benefit from content-aware risk assessment. Any tool
+// here triggers a getEmailContent fetch (cached) before tier evaluation.
+const CONTENT_AWARE_EMAIL_TOOLS = new Set(['archive_email', 'delete_email']);
 
 // Phase 3 → Phase 0 disposition mapping for storage.
 const PERSISTED_DISPOSITION = {
@@ -192,6 +197,28 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     const explicit = (bundle?.explicit || []).filter((p) => p.isActive !== false && p.preferenceType);
     const inferred = (bundle?.inferred || []).filter((r) => r.isActive !== false);
 
+    // ── Tier 0 (Phase 3.1) — content-aware override for email actions.
+    // Fetch the message body (Redis cached, 5-min TTL). Confirmation
+    // codes / OTP magic links → hard_stop because archiving them can
+    // lock the user out. Financial content → bumps risk + escalates
+    // to soft_confirm if the action would otherwise auto-proceed.
+    let contentFlags = null;
+    if (CONTENT_AWARE_EMAIL_TOOLS.has(toolName) && toolInput?.message_id && toolInput?.account_email) {
+      try {
+        const content = await getEmailContent(userId, toolInput.message_id, toolInput.account_email, db);
+        contentFlags = assessEmailContentRisk(content);
+        if (contentFlags.hasConfirmationCode) {
+          disposition = 'hard_stop';
+          conflictLevel = 'content_otp';
+          conflictedRules = [];
+          reason = `This email looks like a verification or confirmation code. Archiving it could lock you out of an account — handle it manually if you're sure.`;
+        }
+      } catch (err) {
+        // Content fetch failures are non-fatal — fall through to baseline tiers.
+        logger.warn('decisionEngine.contentCheck.failed', { userId, toolName, error: err.message });
+      }
+    }
+
     // Tier 1 — explicit hard constraints. Both 'never' polarity and
     // strength=5 with non-ask_first polarity qualify as ABSOLUTE.
     // ask_first is excluded here even if strength=5 — it goes to tier 2
@@ -266,6 +293,20 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
       confidenceScore = Number(trust.trustScore) * (1 - conflictedRules.length * 0.2);
       const impactRisk = IMPACT_RISK[trust.impactLevel] ?? 0.5;
       riskScore = trust.isReversible ? impactRisk * 0.5 : impactRisk;
+    }
+
+    // Phase 3.1 — financial content bumps risk +0.3 AND escalates an
+    // otherwise-auto_proceed disposition to soft_confirm. Doesn't
+    // override hard_stop or higher-tier confirms (engine only adds
+    // friction). Logged as conflict_level='content_financial' for
+    // queryability.
+    if (contentFlags?.hasFinancialData) {
+      riskScore = (riskScore || 0) + 0.3;
+      if (disposition === 'auto_proceed') {
+        disposition = 'soft_confirm';
+        conflictLevel = 'content_financial';
+        reason = `This email looks financial (amounts, account numbers, billing). Want me to proceed with ${toolName.replace(/_/g, ' ')}?`;
+      }
     }
   } catch (err) {
     // Fail-closed: bias to confirm_required on engine error.

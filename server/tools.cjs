@@ -20,6 +20,7 @@ const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('./utils/crypto
 const { DEFAULT_TIMEZONE } = require('./utils/timezone.cjs');
 const { inferRulesFromBehavior } = require('./lib/ruleEngine.cjs');
 const { invalidateRulesCache } = require('./lib/ruleCache.cjs');
+const { getEmailContent } = require('./lib/emailContent.cjs');
 
 // ── Aria tool registry ─────────────────────────────────────────────────────
 
@@ -281,6 +282,37 @@ const ARIA_TOOLS = [
         date_from:     { type: 'string', description: "ISO date YYYY-MM-DD or one of: today, last_week, last_month, last_3_months, last_year, all. Default: last 7 days." },
         date_to:       { type: 'string', description: 'ISO date YYYY-MM-DD. Optional upper bound.' },
       },
+    },
+  },
+  {
+    name: 'get_email_content',
+    group: 'communication',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Retrieve the full body, headers, and snippet of a single email. Use when you need the actual content of a message — to summarize, extract details, decide on archival, or answer questions about what's in it. Cached server-side for 5 minutes.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        message_id:    { type: 'string', description: 'Gmail message id.' },
+        account_email: { type: 'string', description: 'The receiving account; required to scope the Gmail API call.' },
+      },
+      required: ['message_id', 'account_email'],
+    },
+  },
+  {
+    name: 'search_email_content',
+    group: 'communication',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Search within a single email's body text for a substring. Returns matching context windows. Use when the user asks 'does that email mention X' or 'what did Paul say about Y'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        message_id:    { type: 'string' },
+        account_email: { type: 'string' },
+        query:         { type: 'string', description: 'Substring to find (case-insensitive).' },
+      },
+      required: ['message_id', 'account_email', 'query'],
     },
   },
   // --- PEOPLE / CONTACTS / SHARED ACCESS ---
@@ -1256,6 +1288,82 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           date_range: { from: range.fromLabel, to: range.toLabel, label: range.label },
           has_more: hasMore,
         };
+      }
+
+      case 'get_email_content': {
+        const { message_id, account_email } = toolInput || {};
+        if (!message_id || !account_email) {
+          return { success: false, error: 'message_id and account_email are required' };
+        }
+        try {
+          const content = await getEmailContent(userId, message_id, account_email, db);
+          if (!content?.hasContent) {
+            return { success: false, error: 'Could not retrieve email content (no tokens or Gmail error).' };
+          }
+          // Cap body at 8000 chars so we don't blow the model's token budget
+          // on enormous newsletter HTML. The full body is in the cache for
+          // any subsequent search_email_content lookups.
+          const body = (content.body || '').slice(0, 8000);
+          return {
+            success: true,
+            message_id: content.messageId,
+            thread_id: content.threadId,
+            subject: content.subject,
+            from: content.from,
+            to: content.to,
+            date: content.date,
+            snippet: content.snippet,
+            body,
+            body_truncated: (content.body || '').length > 8000,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'search_email_content': {
+        const { message_id, account_email, query } = toolInput || {};
+        if (!message_id || !account_email || !query) {
+          return { success: false, error: 'message_id, account_email, and query are required' };
+        }
+        try {
+          const content = await getEmailContent(userId, message_id, account_email, db);
+          if (!content?.hasContent) {
+            return { success: false, error: 'Could not retrieve email content.' };
+          }
+          const body = String(content.body || '');
+          const needle = String(query).toLowerCase();
+          if (!needle) return { success: true, matches: [], match_count: 0 };
+          // Find every match position in the lowered body, surface up to 5
+          // 200-char context windows around each. Lowercased only for
+          // searching — output uses the original casing from the body.
+          const lowered = body.toLowerCase();
+          const positions = [];
+          let from = 0;
+          while (positions.length < 5) {
+            const idx = lowered.indexOf(needle, from);
+            if (idx === -1) break;
+            positions.push(idx);
+            from = idx + needle.length;
+          }
+          const matches = positions.map((idx) => {
+            const start = Math.max(0, idx - 80);
+            const end = Math.min(body.length, idx + needle.length + 80);
+            const prefix = start > 0 ? '…' : '';
+            const suffix = end < body.length ? '…' : '';
+            return prefix + body.slice(start, end) + suffix;
+          });
+          return {
+            success: true,
+            message_id: content.messageId,
+            subject: content.subject,
+            match_count: positions.length,
+            matches,
+            has_more_matches: lowered.indexOf(needle, from) !== -1,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
       }
 
       case 'bulk_archive_emails': {
