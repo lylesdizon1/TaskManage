@@ -44,7 +44,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ projects });
     } catch (err) {
       logger.error('projects.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -59,7 +59,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ project });
     } catch (err) {
       logger.error('projects.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -75,7 +75,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ project });
     } catch (err) {
       logger.error('projects.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -90,7 +90,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('projects.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -107,7 +107,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ tasks });
     } catch (err) {
       logger.error('projects.tasks.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -125,7 +125,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ task });
     } catch (err) {
       logger.error('projects.tasks.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -141,7 +141,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ task });
     } catch (err) {
       logger.error('projects.tasks.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -156,7 +156,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('projects.tasks.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -179,7 +179,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json(out);
     } catch (err) {
       logger.error('projects.tasks.complete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -198,7 +198,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ items });
     } catch (err) {
       logger.error('projects.checklist.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -215,7 +215,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ item });
     } catch (err) {
       logger.error('projects.checklist.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -231,7 +231,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ item });
     } catch (err) {
       logger.error('projects.checklist.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -246,7 +246,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('projects.checklist.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -261,7 +261,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ item });
     } catch (err) {
       logger.error('projects.checklist.toggle.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -289,7 +289,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ notes });
     } catch (err) {
       logger.error('projects.notes.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -314,7 +314,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ note });
     } catch (err) {
       logger.error('projects.notes.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -331,7 +331,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ note });
     } catch (err) {
       logger.error('projects.notes.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -346,7 +346,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('projects.notes.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

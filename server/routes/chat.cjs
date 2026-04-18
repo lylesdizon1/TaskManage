@@ -28,7 +28,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       return res.json(msg);
     } catch (err) {
       logger.error('chat.message.saveFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -38,7 +38,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('chat.history.clearFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -61,7 +61,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       return res.json(conv);
     } catch (err) {
       logger.error('conversations.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -71,7 +71,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('conversations.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -83,7 +83,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       return res.json(updated);
     } catch (err) {
       logger.error('conversations.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -105,7 +105,7 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
       return res.json(msg);
     } catch (err) {
       logger.error('conversations.messages.saveFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

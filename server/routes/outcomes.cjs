@@ -60,7 +60,7 @@ module.exports = function createOutcomesRouter({ authenticateToken, db }) {
       return res.json({ success: true, outcome });
     } catch (err) {
       logger.error('outcomes.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

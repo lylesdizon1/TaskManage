@@ -58,7 +58,7 @@ module.exports = function createClassificationRouter({ authenticateToken, db }) 
       res.json({ rules });
     } catch (err) {
       logger.error('classification.rules.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -72,7 +72,7 @@ module.exports = function createClassificationRouter({ authenticateToken, db }) 
       res.json({ rule });
     } catch (err) {
       logger.error('classification.rules.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -86,7 +86,7 @@ module.exports = function createClassificationRouter({ authenticateToken, db }) 
       res.json({ rule });
     } catch (err) {
       logger.error('classification.rules.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -97,7 +97,7 @@ module.exports = function createClassificationRouter({ authenticateToken, db }) 
       res.json({ success: true });
     } catch (err) {
       logger.error('classification.rules.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -111,7 +111,7 @@ module.exports = function createClassificationRouter({ authenticateToken, db }) 
       res.json({ classifications: map });
     } catch (err) {
       logger.error('classification.batchLookup.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -203,7 +203,7 @@ Respond ONLY with a JSON array:
       res.json({ suggestions: cleaned });
     } catch (err) {
       logger.error('classification.suggest.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

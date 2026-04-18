@@ -68,7 +68,7 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
       res.redirect('/?outlook=connected');
     } catch (err) {
       logger.error('outlook.tokenExchange.failed', { userId, error: err.message });
-      res.status(500).send(`Outlook auth failed: ${err.message}`);
+      res.status(500).send('Outlook auth failed');
     }
   });
 
@@ -94,7 +94,7 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
       })));
     } catch (err) {
       logger.error('outlook.accounts.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -109,7 +109,7 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('outlook.account.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -122,7 +122,7 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('outlook.disconnect.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -146,7 +146,7 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
       return res.json({ calendar: 'synced', mail: mailResult });
     } catch (err) {
       logger.error('outlook.scan.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

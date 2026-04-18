@@ -84,7 +84,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       res.redirect('/?gcal=connected');
     } catch (err) {
       logger.error('gcal.tokenExchange.failed', { userId, error: err.message });
-      res.status(500).send(`Google Calendar auth failed: ${err.message}`);
+      res.status(500).send('Google Calendar auth failed');
     }
   });
 
@@ -198,7 +198,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
     } catch (err) {
       logger.error('gcal.syncTask.failed', { requestId: req.requestId, userId, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -216,7 +216,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       res.json({ success: true });
     } catch (err) {
       logger.error('gcal.disconnect.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -234,7 +234,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       res.json({ success: true });
     } catch (err) {
       logger.error('gcal.setPrimary.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -269,7 +269,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       return res.json(allCalendars);
     } catch (err) {
       logger.error('gcal.calendars.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -429,7 +429,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       res.json({ success: true, eventId: event.data.id, htmlLink: event.data.htmlLink });
     } catch (err) {
       logger.error('gcal.createEvent.failed', { requestId: req.requestId, userId, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -482,7 +482,7 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
       res.json({ success: true });
     } catch (err) {
       logger.error('gcal.deleteEvent.failed', { requestId: req.requestId, userId, eventId, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

@@ -94,7 +94,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       return res.json({ success: true, count: results.length });
     } catch (err) {
       logger.error('tasks.write.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -126,7 +126,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       return res.json(updated);
     } catch (err) {
       logger.error('tasks.update.failed', { requestId: req.requestId, userId: req.user?.id, taskId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -142,7 +142,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('tasks.delete.failed', { requestId: req.requestId, userId: req.user?.id, taskId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -163,7 +163,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       return res.json(updated);
     } catch (err) {
       logger.error('tasks.completionNote.failed', { requestId: req.requestId, userId: req.user?.id, taskId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

@@ -34,7 +34,7 @@ module.exports = function createCloseLoopRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('closeLoop.dismiss.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -53,7 +53,7 @@ module.exports = function createCloseLoopRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('closeLoop.resolve.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

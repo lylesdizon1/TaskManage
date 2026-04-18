@@ -324,7 +324,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json(account);
     } catch (err) {
       logger.error('financial.account.createFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -343,7 +343,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json(updated);
     } catch (err) {
       logger.error('financial.account.updateFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -361,7 +361,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json({ success: true });
     } catch (err) {
       logger.error('financial.account.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -398,7 +398,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json(txn);
     } catch (err) {
       logger.error('financial.transaction.createFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -415,7 +415,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json(updated);
     } catch (err) {
       logger.error('financial.transaction.updateFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -431,7 +431,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json({ success: true });
     } catch (err) {
       logger.error('financial.transaction.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -499,7 +499,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json({ success: true, count: created.length, format, transactions: created });
     } catch (err) {
       logger.error('financial.import.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -511,7 +511,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       return res.json(summary);
     } catch (err) {
       logger.error('financial.summary.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

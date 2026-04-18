@@ -29,7 +29,7 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
       res.json({ connections });
     } catch (err) {
       logger.error('connections.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -59,7 +59,7 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
       }
     } catch (err) {
       logger.error('connections.invite.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -98,7 +98,7 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
       res.json({ connection: initiatorRow, mirror });
     } catch (err) {
       logger.error('connections.accept.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -133,7 +133,7 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
       res.json({ connection: updated });
     } catch (err) {
       logger.error('connections.block.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -166,7 +166,7 @@ module.exports = function createConnectionsRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('connections.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

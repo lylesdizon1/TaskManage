@@ -31,7 +31,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json(items);
     } catch (err) {
       logger.error('inbox.fetch.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -52,7 +52,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('inbox.actionUpdate.failed', { requestId: req.requestId, userId: req.user?.id, itemId: req.params.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -70,7 +70,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json(accounts);
     } catch (err) {
       logger.error('inbox.accounts.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -138,7 +138,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       })();
     } catch (err) {
       logger.error('inbox.threads.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -181,7 +181,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       }
     } catch (err) {
       logger.error('inbox.thread.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -214,7 +214,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('inbox.archive.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -230,7 +230,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('inbox.markRead.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

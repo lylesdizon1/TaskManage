@@ -19,7 +19,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       const orgs = await db.getOrganizations();
       return res.json(orgs);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.orgs.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -42,7 +43,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'create_org', targetType: 'organization', targetId: id, metadata: { name, type, adminEmail } });
       return res.json({ org, invite });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.orgs.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -53,7 +55,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'suspend_org', targetType: 'organization', targetId: req.params.id });
       return res.json(updated);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.orgs.suspend.failed', { requestId: req.requestId, userId: req.user?.id, orgId: req.params.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -64,7 +67,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       const users = await db.getAllUsersWithOrg();
       return res.json(users);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.users.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -81,7 +85,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'create_user', targetType: 'user', targetId: id, metadata: { username, email, orgId } });
       return res.json({ id, username, displayName: displayName || username, email, role: role || 'member' });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.users.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -92,7 +97,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'suspend_user', targetType: 'user', targetId: req.params.id });
       return res.json(updated);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.users.suspend.failed', { requestId: req.requestId, userId: req.user?.id, targetId: req.params.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -105,7 +111,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'reset_password', targetType: 'user', targetId: req.params.id });
       return res.json({ success: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.users.password.failed', { requestId: req.requestId, userId: req.user?.id, targetId: req.params.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -117,7 +124,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'update_email', targetType: 'user', targetId: req.params.id, metadata: { email } });
       return res.json(updated);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.users.email.failed', { requestId: req.requestId, userId: req.user?.id, targetId: req.params.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -134,7 +142,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'assign_org', targetType: 'user', targetId: req.params.id, metadata: { orgId, role } });
       return res.json({ success: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.users.assignOrg.failed', { requestId: req.requestId, userId: req.user?.id, targetId: req.params.id, orgId, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -145,7 +154,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'delete_user', targetType: 'user', targetId: req.params.id });
       return res.json({ success: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.users.delete.failed', { requestId: req.requestId, userId: req.user?.id, targetId: req.params.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -162,7 +172,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       await db.logAdminAction({ superAdminUserId: req.user.id, action: 'create_invite', targetType: 'invite', targetId: id, metadata: { email, orgId, role } });
       return res.json(invite);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.invites.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -191,7 +202,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
 
       return res.json({ token, user: { id: target.id, username: target.username, displayName: target.displayName, role: target.role } });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.impersonate.failed', { requestId: req.requestId, userId: req.user?.id, targetId: req.params.userId, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -205,7 +217,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       const entries = await db.getAuditLog(limit, offset);
       return res.json(entries);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.auditLog.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -222,7 +235,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       const memories = await db.getAllMemories({ limit, offset, userId });
       return res.json(memories);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.memory.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -237,7 +251,8 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       });
       return res.json({ success: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      logger.error('admin.memory.delete.failed', { requestId: req.requestId, userId: req.user?.id, memoryId: req.params.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

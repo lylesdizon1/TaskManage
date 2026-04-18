@@ -28,7 +28,7 @@ module.exports = function createEmailCleanRouter({ authenticateToken, db }) {
       res.json({ policy: p || { ...DEFAULT_POLICY, userId: req.user.id } });
     } catch (err) {
       logger.error('emailClean.policy.get.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -38,7 +38,7 @@ module.exports = function createEmailCleanRouter({ authenticateToken, db }) {
       res.json({ policy: p });
     } catch (err) {
       logger.error('emailClean.policy.save.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -60,7 +60,7 @@ module.exports = function createEmailCleanRouter({ authenticateToken, db }) {
       res.json(result);
     } catch (err) {
       logger.error('emailClean.run.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

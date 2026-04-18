@@ -19,7 +19,7 @@ module.exports = function createLearningsRouter({ authenticateToken, db }) {
       res.json({ learnings: rows });
     } catch (err) {
       logger.error('learnings.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -30,7 +30,7 @@ module.exports = function createLearningsRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('learnings.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

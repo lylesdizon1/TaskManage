@@ -38,7 +38,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       return res.json(updated);
     } catch (err) {
       logger.error('users.settings.updateFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -66,7 +66,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       return res.json({ id, username, displayName: displayName || username, email, role, entityIds });
     } catch (err) {
       logger.error('users.create.failed', { requestId: req.requestId, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -83,7 +83,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       return res.json(updated);
     } catch (err) {
       logger.error('users.update.failed', { requestId: req.requestId, userId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -96,7 +96,7 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
       return res.json({ success: true });
     } catch (err) {
       logger.error('users.delete.failed', { requestId: req.requestId, userId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

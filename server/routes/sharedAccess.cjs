@@ -27,7 +27,7 @@ module.exports = function createSharedAccessRouter({ authenticateToken, db }) {
       res.json({ grants });
     } catch (err) {
       logger.error('sharedAccess.grants.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -37,7 +37,7 @@ module.exports = function createSharedAccessRouter({ authenticateToken, db }) {
       res.json({ grants });
     } catch (err) {
       logger.error('sharedAccess.granted-to-me.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -73,7 +73,7 @@ module.exports = function createSharedAccessRouter({ authenticateToken, db }) {
       }
     } catch (err) {
       logger.error('sharedAccess.grant.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -89,7 +89,7 @@ module.exports = function createSharedAccessRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('sharedAccess.grant.revoke.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

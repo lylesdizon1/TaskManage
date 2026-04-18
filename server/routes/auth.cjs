@@ -148,7 +148,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
       return res.json({ success: true });
     } catch (err) {
       logger.error('auth.changePassword.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -206,7 +206,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
       });
     } catch (err) {
       logger.error('auth.register.failed', { error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -220,7 +220,7 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
       }
       return res.json({ orgName: invite.orgName, role: invite.role, email: invite.email });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

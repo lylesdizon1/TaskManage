@@ -56,7 +56,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       if (err.message.includes('already exists')) {
         return res.status(409).json({ error: err.message });
       }
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -82,7 +82,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       return res.json(updated);
     } catch (err) {
       logger.error('entities.update.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -108,7 +108,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       return res.json({ members });
     } catch (err) {
       logger.error('entities.members.list.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -135,7 +135,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       return res.json({ success: true, member });
     } catch (err) {
       logger.error('entities.members.add.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -154,7 +154,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       return res.json({ success: true, member });
     } catch (err) {
       logger.error('entities.members.update.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -176,7 +176,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       return res.json({ success: !!removed });
     } catch (err) {
       logger.error('entities.members.remove.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -192,7 +192,7 @@ module.exports = function createEntitiesRouter({ authenticateToken, requireAdmin
       return res.json({ success: true });
     } catch (err) {
       logger.error('entities.delete.failed', { requestId: req.requestId, userId: req.user?.id, entityId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

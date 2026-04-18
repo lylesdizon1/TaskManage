@@ -46,7 +46,7 @@ module.exports = function createJournalRouter({ authenticateToken, db }) {
       res.json({ entries });
     } catch (err) {
       logger.error('journal.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -57,7 +57,7 @@ module.exports = function createJournalRouter({ authenticateToken, db }) {
       res.json({ entry, entry_date: entryDate });
     } catch (err) {
       logger.error('journal.today.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -87,7 +87,7 @@ module.exports = function createJournalRouter({ authenticateToken, db }) {
       res.json({ entry });
     } catch (err) {
       logger.error('journal.upsert.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -105,7 +105,7 @@ module.exports = function createJournalRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('journal.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

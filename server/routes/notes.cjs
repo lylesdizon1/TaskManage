@@ -34,7 +34,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       return res.json(cat);
     } catch (err) {
       logger.error('notes.category.createFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -145,7 +145,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       return res.json(note);
     } catch (err) {
       logger.error('notes.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -161,7 +161,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       return res.json(updated);
     } catch (err) {
       logger.error('notes.update.failed', { requestId: req.requestId, userId: req.user?.id, noteId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -176,7 +176,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       return res.json({ success: true });
     } catch (err) {
       logger.error('notes.delete.failed', { requestId: req.requestId, userId: req.user?.id, noteId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -191,7 +191,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       return res.json(updated);
     } catch (err) {
       logger.error('notes.pin.failed', { requestId: req.requestId, userId: req.user?.id, noteId: req.params.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -305,7 +305,7 @@ Respond in JSON only:
       return res.json(image);
     } catch (err) {
       logger.error('notes.image.uploadFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -320,7 +320,7 @@ Respond in JSON only:
       return res.json({ success: true });
     } catch (err) {
       logger.error('notes.image.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

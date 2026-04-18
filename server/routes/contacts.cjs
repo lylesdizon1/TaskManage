@@ -29,7 +29,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ contacts });
     } catch (err) {
       logger.error('contacts.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -63,7 +63,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
         return res.status(409).json({ error: 'A contact with this email already exists' });
       }
       logger.error('contacts.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -76,7 +76,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ contact });
     } catch (err) {
       logger.error('contacts.get.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -101,7 +101,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
         return res.status(409).json({ error: 'A contact with this email already exists' });
       }
       logger.error('contacts.update.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -113,7 +113,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('contacts.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -128,7 +128,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ notes });
     } catch (err) {
       logger.error('contacts.notes.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -145,7 +145,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('contacts.notes.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -160,7 +160,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ facts });
     } catch (err) {
       logger.error('contacts.facts.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -179,7 +179,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ contact, notes, facts, identities });
     } catch (err) {
       logger.error('contacts.context.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

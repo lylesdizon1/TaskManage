@@ -85,7 +85,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       });
     } catch (err) {
       logger.error('settings.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -133,7 +133,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('settings.write.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -151,7 +151,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       res.json({ integrations: masked });
     } catch (err) {
       logger.error('integrations.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -183,7 +183,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       });
     } catch (err) {
       logger.error('integrations.put.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -197,7 +197,7 @@ module.exports = function createSettingsRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('integrations.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

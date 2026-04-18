@@ -131,7 +131,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       return res.json({ conversation, messages });
     } catch (err) {
       logger.error('commandCenter.session.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -192,7 +192,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       return res.json({ updates });
     } catch (err) {
       logger.error('commandCenter.updates.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

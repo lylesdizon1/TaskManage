@@ -450,7 +450,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       // If headers never flushed, fall back to a JSON error. Otherwise
       // route through finalizeStream so `done` + res.end fire once.
       if (!res.headersSent) {
-        try { return res.status(500).json({ error: err.message }); } catch { /* fallthrough */ }
+        try { return res.status(500).json({ error: 'Internal server error' }); } catch { /* fallthrough */ }
       }
       finalizeStream({ error: err.message });
       return;
@@ -503,7 +503,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       return res.json({ success: true, status: nextStatus });
     } catch (err) {
       logger.error('chat.confirm.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

@@ -61,7 +61,7 @@ module.exports = function createAgentActionsRouter({ authenticateToken, db }) {
       res.json({ actions: rows, summary });
     } catch (err) {
       logger.error('agentActions.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

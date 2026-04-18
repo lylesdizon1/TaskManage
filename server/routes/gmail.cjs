@@ -126,7 +126,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       res.redirect('/?gmail=connected');
     } catch (err) {
       logger.error('gmail.tokenExchange.failed', { userId, error: err.message });
-      res.status(500).send(`Gmail auth failed: ${err.message}`);
+      res.status(500).send('Gmail auth failed');
     }
   });
 
@@ -146,7 +146,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       res.json(accounts);
     } catch (err) {
       logger.error('gmail.accounts.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -167,7 +167,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       res.json({ success: true });
     } catch (err) {
       logger.error('gmail.account.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -224,7 +224,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       res.json({ success: true });
     } catch (err) {
       logger.error('gmail.disconnect.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -255,7 +255,7 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       res.json({ success: true });
     } catch (err) {
       logger.error('gmail.config.save.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

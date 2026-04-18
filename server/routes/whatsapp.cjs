@@ -451,7 +451,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       return res.json({ ok: true });
     } catch (err) {
       logger.error('whatsapp.inbound.failed', { requestId: req.requestId, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

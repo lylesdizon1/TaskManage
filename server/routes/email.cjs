@@ -44,7 +44,7 @@ module.exports = function createEmailRouter({ authenticateToken, db }) {
       return res.json({ success: true, message: 'Test email sent via Resend', response });
     } catch (err) {
       logger.error('email.test.failed', { requestId: req.requestId, userId, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -94,7 +94,7 @@ module.exports = function createEmailRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('email.send.error', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

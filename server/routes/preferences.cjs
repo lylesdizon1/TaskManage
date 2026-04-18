@@ -18,7 +18,7 @@ module.exports = function createPreferencesRouter({ authenticateToken, db }) {
       return res.json(prefs || { theme: 'light', defaultTagFilter: [], defaultStatusFilter: 'all', notificationsEnabled: true });
     } catch (err) {
       logger.error('preferences.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -28,7 +28,7 @@ module.exports = function createPreferencesRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('preferences.write.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -43,7 +43,7 @@ module.exports = function createPreferencesRouter({ authenticateToken, db }) {
       return res.json({ success: true });
     } catch (err) {
       logger.error('preferences.dnd.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

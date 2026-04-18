@@ -236,7 +236,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       return res.json({ success: true, message: `Morning brief sent to ${result.sent.join(', ')}${result.failed.length ? ` (failed: ${result.failed.join(', ')})` : ''}` });
     } catch (err) {
       logger.error('morningBrief.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -270,7 +270,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       return res.json({ sent, failed, skipped });
     } catch (err) {
       logger.error('alerts.fire.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -284,7 +284,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       return res.json({ fired });
     } catch (err) {
       logger.error('alerts.checkFired.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -296,7 +296,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       return res.json({ success: true });
     } catch (err) {
       logger.error('alerts.markFired.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -312,7 +312,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       return res.json(configs);
     } catch (err) {
       logger.error('alerts.cadence.getFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -331,7 +331,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       return res.json(configs);
     } catch (err) {
       logger.error('alerts.cadence.putFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -341,7 +341,7 @@ module.exports = function createAlertsRouter({ authenticateToken, db, loadGcalTo
       res.json(status);
     } catch (err) {
       logger.error('config.status.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

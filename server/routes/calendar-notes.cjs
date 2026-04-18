@@ -19,7 +19,7 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
       return res.json(note || { preNote: null, postNote: null });
     } catch (err) {
       logger.error('calendarNotes.get.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -61,7 +61,7 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
       return res.json(result);
     } catch (err) {
       logger.error('calendarNotes.upsert.failed', { requestId: req.requestId, userId: req.user?.id, eventId: req.params.eventId, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -96,7 +96,7 @@ module.exports = function createCalendarNotesRouter({ authenticateToken, db }) {
       return res.json({ success: true, note });
     } catch (err) {
       logger.error('calendarNotes.post.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
