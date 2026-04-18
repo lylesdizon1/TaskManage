@@ -20,7 +20,7 @@ const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('./utils/crypto
 const { DEFAULT_TIMEZONE } = require('./utils/timezone.cjs');
 const { inferRulesFromBehavior } = require('./lib/ruleEngine.cjs');
 const { invalidateRulesCache } = require('./lib/ruleCache.cjs');
-const { getEmailContent } = require('./lib/emailContent.cjs');
+const { getEmailContent, searchGmail } = require('./lib/emailContent.cjs');
 
 // ── Aria tool registry ─────────────────────────────────────────────────────
 
@@ -313,6 +313,31 @@ const ARIA_TOOLS = [
         query:         { type: 'string', description: 'Substring to find (case-insensitive).' },
       },
       required: ['message_id', 'account_email', 'query'],
+    },
+  },
+  {
+    name: 'search_gmail',
+    group: 'communication',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Search the user's Gmail mailbox for messages matching a query. Uses Gmail's native search syntax: scope aggressively with from:<sender> / subject:<text> / newer_than:7d / has:attachment / label:<name> / is:unread to keep results fast and relevant. Returns thread-level matches; follow up with get_email_content for a specific thread id. Use when the user asks to find an email and no message_id is known — this is the wide-mailbox equivalent of search_inbox (which only sees classified/flagged emails).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: "Gmail q= syntax. Examples: 'from:americanexpress.com newer_than:30d', 'subject:invoice has:attachment', 'from:paul railway config'. Prefer scoped queries — unscoped broad text searches are slow and may time out.",
+        },
+        account_email: {
+          type: 'string',
+          description: 'Optional — restrict to one connected Gmail account. Omit to search every connected account and merge results.',
+        },
+        max_results: {
+          type: 'number',
+          description: 'Max threads to return (default 10, cap 25).',
+        },
+      },
+      required: ['query'],
     },
   },
   // --- PEOPLE / CONTACTS / SHARED ACCESS ---
@@ -1377,6 +1402,60 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             match_count: positions.length,
             matches,
             has_more_matches: lowered.indexOf(needle, from) !== -1,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'search_gmail': {
+        const { query, account_email, max_results } = toolInput || {};
+        if (!query) return { success: false, error: 'query is required' };
+        try {
+          const result = await searchGmail(userId, query, db, {
+            accountEmail: account_email || null,
+            maxResults: max_results || 10,
+          });
+          if (result.failed) {
+            // Map classified failure to a user-friendly hint.
+            const userMsg = {
+              timeout:        'Gmail search took too long — try a more scoped query (add from:, newer_than:, or subject:).',
+              rate_limit:     'Gmail search rate limit hit; will retry after a short cooldown.',
+              auth:           'Gmail connection needs reconnecting — visit Settings.',
+              no_accounts:    'No matching Gmail account is connected.',
+              mixed_failures: 'Some connected accounts failed to search — narrow with account_email or try again.',
+              invalid_args:   'query is required.',
+              accounts_fetch_failed: 'Could not load Gmail account list.',
+            }[result.reason] || `Could not search Gmail (${result.reason || 'unknown'}).`;
+            return {
+              success: false,
+              error: userMsg,
+              reason: result.reason,
+              retry_after_seconds: (result.reason === 'timeout' || result.reason === 'rate_limit' || result.reason === 'unknown') ? 120 : null,
+              failed_accounts: result.failedAccounts || [],
+            };
+          }
+          // Thread projection — trim to fields Aria actually needs so we
+          // don't bloat the tool result payload.
+          const threads = (result.threads || []).map((t) => ({
+            thread_id:  t.id,
+            message_id: t.latestMessageId || t.id,
+            account_email: t.accountEmail,
+            subject:    t.subject,
+            from:       t.from,
+            date:       t.date,
+            snippet:    t.snippet,
+            is_read:    !!t.isRead,
+            message_count: t.messageCount || 1,
+          }));
+          return {
+            success: true,
+            query,
+            result_count: threads.length,
+            threads,
+            total_accounts_searched: result.totalAccountsSearched,
+            failed_accounts: result.failedAccounts || [],
+            has_more: !!result.hasMore,
           };
         } catch (err) {
           return { success: false, error: err.message };

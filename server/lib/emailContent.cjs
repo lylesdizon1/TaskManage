@@ -35,7 +35,12 @@ const CACHE_TTL_SEC = 5 * 60;
 const FAIL_CACHE_TTL_SEC = 60;          // don't retry-storm a failing message
 const GMAIL_FULL_TIMEOUT_MS = 15_000;   // ceiling for format: 'full' fetch
 const GMAIL_META_TIMEOUT_MS = 5_000;    // metadata-only fallback — much smaller payload
+const GMAIL_SEARCH_TIMEOUT_MS = 20_000; // mailbox search (q=) ceiling
+const SEARCH_CACHE_TTL_SEC = 10 * 60;   // 10min — search results are stable enough
+const SEARCH_FAIL_CACHE_TTL_SEC = 120;  // 2min — shorter so a transient failure isn't sticky
 const cacheKey = (userId, messageId) => `email:${userId}:${messageId}`;
+const searchCacheKey = (userId, accountEmail, query) =>
+  `email-search:${userId}:${(accountEmail || 'all').toLowerCase()}:${String(query).toLowerCase().trim().slice(0, 200)}`;
 
 /**
  * Wrap a promise in a race against a timeout. On timeout, the underlying
@@ -295,8 +300,123 @@ function assessEmailContentRisk(content) {
   };
 }
 
+/**
+ * Search Gmail across one or all of the user's connected accounts via
+ * Gmail's native q= syntax. Wraps googleEmailProvider.listThreads with:
+ *   - 20s hard timeout per account (race, doesn't cancel in-flight)
+ *   - Redis cache: 10min on success, 2min on failure (shorter so
+ *     transient errors aren't sticky)
+ *   - Result shape: { threads: [{id, subject, from, date, snippet}],
+ *     totalAccountsSearched, failedAccounts: [{accountEmail, reason}] }
+ *
+ * Returns { failed: true, reason } on total failure (no accounts, no
+ * Gmail tokens, full timeout across all accounts). Partial success
+ * (some accounts succeed, some fail) returns threads + failedAccounts
+ * so the caller can surface "searched 2 of 3 accounts".
+ *
+ * NEVER throws. Callers treat failed:true as "no results, with reason".
+ *
+ * @param {string} userId
+ * @param {string} query - Gmail q= syntax. Aria should scope with
+ *   from:, subject:, newer_than:, has:attachment, label: etc.
+ * @param {Object} db
+ * @param {Object} [opts]
+ * @param {string} [opts.accountEmail] - restrict to a single connected
+ *   Gmail account. Omitted → search every connected account, merged.
+ * @param {number} [opts.maxResults=10] - cap per account. Final merged
+ *   list sorted by date desc then truncated to this limit.
+ * @param {number} [opts.timeoutMs=20000]
+ */
+async function searchGmail(userId, query, db, opts = {}) {
+  if (!userId || !query || !db) {
+    return { failed: true, reason: 'invalid_args', threads: [] };
+  }
+  const accountEmail = opts.accountEmail || null;
+  const maxResults = Math.min(Math.max(parseInt(opts.maxResults, 10) || 10, 1), 25);
+  const timeoutMs = opts.timeoutMs || GMAIL_SEARCH_TIMEOUT_MS;
+
+  const key = searchCacheKey(userId, accountEmail, query);
+  try {
+    const cached = await rediGet(key);
+    if (cached) return cached;
+  } catch { /* cache miss */ }
+
+  // Resolve which accounts to search. Route restricts to 'gmail' type.
+  let integrationRows;
+  try {
+    integrationRows = await db.getUserIntegrationsByType(userId, 'gmail');
+  } catch (err) {
+    logger.warn('searchGmail.accounts.failed', { userId, error: err.message });
+    return { failed: true, reason: 'accounts_fetch_failed', threads: [] };
+  }
+  const targets = accountEmail
+    ? integrationRows.filter((r) => (r.accountEmail || '').toLowerCase() === accountEmail.toLowerCase())
+    : integrationRows;
+  if (!targets.length) {
+    return { failed: true, reason: 'no_accounts', threads: [] };
+  }
+
+  // Lazy-require to keep the ai/chat route startup path lean and avoid
+  // a circular between providers/googleEmailProvider ↔ emailContent.
+  const googleEmailProvider = require('./providers/googleEmailProvider.cjs');
+
+  const failedAccounts = [];
+  const perAccount = await Promise.all(targets.map(async (row) => {
+    try {
+      const res = await withTimeout(
+        googleEmailProvider.listThreads({
+          db, userId,
+          accountEmail: row.accountEmail,
+          maxResults,
+          query,
+        }),
+        timeoutMs,
+        `gmail.search(${row.accountEmail || '?'})`,
+      );
+      return (res?.threads || []).map((t) => ({ ...t, accountEmail: row.accountEmail || '' }));
+    } catch (err) {
+      const reason = _classifyGmailError(err);
+      failedAccounts.push({ accountEmail: row.accountEmail || '', reason });
+      logger.warn('searchGmail.account.failed', { userId, accountEmail: row.accountEmail, reason, error: err.message });
+      return [];
+    }
+  }));
+  const merged = perAccount.flat();
+
+  // All accounts failed with the same reason → treat as a total failure
+  // so the caller can show a unified error message.
+  if (merged.length === 0 && failedAccounts.length === targets.length) {
+    const allSameReason = failedAccounts.every((f) => f.reason === failedAccounts[0].reason);
+    const reason = allSameReason ? failedAccounts[0].reason : 'mixed_failures';
+    const failed = { failed: true, reason, threads: [], failedAccounts, failedAt: Date.now() };
+    if (reason === 'timeout' || reason === 'rate_limit' || reason === 'unknown' || reason === 'mixed_failures') {
+      rediSet(key, failed, SEARCH_FAIL_CACHE_TTL_SEC).catch(() => {});
+    }
+    return failed;
+  }
+
+  // Sort merged results by date desc (Gmail RFC 2822 strings), truncate.
+  merged.sort((a, b) => {
+    const ta = Date.parse(a.date || '') || 0;
+    const tb = Date.parse(b.date || '') || 0;
+    return tb - ta;
+  });
+  const truncated = merged.slice(0, maxResults);
+  const result = {
+    failed: false,
+    query,
+    threads: truncated,
+    totalAccountsSearched: targets.length - failedAccounts.length,
+    failedAccounts,
+    hasMore: merged.length > truncated.length,
+  };
+  rediSet(key, result, SEARCH_CACHE_TTL_SEC).catch(() => {});
+  return result;
+}
+
 module.exports = {
   getEmailContent,
+  searchGmail,
   assessEmailContentRisk,
   containsFinancialData,
   containsConfirmationCode,
