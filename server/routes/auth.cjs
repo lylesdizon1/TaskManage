@@ -190,6 +190,11 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
       // Seed default alert cadence config
       try { await db.seedDefaultCadenceConfig(id); } catch (e) { logger.error('auth.register.cadenceSeed.failed', { error: e.message }); }
 
+      // Seed Aria Intelligence default trust matrix (18 rows, all
+      // confirm_required). Idempotent via ON CONFLICT DO NOTHING so a
+      // re-registration edge case won't clobber an existing matrix.
+      try { await db.seedDefaultTrustScores(id); } catch (e) { logger.error('auth.register.trustSeed.failed', { error: e.message }); }
+
       // Add to org
       await db.addOrgMember(invite.orgId, id, invite.role, invite.invitedBy);
       await db.acceptInvite(token, id);

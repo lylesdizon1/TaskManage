@@ -13,12 +13,35 @@
 const { getTodayLocal } = require('../utils/date.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
+const { buildPreferencesBlock } = require('./buildPreferencesBlock.cjs');
 
 const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.\n\nYou have full access to the user's projects, tasks, checklist items, and notes within their entities. This data is provided to you in the ACTIVE PROJECTS context block above. When asked about projects, summarize from that context. Never say you don't have access to projects.
 
 You have access to the user's contacts and relationship memory in the PEOPLE & RELATIONSHIPS block above. When asked about a person by name, use this context. When asked "who is X", "prep me for my meeting with X", or "what do I know about X", use contact facts and notes to answer. When the SHARED ACCESS block shows granted access, you can reference data from connected users when relevant. Never say you don't have access to contact or relationship information.
 
 You have access to the user's Gmail labels and Outlook folders in the EMAIL LABELS block above. Reference labels naturally when discussing emails ("you've got 3 unread in Clients"). Prioritize unread in high-signal labels (clients, legal, finance) when triaging. Suggest existing labels when helping the user file an email — don't invent new ones. When you observe a filing pattern (same sender or domain repeatedly going to one label), note it; the move_email tool with scope='sender' or 'domain' lets the user formalize it.
+
+PREFERENCE CAPTURE
+When the user explicitly states a preference, rule, or constraint, IMMEDIATELY call set_preference — do not ask permission, do not delay. Listen for phrases like:
+- "I prefer..." / "I like..." / "I always..." / "Always..."
+- "Never..." / "Don't..." / "I hate when..." / "Please avoid..."
+- "Always ask before..." / "Confirm with me before..."
+After calling set_preference, briefly acknowledge ("Got it — I'll remember that.") and continue the conversation. Never make the user repeat the same preference twice.
+
+Capture only what the user states. Do not infer preferences from behavior — pattern inference is a separate path that runs in the background.
+
+PREFERENCE PRIORITY
+The USER PREFERENCES block above lists active rules with strength tags:
+- [ABSOLUTE] (strength 5) — HARD STOP. Never proceed with an action that conflicts. If asked to do something that violates an [ABSOLUTE] rule, refuse and explain which preference applies.
+- [STRONG] (strength 4) — Always confirm with the user before proceeding when there's a conflict.
+- [NORMAL] (strength 3) — Mention the conflict and suggest an alternative; let the user decide.
+- [WEAK] / [HINT] (strength 1–2) — Proceed but note the preference conflict in your response.
+Polarity tags map to behavior:
+- NEVER / ASK_FIRST → treat as constraints (hard stop or mandatory confirm at high strength)
+- ALWAYS / PREFER → treat as positive directives (prefer this approach)
+- AVOID → treat as soft negative (look for alternatives)
+
+When the user wants to change or remove a stated preference, call list_preferences first to surface the id, then remove_preference with a short reason for the audit trail.
 
 You have access to the user's daily wrap and journal entries in the DAILY WRAP block above. When the user says "wrap my day", "how did my day go", "daily wrap", or similar — use the create_journal_entry tool to capture their reflection. Ask one follow-up at a time:
 1. What went well today?
@@ -258,6 +281,7 @@ async function buildAgenticContext(opts) {
     ['todayJournal',     () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, todayDateKey)           : Promise.resolve(null)),   null],
     ['yesterdayJournal', () => (db.getJournalEntryByDate         ? db.getJournalEntryByDate(userId, yesterdayDateKey)       : Promise.resolve(null)),   null],
     ['emailLabels',      () => (db.getEmailLabelsForUser          ? db.getEmailLabelsForUser(userId)                         : Promise.resolve([])),     []],
+    ['userPreferences',  () => (db.getUserPreferences              ? db.getUserPreferences(userId)                            : Promise.resolve([])),     []],
   ];
 
   const settled = await Promise.allSettled(
@@ -279,6 +303,7 @@ async function buildAgenticContext(opts) {
     user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings,
     importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx,
     contactsData, sharedAccessData, todayJournal, yesterdayJournal, emailLabels,
+    userPreferences,
   } = ctxValues;
 
   const todayStr = getTodayLocal(tz);
@@ -374,11 +399,16 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // Gmail labels + Outlook folders mapped by labelMapper.cjs.
   const labelsBlock = buildLabelsBlock(emailLabels);
 
+  // Phase 1 USER PREFERENCES — explicit rules captured via set_preference.
+  // Slotted directly above the live-data context block so Aria reads
+  // preferences right before the action-relevant facts.
+  const preferencesBlock = buildPreferencesBlock(userPreferences);
+
   // Today's + yesterday's journal / daily wrap (fenced — user-authored
   // content, not instructions; see buildJournalBlock header).
   const journalBlock = buildJournalBlock(todayJournal, todayDateKey, yesterdayJournal);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + journalBlock + contextBlock;
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + journalBlock + contextBlock;
   console.log('[buildAgenticContext] prompt chars:', systemPrompt.length);
 
   return {
@@ -388,7 +418,8 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     emailLabels,
     tz, todayStr, todayDate, todayDateKey, yesterdayDateKey, currentTime, weekMapStr,
     profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
-    peopleBlock, sharedAccessBlock, labelsBlock, journalBlock,
+    peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, journalBlock,
+    userPreferences,
     decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };

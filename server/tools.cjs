@@ -523,6 +523,83 @@ const ARIA_TOOLS = [
     },
   },
   {
+    name: 'set_preference',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Capture a user preference, rule, or constraint when the user explicitly states one. Call this immediately the moment the user says \"I prefer...\", \"Always...\", \"Never...\", \"Don't...\", \"Always ask before...\", or any similar directive. No need to ask permission — just call it.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['tasks', 'calendar', 'email', 'communication', 'general'],
+          description: 'Which surface this preference applies to. Use "general" only when nothing more specific fits.',
+        },
+        preference_type: {
+          type: 'string',
+          enum: ['always', 'never', 'ask_first', 'prefer', 'avoid'],
+          description: "Polarity. 'never' and 'ask_first' are stored as constraints (hard stops or mandatory confirms). 'always'/'prefer'/'avoid' are preferences.",
+        },
+        description: {
+          type: 'string',
+          description: "Human-readable preference statement. Restate the user's words concisely (e.g. \"Ask before deleting tasks\", \"Never archive Rose Motorcars emails\").",
+        },
+        context: {
+          type: 'string',
+          description: 'Optional applicability scope (e.g. "weekends", "sender: Rose Motorcars", "between 6pm and 9am").',
+        },
+        strength: {
+          type: 'number',
+          description: 'Strength 1–5. 5 = ABSOLUTE (hard stop), 4 = STRONG (confirm first), 3 = NORMAL, 2 = WEAK, 1 = HINT. Default 3 if the user is ambiguous; use 5 for "always" / "never" said with conviction.',
+        },
+      },
+      required: ['category', 'preference_type', 'description'],
+    },
+  },
+  {
+    name: 'list_preferences',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "List the user's active preferences and constraints. Use when the user asks \"what rules do I have?\" or before calling remove_preference (so you have the id).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['tasks', 'calendar', 'email', 'communication', 'general'],
+          description: 'Optional category filter.',
+        },
+        include_inactive: {
+          type: 'boolean',
+          description: 'Include disabled / removed preferences. Default false.',
+        },
+      },
+    },
+  },
+  {
+    name: 'remove_preference',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Delete or disable a preference the user no longer wants. Always call list_preferences first to surface the preference_id. Always provide a reason for the audit trail.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        preference_id: {
+          type: 'number',
+          description: 'The id from list_preferences.',
+        },
+        reason: {
+          type: 'string',
+          description: "Short audit-trail reason (e.g. \"user changed their mind\", \"superseded by stronger rule\").",
+        },
+      },
+      required: ['preference_id', 'reason'],
+    },
+  },
+  {
     name: 'move_email',
     group: 'communication',
     risk: 'low',
@@ -1194,6 +1271,74 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           });
         }
         return { success: true, labels, by_category: grouped };
+      }
+
+      // ── Aria Intelligence System (Phase 1) — User Preferences ─────────
+      case 'set_preference': {
+        const { category, preference_type, description, context, strength } = toolInput || {};
+        if (!category || !preference_type || !description) {
+          return { success: false, error: 'category, preference_type, and description are required' };
+        }
+        try {
+          const row = await db.createUserPreference(
+            userId, category, preference_type, description,
+            context || null, strength || 3,
+          );
+          if (!row) return { success: false, error: 'Failed to create preference' };
+          try { await db.logMemory({ userId, tool: 'set_preference', content: `Captured preference: ${preference_type.toUpperCase()} ${description}`, metadata: { preference_id: row.id, category, preference_type, strength: row.strength } }); } catch {}
+          return {
+            success: true,
+            preference_id: row.id,
+            category: row.category,
+            preference_type: row.preferenceType,
+            description: row.description,
+            context: row.context,
+            strength: row.strength,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'list_preferences': {
+        const { category, include_inactive } = toolInput || {};
+        try {
+          const prefs = await db.getUserPreferences(userId, category || null, include_inactive === true);
+          // Group by category for the model — easier to scan than a flat list.
+          const byCategory = {};
+          for (const p of prefs) {
+            const cat = p.category || 'general';
+            if (!byCategory[cat]) byCategory[cat] = [];
+            byCategory[cat].push({
+              preference_id: p.id,
+              preference_type: p.preferenceType,
+              description: p.description,
+              context: p.context,
+              strength: p.strength,
+              is_active: p.isActive,
+            });
+          }
+          return { success: true, count: prefs.length, by_category: byCategory };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'remove_preference': {
+        const { preference_id, reason } = toolInput || {};
+        if (!preference_id) return { success: false, error: 'preference_id is required' };
+        if (!reason) return { success: false, error: 'reason is required for the audit trail' };
+        try {
+          // Snapshot before removal so the memory log captures what was removed.
+          const existing = await db.getUserPreferenceById(userId, preference_id);
+          if (!existing) return { success: false, error: 'Preference not found' };
+          const result = await db.removeUserPreference(userId, preference_id, reason);
+          if (!result) return { success: false, error: 'Removal failed' };
+          try { await db.logMemory({ userId, tool: 'remove_preference', content: `Removed preference: ${existing.preferenceType?.toUpperCase()} ${existing.description}`, metadata: { preference_id, reason } }); } catch {}
+          return { success: true, preference_id, removed_reason: reason };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
       }
 
       case 'move_email': {

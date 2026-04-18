@@ -3172,6 +3172,174 @@ async function logCorrection(userId, data) {
   return rows[0] || null;
 }
 
+// ── Aria Intelligence System (Phase 1) — User Preferences ────────────────
+//
+// Phase 1's user-facing "preferences" data layers on top of behavior_rules
+// from Phase 0. The Phase 0 helpers (upsertBehaviorRule, getActiveRulesForUser,
+// reinforceRule, etc.) remain the canonical CRUD path for the decision
+// engine in Phase 3. The helpers below add Phase 1's domain vocabulary
+// (category / preference_type / 1–5 strength) as a thin translation layer.
+//
+// Strength translation is bidirectional and lossy:
+//   1 ↔ 0.2   (HINT)
+//   2 ↔ 0.4   (WEAK)
+//   3 ↔ 0.6   (NORMAL)
+//   4 ↔ 0.8   (STRONG)
+//   5 ↔ 1.0   (ABSOLUTE)
+// Phase 3's decision engine reads FLOAT strength as designed (>= 0.8 =
+// constraint hard-stop, >= 0.6 = preference confirm). preference_type
+// 'never' or 'ask_first' OR strength=5 is stored as rule_type='constraint'
+// so Phase 3's existing branching works without modification.
+
+const PREF_VALID_CATEGORIES = new Set(['tasks', 'calendar', 'email', 'communication', 'general']);
+const PREF_VALID_TYPES = new Set(['always', 'never', 'ask_first', 'prefer', 'avoid']);
+
+function _strengthIntToFloat(n) {
+  const i = Math.min(Math.max(parseInt(n, 10) || 3, 1), 5);
+  return [0.2, 0.4, 0.6, 0.8, 1.0][i - 1];
+}
+function _strengthFloatToInt(f) {
+  const v = Number(f);
+  if (!Number.isFinite(v)) return 3;
+  // Round to the closest 0.2 step, clamp 1..5.
+  return Math.min(Math.max(Math.round(v * 5), 1), 5);
+}
+// 'never' and 'ask_first' are functionally constraints (hard stops or
+// mandatory confirmation). 'always' / 'prefer' / 'avoid' are preferences
+// (suggestion-strength signals). Strength=5 always upgrades to constraint.
+function _deriveRuleType(preferenceType, strengthInt) {
+  if (strengthInt === 5) return 'constraint';
+  if (preferenceType === 'never' || preferenceType === 'ask_first') return 'constraint';
+  return 'preference';
+}
+
+/**
+ * Create a Phase 1 user preference. Always source='explicit' — Phase 1
+ * captures only what the user states. Pattern inference is Phase 2.
+ *
+ * @param {string} userId
+ * @param {string} category - One of PREF_VALID_CATEGORIES.
+ * @param {string} preferenceType - One of PREF_VALID_TYPES.
+ * @param {string} description - Human-readable preference statement (becomes rule_text).
+ * @param {string} [context] - Optional applicability scope (becomes trigger_context).
+ * @param {number} [strength=3] - 1–5 integer (5 = ABSOLUTE).
+ * @returns {Promise<Object|null>} The created row in Phase 1 shape (strength as 1–5 integer).
+ */
+async function createUserPreference(userId, category, preferenceType, description, context = null, strength = 3) {
+  if (!PREF_VALID_CATEGORIES.has(category)) {
+    throw new Error(`Invalid category: ${category}. Must be one of: ${[...PREF_VALID_CATEGORIES].join(', ')}`);
+  }
+  if (!PREF_VALID_TYPES.has(preferenceType)) {
+    throw new Error(`Invalid preference_type: ${preferenceType}. Must be one of: ${[...PREF_VALID_TYPES].join(', ')}`);
+  }
+  if (!description || typeof description !== 'string') {
+    throw new Error('description is required');
+  }
+  const strengthInt = Math.min(Math.max(parseInt(strength, 10) || 3, 1), 5);
+  const strengthFloat = _strengthIntToFloat(strengthInt);
+  const ruleType = _deriveRuleType(preferenceType, strengthInt);
+
+  const { rows } = await pool.query(
+    `INSERT INTO behavior_rules
+       (user_id, rule_type, trigger_context, rule_text, source, strength,
+        category, preference_type,
+        last_reinforced_at, is_active)
+     VALUES ($1, $2, $3, $4, 'explicit', $5, $6, $7, NOW(), TRUE)
+     RETURNING id, user_id AS "userId", rule_type AS "ruleType",
+               trigger_context AS "context", rule_text AS "description",
+               source, strength,
+               category, preference_type AS "preferenceType",
+               removed_reason AS "removedReason",
+               times_reinforced AS "timesReinforced",
+               times_violated AS "timesViolated",
+               last_reinforced_at AS "lastReinforcedAt",
+               last_violated_at AS "lastViolatedAt",
+               is_active AS "isActive",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [userId, ruleType, context, description, strengthFloat, category, preferenceType],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  // Translate FLOAT back to 1–5 integer for the Phase 1 surface.
+  row.strength = _strengthFloatToInt(row.strength);
+  return row;
+}
+
+/**
+ * List a user's Phase 1 preferences. Defaults to active only. Optionally
+ * filter by category. Returns rows in Phase 1 shape (strength as 1–5).
+ */
+async function getUserPreferences(userId, category = null, includeInactive = false) {
+  const conds = ['user_id = $1', 'preference_type IS NOT NULL'];
+  const params = [userId];
+  if (!includeInactive) conds.push('is_active = TRUE');
+  if (category) {
+    if (!PREF_VALID_CATEGORIES.has(category)) {
+      throw new Error(`Invalid category: ${category}`);
+    }
+    params.push(category);
+    conds.push(`category = $${params.length}`);
+  }
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", rule_type AS "ruleType",
+            trigger_context AS "context", rule_text AS "description",
+            source, strength,
+            category, preference_type AS "preferenceType",
+            removed_reason AS "removedReason",
+            times_reinforced AS "timesReinforced",
+            times_violated AS "timesViolated",
+            last_reinforced_at AS "lastReinforcedAt",
+            last_violated_at AS "lastViolatedAt",
+            is_active AS "isActive",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM behavior_rules
+      WHERE ${conds.join(' AND ')}
+      ORDER BY category ASC NULLS LAST, strength DESC, updated_at DESC`,
+    params,
+  );
+  return rows.map((r) => ({ ...r, strength: _strengthFloatToInt(r.strength) }));
+}
+
+/**
+ * Fetch one preference by id, scoped by userId so a stolen id can't
+ * read another user's row.
+ */
+async function getUserPreferenceById(userId, preferenceId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", rule_type AS "ruleType",
+            trigger_context AS "context", rule_text AS "description",
+            source, strength,
+            category, preference_type AS "preferenceType",
+            removed_reason AS "removedReason",
+            is_active AS "isActive",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM behavior_rules
+      WHERE id = $1 AND user_id = $2 AND preference_type IS NOT NULL`,
+    [preferenceId, userId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  row.strength = _strengthFloatToInt(row.strength);
+  return row;
+}
+
+/**
+ * Soft-delete a preference: is_active=FALSE + stash reason. Behavior_rules
+ * stays append-mostly so the audit trail survives. Scoped by userId.
+ */
+async function removeUserPreference(userId, preferenceId, reason) {
+  const { rows } = await pool.query(
+    `UPDATE behavior_rules
+        SET is_active = FALSE,
+            removed_reason = $3,
+            updated_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND preference_type IS NOT NULL
+      RETURNING id, is_active AS "isActive", removed_reason AS "removedReason"`,
+    [preferenceId, userId, reason || null],
+  );
+  return rows[0] || null;
+}
+
 async function getCorrections(userId, opts = {}) {
   const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 20, 1), 200);
   const { rows } = await pool.query(
@@ -4297,6 +4465,17 @@ async function runMigrations() {
     )
   `).catch((err) => logger.warn('migration.warn', { label: 'behavior_rules table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS behavior_rules_user_active_idx ON behavior_rules(user_id, is_active, strength DESC)`).catch(() => {});
+  // Phase 1 axes layered on top of the Phase 0 schema. Nullable so existing
+  // rows + Phase 0 helpers (upsertBehaviorRule etc.) keep working unchanged.
+  // category: filter dimension (tasks|calendar|email|communication|general)
+  // preference_type: polarity axis (always|never|ask_first|prefer|avoid)
+  // removed_reason: audit string captured by removeUserPreference
+  await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS category TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.category', error: err.message }));
+  await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS preference_type TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.preference_type', error: err.message }));
+  await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS removed_reason TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.removed_reason', error: err.message }));
 
   // 2. user_preferences_v2 — explicit key-value preference store. _v2
   // namespace because the legacy user_preferences serves DND/cadence.
@@ -7474,6 +7653,11 @@ module.exports = {
   getDisposition,
   logCorrection,
   getCorrections,
+  // Aria Intelligence System (Phase 1) — User Preferences vocabulary
+  createUserPreference,
+  getUserPreferences,
+  getUserPreferenceById,
+  removeUserPreference,
   getUserByWhatsAppPhone,
   getOrgForUser,
   getOrganizations,
