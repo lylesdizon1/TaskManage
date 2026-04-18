@@ -138,14 +138,14 @@ const ARIA_TOOLS = [
     group: 'calendar',
     risk: 'medium',
     requires_confirmation: false,
-    description: 'Update an existing calendar event. Only scoped to the user\'s own connected calendars.',
+    description: 'Update an existing calendar event in any of the user\'s connected calendars. Only include the fields you want to change. Double-check any new date matches the user\'s words against the week map in your context.',
     input_schema: {
       type: 'object',
       properties: {
         event_id:    { type: 'string' },
         title:       { type: 'string' },
-        start_time:  { type: 'string', description: 'ISO 8601' },
-        end_time:    { type: 'string', description: 'ISO 8601' },
+        start_time:  { type: 'string', description: 'YYYY-MM-DDTHH:MM:SS in the user\'s LOCAL timezone — no Z suffix, no offset. Example: "2026-04-21T15:00:00".' },
+        end_time:    { type: 'string', description: 'Same format as start_time — bare local YYYY-MM-DDTHH:MM:SS. Optional; only include if changing the end time.' },
         description: { type: 'string' },
         location:    { type: 'string' },
       },
@@ -1047,6 +1047,38 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       case 'update_event': {
         const accounts = (await loadAllGcalAccounts(userId, db)) || [];
         if (!accounts.length) return { success: false, error: 'Google Calendar not connected.' };
+
+        const userTz = tz || DEFAULT_TIMEZONE;
+        // Normalize any TZ-marked input to bare-local in user's tz so the
+        // (dateTime, timeZone) Google receives is unambiguous. Same fix as
+        // create_event — see commit b579032.
+        let sentStart = null;
+        let sentEnd = null;
+        if (toolInput.start_time) {
+          sentStart = toLocalIsoNoTz(toolInput.start_time, userTz);
+          if (!sentStart) return { success: false, error: `Invalid start_time: "${toolInput.start_time}".` };
+        }
+        if (toolInput.end_time) {
+          sentEnd = toLocalIsoNoTz(toolInput.end_time, userTz);
+          if (!sentEnd) return { success: false, error: `Invalid end_time: "${toolInput.end_time}".` };
+        }
+        // Only enforce ordering when BOTH are provided — partial updates
+        // (e.g. start-only) are valid and Google handles them.
+        if (sentStart && sentEnd && compareLocalIso(sentEnd, sentStart) <= 0) {
+          return { success: false, error: 'end_time must be after start_time.' };
+        }
+
+        // One-shot input log — covers all account-loop iterations so we
+        // don't spam Railway with N-account-many lines per call.
+        logger.info('tools.update_event.input', {
+          userId, tz: userTz, event_id: toolInput.event_id,
+          raw_start: toolInput.start_time || null,
+          raw_end:   toolInput.end_time   || null,
+          sent_start: sentStart, sent_end: sentEnd,
+          changed_fields: Object.keys(toolInput).filter((k) => k !== 'event_id' && toolInput[k] !== undefined),
+        });
+
+        let lastError = null;
         for (const acct of accounts) {
           const oauth2 = makeOAuth2Client(); if (!oauth2) continue;
           oauth2.setCredentials(acct.tokens);
@@ -1055,19 +1087,43 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             const existing = await calendar.events.get({ calendarId: 'primary', eventId: toolInput.event_id });
             if (!existing?.data) continue;
             const patch = {};
-            if (toolInput.title !== undefined) patch.summary = toolInput.title;
+            if (toolInput.title !== undefined)       patch.summary     = toolInput.title;
             if (toolInput.description !== undefined) patch.description = toolInput.description;
-            if (toolInput.location !== undefined) patch.location = toolInput.location;
-            if (toolInput.start_time) patch.start = { dateTime: toolInput.start_time, timeZone: tz || DEFAULT_TIMEZONE };
-            if (toolInput.end_time)   patch.end   = { dateTime: toolInput.end_time,   timeZone: tz || DEFAULT_TIMEZONE };
-            const { data: updated } = await calendar.events.patch({ calendarId: 'primary', eventId: toolInput.event_id, requestBody: patch });
+            if (toolInput.location !== undefined)    patch.location    = toolInput.location;
+            if (sentStart) patch.start = { dateTime: sentStart, timeZone: userTz };
+            if (sentEnd)   patch.end   = { dateTime: sentEnd,   timeZone: userTz };
+
+            const { data: updated } = await calendar.events.patch({
+              calendarId: 'primary', eventId: toolInput.event_id, requestBody: patch,
+            });
+
+            logger.info('tools.update_event.success', {
+              userId, event_id: updated.id, account_email: acct.googleEmail || null,
+              sent_start: sentStart, sent_end: sentEnd,
+              returned_start: updated.start?.dateTime || updated.start?.date || null,
+              returned_end:   updated.end?.dateTime   || updated.end?.date   || null,
+              returned_tz: updated.start?.timeZone || null,
+              patched_keys: Object.keys(patch),
+            });
+
             try { await db.logMemory({ userId, tool: 'update_event', content: `Updated event: "${updated.summary}"`, metadata: { event_id: updated.id, changes: Object.keys(patch) } }); } catch {}
             return { success: true, event_id: updated.id, title: updated.summary, account_email: acct.googleEmail || null };
           } catch (err) {
             if (err.code === 404 || err.response?.status === 404) continue;
+            lastError = err;
+            logger.warn('tools.update_event.account_error', {
+              userId, event_id: toolInput.event_id, account_email: acct.googleEmail || null,
+              error: err.message,
+            });
             return { success: false, error: err.message };
           }
         }
+        // All accounts returned 404 (or no calendar ever responded). Log the
+        // miss so we can spot patterns of stale event_ids being passed in.
+        logger.info('tools.update_event.not_found', {
+          userId, event_id: toolInput.event_id, accounts_tried: accounts.length,
+          last_error: lastError?.message || null,
+        });
         return { success: false, error: 'Event not found in any connected calendar.' };
       }
 
