@@ -21,6 +21,7 @@
 
 const crypto = require('crypto');
 const { getRedisClient } = require('../lib/redis.cjs');
+const logger = require('../../guardrails/logger.cjs');
 
 const KEY_PREFIX = 'oauth:state:';
 const TTL_SECONDS = 600; // 10 minutes — covers normal consent flows + slow typers
@@ -41,12 +42,19 @@ async function mintState(userId) {
 async function consumeState(state) {
   if (!state || typeof state !== 'string') return null;
   const client = await getRedisClient();
-  if (!client) return null;
+  if (!client) {
+    // Distinguish "Redis down → all OAuth flows broken" from "user
+    // clicked an expired link" so ops can act. Caller's existing
+    // "invalidState" warn would otherwise look like a normal user error.
+    logger.warn('oauthState.consume.redisUnavailable', {});
+    return null;
+  }
   const key = `${KEY_PREFIX}${state}`;
   let raw;
   try {
     raw = await client.get(key);
-  } catch {
+  } catch (err) {
+    logger.warn('oauthState.consume.redisError', { error: err.message });
     return null;
   }
   if (!raw) return null;
