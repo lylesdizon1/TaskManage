@@ -86,6 +86,48 @@ const chatExecuteLimit = userRateLimit({ key: 'chat-execute', limit: 50, windowS
  * before being passed into agenticLoop. This module does not implement tool
  * logic directly; it injects executeTool into agenticLoop and handles transport.
  */
+// ── Proxy payload sanitisation ──────────────────────────────────────────────
+// Both /api/claude and /api/chat/stream forward the body verbatim to
+// Anthropic's API on the server's CLAUDE_API_KEY. Without these guards,
+// any authed user could (a) pick an arbitrary expensive model, (b) ask
+// for an unbounded max_tokens, or (c) attach `tools` definitions that
+// bypass the agentic-gating + confirmation flow on /api/chat/execute.
+const PROXY_ALLOWED_MODELS = new Set([
+  'claude-sonnet-4-20250514',
+  'claude-opus-4-7',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5-20251001',
+]);
+const PROXY_MAX_TOKENS_CAP = 8192;
+
+function sanitizeProxyPayload(input, label, userId) {
+  if (!input || typeof input !== 'object') return { error: 'Invalid payload' };
+  const model = input.model;
+  if (!model || !PROXY_ALLOWED_MODELS.has(model)) {
+    return { error: `Model "${model || ''}" not permitted via proxy` };
+  }
+  const requestedMax = parseInt(input.max_tokens, 10);
+  const max_tokens = Math.min(Number.isFinite(requestedMax) ? requestedMax : 4096, PROXY_MAX_TOKENS_CAP);
+
+  const stripped = [];
+  if (input.tools)       stripped.push('tools');
+  if (input.tool_choice) stripped.push('tool_choice');
+  if (stripped.length) {
+    require('../../guardrails/logger.cjs').warn(`${label}.fieldsStripped`, { userId, stripped });
+  }
+
+  // Build a clean payload — only fields we explicitly allow through.
+  const payload = {
+    model,
+    max_tokens,
+    ...(input.system !== undefined ? { system: input.system } : {}),
+    messages: Array.isArray(input.messages) ? input.messages : [],
+    ...(input.temperature !== undefined ? { temperature: Math.max(0, Math.min(1, Number(input.temperature) || 0)) } : {}),
+    ...(input.stop_sequences ? { stop_sequences: input.stop_sequences } : {}),
+  };
+  return { payload };
+}
+
 function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }) {
   const router = express.Router();
 
@@ -123,12 +165,13 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
     }
     const apiKey = process.env.CLAUDE_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
-    const body = req.body;
+    const body = sanitizeProxyPayload(req.body, 'api.claude', req.user?.id);
+    if (body.error) return res.status(400).json({ error: body.error });
 
     try {
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',
-        body,
+        body.payload,
         {
           headers: {
             'x-api-key': apiKey,
@@ -163,7 +206,9 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
     }
     const apiKey = process.env.CLAUDE_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
-    const body = req.body;
+    const sanitized = sanitizeProxyPayload(req.body, 'api.chat.stream', req.user?.id);
+    if (sanitized.error) return res.status(400).json({ error: sanitized.error });
+    const body = sanitized.payload;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

@@ -186,9 +186,31 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
     }
   });
 
+  // Allowlisted fields the admin PUT may modify on another user. Without
+  // this, a body containing { passwordHash: '$$malformed' } persisted
+  // untransformed (bricking the account), and { whatsappPhone: ... } let
+  // an admin bypass the C2 verification flow and silently rebind a
+  // victim's WhatsApp number. Allowlist forces every new field through
+  // a code review step.
+  const ADMIN_PUT_ALLOWED = new Set([
+    'displayName', 'email', 'role', 'entityIds', 'active',
+    'persona', 'assistantName', 'timezone',
+    'profileName', 'profileBusinesses', 'profileHousehold', 'profileLocation', 'profileNotes',
+    'password', // hashed below before persisting
+  ]);
+
   router.put('/api/users/:id', authenticateToken, requireAdmin, async (req, res) => {
     try {
-      const fields = { ...req.body };
+      const fields = {};
+      for (const [k, v] of Object.entries(req.body || {})) {
+        if (ADMIN_PUT_ALLOWED.has(k)) fields[k] = v;
+      }
+      // Surface what got dropped so the operator knows their PUT didn't
+      // include forbidden fields (passwordHash, whatsappPhone, etc.).
+      const dropped = Object.keys(req.body || {}).filter((k) => !ADMIN_PUT_ALLOWED.has(k));
+      if (dropped.length) {
+        logger.warn('users.admin.put.fieldsDropped', { requestId: req.requestId, targetUserId: req.params.id, dropped });
+      }
       // If password is provided, hash it
       if (fields.password) {
         fields.passwordHash = await bcrypt.hash(fields.password, 10);

@@ -62,8 +62,22 @@ const decrypt = (text) => {
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
-  } catch {
-    return text; // decryption failed (likely unencrypted legacy data), return as-is
+  } catch (err) {
+    // Distinguish "this looks encrypted but failed to decrypt" from
+    // "this is legacy plaintext (no colon)". The plaintext path returned
+    // above already; reaching here means the input HAD an iv:cipher
+    // shape but the key didn't match — likely ENCRYPTION_KEY rotation.
+    // Logging via require() rather than module-load to avoid circular
+    // bootstrap risk in the crypto-on-boot flow.
+    try {
+      const logger = require('../../guardrails/logger.cjs');
+      logger.error('crypto.decrypt.failed', {
+        error: err.message,
+        // Hint at the likely cause without leaking ciphertext.
+        likelyCause: 'encryption_key_mismatch_or_corrupt_ciphertext',
+      });
+    } catch { /* logger unavailable during boot — silent ok */ }
+    return text; // preserve legacy-read semantics so the rest of the app keeps working
   }
 };
 
