@@ -175,7 +175,7 @@ module.exports = function createProjectsRouter({ authenticateToken, db }) {
       // Project tasks don't currently carry a completion-note equivalent,
       // so there's nothing to short-circuit against like tasks.cjs does.
       emitCloseLoop(req.user.id, 'project_task', task.id, task.title || existing.title)
-        .catch((err) => console.error('[closeLoop] project_task hook failed:', err.message));
+        .catch((err) => logger.warn('projects.closeLoop.failed', { userId: req.user?.id, taskId: task.id, error: err.message }));
       return res.json(out);
     } catch (err) {
       logger.error('projects.tasks.complete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

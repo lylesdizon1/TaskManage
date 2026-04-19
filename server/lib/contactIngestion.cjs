@@ -16,6 +16,7 @@
  */
 
 const db = require('../../db.cjs');
+const logger = require('../../guardrails/logger.cjs');
 const { extractContactFacts } = require('./contactFactExtractor.cjs');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -111,7 +112,7 @@ async function resolveOrCreateContact(userId, { email, name, source, snippet } =
   try {
     contact = await db.resolveContactByEmail(cleanEmail, userId);
   } catch (err) {
-    console.error('[contactIngestion] resolve failed:', err.message);
+    logger.warn('contactIngestion.resolve.failed', { userId, email: cleanEmail, error: err.message });
     return null;
   }
 
@@ -138,7 +139,7 @@ async function resolveOrCreateContact(userId, { email, name, source, snippet } =
         try { contact = await db.resolveContactByEmail(cleanEmail, userId); }
         catch { return null; }
       } else {
-        console.error('[contactIngestion] create failed:', err.message);
+        logger.warn('contactIngestion.create.failed', { userId, email: cleanEmail, error: err.message });
         return null;
       }
     }
@@ -149,7 +150,7 @@ async function resolveOrCreateContact(userId, { email, name, source, snippet } =
   // live inside the extractor.
   if (contact?.id && typeof snippet === 'string' && snippet.trim().length >= MIN_SNIPPET_CHARS) {
     extractContactFacts(userId, contact.id, contact.displayName, snippet.trim())
-      .catch((err) => console.error('[contactIngestion] extract:', err.message));
+      .catch((err) => logger.warn('contactIngestion.extract.failed', { userId, contactId: contact.id, error: err.message }));
   }
 
   return contact;

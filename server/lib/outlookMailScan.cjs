@@ -125,18 +125,29 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
       if (result.status !== 'fulfilled') continue;
       const f = result.value;
       const id = `inbox-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      await db.createInboxItem({
-        id, userId, type: f.type,
-        title: f.msg.subject || '(no subject)',
-        summary: f.summary,
-        source: 'outlook',
-        sourceId: f.msg.id,
-        gmailThreadId: f.msg.conversationId || null,
-        gmailLink: f.msg.webLink || null,
-        sender: `${f.fromName || ''} <${f.fromAddr}>`.trim(),
-      });
+      try {
+        await db.createInboxItem({
+          id, userId, type: f.type,
+          title: f.msg.subject || '(no subject)',
+          summary: f.summary,
+          source: 'outlook',
+          sourceId: f.msg.id,
+          gmailThreadId: f.msg.conversationId || null,
+          gmailLink: f.msg.webLink || null,
+          sender: `${f.fromName || ''} <${f.fromAddr}>`.trim(),
+        });
+        newCount++;
+      } catch (err) {
+        // Per-message guard — without it, a single 23505 unique violation
+        // or transient pool error kills the entire chunk and forces
+        // re-scan to re-pay the (paid) Haiku summary on every message
+        // already processed earlier in this chunk.
+        logger.warn('outlookScan.createItem.failed', {
+          requestId, userId, messageId: f.msg.id, error: err.message,
+        });
+        continue;
+      }
       // Contact auto-create disabled for V1 — see module header.
-      newCount++;
     }
   }
   return { newItems: newCount };

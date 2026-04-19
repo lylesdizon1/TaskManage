@@ -141,7 +141,7 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       await db.addContactFact(req.user.id, req.params.id, text, 'note', 0.5);
       // Fire-and-forget fact extraction — never await, never block.
       extractContactFacts(req.user.id, req.params.id, existing.displayName, text)
-        .catch((err) => console.error('[contacts] fact extract:', err.message));
+        .catch((err) => logger.warn('contacts.factExtract.failed', { userId: req.user?.id, contactId: req.params.id, error: err.message }));
       res.json({ success: true });
     } catch (err) {
       logger.error('contacts.notes.create.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

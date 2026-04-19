@@ -55,7 +55,7 @@ module.exports = function createOutcomesRouter({ authenticateToken, db }) {
 
       // Fire-and-forget Haiku enrichment — never blocks the response.
       enrichOutcomeRecord(outcome.id, userId, outcome)
-        .catch((err) => console.error('[outcome-enrichment] failed:', err.message));
+        .catch((err) => logger.warn('outcomes.enrichment.failed', { userId, outcomeId: outcome.id, error: err.message }));
 
       return res.json({ success: true, outcome });
     } catch (err) {

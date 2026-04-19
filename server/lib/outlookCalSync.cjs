@@ -41,7 +41,6 @@ async function syncOutlookForUser(userId, tz, db) {
         });
         if (!res.ok) {
           const body = await res.text().catch(() => '');
-          console.error('[outlookCalSync] fetch failed', { userId, accountEmail: account.accountEmail, status: res.status, body: body.slice(0, 500) });
           logger.error('outlook-sync.fetch.failed', { userId, accountEmail: account.accountEmail, status: res.status, body: body.slice(0, 500) });
           continue;
         }
@@ -86,7 +85,7 @@ async function syncOutlookForUser(userId, tz, db) {
           // No snippet passed → no fact extraction from calendar events;
           // organizer resolution only (higher signal than mail senders).
           resolveOrCreateContact(userId, { email: orgEmail, name: org.name || '', source: 'calendar_sync' })
-            .catch((err) => console.error('[contactIngestion] outlook-cal:', err.message));
+            .catch((err) => logger.warn('outlookCalSync.contactIngestion.failed', { userId, accountEmail: account.accountEmail, error: err.message }));
         }
 
         // Redis invalidation — same keys GCal sync purges.
@@ -95,8 +94,7 @@ async function syncOutlookForUser(userId, tz, db) {
           await Promise.all([1, 7, 14].map((d) => rediDel(`gcal:${userId}:${tz}:${d}`)));
         } catch { /* best-effort */ }
       } catch (e) {
-        console.error('[outlookCalSync] account failed', { userId, accountEmail: account.accountEmail, error: e.message, stack: e.stack?.split('\n').slice(0, 3).join(' | ') });
-        logger.error('outlook-sync.account-failed', { userId, accountEmail: account.accountEmail, error: e.message });
+        logger.error('outlook-sync.account-failed', { userId, accountEmail: account.accountEmail, error: e.message, stack: e.stack?.split('\n').slice(0, 3).join(' | ') });
       }
     }
     // Bounded retention — mirror GCal: drop end_time older than 30 days.

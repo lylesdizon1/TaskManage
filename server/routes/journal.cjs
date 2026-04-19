@@ -82,7 +82,7 @@ module.exports = function createJournalRouter({ authenticateToken, db }) {
       // so noisy partial saves never burn Haiku cost.
       if (patch.completed === true && entry?.id) {
         enrichJournalEntry(req.user.id, entry)
-          .catch((err) => console.error('[journal] enrich failed:', err.message));
+          .catch((err) => logger.warn('journal.enrich.failed', { userId: req.user?.id, entryId: entry.id, error: err.message }));
       }
       res.json({ entry });
     } catch (err) {

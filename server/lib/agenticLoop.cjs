@@ -19,9 +19,23 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const logger = require('../../guardrails/logger.cjs');
 const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 const MAX_ITERATIONS = 5;
+
+/** Centralised logAction wrapper that surfaces failures instead of swallowing
+ *  them — Phase 4 trust scoring + decision_log analytics depend on these
+ *  audit rows being durable. Returns void; never throws. */
+async function _safeLogAction(logAction, event) {
+  if (!logAction) return;
+  try { await logAction(event); }
+  catch (err) {
+    logger.error('agenticLoop.logAction.failed', {
+      eventType: event?.eventType, toolName: event?.toolName || null, error: err.message,
+    });
+  }
+}
 
 /** Extract the most recent <decision>{...}</decision> JSON object from text blocks. */
 function parseDecision(textBlocks) {
@@ -72,7 +86,7 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
     }
 
     if (decision) {
-      try { await logAction?.({ eventType: 'decision_created', decision }); } catch {}
+      await _safeLogAction(logAction, { eventType: 'decision_created', decision });
     }
 
     const toolResults = [];
@@ -96,7 +110,7 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         resultContent = gateDecision.message || `User cancelled ${toolUse.name}.`;
         toolSummaries.push({ tool: toolUse.name, success: false, cancelled: true, reason: gateDecision.reason || 'cancelled' });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: resultContent });
-        try { await logAction?.({ eventType: 'tool_cancelled', toolName: toolUse.name, input: toolUse.input, reason: gateDecision.reason }); } catch {}
+        await _safeLogAction(logAction, { eventType: 'tool_cancelled', toolName: toolUse.name, input: toolUse.input, reason: gateDecision.reason });
         // Cancellation is a terminal but non-error result — without is_error,
         // Aria treats the cancelled tool as complete and produces a normal
         // follow-up acknowledgment instead of retrying.
@@ -126,7 +140,7 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         const success = payload.success !== false;
         toolSummaries.push({ tool: toolUse.name, success, result: payload });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result: payload });
-        try { await logAction?.({ eventType: 'tool_executed_elsewhere', toolName: toolUse.name, input: effectiveInput, output: payload, status: success ? 'success' : 'failure' }); } catch {}
+        await _safeLogAction(logAction, { eventType: 'tool_executed_elsewhere', toolName: toolUse.name, input: effectiveInput, output: payload, status: success ? 'success' : 'failure' });
         toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent });
         continue;
       }
@@ -136,13 +150,13 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         resultContent = typeof result === 'string' ? result : JSON.stringify(result);
         toolSummaries.push({ tool: toolUse.name, success: true, result });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result });
-        try { await logAction?.({ eventType: 'tool_executed', toolName: toolUse.name, input: effectiveInput, output: result, status: result?.success === false ? 'failure' : 'success' }); } catch {}
+        await _safeLogAction(logAction, { eventType: 'tool_executed', toolName: toolUse.name, input: effectiveInput, output: result, status: result?.success === false ? 'failure' : 'success' });
       } catch (err) {
         success = false;
         resultContent = `Error executing ${toolUse.name}: ${err.message}`;
         toolSummaries.push({ tool: toolUse.name, success: false, error: err.message });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: err.message });
-        try { await logAction?.({ eventType: 'tool_failed', toolName: toolUse.name, input: toolUse.input, errorMsg: err.message, status: 'failure' }); } catch {}
+        await _safeLogAction(logAction, { eventType: 'tool_failed', toolName: toolUse.name, input: toolUse.input, errorMsg: err.message, status: 'failure' });
       }
 
       toolResults.push({

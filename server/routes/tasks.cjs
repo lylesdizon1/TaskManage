@@ -121,7 +121,7 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
       const hasNote = !!(req.body.completionNote && String(req.body.completionNote).trim());
       if (justCompleted && !hasNote) {
         emitCloseLoop(req.user.id, 'task', req.params.id, updated.title || task.title)
-          .catch((err) => console.error('[closeLoop] task hook failed:', err.message));
+          .catch((err) => logger.warn('tasks.closeLoop.failed', { userId: req.user?.id, taskId: req.params.id, error: err.message }));
       }
       return res.json(updated);
     } catch (err) {
