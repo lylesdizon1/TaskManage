@@ -104,12 +104,51 @@ async function initTables() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS persona VARCHAR(50) DEFAULT 'executive_assistant'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_name VARCHAR(50) DEFAULT 'Aria'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT DEFAULT NULL`);
+  // Tracks when the user last completed WhatsApp phone verification — null
+  // for legacy rows. New writes go through the verify flow; legacy phones
+  // continue to work for inbound but cannot be changed without verification.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_verified_at TIMESTAMPTZ DEFAULT NULL`);
+  // Closes the WhatsApp account-takeover vector: without this index, two
+  // users could claim the same number and getUserByWhatsAppPhone returned
+  // the first match non-deterministically — letting an attacker route
+  // victim's inbound WhatsApp into the attacker's session. The index is
+  // partial (NULL allowed) and uses the same digits-only normalization
+  // as getUserByWhatsAppPhone. If pre-existing duplicates make the
+  // CREATE fail, log loudly so ops can resolve manually rather than
+  // leaving the hole open silently.
+  try {
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_whatsapp_phone_normalized
+         ON users (REGEXP_REPLACE(whatsapp_phone, '[^0-9]', '', 'g'))
+         WHERE whatsapp_phone IS NOT NULL`
+    );
+  } catch (err) {
+    console.error('[db] WARNING: could not create UNIQUE index on whatsapp_phone — duplicates exist. Resolve manually then re-deploy. Error:', err.message);
+  }
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_name TEXT DEFAULT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_businesses TEXT DEFAULT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_household TEXT DEFAULT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_location TEXT DEFAULT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_notes TEXT DEFAULT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'America/Los_Angeles'`);
+
+  // ── pending_whatsapp_verifications — short-lived OTP store for the
+  //    phone-claim verification flow. One pending row per user (UNIQUE on
+  //    user_id) so a fresh start_verify replaces any prior pending. The
+  //    code is sent via UltraMsg to the to-be-claimed phone; only the real
+  //    owner of that number sees it, which is the security guarantee.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_whatsapp_verifications (
+      id                 SERIAL PRIMARY KEY,
+      user_id            TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      phone_normalized   TEXT NOT NULL,
+      code               TEXT NOT NULL,
+      expires_at         TIMESTAMPTZ NOT NULL,
+      attempts           INT NOT NULL DEFAULT 0,
+      created_at         TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pwv_expires ON pending_whatsapp_verifications(expires_at)`).catch(() => {});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entities (
@@ -4438,6 +4477,95 @@ async function getUserByWhatsAppPhone(normalizedPhone) {
   return rows[0] || null;
 }
 
+// ── WhatsApp phone verification (anti-takeover) ──────────────────────────
+
+/** Strip everything except digits — same normalization the lookup uses. */
+function normalizeWhatsAppPhone(raw) {
+  if (!raw) return '';
+  return String(raw).replace(/[^0-9]/g, '');
+}
+
+/**
+ * Issue (or replace) the pending verification row for this user. Caller is
+ * responsible for sending the code via UltraMsg to the to-be-claimed phone.
+ * Returns nothing — caller already knows the code it minted.
+ */
+async function mintWhatsAppVerification(userId, phoneNormalized, code, ttlSeconds = 600) {
+  await pool.query(
+    `INSERT INTO pending_whatsapp_verifications
+       (user_id, phone_normalized, code, expires_at, attempts, created_at)
+     VALUES ($1, $2, $3, NOW() + ($4 || ' seconds')::interval, 0, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET
+       phone_normalized = EXCLUDED.phone_normalized,
+       code             = EXCLUDED.code,
+       expires_at       = EXCLUDED.expires_at,
+       attempts         = 0,
+       created_at       = NOW()`,
+    [userId, phoneNormalized, code, String(ttlSeconds)],
+  );
+}
+
+/**
+ * Validate a code against this user's pending verification.
+ *   - Returns { ok: true, phoneNormalized } and deletes the row on success.
+ *   - Returns { ok: false, reason: 'no_pending' | 'expired' | 'bad_code' | 'too_many_attempts' }
+ *     on any failure path. Bumps attempts on a wrong code; gives up at 5.
+ */
+async function consumeWhatsAppVerification(userId, code) {
+  const { rows } = await pool.query(
+    `SELECT id, phone_normalized AS "phoneNormalized", code, expires_at AS "expiresAt", attempts
+       FROM pending_whatsapp_verifications WHERE user_id = $1`,
+    [userId],
+  );
+  const row = rows[0];
+  if (!row) return { ok: false, reason: 'no_pending' };
+  if (new Date(row.expiresAt) <= new Date()) {
+    await pool.query('DELETE FROM pending_whatsapp_verifications WHERE id = $1', [row.id]);
+    return { ok: false, reason: 'expired' };
+  }
+  if (row.attempts >= 5) {
+    await pool.query('DELETE FROM pending_whatsapp_verifications WHERE id = $1', [row.id]);
+    return { ok: false, reason: 'too_many_attempts' };
+  }
+  if (String(row.code) !== String(code)) {
+    await pool.query(
+      'UPDATE pending_whatsapp_verifications SET attempts = attempts + 1 WHERE id = $1',
+      [row.id],
+    );
+    return { ok: false, reason: 'bad_code' };
+  }
+  await pool.query('DELETE FROM pending_whatsapp_verifications WHERE id = $1', [row.id]);
+  return { ok: true, phoneNormalized: row.phoneNormalized };
+}
+
+/**
+ * Atomically set a user's whatsapp_phone, catching the UNIQUE-index
+ * violation as a clean { ok: false, reason: 'already_claimed' } so callers
+ * don't have to handle the raw 23505 SQLSTATE. Also stamps
+ * whatsapp_verified_at so future audits can distinguish verified
+ * (post-fix) phones from legacy (pre-fix) ones.
+ */
+async function setVerifiedWhatsAppPhone(userId, phoneNormalized) {
+  try {
+    await pool.query(
+      `UPDATE users SET whatsapp_phone = $2, whatsapp_verified_at = NOW() WHERE id = $1`,
+      [userId, phoneNormalized],
+    );
+    return { ok: true };
+  } catch (err) {
+    if (err.code === '23505') return { ok: false, reason: 'already_claimed' };
+    throw err;
+  }
+}
+
+/** Clear a user's whatsapp_phone — no verification needed for unsetting. */
+async function clearUserWhatsAppPhone(userId) {
+  await pool.query(
+    `UPDATE users SET whatsapp_phone = NULL, whatsapp_verified_at = NULL WHERE id = $1`,
+    [userId],
+  );
+}
+
 /**
  * Update a user's password hash. Used by the change-password and
  * admin reset-password flows.
@@ -7964,6 +8092,11 @@ module.exports = {
   getInferredRulesForUser,
   getAllUserIds,
   getUserByWhatsAppPhone,
+  normalizeWhatsAppPhone,
+  mintWhatsAppVerification,
+  consumeWhatsAppVerification,
+  setVerifiedWhatsAppPhone,
+  clearUserWhatsAppPhone,
   getOrgForUser,
   getOrganizations,
   createOrganization,
