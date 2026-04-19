@@ -248,7 +248,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       // Bulk shape: { threads: [{ account_email, message_id }, ...] }
       if (Array.isArray(req.body?.threads)) {
         const jobs = req.body.threads.filter(t => t?.account_email && t?.message_id);
-        if (!jobs.length) return res.json({ archived: 0 });
+        if (!jobs.length) return res.json({ archived: 0, failed: [] });
         const results = await Promise.allSettled(jobs.map(async (j) => {
           const row = await db.getGmailIntegrationByEmail(userId, j.account_email);
           if (!row) throw new Error('Account not found');
@@ -257,7 +257,19 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
           await provider.archiveMessage({ db, userId, accountEmail: row.accountEmail, messageId: j.message_id });
         }));
         const archived = results.filter(r => r.status === 'fulfilled').length;
-        return res.json({ archived });
+        // Surface failed thread IDs so the UI can show "7 archived, 3 stuck"
+        // instead of silently leaving the user wondering why some items
+        // remained in the inbox. Each failed entry includes the job index
+        // (so the client can reconcile) and a short reason.
+        const failed = [];
+        results.forEach((r, idx) => {
+          if (r.status === 'rejected') {
+            const reason = r.reason?.message || String(r.reason);
+            failed.push({ message_id: jobs[idx].message_id, account_email: jobs[idx].account_email, reason });
+            logger.warn('inbox.archive.itemFailed', { userId, messageId: jobs[idx].message_id, accountEmail: jobs[idx].account_email, reason });
+          }
+        });
+        return res.json({ archived, failed });
       }
 
       // Single-thread shape (backward compat).

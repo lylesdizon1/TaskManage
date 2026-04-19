@@ -536,7 +536,14 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       // DB update first (row is authoritative, resolution_json persisted so
       // the listener's re-read path works even if NOTIFY is lost). NOTIFY is
       // the wake-up signal only.
-      await db.updatePendingConfirmationStatus(confirm_id, userId, nextStatus, resolution).catch(() => {});
+      //
+      // No silent .catch — prior code swallowed DB failures here, so the
+      // route would NOTIFY/audit/return success while the row stayed
+      // 'pending' forever. The listener can't resolve from the wrong
+      // status, the user thinks they approved, and the action expires
+      // unfulfilled. Let it throw to the outer try → 500 to the client
+      // and skip the audit/notify below.
+      await db.updatePendingConfirmationStatus(confirm_id, userId, nextStatus, resolution);
       await db.logAgentAction({
         userId,
         eventType: approved ? 'confirmation_approved' : 'confirmation_rejected',

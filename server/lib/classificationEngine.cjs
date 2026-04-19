@@ -13,6 +13,7 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const logger = require('../../guardrails/logger.cjs');
 
 const VALID_CATEGORIES = new Set([
   'invoice', 'receipt', 'purchase', 'contract', 'alert',
@@ -304,7 +305,12 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     }).catch(() => null);
 
     return saved || null;
-  } catch {
+  } catch (err) {
+    // Hot path called from inbox.cjs / gmail.cjs / outlookMailScan.cjs;
+    // every caller swallows null. Without a log line, classification
+    // failures (DB write, AI 500, label lookup) silently disappear and
+    // the user sees the inbox "just not getting smarter."
+    logger.error('classifyEmail.unexpected', { userId, messageId, error: err.message });
     return null;
   }
 }

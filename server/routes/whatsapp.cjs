@@ -252,10 +252,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const pendingKey = userId;
       const pending = pendingCompletionNotes.get(pendingKey);
       if (pending && Date.now() < pending.expiresAt) {
-        // This message might be a completion note reply — save it
-        pendingCompletionNotes.delete(pendingKey);
+        // This message might be a completion note reply — save it.
+        // Note: pendingCompletionNotes.delete moves AFTER the successful
+        // updateTask. Prior code deleted before the save, so on failure
+        // the user's retry wasn't recognized as a completion note (just
+        // a regular Aria message) and their note was lost without trace.
         try {
           await db.updateTask(pending.taskId, userId, { completionNote: msgBody });
+          pendingCompletionNotes.delete(pendingKey);
           await db.logMemory({
             userId, tool: 'complete_task',
             content: `Added completion note to "${pending.taskTitle}": ${msgBody}`,
@@ -265,6 +269,12 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           return res.json({ ok: true, completionNote: true });
         } catch (err) {
           logger.error('whatsapp.completionNote.saveFailed', { requestId: req.requestId, userId, error: err.message });
+          // Tell the user the save failed and exit — DO NOT fall through
+          // to the rest of the message-handling pipeline (which would
+          // route this same message into Aria as if it were a fresh chat,
+          // confusing both the agent and the user).
+          await sendWhatsApp(db, userId, "Couldn't save your note — try again.", fromRaw).catch(() => {});
+          return res.json({ ok: true, completionNote: false, error: 'save_failed' });
         }
       }
       // Clean up expired entry
@@ -374,7 +384,16 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           // user knows why we're asking (vs. baseline tool caution).
           const prefix = engineWantsConfirm && engineReason ? `${engineReason}\n\n` : '';
           const prompt = `${prefix}Confirm: ${preview}.\nReply YES ${code} or NO ${code} within 2 minutes.`;
-          await sendWhatsApp(db, userId, prompt, fromRaw).catch(() => {});
+          // Check the send result — if WhatsApp delivery fails, the user
+          // never sees the prompt. Without this, the agent reported
+          // "Awaiting confirmation" while the row sat unfulfilled until
+          // expiry. Roll back the pending row and surface a real error.
+          const sendResult = await sendWhatsApp(db, userId, prompt, fromRaw);
+          if (!sendResult?.ok) {
+            logger.warn('whatsapp.confirmation.sendFailed', { userId, tool, reason: sendResult?.reason });
+            await db.deletePendingConfirmation?.(pending.id, userId).catch(() => {});
+            return { action: 'deny', reason: 'whatsapp_unreachable', message: "Couldn't reach you on WhatsApp to confirm — try again from the app." };
+          }
           waSentConfirmation = true;
           await db.logAgentAction({ userId, eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id });
           return { action: 'deny', reason: 'awaiting_whatsapp_confirmation', message: `Awaiting user confirmation via WhatsApp (code ${code}).` };

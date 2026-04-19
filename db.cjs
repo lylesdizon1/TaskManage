@@ -1140,6 +1140,21 @@ async function createPendingConfirmation({ userId, toolName, params, channel }) 
 }
 
 /**
+ * Hard-delete a pending confirmation row, scoped by userId. Used when a
+ * gate creation succeeded in the DB but the downstream side-channel
+ * (WhatsApp prompt) failed to deliver — leaving the row pending would
+ * block the next attempt and confuse the listener.
+ */
+async function deletePendingConfirmation(id, userId) {
+  if (!userId) throw new Error('deletePendingConfirmation requires userId');
+  const result = await pool.query(
+    'DELETE FROM pending_confirmations WHERE id = $1 AND user_id = $2',
+    [id, userId],
+  );
+  return result.rowCount > 0;
+}
+
+/**
  * Sanitize a confirmation id into a safe pg LISTEN/NOTIFY channel.
  * Lowercase alphanumerics + underscore only; capped at 55 chars so the
  * `confirm_` prefix keeps the identifier under the 63-byte pg limit.
@@ -8217,6 +8232,7 @@ module.exports = {
   backfillSuperadminSettingsFromGlobal,
   logAgentAction,
   createPendingConfirmation,
+  deletePendingConfirmation,
   getPendingConfirmation,
   updatePendingConfirmationStatus,
   findLatestPendingConfirmation,

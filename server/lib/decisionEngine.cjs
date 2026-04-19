@@ -218,6 +218,25 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
         ]);
         if (content?.timedOut) {
           logger.warn('decisionEngine.contentCheck.timeout', { userId, toolName });
+          // Fail-closed: timeout means we couldn't check for OTP/financial
+          // content. Bump auto_proceed → soft_confirm so a one-tap user
+          // confirm catches anything we'd otherwise miss.
+          if (disposition === 'auto_proceed') {
+            disposition = 'soft_confirm';
+            conflictLevel = 'content_check_unavailable';
+            reason = "Couldn't verify the email's contents in time. Confirming with you to be safe.";
+          }
+        } else if (content?.failed) {
+          // Same fail-closed treatment for hard failures (auth, rate-limit,
+          // not-found). Prior code only logged on .timedOut and silently
+          // accepted .failed → Aria could auto-archive an OTP email when
+          // Gmail was momentarily refusing requests.
+          logger.warn('decisionEngine.contentCheck.unavailable', { userId, toolName, reason: content.reason });
+          if (disposition === 'auto_proceed') {
+            disposition = 'soft_confirm';
+            conflictLevel = 'content_check_unavailable';
+            reason = "Couldn't fetch the email's contents (Gmail returned an error). Confirming with you to be safe.";
+          }
         } else {
           contentFlags = assessEmailContentRisk(content);
           if (contentFlags.hasConfirmationCode) {
@@ -228,8 +247,15 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
           }
         }
       } catch (err) {
-        // Content fetch failures are non-fatal — fall through to baseline tiers.
+        // Same fail-closed treatment for unexpected throws (engine crash,
+        // module load failure). Bumps friction rather than silently
+        // accepting the action.
         logger.warn('decisionEngine.contentCheck.failed', { userId, toolName, error: err.message });
+        if (disposition === 'auto_proceed') {
+          disposition = 'soft_confirm';
+          conflictLevel = 'content_check_failed';
+          reason = "Couldn't safety-check this email — confirming with you to be safe.";
+        }
       }
     }
 
