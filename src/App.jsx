@@ -51,20 +51,22 @@ async function refreshToken() {
 }
 
 /**
- * Drop-in replacement for fetch() that auto-refreshes on 403.
- * - If a request returns 403, attempts a silent token refresh and retries once.
+ * Drop-in replacement for fetch() that auto-refreshes on 401 or 403.
+ * - 401 (no/invalid/expired token) and 403 (refresh-needed) both attempt
+ *   silent token refresh and retry once. Prior code only handled 403, which
+ *   meant any expired-JWT 401 from authenticateToken silently surfaced as
+ *   a normal !res.ok response — callers who only checked res.ok logged
+ *   "request failed" and the user had no idea their session had ended.
  * - If refresh fails, fires a 'session-expired' CustomEvent so the UI can react.
  * - Accepts the same arguments as fetch(). If `options.headers.Authorization` is
  *   present, it will be updated with the refreshed token on retry.
  */
 async function apiFetch(url, options = {}) {
   const res = await fetch(url, options);
-  if (res.status !== 403) return res;
+  if (res.status !== 401 && res.status !== 403) return res;
 
-  // 403 — attempt silent refresh
   const newToken = await refreshToken();
   if (newToken) {
-    // Retry original request with new token
     const retryOpts = { ...options, headers: { ...options.headers, Authorization: `Bearer ${newToken}` } };
     return fetch(url, retryOpts);
   }
@@ -875,38 +877,64 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     }
   }
 
-  function toggleTask(id) {
+  // Optimistic mutations below snapshot the prior task before applying the
+  // local change, then revert + toast on server failure. The previous
+  // pattern (apiFetch.catch console.error) silently desynced UI from DB on
+  // any non-network failure — including the 401-after-expired-JWT path
+  // that apiFetch couldn't see until the 401 fix above.
+  async function toggleTask(id) {
     const task = tasks.find((t) => t.id === id);
     if (!task) return;
     const nowCompleted = !task.completed;
     const completedAt = nowCompleted ? new Date().toISOString() : null;
+    const snapshot = { completed: task.completed, completedAt: task.completedAt };
+
     setTasks((prev) =>
       prev.map((t) => t.id === id ? { ...t, completed: nowCompleted, completedAt } : t),
     );
-    apiFetch(`/api/tasks/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ completed: nowCompleted, completedAt }),
-    }).catch((err) => console.error('[tasks] toggle failed:', err.message));
-    // Show completion note prompt when completing (not uncompleting)
     if (nowCompleted) {
       setCompletionNoteTaskId(id);
       setCompletionNoteDraft(task.completionNote || '');
-    } else {
-      if (completionNoteTaskId === id) setCompletionNoteTaskId(null);
+    } else if (completionNoteTaskId === id) {
+      setCompletionNoteTaskId(null);
+    }
+
+    try {
+      const res = await apiFetch(`/api/tasks/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ completed: nowCompleted, completedAt }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      setTasks((prev) => prev.map((t) => t.id === id ? { ...t, ...snapshot } : t));
+      if (nowCompleted && completionNoteTaskId === id) setCompletionNoteTaskId(null);
+      addToast({ type: 'error', message: `Couldn't ${nowCompleted ? 'complete' : 'reopen'} task — change reverted.` });
+      console.error('[tasks] toggle failed:', err.message);
     }
   }
 
-  function saveCompletionNote(taskId) {
+  async function saveCompletionNote(taskId) {
     const note = completionNoteDraft.trim();
     if (!note) { setCompletionNoteTaskId(null); return; }
+    const prevTask = tasks.find((t) => t.id === taskId);
+    const prevNote = prevTask?.completionNote || '';
+
     setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, completionNote: note } : t));
-    apiFetch(`/api/tasks/${taskId}/completion-note`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ completion_note: note }),
-    }).catch((err) => console.error('[tasks] completion-note save failed:', err.message));
     setCompletionNoteTaskId(null);
+
+    try {
+      const res = await apiFetch(`/api/tasks/${taskId}/completion-note`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ completion_note: note }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, completionNote: prevNote } : t));
+      addToast({ type: 'error', message: "Couldn't save completion note — change reverted." });
+      console.error('[tasks] completion-note save failed:', err.message);
+    }
   }
 
   const fetchCompletedHistory = useCallback(async (entityFilter, dateRangeFilter, searchFilter) => {
@@ -942,16 +970,29 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     );
   }
 
-  function editTask(id, fields) {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...fields } : t)),
-    );
-    // Also persist to server via PUT
-    apiFetch(`/api/tasks/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify(fields),
-    }).catch((err) => console.error('[tasks] edit failed:', err.message));
+  async function editTask(id, fields) {
+    const prevTask = tasks.find((t) => t.id === id);
+    if (!prevTask) return;
+    // Snapshot only the fields we're about to change so revert restores
+    // exactly the prior values (not the whole task — concurrent updates
+    // from polling/SSE would otherwise be clobbered on revert).
+    const snapshot = {};
+    for (const k of Object.keys(fields)) snapshot[k] = prevTask[k];
+
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
+
+    try {
+      const res = await apiFetch(`/api/tasks/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(fields),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...snapshot } : t)));
+      addToast({ type: 'error', message: "Couldn't save task — change reverted." });
+      console.error('[tasks] edit failed:', err.message);
+    }
   }
 
   // Filter tasks: show shared tasks from anyone + private tasks only from current user

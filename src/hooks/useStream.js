@@ -17,7 +17,11 @@ export default function useStream() {
   const streamChat = useCallback(async (messages, persona, contextSlices, onToolExecuted) => {
     resetStream();
 
-    const token = localStorage.getItem('token');
+    // App.jsx writes the JWT under 'tm_token' (see refreshToken/handleLogin).
+    // Prior code read 'token' which never matched — this hook silently threw
+    // 'Not authenticated' on every call. Latent: no current callers, but
+    // future ones would have hit the bug.
+    const token = localStorage.getItem('tm_token');
     if (!token) throw new Error('Not authenticated');
 
     const controller = new AbortController();
