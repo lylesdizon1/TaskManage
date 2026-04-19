@@ -719,6 +719,42 @@ function requiresConfirmation(toolName, llmDecision) {
   return false;
 }
 
+// ── Tool error sanitisation ────────────────────────────────────────────────
+// Shaped reasons we expose to the LLM (and via SSE to the user). Anything
+// outside this map gets bucketed to 'unknown'. Keep the set small — every
+// new code is a contract Aria's prompt has to be aware of.
+const TOOL_ERROR_TEXT = {
+  rate_limit: 'API rate limit hit — try again in a moment.',
+  auth:       'Authentication expired. Reconnect the account in Settings.',
+  not_found:  'Item not found.',
+  permission: 'Account is missing the required permission. Reconnect in Settings.',
+  network:    'Network error reaching the API.',
+  timeout:    'API call timed out.',
+  unknown:    'API call failed.',
+};
+
+/**
+ * Map a googleapis / fetch error to a sanitized { reason, error } pair.
+ * Logs the raw err.message + status under the given label so postmortem
+ * is one Railway query; only returns the bucketed reason and the safe
+ * user-facing string. Use whenever a tool catches an external API failure
+ * and needs to return to the agentic loop.
+ */
+function sanitizeApiError(err, label, ctx = {}) {
+  const status = err?.code || err?.response?.status || err?.status || null;
+  const raw = String(err?.message || '');
+  const lowered = raw.toLowerCase();
+  let reason = 'unknown';
+  if (status === 401 || /unauthorized|invalid[_ ]?grant|invalid[_ ]?token/i.test(lowered)) reason = 'auth';
+  else if (status === 403 || /insufficient|permission/i.test(lowered))                     reason = 'permission';
+  else if (status === 404)                                                                  reason = 'not_found';
+  else if (status === 429 || /rate.?limit|quota|too many requests/i.test(lowered))         reason = 'rate_limit';
+  else if (/timeout|timed[ -]?out|etimedout/i.test(lowered))                                reason = 'timeout';
+  else if (/network|enotfound|econnreset|econnrefused|fetch failed/i.test(lowered))         reason = 'network';
+  logger.warn(`tools.${label}.apiError`, { ...ctx, status, reason, raw });
+  return { reason, error: TOOL_ERROR_TEXT[reason] };
+}
+
 // ── Gmail tokens (via user_integrations) ───────────────────────────────────
 
 /**
@@ -1116,6 +1152,32 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           try {
             const existing = await calendar.events.get({ calendarId: 'primary', eventId: toolInput.event_id });
             if (!existing?.data) continue;
+
+            // Partial-update ordering check — when only ONE side is being
+            // changed, compare against the unchanged side from the existing
+            // event so we don't accept e.g. a new start that lands after
+            // the existing end (which would create a negative-length event
+            // until manual fix). The both-provided case was already checked
+            // above; this handles the one-side case.
+            if (sentStart && !sentEnd) {
+              const existingEndStr = existing.data.end?.dateTime || existing.data.end?.date;
+              if (existingEndStr) {
+                const existingEndLocal = toLocalIsoNoTz(existingEndStr, userTz);
+                if (existingEndLocal && compareLocalIso(existingEndLocal, sentStart) <= 0) {
+                  return { success: false, error: 'New start_time would be at or after the existing end_time. Provide end_time too.' };
+                }
+              }
+            }
+            if (sentEnd && !sentStart) {
+              const existingStartStr = existing.data.start?.dateTime || existing.data.start?.date;
+              if (existingStartStr) {
+                const existingStartLocal = toLocalIsoNoTz(existingStartStr, userTz);
+                if (existingStartLocal && compareLocalIso(sentEnd, existingStartLocal) <= 0) {
+                  return { success: false, error: 'New end_time would be at or before the existing start_time. Provide start_time too.' };
+                }
+              }
+            }
+
             const patch = {};
             if (toolInput.title !== undefined)       patch.summary     = toolInput.title;
             if (toolInput.description !== undefined) patch.description = toolInput.description;
@@ -1260,10 +1322,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           try { await db.logMemory({ userId, tool: 'send_email', content: `Sent email to ${to}: "${subject}"`, metadata: { message_id: data.id, account_email } }); } catch {}
           return { success: true, message_id: data.id, thread_id: data.threadId, account_email };
         } catch (err) {
-          if (err.message?.includes('insufficient') || err.code === 403) {
-            return { success: false, error: 'Gmail account is missing send permission. Reconnect in Settings to grant send access.' };
-          }
-          return { success: false, error: err.message };
+          return { success: false, ...sanitizeApiError(err, 'send_email', { userId, account: fromAddress }) };
         }
       }
 
@@ -1295,10 +1354,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           try { await db.logMemory({ userId, tool: 'reply_email', content: `Replied to "${origSubject}"`, metadata: { message_id: data.id, thread_id, account_email } }); } catch {}
           return { success: true, message_id: data.id, thread_id: data.threadId, account_email };
         } catch (err) {
-          if (err.code === 403 || err.message?.includes('insufficient')) {
-            return { success: false, error: 'Gmail account is missing send permission. Reconnect in Settings.' };
-          }
-          return { success: false, error: err.message };
+          return { success: false, ...sanitizeApiError(err, 'reply_email', { userId, account: fromAddress, thread_id }) };
         }
       }
 
@@ -1321,10 +1377,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           });
           return { success: true, message_id, account_email };
         } catch (err) {
-          if (err.code === 403 || err.message?.includes('insufficient')) {
-            return { success: false, error: 'Gmail account is missing modify permission. Reconnect in Settings.' };
-          }
-          return { success: false, error: err.message };
+          return { success: false, ...sanitizeApiError(err, 'archive_email', { userId, account: account_email, message_id }) };
         }
       }
 
@@ -1638,10 +1691,16 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (!category || !preference_type || !description) {
           return { success: false, error: 'category, preference_type, and description are required' };
         }
+        // Length caps — prevent the LLM from ballooning the rule cache by
+        // capturing run-on monologues as preferences. Bigger inputs are
+        // truncated rather than rejected so calls don't fail mid-flow.
+        const safeDescription = String(description).trim().slice(0, 500);
+        const safeContext = context ? String(context).trim().slice(0, 200) : null;
+        if (!safeDescription) return { success: false, error: 'description is empty after trim' };
         try {
           const row = await db.createUserPreference(
-            userId, category, preference_type, description,
-            context || null, strength || 3,
+            userId, category, preference_type, safeDescription,
+            safeContext, strength || 3,
           );
           if (!row) return { success: false, error: 'Failed to create preference' };
           try { await db.logMemory({ userId, tool: 'set_preference', content: `Captured preference: ${preference_type.toUpperCase()} ${description}`, metadata: { preference_id: row.id, category, preference_type, strength: row.strength } }); } catch {}
