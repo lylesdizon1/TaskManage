@@ -111,15 +111,19 @@ function requireAdmin(req, res, next) {
  */
 function requireOwnership(record, req) {
   // Normalize field names — DB returns snake_case (SELECT *) or camelCase (aliased queries)
-  const ownerId   = record.userId   ?? record.user_id  ?? record.owner ?? record.createdBy ?? record.created_by;
-  const entityId  = record.entityId ?? record.entity_id;
+  const ownerId = record.userId ?? record.user_id ?? record.owner ?? record.createdBy ?? record.created_by;
 
-  const isOwner   = ownerId === req.user.id;
-  const inEntity  = entityId && (req.user.entityIds || []).includes(entityId);
-
+  // Owner-only mutation. The prior `inEntity` branch granted access if the
+  // record's entity_id was in req.user.entityIds — but entityIds is a
+  // legacy JWT-claim shape; canonical visibility now requires explicit
+  // entity_members rows, NOT a tag match. Per CLAUDE.md "Architectural
+  // Principles": owner-only mutation for entities. If a route ever
+  // legitimately needs membership-based mutation, it should query
+  // entity_members directly rather than relying on this helper.
+  //
   // No admin/superadmin bypass — cross-tenant mutation belongs in
   // /api/admin/* routes gated by requireSuperAdmin, not this helper.
-  return isOwner || inEntity;
+  return ownerId === req.user.id;
 }
 
 /**

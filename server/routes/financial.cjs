@@ -338,7 +338,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       if (!requireOwnership(record, req)) {
         return res.status(403).json({ error: 'Access denied' });
       }
-      const updated = await db.updateFinancialAccount(req.params.id, req.body);
+      const updated = await db.updateFinancialAccount(req.params.id, req.body, req.user.id);
       if (!updated) return res.status(404).json({ error: 'Account not found' });
       return res.json(updated);
     } catch (err) {
@@ -357,7 +357,7 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       if (!requireOwnership(record, req)) {
         return res.status(403).json({ error: 'Access denied' });
       }
-      await db.deleteFinancialAccount(req.params.id);
+      await db.deleteFinancialAccount(req.params.id, req.user.id);
       return res.json({ success: true });
     } catch (err) {
       logger.error('financial.account.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
@@ -411,13 +411,13 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.put('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
     try {
-      const { rows } = await db.pool.query(
-        `SELECT id, user_id AS "userId", entity_id AS "entityId" FROM financial_transactions WHERE id = $1`,
-        [req.params.id]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Transaction not found' });
-      if (!requireOwnership(rows[0], req)) return res.status(403).json({ error: 'Access denied' });
-      const updated = await db.updateTransaction(req.params.id, req.body);
+      // updateTransaction is now tenant-scoped — null result = either
+      // not-found or wrong-owner (ambiguous on purpose to avoid leaking
+      // existence). Drop the SELECT/requireOwnership prelude (the prior
+      // query also pointed at a nonexistent `financial_transactions`
+      // table, silently 404ing every PUT — separate latent bug fixed
+      // by this consolidation).
+      const updated = await db.updateTransaction(req.params.id, req.body, req.user.id);
       if (!updated) return res.status(404).json({ error: 'Transaction not found' });
       return res.json(updated);
     } catch (err) {
@@ -428,13 +428,8 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
 
   router.delete('/api/financial/transactions/:id', authenticateToken, async (req, res) => {
     try {
-      const { rows } = await db.pool.query(
-        `SELECT id, user_id AS "userId", entity_id AS "entityId" FROM financial_transactions WHERE id = $1`,
-        [req.params.id]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Transaction not found' });
-      if (!requireOwnership(rows[0], req)) return res.status(403).json({ error: 'Access denied' });
-      await db.deleteTransaction(req.params.id);
+      const ok = await db.deleteTransaction(req.params.id, req.user.id);
+      if (!ok) return res.status(404).json({ error: 'Transaction not found' });
       return res.json({ success: true });
     } catch (err) {
       logger.error('financial.transaction.deleteFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

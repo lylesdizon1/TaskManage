@@ -2779,11 +2779,16 @@ async function inboxItemExistsBySourceId(userId, sourceId) {
  * @returns {Promise<void>}
  * @throws {Error} If the database query fails.
  */
-async function updateInboxItemAction(id, action) {
-  await pool.query(
-    'UPDATE inbox_items SET action_taken = $2 WHERE id = $1',
-    [id, action],
+async function updateInboxItemAction(id, action, userId) {
+  // userId is required — defense-in-depth tenant scope so any future caller
+  // (Aria tool, refactored bulk path) can't accidentally update another
+  // user's row. Returns boolean indicating whether a row matched.
+  if (!userId) throw new Error('updateInboxItemAction requires userId');
+  const result = await pool.query(
+    'UPDATE inbox_items SET action_taken = $2 WHERE id = $1 AND user_id = $3',
+    [id, action, userId],
   );
+  return result.rowCount > 0;
 }
 
 // ── Email labels (Gmail labels + Outlook folders) ─────────────────────────
@@ -5566,10 +5571,11 @@ async function createFinancialAccount({ id, userId, name, type, institution, cur
  * @param {Object} fields - Fields to update.
  * @returns {Promise<Object|null>} Updated row, or null if no fields or not found.
  */
-async function updateFinancialAccount(id, fields) {
+async function updateFinancialAccount(id, fields, userId) {
+  if (!userId) throw new Error('updateFinancialAccount requires userId');
   const sets = [];
-  const vals = [id];
-  let idx = 2;
+  const vals = [id, userId];
+  let idx = 3;
   if (fields.name !== undefined) { sets.push(`name = $${idx++}`); vals.push(fields.name); }
   if (fields.type !== undefined) { sets.push(`type = $${idx++}`); vals.push(fields.type); }
   if (fields.institution !== undefined) { sets.push(`institution = $${idx++}`); vals.push(fields.institution); }
@@ -5578,7 +5584,7 @@ async function updateFinancialAccount(id, fields) {
   if (fields.accountClass !== undefined) { sets.push(`account_class = $${idx++}`); vals.push(fields.accountClass); }
   if (sets.length === 0) return null;
   const { rows } = await pool.query(
-    `UPDATE financial_accounts SET ${sets.join(', ')} WHERE id = $1
+    `UPDATE financial_accounts SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2
      RETURNING id, user_id AS "userId", name, type, institution, currency,
                entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"`,
     vals,
@@ -5597,9 +5603,36 @@ async function updateFinancialAccount(id, fields) {
  * @param {string} id - Account ID to delete.
  * @returns {Promise<void>}
  */
-async function deleteFinancialAccount(id) {
-  await pool.query('DELETE FROM transactions WHERE account_id = $1', [id]);
-  await pool.query('DELETE FROM financial_accounts WHERE id = $1', [id]);
+async function deleteFinancialAccount(id, userId) {
+  // userId scope on both DELETEs — any future direct caller (Aria tool,
+  // bulk cleanup) can't wipe another user's account or its transactions.
+  // Wrapped in a transaction so a half-failed delete can't leave the
+  // account row alive with its transactions already gone (or vice versa).
+  if (!userId) throw new Error('deleteFinancialAccount requires userId');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Scope transactions delete via the parent account's user_id — keeps
+    // the existing schema (transactions has its own user_id but joining
+    // through account_id makes the tenant relationship explicit).
+    await client.query(
+      `DELETE FROM transactions
+        WHERE account_id = $1
+          AND account_id IN (SELECT id FROM financial_accounts WHERE id = $1 AND user_id = $2)`,
+      [id, userId],
+    );
+    const result = await client.query(
+      'DELETE FROM financial_accounts WHERE id = $1 AND user_id = $2',
+      [id, userId],
+    );
+    await client.query('COMMIT');
+    return result.rowCount > 0;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────
@@ -5737,8 +5770,10 @@ async function bulkCreateTransactions(txns) {
  * @param {string} id - Transaction ID to delete.
  * @returns {Promise<void>}
  */
-async function deleteTransaction(id) {
-  await pool.query('DELETE FROM transactions WHERE id = $1', [id]);
+async function deleteTransaction(id, userId) {
+  if (!userId) throw new Error('deleteTransaction requires userId');
+  const result = await pool.query('DELETE FROM transactions WHERE id = $1 AND user_id = $2', [id, userId]);
+  return result.rowCount > 0;
 }
 
 /**
@@ -5748,10 +5783,11 @@ async function deleteTransaction(id) {
  * @param {Object} fields - Fields to update (date, description, amount, type, category, entityId, accountClass, notes).
  * @returns {Promise<Object|null>} Updated row, or null if no fields or not found.
  */
-async function updateTransaction(id, fields) {
+async function updateTransaction(id, fields, userId) {
+  if (!userId) throw new Error('updateTransaction requires userId');
   const sets = [];
-  const vals = [id];
-  let idx = 2;
+  const vals = [id, userId];
+  let idx = 3;
   if (fields.date !== undefined) { sets.push(`date = $${idx++}`); vals.push(fields.date); }
   if (fields.description !== undefined) { sets.push(`description = $${idx++}`); vals.push(fields.description); }
   if (fields.amount !== undefined) { sets.push(`amount = $${idx++}`); vals.push(fields.amount); }
@@ -5762,7 +5798,7 @@ async function updateTransaction(id, fields) {
   if (fields.notes !== undefined) { sets.push(`notes = $${idx++}`); vals.push(fields.notes); }
   if (sets.length === 0) return null;
   const { rows } = await pool.query(
-    `UPDATE transactions SET ${sets.join(', ')} WHERE id = $1
+    `UPDATE transactions SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2
      RETURNING id, account_id AS "accountId", user_id AS "userId", date, description,
                amount::float, type, category, entity_id AS "entityId",
                account_class AS "accountClass", notes, created_at AS "createdAt"`,
