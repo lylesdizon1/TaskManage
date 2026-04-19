@@ -5518,6 +5518,23 @@ async function getFinancialAccounts(userId) {
 }
 
 /**
+ * Tenant-scoped lookup for a single financial account. Returns null when
+ * the account doesn't exist OR belongs to a different user — callers
+ * should treat both as 404 to avoid leaking account-existence info across
+ * tenants. Used by the transaction-write paths to verify ownership BEFORE
+ * inserting a row tagged with that account_id.
+ */
+async function getFinancialAccountForUser(accountId, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", name, type, institution, currency,
+            entity_id AS "entityId", account_class AS "accountClass", created_at AS "createdAt"
+     FROM financial_accounts WHERE id = $1 AND user_id = $2`,
+    [accountId, userId],
+  );
+  return rows[0] || null;
+}
+
+/**
  * Create a new financial account and return the inserted row.
  *
  * @param {Object} account
@@ -8050,6 +8067,7 @@ module.exports = {
   updateFinancialAccount,
   deleteFinancialAccount,
   getTransactions,
+  getFinancialAccountForUser,
   createTransaction,
   bulkCreateTransactions,
   deleteTransaction,

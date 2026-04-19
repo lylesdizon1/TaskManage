@@ -390,6 +390,13 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       if (!accountId || !date || amount === undefined) {
         return res.status(400).json({ error: 'accountId, date, and amount are required' });
       }
+      // Tenant guard — without this, user A could inject transactions
+      // tagged with user B's account_id (the row would still carry user_id
+      // = req.user.id, but the cross-account pollution surfaces in any
+      // account-joined report or downstream export).
+      const owned = await db.getFinancialAccountForUser(accountId, req.user.id);
+      if (!owned) return res.status(404).json({ error: 'Account not found' });
+
       const id = `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       const txn = await db.createTransaction({
         id, accountId, userId: req.user.id, date, description, amount: Math.abs(amount),
@@ -443,6 +450,11 @@ module.exports = function createFinancialRouter({ authenticateToken, requireOwne
       if (!accountId) {
         return res.status(400).json({ error: 'accountId is required' });
       }
+      // Tenant guard — bulk-import path; same risk as the single-row POST
+      // above. Pre-check ownership BEFORE doing the (potentially expensive)
+      // PDF/Excel parse work so attackers can't burn parse cycles either.
+      const owned = await db.getFinancialAccountForUser(accountId, req.user.id);
+      if (!owned) return res.status(404).json({ error: 'Account not found' });
 
       let mappedRows = [];
       let format = 'csv';
