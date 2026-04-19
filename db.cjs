@@ -460,6 +460,12 @@ async function initTables() {
     CREATE INDEX IF NOT EXISTS scheduled_alerts_fire_at
       ON scheduled_alerts(fire_at) WHERE fired = FALSE;
   `);
+  // Retry/dead-letter tracking — added when the cron was discovered to mark
+  // alerts fired even on total channel failure (silent loss of reminders).
+  // attempts bumps on every failed delivery; last_error captures the reason.
+  // The cron gives up at MAX_ATTEMPTS to prevent infinite retry storms.
+  await pool.query(`ALTER TABLE scheduled_alerts ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE scheduled_alerts ADD COLUMN IF NOT EXISTS last_error TEXT`).catch(() => {});
 
   // ── alert_cadence_config table (per-user priority-based alert timing) ──
   await pool.query(`
@@ -6407,16 +6413,32 @@ async function checkAndLockDailyWrapWeb(userId, dateKey) {
   return rows.length === 0;
 }
 
+/** Max delivery attempts before an alert is dead-lettered (marked fired with
+ *  last_error captured) so it stops blocking the cron. Five gives ~5 minutes
+ *  of recovery for transient outages without spamming channels indefinitely. */
+const SCHEDULED_ALERT_MAX_ATTEMPTS = 5;
+
 async function getUnfiredAlerts() {
-  // Per-user DND check: compute each user's local time via AT TIME ZONE
+  // Per-user DND check: compute each user's local time via AT TIME ZONE.
+  //
+  // LEFT JOIN tasks (was INNER) so alerts for deleted tasks AND task-less
+  // alerts (custom one-off reminders, alert_key without task_id) are still
+  // delivered — the prior INNER JOIN silently dropped both classes forever.
+  // The completed-task filter still applies when a task row exists.
+  //
+  // attempts < MAX guards against infinite retry on permanently-failing
+  // alerts (no whatsapp configured, no email recipient, etc.); past that,
+  // the cron's give-up branch marks them fired with last_error captured.
   const { rows } = await pool.query(
-    `SELECT sa.id, sa.user_id, sa.task_id, sa.alert_key, sa.message, sa.channels, sa.fire_at, u.email
+    `SELECT sa.id, sa.user_id, sa.task_id, sa.alert_key, sa.message, sa.channels,
+            sa.fire_at, sa.attempts, u.email
      FROM scheduled_alerts sa
      JOIN users u ON u.id = sa.user_id
-     JOIN tasks t ON t.id = sa.task_id
+     LEFT JOIN tasks t ON t.id = sa.task_id
      LEFT JOIN user_preferences up ON up.user_id = sa.user_id
      WHERE sa.fired = FALSE AND sa.fire_at <= NOW()
-       AND t.completed = FALSE
+       AND sa.attempts < $1
+       AND (sa.task_id IS NULL OR t.completed = FALSE)
        AND NOT (
          CASE
            WHEN COALESCE(up.dnd_start, '22:00') > COALESCE(up.dnd_end, '07:00')
@@ -6427,22 +6449,47 @@ async function getUnfiredAlerts() {
          END
        )
      ORDER BY sa.fire_at ASC
-     LIMIT 50`
+     LIMIT 50`,
+    [SCHEDULED_ALERT_MAX_ATTEMPTS]
   );
   return rows;
 }
 
 /**
  * Mark an alert as fired so it is not returned by getUnfiredAlerts() again.
- * Called by the cron scheduler after successful delivery.
+ * Called by the cron scheduler after successful delivery, OR after the cron
+ * has exhausted retries (in which case lastError captures the give-up reason
+ * for postmortem visibility).
  *
  * @param {number} alertId - Scheduled alert row ID.
+ * @param {string|null} [lastError=null] - Reason for marking fired without
+ *   delivery; null on the success path.
  * @returns {Promise<void>}
  */
-async function markScheduledAlertFired(alertId) {
+async function markScheduledAlertFired(alertId, lastError = null) {
   await pool.query(
-    `UPDATE scheduled_alerts SET fired = TRUE, fired_at = NOW() WHERE id = $1`,
-    [alertId]
+    `UPDATE scheduled_alerts
+        SET fired = TRUE, fired_at = NOW(), last_error = COALESCE($2, last_error)
+      WHERE id = $1`,
+    [alertId, lastError]
+  );
+}
+
+/**
+ * Bump attempts and capture last_error after a delivery attempt where every
+ * configured channel failed. Leaves fired=FALSE so the next cron tick retries
+ * (until SCHEDULED_ALERT_MAX_ATTEMPTS is reached and the row drops out of
+ * getUnfiredAlerts).
+ *
+ * @param {number} alertId
+ * @param {string} lastError - Comma-joined "Channel:reason" string.
+ */
+async function incrementAlertAttempt(alertId, lastError) {
+  await pool.query(
+    `UPDATE scheduled_alerts
+        SET attempts = attempts + 1, last_error = $2
+      WHERE id = $1`,
+    [alertId, lastError]
   );
 }
 
@@ -7946,6 +7993,8 @@ module.exports = {
   getUsersWithDailyWrapEnabled,
   checkAndLockDailyWrapSent,
   markScheduledAlertFired,
+  incrementAlertAttempt,
+  SCHEDULED_ALERT_MAX_ATTEMPTS,
   DEFAULT_CADENCE_CONFIGS,
   getCalendarNote,
   upsertCalendarNote,

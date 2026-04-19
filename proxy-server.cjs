@@ -245,15 +245,41 @@ cron.schedule('* * * * *', async () => {
           else failed.push(`Email:${r.reason}`);
         }
 
-        await db.markScheduledAlertFired(alert.id);
-        if (sent.length) console.log(`[cron] Fired alert ${alert.id}: ${sent.join(', ')}`);
-        if (failed.length) console.error(`[cron] Alert ${alert.id} partial failure: ${failed.join(', ')}`);
+        // Three outcomes, three branches — the prior code unconditionally
+        // marked fired even when every channel failed, silently dropping
+        // the reminder forever. Now: success → fire; partial → fire (≥1
+        // channel got through); total failure → bump attempts and retry
+        // next tick, with a dead-letter give-up at MAX_ATTEMPTS so the row
+        // doesn't block the cron forever.
+        if (sent.length > 0) {
+          await db.markScheduledAlertFired(alert.id);
+          cronLogger.info('alert.fired', {
+            alertId: alert.id, userId: alert.user_id,
+            sent, failed: failed.length ? failed : undefined,
+          });
+        } else if ((alert.attempts || 0) + 1 >= db.SCHEDULED_ALERT_MAX_ATTEMPTS) {
+          // Out of retries — dead-letter. Mark fired with last_error so the
+          // row stops being scanned, but capture why for postmortem.
+          await db.markScheduledAlertFired(alert.id, failed.join(', '));
+          cronLogger.error('alert.deadLettered', {
+            alertId: alert.id, userId: alert.user_id,
+            attempts: (alert.attempts || 0) + 1, failed,
+          });
+        } else {
+          await db.incrementAlertAttempt(alert.id, failed.join(', '));
+          cronLogger.warn('alert.deliveryFailed', {
+            alertId: alert.id, userId: alert.user_id,
+            attempt: (alert.attempts || 0) + 1, failed,
+          });
+        }
       } catch (err) {
-        console.error(`[cron] Failed to fire alert ${alert.id}:`, err.message);
+        cronLogger.error('alert.iteration.failed', {
+          alertId: alert.id, userId: alert.user_id, error: err.message,
+        });
       }
     }
   } catch (err) {
-    console.error('[cron] Scheduler error:', err.message);
+    cronLogger.error('alert.scheduler.failed', { error: err.message });
   }
 });
 console.log('[cron] Alert scheduler started');
@@ -268,25 +294,44 @@ cron.schedule('* * * * *', async () => {
       try {
         const msg = `Your meeting "${ev.eventTitle || 'Untitled'}" just ended. Reply with your outcomes & decisions — Aria will save them for you.`;
         let sent = false;
+        const failed = [];
 
         const wa = await _sendWhatsApp(db, ev.userId, msg);
-        if (wa.ok) { sent = true; console.log(`[cron] Post-meeting alert sent (WhatsApp) for event "${ev.eventTitle}"`); }
+        if (wa.ok) sent = true;
+        else failed.push(`WhatsApp:${wa.reason}`);
 
         if (!sent) {
           const em = await _sendAlertEmail(db, ev.userId, {
             subject: `Meeting ended: ${ev.eventTitle || 'Untitled'}`,
             text: msg,
           });
-          if (em.ok) { sent = true; console.log(`[cron] Post-meeting alert sent (Email) for event "${ev.eventTitle}"`); }
+          if (em.ok) sent = true;
+          else failed.push(`Email:${em.reason}`);
         }
 
-        await db.markCalendarNoteAlertSent(ev.userId, ev.eventId);
+        // Only mark sent when at least one channel succeeded — the prior code
+        // unconditionally flipped post_alert_sent=true so failed deliveries
+        // were never retried. The 5-min eligibility window in
+        // getRecentlyEndedEventsForAlerts naturally caps retries (~5 ticks)
+        // without spamming the user once the meeting is stale.
+        if (sent) {
+          await db.markCalendarNoteAlertSent(ev.userId, ev.eventId);
+          cronLogger.info('alert.postMeeting.sent', {
+            userId: ev.userId, eventId: ev.eventId, eventTitle: ev.eventTitle,
+          });
+        } else {
+          cronLogger.warn('alert.postMeeting.deliveryFailed', {
+            userId: ev.userId, eventId: ev.eventId, eventTitle: ev.eventTitle, failed,
+          });
+        }
       } catch (err) {
-        console.error(`[cron] Post-meeting alert failed for ${ev.eventId}:`, err.message);
+        cronLogger.error('alert.postMeeting.iteration.failed', {
+          userId: ev.userId, eventId: ev.eventId, error: err.message,
+        });
       }
     }
   } catch (err) {
-    console.error('[cron] Post-meeting cron error:', err.message);
+    cronLogger.error('alert.postMeeting.scheduler.failed', { error: err.message });
   }
 });
 console.log('[cron] Post-meeting alert scheduler started');
