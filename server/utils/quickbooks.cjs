@@ -237,6 +237,32 @@ async function fetchCompanyInfo({ realmId, environment, accessToken }) {
   return json.CompanyInfo || json;
 }
 
+/**
+ * Run a QuickBooks Online SOQL-like `query` against the connection's realm.
+ * Returns the raw QueryResponse object (Account, Invoice, Bill, etc. arrays
+ * keyed by entity name). Throws on non-2xx with a sanitized message — caller
+ * decides whether to swallow or surface.
+ */
+async function qbQuery({ realmId, environment, accessToken, query }) {
+  const url = `${apiBase(environment)}/v3/company/${realmId}/query?minorversion=70`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/text',
+    },
+    body: query,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(`QB query failed: ${json.Fault?.Error?.[0]?.Message || res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return json.QueryResponse || {};
+}
+
 module.exports = {
   AUTH_BASE,
   TOKEN_URL,
@@ -255,4 +281,5 @@ module.exports = {
   unpackTokens,
   withFreshAccessToken,
   fetchCompanyInfo,
+  qbQuery,
 };

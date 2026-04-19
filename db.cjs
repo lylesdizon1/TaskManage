@@ -745,6 +745,64 @@ async function initTables() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_conn_user ON entity_qb_connections(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_conn_entity ON entity_qb_connections(entity_id)`).catch(() => {});
 
+  // ── qb_snapshots (P1) ─ time-series financial snapshot per connection.
+  // Computed during the */15 sync from QB Account balances + recent
+  // Invoice/Bill aggregates. as_of_date is the local date the snapshot
+  // covers (UTC-truncated). One row per (connection_id, as_of_date) — a
+  // re-sync on the same day overwrites.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS qb_snapshots (
+      id                  SERIAL PRIMARY KEY,
+      connection_id       INT NOT NULL REFERENCES entity_qb_connections(id) ON DELETE CASCADE,
+      user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id           TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      as_of_date          DATE NOT NULL,
+      cash_balance        NUMERIC(14,2) DEFAULT 0,
+      accounts_receivable NUMERIC(14,2) DEFAULT 0,
+      accounts_payable    NUMERIC(14,2) DEFAULT 0,
+      revenue_30d         NUMERIC(14,2) DEFAULT 0,
+      expenses_30d        NUMERIC(14,2) DEFAULT 0,
+      net_income_30d      NUMERIC(14,2) DEFAULT 0,
+      runway_months       NUMERIC(6,2),
+      health_score        INT,
+      raw_json            JSONB DEFAULT '{}',
+      synced_at           TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(connection_id, as_of_date)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_snap_user ON qb_snapshots(user_id, as_of_date DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_snap_entity ON qb_snapshots(entity_id, as_of_date DESC)`).catch(() => {});
+
+  // ── qb_transactions (P1) ─ raw QB invoice + bill pulls. Kept separate
+  // from the existing `transactions` table (manual/CSV) so re-syncs can
+  // overwrite without clobbering manual edits, and so the source field
+  // stays single-valued. txn_qb_id is QB's Invoice/Bill Id; type
+  // distinguishes invoice / bill / payment.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS qb_transactions (
+      id              SERIAL PRIMARY KEY,
+      connection_id   INT NOT NULL REFERENCES entity_qb_connections(id) ON DELETE CASCADE,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id       TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      txn_qb_id       TEXT NOT NULL,
+      txn_type        TEXT NOT NULL,
+      txn_date        DATE NOT NULL,
+      amount          NUMERIC(14,2) NOT NULL,
+      currency        TEXT DEFAULT 'USD',
+      counterparty    TEXT DEFAULT '',
+      memo            TEXT DEFAULT '',
+      status          TEXT DEFAULT '',
+      due_date        DATE,
+      balance         NUMERIC(14,2) DEFAULT 0,
+      raw_json        JSONB DEFAULT '{}',
+      synced_at       TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(connection_id, txn_type, txn_qb_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_tx_user ON qb_transactions(user_id, txn_date DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_tx_entity ON qb_transactions(entity_id, txn_date DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_qb_tx_due ON qb_transactions(entity_id, due_date) WHERE due_date IS NOT NULL`).catch(() => {});
+
   // Legacy "Dizon Household" seed org intentionally removed — founder-specific.
   // Production org_members rows remain intact; new deployments start with
   // no default org.
@@ -951,6 +1009,152 @@ async function deleteQbConnectionById(id, userId) {
     [id, userId],
   );
   return result.rowCount > 0;
+}
+
+/**
+ * Upsert a daily snapshot. (connection_id, as_of_date) is unique; second
+ * sync on the same day overwrites the prior row's metric columns.
+ */
+async function upsertQbSnapshot(snap) {
+  const { rows } = await pool.query(
+    `INSERT INTO qb_snapshots
+       (connection_id, user_id, entity_id, as_of_date,
+        cash_balance, accounts_receivable, accounts_payable,
+        revenue_30d, expenses_30d, net_income_30d, runway_months,
+        health_score, raw_json, synced_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, NOW())
+     ON CONFLICT (connection_id, as_of_date) DO UPDATE SET
+       cash_balance        = EXCLUDED.cash_balance,
+       accounts_receivable = EXCLUDED.accounts_receivable,
+       accounts_payable    = EXCLUDED.accounts_payable,
+       revenue_30d         = EXCLUDED.revenue_30d,
+       expenses_30d        = EXCLUDED.expenses_30d,
+       net_income_30d      = EXCLUDED.net_income_30d,
+       runway_months       = EXCLUDED.runway_months,
+       health_score        = EXCLUDED.health_score,
+       raw_json            = EXCLUDED.raw_json,
+       synced_at           = NOW()
+     RETURNING id`,
+    [snap.connectionId, snap.userId, snap.entityId, snap.asOfDate,
+     snap.cashBalance, snap.accountsReceivable, snap.accountsPayable,
+     snap.revenue30d, snap.expenses30d, snap.netIncome30d, snap.runwayMonths,
+     snap.healthScore, JSON.stringify(snap.rawJson || {})],
+  );
+  return rows[0]?.id;
+}
+
+/** Latest snapshot per connection for a user. Used by Aria financial tools. */
+async function getLatestQbSnapshotsForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (connection_id)
+            id, connection_id AS "connectionId", user_id AS "userId",
+            entity_id AS "entityId", as_of_date AS "asOfDate",
+            cash_balance::float AS "cashBalance",
+            accounts_receivable::float AS "accountsReceivable",
+            accounts_payable::float AS "accountsPayable",
+            revenue_30d::float AS "revenue30d",
+            expenses_30d::float AS "expenses30d",
+            net_income_30d::float AS "netIncome30d",
+            runway_months::float AS "runwayMonths",
+            health_score AS "healthScore",
+            synced_at AS "syncedAt"
+       FROM qb_snapshots
+      WHERE user_id = $1
+      ORDER BY connection_id, as_of_date DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+/** Snapshot history for one connection, newest first. */
+async function getQbSnapshotHistory(connectionId, userId, limit = 30) {
+  const { rows } = await pool.query(
+    `SELECT id, as_of_date AS "asOfDate",
+            cash_balance::float AS "cashBalance",
+            accounts_receivable::float AS "accountsReceivable",
+            accounts_payable::float AS "accountsPayable",
+            revenue_30d::float AS "revenue30d",
+            expenses_30d::float AS "expenses30d",
+            net_income_30d::float AS "netIncome30d",
+            runway_months::float AS "runwayMonths",
+            health_score AS "healthScore",
+            synced_at AS "syncedAt"
+       FROM qb_snapshots
+      WHERE connection_id = $1 AND user_id = $2
+      ORDER BY as_of_date DESC
+      LIMIT $3`,
+    [connectionId, userId, Math.min(parseInt(limit, 10) || 30, 365)],
+  );
+  return rows;
+}
+
+/**
+ * Bulk upsert raw QB transactions. Conflict key (connection_id, txn_type,
+ * txn_qb_id) — re-pulls overwrite. Returns count upserted.
+ */
+async function upsertQbTransactions(rows) {
+  if (!Array.isArray(rows) || !rows.length) return 0;
+  const CHUNK = 200;
+  let count = 0;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const placeholders = [];
+    const vals = [];
+    let idx = 1;
+    for (const r of chunk) {
+      placeholders.push(`($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++}::jsonb,NOW())`);
+      vals.push(
+        r.connectionId, r.userId, r.entityId, r.txnQbId, r.txnType,
+        r.txnDate, r.amount, r.currency || 'USD', r.counterparty || '',
+        r.memo || '', r.status || '', r.dueDate || null,
+        JSON.stringify(r.rawJson || {}),
+      );
+    }
+    const result = await pool.query(
+      `INSERT INTO qb_transactions
+         (connection_id, user_id, entity_id, txn_qb_id, txn_type,
+          txn_date, amount, currency, counterparty, memo, status,
+          due_date, raw_json, synced_at)
+       VALUES ${placeholders.join(',')}
+       ON CONFLICT (connection_id, txn_type, txn_qb_id) DO UPDATE SET
+         txn_date     = EXCLUDED.txn_date,
+         amount       = EXCLUDED.amount,
+         currency     = EXCLUDED.currency,
+         counterparty = EXCLUDED.counterparty,
+         memo         = EXCLUDED.memo,
+         status       = EXCLUDED.status,
+         due_date     = EXCLUDED.due_date,
+         raw_json     = EXCLUDED.raw_json,
+         synced_at    = NOW()`,
+      vals,
+    );
+    count += result.rowCount || 0;
+  }
+  return count;
+}
+
+/** All QB transactions for a user with optional entity + window filters. */
+async function getQbTransactionsForUser(userId, opts = {}) {
+  const where = ['user_id = $1'];
+  const vals = [userId];
+  let idx = 2;
+  if (opts.entityId)   { where.push(`entity_id = $${idx++}`); vals.push(opts.entityId); }
+  if (opts.txnType)    { where.push(`txn_type = $${idx++}`); vals.push(opts.txnType); }
+  if (opts.sinceDate)  { where.push(`txn_date >= $${idx++}`); vals.push(opts.sinceDate); }
+  const limit = Math.min(parseInt(opts.limit, 10) || 200, 1000);
+  const { rows } = await pool.query(
+    `SELECT id, connection_id AS "connectionId", entity_id AS "entityId",
+            txn_qb_id AS "txnQbId", txn_type AS "txnType",
+            txn_date AS "txnDate", amount::float, currency,
+            counterparty, memo, status, due_date AS "dueDate",
+            synced_at AS "syncedAt"
+       FROM qb_transactions
+      WHERE ${where.join(' AND ')}
+      ORDER BY txn_date DESC
+      LIMIT $${idx}`,
+    [...vals, limit],
+  );
+  return rows;
 }
 
 /**
@@ -8299,6 +8503,11 @@ module.exports = {
   updateQbConnectionTokens,
   deleteQbConnectionById,
   getAllQbConnections,
+  upsertQbSnapshot,
+  getLatestQbSnapshotsForUser,
+  getQbSnapshotHistory,
+  upsertQbTransactions,
+  getQbTransactionsForUser,
   backfillSuperadminIntegrationsFromEnv,
   getUserSetting,
   getUserSettings,

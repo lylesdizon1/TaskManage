@@ -594,6 +594,7 @@ console.log('[cron] GCal sync scheduler started');
 // ── Outlook sync — every 15 min, same window as GCal ──────────────────────
 const { syncOutlookForUser } = require('./server/lib/outlookCalSync.cjs');
 const { scanOutlookMailForUser } = require('./server/lib/outlookMailScan.cjs');
+const { syncAllQbConnections } = require('./server/lib/quickbooksSync.cjs');
 
 cron.schedule('*/15 * * * *', async () => {
   try {
@@ -607,6 +608,15 @@ cron.schedule('*/15 * * * *', async () => {
     cronLogger.info('outlook-sync.complete', { userCount: users.length });
   } catch (e) {
     cronLogger.error('outlook-sync.failed', { error: e.message });
+  }
+
+  // QB sync piggybacks the same */15 tick — fewer cron slots, and QB API
+  // rate limits (~60 req/min per realm) are well within our budget at
+  // ~4 calls per connection per cycle.
+  try {
+    await syncAllQbConnections(db);
+  } catch (e) {
+    cronLogger.error('quickbooks-sync.failed', { error: e.message });
   }
 });
 console.log('[cron] Outlook sync scheduler started');
