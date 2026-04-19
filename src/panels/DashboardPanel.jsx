@@ -267,31 +267,34 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     return notes.find((n) => n.type !== 'digest') || null;
   }, [notes]);
 
-  // Fetch calendar events for today
+  // Fetch calendar events for today. Re-runs on user OR timezone change
+  // (the latter was missing from deps, so a TZ flip didn't refresh the
+  // filter window). AbortController-aware so unmount mid-fetch doesn't
+  // setState on a dead component.
   useEffect(() => {
     if (!currentUser?.id) return;
+    const ctrl = new AbortController();
     apiFetch(`${API_BASE}/api/gcal/events?timeZone=${encodeURIComponent(userTZ)}`, {
       headers: { Authorization: `Bearer ${authToken}` },
+      signal: ctrl.signal,
     })
       .then((r) => r.json())
       .then((data) => {
-        if (!Array.isArray(data)) return;
-        // Client-side safety filter: only keep events that overlap with today in user's local timezone
+        if (ctrl.signal.aborted || !Array.isArray(data)) return;
         const todayLocal = getTodayLocal(userTZ);
         const filtered = data.filter((ev) => {
           if (ev.allDay) {
-            // All-day events use date strings (YYYY-MM-DD)
             return ev.start === todayLocal || ev.end === todayLocal || (ev.start <= todayLocal && ev.end > todayLocal);
           }
-          // Timed events: check if start date in local time matches today
           const startLocal = new Intl.DateTimeFormat('en-CA', { timeZone: userTZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ev.start));
           return startLocal === todayLocal;
         });
         setCalendarEvents(filtered);
       })
-      .catch(() => {})
-      .finally(() => setCalendarLoaded(true));
-  }, [currentUser?.id]);
+      .catch((err) => { if (err?.name !== 'AbortError') { /* swallow — UI fallback handles missing events */ } })
+      .finally(() => { if (!ctrl.signal.aborted) setCalendarLoaded(true); });
+    return () => ctrl.abort();
+  }, [currentUser?.id, userTZ, authToken]);
 
   // Timeline items: merge calendar events + tasks, sorted chronologically
   const timelineItems = useMemo(() => {

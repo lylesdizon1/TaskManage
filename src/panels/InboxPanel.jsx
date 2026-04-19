@@ -1822,7 +1822,10 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
         borderLeft: active ? '3px solid #4f4dcf' : '3px solid transparent',
       }}
     >
-      {/* Mobile swipe drawer — sits behind the row, revealed on left-swipe. */}
+      {/* Mobile swipe drawer — sits behind the row, revealed on left-swipe.
+          tabIndex={-1} on the buttons keeps them out of the keyboard tab
+          order while hidden (aria-hidden alone doesn't exclude them from
+          focus). They become tab-reachable again when the drawer opens. */}
       <div
         className="md:hidden absolute inset-y-0 right-0 flex items-stretch"
         style={{ width: SWIPE_DRAWER_WIDTH }}
@@ -1830,6 +1833,7 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
       >
         <button
           type="button"
+          tabIndex={drawerOpen ? 0 : -1}
           onClick={(e) => { e.stopPropagation(); markThreadRead(t); setDrawerOpen(false); setDragOffset(0); }}
           className="flex-1 flex flex-col items-center justify-center text-white text-[10px] font-semibold"
           style={{ backgroundColor: '#3b82f6' }}
@@ -1839,6 +1843,7 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
         </button>
         <button
           type="button"
+          tabIndex={drawerOpen ? 0 : -1}
           onClick={(e) => { e.stopPropagation(); archiveSingle(t); setDrawerOpen(false); setDragOffset(0); }}
           className="flex-1 flex flex-col items-center justify-center text-white text-[10px] font-semibold"
           style={{ backgroundColor: '#6b7280' }}
@@ -2046,6 +2051,14 @@ When you have enough info, write the final draft and end your message with:
     setTimeout(() => onClose?.(), 300);
   }
 
+  // Escape-to-close — keyboard users couldn't dismiss the slide-in
+  // before; only the backdrop click worked.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') handleClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []); // handleClose is stable enough — no need to track
+
   async function send() {
     const text = input.trim();
     if (!text || sending) return;
@@ -2119,10 +2132,14 @@ When you have enough info, write the final draft and end your message with:
       {/* Backdrop */}
       <div
         onClick={handleClose}
+        aria-hidden="true"
         style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.15)', zIndex: 40, opacity: visible ? 1 : 0, transition: 'opacity 300ms ease' }}
       />
       {/* Panel */}
       <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label="Draft email reply with Aria"
         style={{
           position: 'absolute', top: 0, right: 0, bottom: 0, width: 380,
           maxWidth: '100%', backgroundColor: '#fbf8fe', borderLeft: '1px solid #e5e7eb',

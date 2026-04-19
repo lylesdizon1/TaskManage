@@ -5780,8 +5780,10 @@ async function getTransactions(userId, filters = {}) {
     `SELECT t.id, t.account_id AS "accountId", t.user_id AS "userId", t.date, t.description,
             t.amount::float, t.type, t.category, t.entity_id AS "entityId",
             t.account_class AS "accountClass", t.notes, t.created_at AS "createdAt"
-     FROM transactions t ${whereClause} ORDER BY t.date DESC, t.created_at DESC`,
-    vals,
+     FROM transactions t ${whereClause}
+     ORDER BY t.date DESC, t.created_at DESC
+     LIMIT $${idx}`,
+    [...vals, Math.min(parseInt(filters.limit, 10) || 500, 2000)],
   );
   return rows;
 }
