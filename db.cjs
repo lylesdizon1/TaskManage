@@ -696,6 +696,11 @@ async function initTables() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_id)`).catch(() => {});
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolution_json JSONB`).catch(() => {});
+  // Phase 5 — link back to decision_log so the WhatsApp YES/NO webhook
+  // can close the original decision with trust feedback at resolution
+  // time (was previously orphaned because the webhook had no way to
+  // recover the engineDecisionId from the prior gate invocation).
+  await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS decision_log_id INT`).catch(() => {});
 
   // ── user_integrations table (per-user outbound notification routing) ──
   // Shape kept in sync with the final migrated state — account_email NOT
@@ -1340,13 +1345,14 @@ async function logAgentAction({ userId, eventType, toolName, input, output, stat
   }
 }
 
-async function createPendingConfirmation({ userId, toolName, params, channel }) {
+async function createPendingConfirmation({ userId, toolName, params, channel, decisionLogId }) {
   const { rows } = await pool.query(
-    `INSERT INTO pending_confirmations (user_id, tool_name, params_json, channel)
-     VALUES ($1, $2, $3::jsonb, $4)
+    `INSERT INTO pending_confirmations (user_id, tool_name, params_json, channel, decision_log_id)
+     VALUES ($1, $2, $3::jsonb, $4, $5)
      RETURNING id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
-               channel, status, expires_at AS "expiresAt", created_at AS "createdAt"`,
-    [userId, toolName, JSON.stringify(params || {}), channel || 'web'],
+               channel, status, expires_at AS "expiresAt", created_at AS "createdAt",
+               decision_log_id AS "decisionLogId"`,
+    [userId, toolName, JSON.stringify(params || {}), channel || 'web', decisionLogId || null],
   );
   return rows[0];
 }
@@ -1953,7 +1959,8 @@ async function findLatestPendingConfirmation(userId, channel, toolName) {
   }
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
-            channel, status, expires_at AS "expiresAt", created_at AS "createdAt"
+            channel, status, expires_at AS "expiresAt", created_at AS "createdAt",
+            decision_log_id AS "decisionLogId"
      FROM pending_confirmations
      ${where}
      ORDER BY created_at DESC LIMIT 1`,
@@ -3440,6 +3447,97 @@ async function logDecision(userId, data) {
      correctionId, contextSummary, latencyMs, conflictLevel],
   );
   return rows[0] || null;
+}
+
+/**
+ * Cross-tenant decision feed for the Phase 5 admin Decisions tab. Joins
+ * decision_log against users for displayName + email. Optional userId
+ * filter narrows to one tenant. Caller MUST be requireSuperAdmin.
+ */
+async function getAdminDecisions(opts = {}) {
+  const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 100, 1), 500);
+  const where = [];
+  const vals = [];
+  let idx = 1;
+  if (opts.userId) { where.push(`d.user_id = $${idx++}`); vals.push(opts.userId); }
+  if (opts.toolCalled) { where.push(`d.tool_called = $${idx++}`); vals.push(opts.toolCalled); }
+  if (opts.outcome) { where.push(`d.outcome = $${idx++}`); vals.push(opts.outcome); }
+  vals.push(limit);
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT d.id, d.user_id AS "userId", u.display_name AS "displayName", u.email,
+            d.action_type AS "actionType", d.tool_called AS "toolCalled",
+            d.tool_input AS "toolInput",
+            d.confidence_score AS "confidenceScore",
+            d.risk_score AS "riskScore",
+            d.disposition, d.outcome,
+            d.conflict_detected AS "conflictDetected",
+            d.conflict_resolution AS "conflictResolution",
+            d.context_summary AS "contextSummary",
+            d.latency_ms AS "latencyMs",
+            d.conflict_level AS "conflictLevel",
+            d.created_at AS "createdAt"
+       FROM decision_log d
+       JOIN users u ON u.id = d.user_id
+       ${whereClause}
+      ORDER BY d.created_at DESC
+      LIMIT $${idx}`,
+    vals,
+  );
+  return rows;
+}
+
+/** Cross-tenant trust matrix for admin Decisions tab. Caller is super-admin. */
+async function getAdminTrustMatrix(opts = {}) {
+  const where = [];
+  const vals = [];
+  let idx = 1;
+  if (opts.userId) { where.push(`t.user_id = $${idx++}`); vals.push(opts.userId); }
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT t.id, t.user_id AS "userId", u.display_name AS "displayName", u.email,
+            t.action_type AS "actionType", t.trust_score AS "trustScore",
+            t.disposition, t.is_reversible AS "isReversible",
+            t.impact_level AS "impactLevel",
+            t.times_auto_executed AS "timesAutoExecuted",
+            t.times_confirmed AS "timesConfirmed",
+            t.times_rejected AS "timesRejected",
+            t.times_corrected AS "timesCorrected",
+            t.updated_at AS "updatedAt"
+       FROM trust_scores t
+       JOIN users u ON u.id = t.user_id
+       ${whereClause}
+      ORDER BY u.display_name ASC, t.action_type ASC`,
+    vals,
+  );
+  return rows;
+}
+
+/** Recent correction events for admin Decisions tab. */
+async function getAdminCorrections(opts = {}) {
+  const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 100, 1), 500);
+  const where = [];
+  const vals = [];
+  let idx = 1;
+  if (opts.userId) { where.push(`c.user_id = $${idx++}`); vals.push(opts.userId); }
+  vals.push(limit);
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT c.id, c.user_id AS "userId", u.display_name AS "displayName",
+            c.decision_log_id AS "decisionLogId",
+            c.original_action AS "originalAction",
+            c.correction_type AS "correctionType",
+            c.correction_note AS "correctionNote",
+            c.generated_rule_id AS "generatedRuleId",
+            c.created_at AS "createdAt"
+       FROM correction_events c
+       JOIN users u ON u.id = c.user_id
+       ${whereClause}
+      ORDER BY c.created_at DESC
+      LIMIT $${idx}`,
+    vals,
+  );
+  return rows;
 }
 
 async function getDecisionHistory(userId, opts = {}) {
@@ -8529,6 +8627,9 @@ module.exports = {
   getAllPreferences,
   logDecision,
   getDecisionHistory,
+  getAdminDecisions,
+  getAdminTrustMatrix,
+  getAdminCorrections,
   updateDecisionOutcome,
   getTrustScore,
   updateTrustScore,

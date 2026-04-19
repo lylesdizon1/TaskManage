@@ -454,7 +454,10 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
 
         let pending;
         try {
-          pending = await db.createPendingConfirmation({ userId, toolName: tool, params: input, channel: 'web' });
+          pending = await db.createPendingConfirmation({
+            userId, toolName: tool, params: input, channel: 'web',
+            decisionLogId: engineDecisionId, // Phase 5 — link for resolver-side closure
+          });
         } catch (err) {
           logger.error('chat.gate.pendingCreate.failed', { requestId: req.requestId, userId, tool, error: err.message });
           // Fail closed: deny execution so the loop resumes and finalizes.

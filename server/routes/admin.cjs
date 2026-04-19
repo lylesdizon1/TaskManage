@@ -256,5 +256,48 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  // ── Phase 5: Aria Decisions visibility ─────────────────────────────────
+  // Read-only diagnostic endpoints for the AdminPanel Decisions tab.
+  // Cross-tenant by design (super-admin only). Optional ?userId filter
+  // narrows to one tenant; ?limit caps row count.
+
+  router.get('/api/admin/decisions', async (req, res) => {
+    try {
+      const decisions = await db.getAdminDecisions({
+        userId: req.query.userId || undefined,
+        toolCalled: req.query.tool || undefined,
+        outcome: req.query.outcome || undefined,
+        limit: req.query.limit,
+      });
+      return res.json(decisions);
+    } catch (err) {
+      logger.error('admin.decisions.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.get('/api/admin/trust-matrix', async (req, res) => {
+    try {
+      const rows = await db.getAdminTrustMatrix({ userId: req.query.userId || undefined });
+      return res.json(rows);
+    } catch (err) {
+      logger.error('admin.trustMatrix.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.get('/api/admin/corrections', async (req, res) => {
+    try {
+      const rows = await db.getAdminCorrections({
+        userId: req.query.userId || undefined,
+        limit: req.query.limit,
+      });
+      return res.json(rows);
+    } catch (err) {
+      logger.error('admin.corrections.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   return router;
 };

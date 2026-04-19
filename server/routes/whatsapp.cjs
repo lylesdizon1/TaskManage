@@ -176,6 +176,15 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
               try { await db.notifyConfirmation(pending.id, denyResolution); }
               catch (e) { logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message }); }
               await db.logAgentAction({ userId, eventType: 'tool_cancelled', toolName: pending.toolName, input: pending.params, confirmId: pending.id });
+              // Phase 5 — close the decision with trust feedback. Without
+              // pending.decisionLogId (legacy rows from before the FK
+              // shipped) this no-ops cleanly.
+              if (pending.decisionLogId) {
+                closeDecisionWithFeedback({
+                  userId, decisionId: pending.decisionLogId, outcome: 'rejected',
+                  actionType: pending.toolName, contextSummary: 'whatsapp_user_rejected',
+                }).catch(() => {});
+              }
               await sendWhatsApp(db, userId, `Cancelled.`, fromRaw).catch(() => {});
               return res.json({ ok: true, confirmed: false });
             }
@@ -213,6 +222,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             await db.updatePendingConfirmationStatus(pending.id, userId, 'approved', allowResolution).catch(() => {});
             try { await db.notifyConfirmation(pending.id, allowResolution); }
             catch (e) { logger.warn('whatsapp.confirm.notify.failed', { userId, error: e.message }); }
+
+            // Phase 5 — close the decision with trust feedback on approval.
+            if (pending.decisionLogId) {
+              closeDecisionWithFeedback({
+                userId, decisionId: pending.decisionLogId, outcome: 'confirmed',
+                actionType: pending.toolName, contextSummary: 'whatsapp_user_confirmed',
+              }).catch(() => {});
+            }
 
             const reply = result?.success === false
               ? `Couldn't complete ${pending.toolName}: ${result.error || 'unknown error'}`
@@ -388,7 +405,10 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         }
 
         try {
-          const pending = await db.createPendingConfirmation({ userId, toolName: tool, params: input, channel: 'whatsapp' });
+          const pending = await db.createPendingConfirmation({
+            userId, toolName: tool, params: input, channel: 'whatsapp',
+            decisionLogId: engineDecisionId, // Phase 5 — let YES/NO webhook close the decision
+          });
           const code = codeFromConfirmId(pending.id);
           const preview = summarizeParams(tool, input);
           // If the engine raised confirmation, prepend its reason so the

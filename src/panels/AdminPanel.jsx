@@ -11,6 +11,11 @@ export default function AdminPanel({ authToken }) {
   const [memories, setMemories] = useState([]);
   const [memoryUserFilter, setMemoryUserFilter] = useState('');
   const [memoryPage, setMemoryPage] = useState(1);
+  // Phase 5 — Aria decisions visibility
+  const [decisions, setDecisions] = useState([]);
+  const [trustMatrix, setTrustMatrix] = useState([]);
+  const [corrections, setCorrections] = useState([]);
+  const [decisionsUserFilter, setDecisionsUserFilter] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -57,12 +62,25 @@ export default function AdminPanel({ authToken }) {
     } catch {}
   }, [authToken]);
 
+  const fetchDecisionsBundle = useCallback(async (userId = '') => {
+    const qs = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    try {
+      const [d, t, c] = await Promise.all([
+        fetch(`${API_BASE}/api/admin/decisions${qs}`, { headers }).then((r) => r.ok ? r.json() : []),
+        fetch(`${API_BASE}/api/admin/trust-matrix${qs}`, { headers }).then((r) => r.ok ? r.json() : []),
+        fetch(`${API_BASE}/api/admin/corrections${qs}`, { headers }).then((r) => r.ok ? r.json() : []),
+      ]);
+      setDecisions(d); setTrustMatrix(t); setCorrections(c);
+    } catch {}
+  }, [authToken]);
+
   useEffect(() => {
     if (tab === 'orgs') fetchOrgs();
     else if (tab === 'users') { fetchUsers(); fetchOrgs(); }
     else if (tab === 'audit') fetchAuditLog(auditPage);
     else if (tab === 'memory') { fetchUsers(); fetchMemories(memoryPage, memoryUserFilter); }
-  }, [tab, auditPage, memoryPage, memoryUserFilter]);
+    else if (tab === 'decisions') { fetchUsers(); fetchDecisionsBundle(decisionsUserFilter); }
+  }, [tab, auditPage, memoryPage, memoryUserFilter, decisionsUserFilter]);
 
   async function handleCreateOrg(e) {
     e.preventDefault();
@@ -220,6 +238,7 @@ export default function AdminPanel({ authToken }) {
         <button onClick={() => setTab('users')} className={tabClass('users')}>Users</button>
         <button onClick={() => setTab('audit')} className={tabClass('audit')}>Audit Log</button>
         <button onClick={() => setTab('memory')} className={tabClass('memory')}>Memory</button>
+        <button onClick={() => setTab('decisions')} className={tabClass('decisions')}>Decisions</button>
       </div>
 
       {error && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg">{error}</div>}
@@ -529,6 +548,123 @@ export default function AdminPanel({ authToken }) {
               </>
             );
           })()}
+        </div>
+      )}
+
+      {/* Decisions Tab — Phase 5 Aria intelligence visibility */}
+      {tab === 'decisions' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Aria Decisions</h3>
+            <select
+              value={decisionsUserFilter}
+              onChange={(e) => setDecisionsUserFilter(e.target.value)}
+              className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-white"
+            >
+              <option value="">All users</option>
+              {users.map(u => <option key={u.id} value={u.id}>{u.displayName || u.username}</option>)}
+            </select>
+          </div>
+
+          {/* Trust matrix */}
+          <div>
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Trust Matrix</h4>
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
+                    <th className="px-3 py-2 text-left">User</th>
+                    <th className="px-3 py-2 text-left">Action</th>
+                    <th className="px-3 py-2 text-right">Score</th>
+                    <th className="px-3 py-2 text-left">Disposition</th>
+                    <th className="px-3 py-2 text-right">✓</th>
+                    <th className="px-3 py-2 text-right">✗</th>
+                    <th className="px-3 py-2 text-right">↺</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trustMatrix.map((t) => (
+                    <tr key={t.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{t.displayName}</td>
+                      <td className="px-3 py-2 text-gray-800">{t.actionType}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-900">{Number(t.trustScore).toFixed(2)}</td>
+                      <td className="px-3 py-2 text-xs text-gray-600">{t.disposition}</td>
+                      <td className="px-3 py-2 text-right text-green-700">{t.timesConfirmed}</td>
+                      <td className="px-3 py-2 text-right text-red-700">{t.timesRejected}</td>
+                      <td className="px-3 py-2 text-right text-amber-700">{t.timesCorrected}</td>
+                    </tr>
+                  ))}
+                  {trustMatrix.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-400">No trust data yet</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Recent decisions */}
+          <div>
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Recent Decisions (last 100)</h4>
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden" style={{ maxHeight: '500px', overflowY: 'auto' }}>
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
+                    <th className="px-3 py-2 text-left">When</th>
+                    <th className="px-3 py-2 text-left">User</th>
+                    <th className="px-3 py-2 text-left">Tool</th>
+                    <th className="px-3 py-2 text-left">Disposition</th>
+                    <th className="px-3 py-2 text-left">Outcome</th>
+                    <th className="px-3 py-2 text-right">Latency</th>
+                    <th className="px-3 py-2 text-left">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {decisions.map((d) => (
+                    <tr key={d.id} className="border-t border-gray-100 hover:bg-gray-50">
+                      <td className="px-3 py-2 text-gray-500 whitespace-nowrap text-xs">{new Date(d.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+                      <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{d.displayName}</td>
+                      <td className="px-3 py-2 text-gray-800">{d.toolCalled || d.actionType}</td>
+                      <td className="px-3 py-2 text-xs text-gray-600">{d.disposition}</td>
+                      <td className={`px-3 py-2 text-xs font-medium ${d.outcome === 'rejected' ? 'text-red-700' : d.outcome === 'confirmed' ? 'text-green-700' : 'text-gray-600'}`}>{d.outcome || '—'}</td>
+                      <td className="px-3 py-2 text-right text-xs text-gray-500 font-mono">{d.latencyMs != null ? `${d.latencyMs}ms` : '—'}</td>
+                      <td className="px-3 py-2 text-xs text-gray-600 truncate max-w-md">{d.contextSummary || d.conflictResolution || ''}</td>
+                    </tr>
+                  ))}
+                  {decisions.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-400">No decisions yet</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Corrections + auto-generated rules */}
+          <div>
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Corrections (last 100)</h4>
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
+                    <th className="px-3 py-2 text-left">When</th>
+                    <th className="px-3 py-2 text-left">User</th>
+                    <th className="px-3 py-2 text-left">Action</th>
+                    <th className="px-3 py-2 text-left">Type</th>
+                    <th className="px-3 py-2 text-left">Note</th>
+                    <th className="px-3 py-2 text-left">Generated Rule</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {corrections.map((c) => (
+                    <tr key={c.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2 text-gray-500 whitespace-nowrap text-xs">{new Date(c.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+                      <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{c.displayName}</td>
+                      <td className="px-3 py-2 text-gray-800">{c.originalAction}</td>
+                      <td className="px-3 py-2 text-xs text-gray-600">{c.correctionType}</td>
+                      <td className="px-3 py-2 text-xs text-gray-600 truncate max-w-md">{c.correctionNote || ''}</td>
+                      <td className="px-3 py-2 text-xs text-indigo-700">{c.generatedRuleId ? `#${c.generatedRuleId}` : '—'}</td>
+                    </tr>
+                  ))}
+                  {corrections.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-gray-400">No corrections yet</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
     </div>
