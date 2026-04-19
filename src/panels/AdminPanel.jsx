@@ -106,6 +106,23 @@ export default function AdminPanel({ authToken }) {
     fetchMemories(memoryPage, memoryUserFilter);
   }
 
+  // Clear date-keyed user-data caches that aren't namespaced per user.
+  // Without this, the admin's cached Aria messages, daily digest, and
+  // unsent chat draft bleed into the impersonated session — and back
+  // into the admin's session on exit. Mirrors handleLogin/handleLogout
+  // in App.jsx.
+  function clearUserScopedCaches() {
+    try {
+      Object.keys(localStorage).forEach((key) => {
+        if (key.startsWith('cc_messages_') || key.startsWith('timeline_summary_') || key.startsWith('digest_')) {
+          localStorage.removeItem(key);
+        }
+      });
+      localStorage.removeItem('tm_chat_draft');
+      localStorage.removeItem('qc_lastPillar');
+    } catch {}
+  }
+
   async function impersonateUser(userId) {
     try {
       const res = await fetch(`${API_BASE}/api/admin/impersonate/${userId}`, { method: 'POST', headers });
@@ -114,6 +131,7 @@ export default function AdminPanel({ authToken }) {
       localStorage.setItem('tm_impersonation_token', localStorage.getItem('tm_token'));
       localStorage.setItem('tm_token', data.token);
       localStorage.setItem('tm_user', JSON.stringify(data.user));
+      clearUserScopedCaches();
       window.location.reload();
     } catch {}
   }
@@ -168,6 +186,7 @@ export default function AdminPanel({ authToken }) {
     if (originalToken) {
       localStorage.setItem('tm_token', originalToken);
       localStorage.removeItem('tm_impersonation_token');
+      clearUserScopedCaches();
       window.location.reload();
     }
   }

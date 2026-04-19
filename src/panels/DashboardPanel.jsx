@@ -640,8 +640,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
-      lastCheckedRef.current = new Date().toISOString();
+      // Advance the cursor ONLY after we know we got a usable response.
+      // Prior code moved it immediately after the fetch — if the request
+      // errored or the JSON parse failed, the cursor still moved and the
+      // next poll skipped the missed window forever.
+      if (!res.ok) return;
       const { updates } = await res.json();
+      lastCheckedRef.current = new Date().toISOString();
       if (!updates || updates.length === 0) return;
 
       // Build a natural prompt for Aria from the raw updates
@@ -2070,7 +2075,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   if (!draftFromRef.current[msg.ts] && currentFrom) draftFromRef.current[msg.ts] = currentFrom;
                   const multiAccount = gmailAccounts.length > 1;
                   return (
-                    <div key={i} className="flex justify-start">
+                    <div key={msg.ts || i} className="flex justify-start">
                       <div
                         className="max-w-[92%] w-full bg-white border border-gray-200 rounded-xl shadow-sm"
                         style={{ fontFamily: 'Manrope, sans-serif' }}
@@ -2202,14 +2207,18 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           ...(approved && bodyOverride !== null ? { body_override: bodyOverride } : {}),
                         }),
                       });
-                      setCcMessages((prev) => prev.map((m, j) => j === i ? { ...m, status: approved ? 'approved' : 'rejected' } : m));
+                      // Lookup by stable msg.ts — index `i` is captured in
+                      // closure and could point at a different row by the
+                      // time this resolves (if user dismissed an earlier
+                      // tile). msg.ts is stamped at message creation.
+                      setCcMessages((prev) => prev.map((m) => m.ts === msg.ts ? { ...m, status: approved ? 'approved' : 'rejected' } : m));
                       onReloadTasks?.(); onReloadNotes?.();
                     } catch (err) {
-                      setCcMessages((prev) => prev.map((m, j) => j === i ? { ...m, status: 'error' } : m));
+                      setCcMessages((prev) => prev.map((m) => m.ts === msg.ts ? { ...m, status: 'error' } : m));
                     }
                   };
                   return (
-                    <div key={i} className="flex justify-start">
+                    <div key={msg.ts || i} className="flex justify-start">
                       <div
                         className="max-w-[85%] border"
                         style={{ backgroundColor: '#fbf8fe', borderColor: 'rgba(79,77,207,0.2)', fontFamily: 'Manrope, sans-serif', fontSize: '14px', lineHeight: '1.5', borderRadius: '12px', padding: '12px 14px' }}
@@ -2256,7 +2265,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 }
                 if (msg.role === 'system') {
                   return (
-                    <div key={i} className="flex justify-center my-1">
+                    <div key={msg.ts || i} className="flex justify-center my-1">
                       <span
                         className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-3 py-1"
                         style={{ fontFamily: 'Manrope, sans-serif' }}
@@ -2269,7 +2278,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 }
                 const isUser = msg.role === 'user';
                 return (
-                  <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                  <div key={msg.ts || i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                     <div
                       className={`max-w-[85%] ${isUser ? 'text-white' : ''}`}
                       style={isUser

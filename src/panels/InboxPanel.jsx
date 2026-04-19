@@ -270,7 +270,13 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   // currentCursor is the cursor used for the page in view (top of the
   // cursorStack), or '' for page 1. Passed to /api/inbox/threads.
   const currentCursor = cursorStack.length ? cursorStack[cursorStack.length - 1] : '';
-  const loadThreads = useCallback(async () => {
+  // AbortController-aware loader — fast typing in search + flipping account
+  // filter previously fired overlapping fetches; the slower one would
+  // resolve last and clobber the fresh result. Now: each call carries an
+  // AbortController and the caller (the useEffect below) cancels the prior
+  // one when deps change, avoiding both stale-state writes and unmount-
+  // after-fetch setState calls.
+  const loadThreads = useCallback(async (signal) => {
     setThreadsLoading(true);
     setThreadsError(null);
     try {
@@ -279,19 +285,24 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       qs.set('max_results', '25');
       if (searchQuery) qs.set('query', searchQuery);
       if (currentCursor) qs.set('cursor', currentCursor);
-      const r = await apiFetch(`/api/inbox/threads?${qs.toString()}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const r = await apiFetch(`/api/inbox/threads?${qs.toString()}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+        signal,
+      });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
+      if (signal?.aborted) return; // a newer call superseded us
       const list = Array.isArray(data?.threads) ? data.threads : [];
       setThreads(list);
       setNextCursor(data?.nextCursor || null);
       onUnreadCountChange?.(list.filter(t => !t.isRead).length);
     } catch (err) {
+      if (err.name === 'AbortError' || signal?.aborted) return;
       setThreadsError(err.message || 'Failed');
       setThreads([]);
       setNextCursor(null);
     } finally {
-      setThreadsLoading(false);
+      if (!signal?.aborted) setThreadsLoading(false);
     }
   }, [accountFilter, apiFetch, authToken, onUnreadCountChange, searchQuery, currentCursor]);
 
@@ -344,7 +355,11 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   }, [apiFetch, authToken]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
-  useEffect(() => { loadThreads(); }, [loadThreads]);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    loadThreads(ctrl.signal);
+    return () => ctrl.abort();
+  }, [loadThreads]);
 
   // Reset the header chat whenever the inbox reloads or the account
   // filter changes — the email context the user is asking about has
@@ -1145,7 +1160,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   {inboxChatMessages.map((m, i) => {
                     const isUser = m.role === 'user';
                     return (
-                      <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                      <div key={m.ts || i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                         <div
                           className={`max-w-[85%] ${isUser ? 'text-white' : ''}`}
                           style={isUser
@@ -2136,7 +2151,7 @@ When you have enough info, write the final draft and end your message with:
           {messages.map((m, i) => {
             const isUser = m.role === 'user';
             return (
-              <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+              <div key={m.ts || i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                 <div
                   className={`max-w-[88%] ${isUser ? 'text-white' : ''}`}
                   style={isUser
