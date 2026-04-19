@@ -28,22 +28,20 @@ async function processRuleDecay() {
   let decayed = 0;
   let archived = 0;
   try {
+    // Two whole-table UPDATEs replace the per-user loop. The decay
+    // formula is per-row in SQL, so there's no semantic difference
+    // between iterating users and updating the table directly — but at
+    // 1k users this saves ~2000 round-trips at 3am.
+    decayed = await db.decayAllRules();
+    archived = await db.archiveAllWeakRules();
+
+    // Cache invalidation still iterates users (Redis-side, no DB load).
+    // Could be optimised further with SCAN+DEL by prefix; not worth
+    // changing today.
     const ids = await db.getAllUserIds();
+    users = ids.length;
     for (const userId of ids) {
-      try {
-        const dec = await db.decayRules(userId);
-        const arc = await db.archiveWeakRules(userId);
-        decayed += dec || 0;
-        archived += arc || 0;
-        users++;
-        // Drop cache so the next chat turn picks up decayed strengths +
-        // archived rows.
-        if (dec || arc) {
-          await invalidateRulesCache(userId).catch(() => {});
-        }
-      } catch (err) {
-        logger.warn('ruleDecay.user.failed', { userId, error: err.message });
-      }
+      await invalidateRulesCache(userId).catch(() => {});
     }
     logger.info('ruleDecay.complete', { users, decayed, archived });
   } catch (err) {

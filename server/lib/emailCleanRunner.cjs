@@ -96,14 +96,18 @@ async function _candidatesByLabel({ gmail, label, olderThanHours, accountEmail }
 /** Newsletter candidates come from our classification table, not Gmail labels. */
 async function _candidatesByNewsletterClassification({ db, gmail, userId, accountEmail, olderThanHours }) {
   const cutoffMs = Date.now() - olderThanHours * 3600 * 1000;
+  // LIMIT bounded by MAX_PER_JOB so we don't haul a 10k+ classification
+  // history into Node just to discard most of it. The downstream loop
+  // already breaks at MAX_PER_JOB; LIMIT just moves the cap earlier.
   const { rows } = await db.pool.query(
     `SELECT message_id, thread_id, account_email
      FROM email_classifications
      WHERE user_id = $1 AND account_email = $2
        AND category = 'newsletter'
        AND importance_rank < 3
-       AND action_required = false`,
-    [userId, accountEmail],
+       AND action_required = false
+     LIMIT $3`,
+    [userId, accountEmail, MAX_PER_JOB * 2], // 2x cap so post-Date-filter we still have enough candidates
   );
   if (!rows.length) return [];
 

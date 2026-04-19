@@ -81,11 +81,12 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
     else if (matchedKeyword) flagged.push({ msg, type: 'KEYWORD', reason: `Contains keyword: "${matchedKeyword}"`, fromName, fromAddr });
   }
 
-  const newFlagged = [];
-  for (const f of flagged) {
-    const exists = await db.inboxItemExistsBySourceId(userId, f.msg.id);
-    if (!exists) newFlagged.push(f);
-  }
+  // Single batched existence check replaces the per-message loop.
+  // At 50 messages × N users every 15min, this drops 50×N round-trips
+  // to 1×N. Backed by idx_inbox_items_user_source.
+  const sourceIds = flagged.map((f) => f.msg.id);
+  const existing = await db.inboxItemsExistingBySourceIds(userId, sourceIds);
+  const newFlagged = flagged.filter((f) => !existing.has(f.msg.id));
   console.log('[outlookMailScan] flagged:', flagged.length, 'new:', newFlagged.length);
   if (!newFlagged.length) return { newItems: 0 };
 

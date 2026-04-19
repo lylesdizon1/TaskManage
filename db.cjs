@@ -698,16 +698,24 @@ async function initTables() {
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolution_json JSONB`).catch(() => {});
 
   // ── user_integrations table (per-user outbound notification routing) ──
+  // Shape kept in sync with the final migrated state — account_email NOT
+  // NULL DEFAULT '' and provider NOT NULL DEFAULT 'google', composite
+  // UNIQUE on (user_id, integration_type, account_email). Without this,
+  // a fresh boot would hit a window where the table existed without
+  // account_email NOT NULL, any concurrent upsert could insert a NULL,
+  // and the SET NOT NULL migration that runs later would crash boot.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_integrations (
       id                SERIAL PRIMARY KEY,
       user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       integration_type  TEXT NOT NULL,
+      account_email     TEXT NOT NULL DEFAULT '',
+      provider          TEXT NOT NULL DEFAULT 'google',
       config_json       JSONB NOT NULL DEFAULT '{}',
       is_enabled        BOOLEAN NOT NULL DEFAULT TRUE,
       created_at        TIMESTAMPTZ DEFAULT NOW(),
       updated_at        TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE(user_id, integration_type)
+      UNIQUE(user_id, integration_type, account_email)
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_integrations_user ON user_integrations(user_id)`).catch(() => {});
@@ -2152,12 +2160,29 @@ async function deleteEntity(id, userId) {
  */
 async function upsertCalendarEvents(userId, accountEmail, events) {
   if (!events || !events.length) return;
-  for (const ev of events) {
+  // Multi-row upsert in chunks of 500 events. Prior code ran one INSERT
+  // per event — at 50 users × 2 providers (gcal+outlook) every 15min,
+  // that's 10k+ round-trips per cycle. pg's libpq caps at 65535 params
+  // per statement; 9 params/row × 500 rows = 4500, well under cap.
+  const CHUNK = 500;
+  for (let i = 0; i < events.length; i += CHUNK) {
+    const chunk = events.slice(i, i + CHUNK);
+    const placeholders = [];
+    const vals = [];
+    let idx = 1;
+    for (const ev of chunk) {
+      placeholders.push(`($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},NOW())`);
+      vals.push(
+        ev.id, userId, accountEmail, ev.title,
+        ev.start_time, ev.end_time, ev.all_day || false,
+        ev.location || null, ev.description || null,
+      );
+    }
     await pool.query(
       `INSERT INTO calendar_events
          (id, user_id, account_email, title, start_time,
           end_time, all_day, location, description, synced_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+       VALUES ${placeholders.join(',')}
        ON CONFLICT (user_id, account_email, id)
        DO UPDATE SET
          title = EXCLUDED.title,
@@ -2167,11 +2192,7 @@ async function upsertCalendarEvents(userId, accountEmail, events) {
          location = EXCLUDED.location,
          description = EXCLUDED.description,
          synced_at = NOW()`,
-      [
-        ev.id, userId, accountEmail, ev.title,
-        ev.start_time, ev.end_time, ev.all_day || false,
-        ev.location || null, ev.description || null,
-      ],
+      vals,
     );
   }
 }
@@ -2774,6 +2795,20 @@ async function createInboxItem(item) {
  * @returns {Promise<boolean>} True if an item with this sourceId exists.
  * @throws {Error} If the database query fails.
  */
+/**
+ * Batch existence check — given an array of source_ids, returns a Set of
+ * those that already exist for this user. Replaces the per-message
+ * existence loop that ran one query per scanned message.
+ */
+async function inboxItemsExistingBySourceIds(userId, sourceIds) {
+  if (!Array.isArray(sourceIds) || !sourceIds.length) return new Set();
+  const { rows } = await pool.query(
+    'SELECT source_id FROM inbox_items WHERE user_id = $1 AND source_id = ANY($2)',
+    [userId, sourceIds],
+  );
+  return new Set(rows.map((r) => r.source_id));
+}
+
 async function inboxItemExistsBySourceId(userId, sourceId) {
   const { rows } = await pool.query(
     'SELECT 1 FROM inbox_items WHERE user_id = $1 AND source_id = $2 LIMIT 1',
@@ -3051,6 +3086,23 @@ async function decayRules(userId) {
 }
 
 /**
+ * Whole-table decay — single UPDATE for every active rule across all
+ * users. Replaces the per-user loop in processRuleDecay (was 1k+ round
+ * trips at scale every 3am). Per-row formula is unchanged; the WHERE
+ * just drops the user filter.
+ */
+async function decayAllRules() {
+  const { rowCount } = await pool.query(
+    `UPDATE behavior_rules
+        SET strength = strength
+              * POWER(0.95, EXTRACT(EPOCH FROM (NOW() - COALESCE(last_reinforced_at, created_at))) / 86400.0),
+            updated_at = NOW()
+      WHERE is_active = TRUE`,
+  );
+  return rowCount;
+}
+
+/**
  * Auto-archive rules whose strength has decayed below 0.1. Returns the
  * count archived. Run after decayRules in the same nightly tick.
  */
@@ -3060,6 +3112,16 @@ async function archiveWeakRules(userId) {
         SET is_active = FALSE, updated_at = NOW()
       WHERE user_id = $1 AND is_active = TRUE AND strength < 0.1`,
     [userId],
+  );
+  return rowCount;
+}
+
+/** Whole-table archive companion to decayAllRules — same collapse rationale. */
+async function archiveAllWeakRules() {
+  const { rowCount } = await pool.query(
+    `UPDATE behavior_rules
+        SET is_active = FALSE, updated_at = NOW()
+      WHERE is_active = TRUE AND strength < 0.1`,
   );
   return rowCount;
 }
@@ -4771,6 +4833,14 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS notes_search_idx ON notes
     USING gin(to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')))
   `).catch(() => {});
+
+  // Perf indexes flagged by the deep-dive DB review:
+  //   - inbox_items(user_id, source_id) — supports the per-scan dedup
+  //     check used by gmail/outlook scanners (was sequential-scanning).
+  //   - tasks USING gin(tags) — supports the `tags ?| $2` predicate in
+  //     getTasksForUser; without it, shared-task lookups scan the table.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_user_source ON inbox_items(user_id, source_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING gin(tags)`).catch(() => {});
 
   // 8. Add conversation_id column to chat_messages (idempotent)
   await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS conversation_id INTEGER`).catch(() => {});
@@ -8129,6 +8199,7 @@ module.exports = {
   getInboxItemsForUser,
   createInboxItem,
   inboxItemExistsBySourceId,
+  inboxItemsExistingBySourceIds,
   updateInboxItemAction,
   searchInboxItems,
   upsertEmailLabel,
@@ -8141,7 +8212,9 @@ module.exports = {
   reinforceRule,
   violateRule,
   decayRules,
+  decayAllRules,
   archiveWeakRules,
+  archiveAllWeakRules,
   setPreference,
   getPreference,
   getAllPreferences,
