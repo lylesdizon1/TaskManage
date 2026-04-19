@@ -14,6 +14,7 @@
  * Tools call DB helpers / existing utils directly — never HTTP.
  */
 
+const crypto = require('crypto');
 const { google } = require('googleapis');
 const { loadGcalTokens, loadAllGcalAccounts, makeOAuth2Client, makeGmailOAuth2Client } = require('./utils/google.cjs');
 const { encryptTokens, decryptTokens, ENCRYPTION_KEY } = require('./utils/crypto.cjs');
@@ -553,7 +554,7 @@ const ARIA_TOOLS = [
     group: 'communication',
     risk: 'high',
     requires_confirmation: true,
-    description: 'Archive low-priority emails matching criteria (promotions / newsletters / social) for a single account. Always dry-run first.',
+    description: 'Archive low-priority emails matching criteria (promotions / newsletters / social) for a single account. ALWAYS dry-run first and tell the user the count before re-running with dry_run:false. Capped at ~100 emails per category per call (300 max). older_than_hours must be >= 24 — recent inbox is never bulk-archived.',
     input_schema: {
       type: 'object',
       properties: {
@@ -564,10 +565,10 @@ const ARIA_TOOLS = [
             include_promos:      { type: 'boolean' },
             include_newsletters: { type: 'boolean' },
             include_social:      { type: 'boolean' },
-            older_than_hours:    { type: 'number' },
+            older_than_hours:    { type: 'number', description: 'Minimum age in hours. Server enforces a floor of 24h regardless of value provided.' },
           },
         },
-        dry_run: { type: 'boolean' },
+        dry_run: { type: 'boolean', description: 'Defaults true. Set false ONLY after presenting the dry-run count to the user and getting their go.' },
       },
       required: ['account_email', 'criteria'],
     },
@@ -998,7 +999,19 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           endDt = addHoursLocalIso(startDt, 1);
         }
 
+        // Deterministic event id for idempotency. The agentic loop's 30s
+        // tool timeout (Promise.race in agenticLoop.cjs) can fire AFTER
+        // Google has already created the event but BEFORE we get the
+        // response — a retry would otherwise insert a duplicate. SHA1
+        // hex (40 chars, [0-9a-f]) fits Google's id alphabet of [a-v0-9].
+        // On the rare 409 (duplicate) we fetch and return the existing
+        // event so the LLM sees a clean success.
+        const idempotencyKey = crypto.createHash('sha1')
+          .update(`${userId}|${title}|${startDt}|${endDt}|${location || ''}`)
+          .digest('hex');
+
         const googlePayload = {
+          id: idempotencyKey,
           summary: title,
           start: { dateTime: startDt, timeZone: userTz },
           end:   { dateTime: endDt,   timeZone: userTz },
@@ -1019,14 +1032,31 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         });
 
         let created;
+        let idempotencyHit = false;
         try {
           const resp = await calendar.events.insert({ calendarId: 'primary', requestBody: googlePayload });
           created = resp.data;
         } catch (err) {
-          logger.error('tools.create_event.failed', {
-            userId, raw_start: start_datetime, sent_start: startDt, error: err.message,
-          });
-          return { success: false, error: `Calendar API failed: ${err.message}` };
+          // 409 = duplicate id. We've been here before (timeout retry).
+          // Fetch the original event and return it as the success result.
+          if (err.code === 409 || err.response?.status === 409) {
+            try {
+              const got = await calendar.events.get({ calendarId: 'primary', eventId: idempotencyKey });
+              created = got.data;
+              idempotencyHit = true;
+              logger.info('tools.create_event.idempotent', { userId, event_id: idempotencyKey });
+            } catch (getErr) {
+              logger.error('tools.create_event.idempotency.fetchFailed', {
+                userId, event_id: idempotencyKey, error: getErr.message,
+              });
+              return { success: false, error: `Calendar API failed: ${err.message}` };
+            }
+          } else {
+            logger.error('tools.create_event.failed', {
+              userId, raw_start: start_datetime, sent_start: startDt, error: err.message,
+            });
+            return { success: false, error: `Calendar API failed: ${err.message}` };
+          }
         }
 
         // Pair-line with the input log: confirms what Google actually stored.
@@ -1039,9 +1069,9 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         });
 
         try {
-          await db.logMemory({ userId, tool: 'create_event', content: `Created event: "${title}" at ${startDt}`, metadata: { event_id: created.id, title, start: startDt } });
+          await db.logMemory({ userId, tool: 'create_event', content: `Created event: "${title}" at ${startDt}`, metadata: { event_id: created.id, title, start: startDt, idempotent: idempotencyHit } });
         } catch {}
-        return { success: true, event_id: created.id, title: created.summary, start: created.start?.dateTime || created.start?.date, link: created.htmlLink };
+        return { success: true, event_id: created.id, title: created.summary, start: created.start?.dateTime || created.start?.date, link: created.htmlLink, ...(idempotencyHit && { already_created: true }) };
       }
 
       case 'update_event': {
@@ -1211,14 +1241,20 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             requiresInfo: 'recipient_email',
           };
         }
-        const { tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'send_email');
+        const { row: integrationRow, tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'send_email');
         if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}. Reconnect in Settings.` };
+        // Use the integration row's canonical accountEmail as the From
+        // address — the LLM-supplied account_email is matched
+        // case/whitespace-insensitively in the lookup, but we don't trust
+        // it as a header value (could be re-cased, padded, or truncated;
+        // the canonical form was captured at OAuth callback).
+        const fromAddress = integrationRow?.accountEmail || account_email;
         const oauth2 = makeGmailOAuth2Client();
         if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
-        oauth2.on('tokens', async (nt) => { await saveGmailTokensForAccount(db, userId, account_email, { ...tokens, ...nt }).catch(() => {}); });
+        oauth2.on('tokens', async (nt) => { await saveGmailTokensForAccount(db, userId, fromAddress, { ...tokens, ...nt }).catch(() => {}); });
         const gmail = google.gmail({ version: 'v1', auth: oauth2 });
-        const raw = buildRawMime({ to, from: account_email, subject, body });
+        const raw = buildRawMime({ to, from: fromAddress, subject, body });
         try {
           const { data } = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
           try { await db.logMemory({ userId, tool: 'send_email', content: `Sent email to ${to}: "${subject}"`, metadata: { message_id: data.id, account_email } }); } catch {}
@@ -1233,11 +1269,12 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
 
       case 'reply_email': {
         const { message_id, thread_id, body, account_email } = toolInput || {};
-        const { tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'reply_email');
+        const { row: integrationRow, tokens } = await loadGmailTokensForAccount(db, userId, account_email, 'reply_email');
         if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}.` };
+        const fromAddress = integrationRow?.accountEmail || account_email;
         const oauth2 = makeGmailOAuth2Client(); if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
-        oauth2.on('tokens', async (nt) => { await saveGmailTokensForAccount(db, userId, account_email, { ...tokens, ...nt }).catch(() => {}); });
+        oauth2.on('tokens', async (nt) => { await saveGmailTokensForAccount(db, userId, fromAddress, { ...tokens, ...nt }).catch(() => {}); });
         const gmail = google.gmail({ version: 'v1', auth: oauth2 });
         try {
           const orig = await gmail.users.messages.get({ userId: 'me', id: message_id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Message-ID', 'References'] });
@@ -1248,7 +1285,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           const origMsgId = getH('Message-ID');
           const origRefs = getH('References');
           const raw = buildRawMime({
-            to: origFrom, from: account_email,
+            to: origFrom, from: fromAddress,
             subject: origSubject.toLowerCase().startsWith('re:') ? origSubject : `Re: ${origSubject}`,
             body,
             inReplyTo: origMsgId,
@@ -1559,12 +1596,22 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (!account_email || !criteria) return { success: false, error: 'account_email and criteria required' };
         const row = await db.getGmailIntegrationByEmail(userId, account_email);
         if (!row) return { success: false, error: `No Gmail tokens for ${account_email}. Reconnect in Settings.` };
+
+        // Enforce a 24h floor on older_than_hours. Without this, a single
+        // bulk_archive_emails call could sweep recent inbox if Aria
+        // (or a prompt-injected criteria) passed a very small value. The
+        // emailCleanRunner already defaults to 24 when missing/invalid,
+        // but a tiny positive number (e.g. 1) bypasses that default.
+        const safeCriteria = {
+          ...criteria,
+          older_than_hours: Math.max(24, parseInt(criteria.older_than_hours, 10) || 24),
+        };
         const { scanAndArchiveForAccount } = require('./lib/emailCleanRunner.cjs');
         const result = await scanAndArchiveForAccount({
-          db, userId, accountEmail: account_email, criteria,
+          db, userId, accountEmail: account_email, criteria: safeCriteria,
           dryRun: dry_run !== false, // default true
         });
-        return { success: true, ...result };
+        return { success: true, ...result, older_than_hours_applied: safeCriteria.older_than_hours };
       }
 
       case 'list_email_labels': {
@@ -1979,15 +2026,41 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         const note = String(toolInput.note).trim();
         if (!note) return { success: false, error: 'note is empty' };
         const eventId = String(toolInput.event_id);
+
+        // Verify the event actually exists in one of the user's connected
+        // calendars before upserting a note. Without this check, Aria
+        // (or a prompt-injected event_id) could pile arbitrary notes
+        // against garbage IDs — the calendar_notes row is per-user so it
+        // isn't cross-tenant, but it pollutes the user's own data with
+        // notes against nonexistent events. Mirrors the entity-membership
+        // check in add_project_update_note (tools.cjs:~2008).
+        let foundOnAccount = null;
         try {
-          // Helper takes (userId, eventId, title, start, end, accountEmail, postNote).
-          // Title/times/account are optional metadata — null is fine; the row
-          // already exists when the user booked/imported the event.
-          await db.upsertCalendarNotePost(userId, eventId, null, null, null, null, note);
+          const accounts = (await loadAllGcalAccounts(userId, db)) || [];
+          for (const acct of accounts) {
+            const oauth2 = makeOAuth2Client(); if (!oauth2) continue;
+            oauth2.setCredentials(acct.tokens);
+            const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+            try {
+              const existing = await calendar.events.get({ calendarId: 'primary', eventId });
+              if (existing?.data?.id) { foundOnAccount = acct.googleEmail || null; break; }
+            } catch (err) {
+              if (err.code === 404 || err.response?.status === 404) continue;
+              // Non-404 error (auth, rate limit) — keep trying other accounts.
+            }
+          }
+        } catch {
+          // Calendar lookup failed entirely; treat as not-found rather than
+          // accepting the write blind.
+        }
+        if (!foundOnAccount) return { success: false, error: 'Event not found in any connected calendar.' };
+
+        try {
+          await db.upsertCalendarNotePost(userId, eventId, null, null, null, foundOnAccount, note);
           if (db.resolveCloseLoopItem) {
             db.resolveCloseLoopItem(userId, 'event', eventId).catch(() => {});
           }
-          return { success: true, event_id: eventId };
+          return { success: true, event_id: eventId, account_email: foundOnAccount };
         } catch (e) {
           return { success: false, error: e.message };
         }
