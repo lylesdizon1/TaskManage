@@ -269,9 +269,12 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
     const oauth2 = makeGmailOAuth2Client();
     if (!oauth2 || !account.tokens) return { newItems: 0, error: 'oauth_unavailable' };
     oauth2.setCredentials(account.tokens);
+    // Use the shared lock helper so a token-refresh fired here can't
+    // race with one fired by an Aria tool call (tools.cjs) — both
+    // serialize against the same per-(user, accountEmail) chain.
+    const { mergeAndSaveGmailTokens } = require('../lib/gmailTokenSaver.cjs');
     oauth2.on('tokens', async (newTokens) => {
-      const merged = { ...account.tokens, ...newTokens };
-      await saveGmailAccount(userId, account.accountEmail || '', merged);
+      await mergeAndSaveGmailTokens(db, userId, account.accountEmail || '', newTokens).catch(() => {});
     });
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2 });

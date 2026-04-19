@@ -24,6 +24,7 @@ const logger = require('../guardrails/logger.cjs');
 const { inferRulesFromBehavior } = require('./lib/ruleEngine.cjs');
 const { invalidateRulesCache } = require('./lib/ruleCache.cjs');
 const { getEmailContent, searchGmail } = require('./lib/emailContent.cjs');
+const { mergeAndSaveGmailTokens } = require('./lib/gmailTokenSaver.cjs');
 
 // ── Aria tool registry ─────────────────────────────────────────────────────
 
@@ -775,6 +776,10 @@ async function saveGmailTokensForAccount(db, userId, accountEmail, tokens) {
   await db.upsertUserIntegration(userId, 'gmail', { tokens: wrapped }, true, accountEmail || '');
 }
 
+// mergeAndSaveGmailTokens lives in server/lib/gmailTokenSaver.cjs so
+// this file's call sites and gmail.cjs's scan handler share one lock
+// Map. See that module for the rationale.
+
 // ── search_inbox date range resolver ───────────────────────────────────────
 // Accepts: ISO 'YYYY-MM-DD', or one of
 //   'today' | 'last_week' | 'last_month' | 'last_3_months' | 'last_year' | 'all'
@@ -1314,7 +1319,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         const oauth2 = makeGmailOAuth2Client();
         if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
-        oauth2.on('tokens', async (nt) => { await saveGmailTokensForAccount(db, userId, fromAddress, { ...tokens, ...nt }).catch(() => {}); });
+        oauth2.on('tokens', async (nt) => { await mergeAndSaveGmailTokens(db, userId, fromAddress, nt).catch(() => {}); });
         const gmail = google.gmail({ version: 'v1', auth: oauth2 });
         const raw = buildRawMime({ to, from: fromAddress, subject, body });
         try {
@@ -1333,7 +1338,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         const fromAddress = integrationRow?.accountEmail || account_email;
         const oauth2 = makeGmailOAuth2Client(); if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
-        oauth2.on('tokens', async (nt) => { await saveGmailTokensForAccount(db, userId, fromAddress, { ...tokens, ...nt }).catch(() => {}); });
+        oauth2.on('tokens', async (nt) => { await mergeAndSaveGmailTokens(db, userId, fromAddress, nt).catch(() => {}); });
         const gmail = google.gmail({ version: 'v1', auth: oauth2 });
         try {
           const orig = await gmail.users.messages.get({ userId: 'me', id: message_id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Message-ID', 'References'] });
@@ -1364,7 +1369,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (!tokens) return { success: false, error: `No Gmail tokens for ${account_email}.` };
         const oauth2 = makeGmailOAuth2Client(); if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
-        oauth2.on('tokens', async (nt) => { await saveGmailTokensForAccount(db, userId, account_email, { ...tokens, ...nt }).catch(() => {}); });
+        oauth2.on('tokens', async (nt) => { await mergeAndSaveGmailTokens(db, userId, account_email, nt).catch(() => {}); });
         const gmail = google.gmail({ version: 'v1', auth: oauth2 });
         try {
           await gmail.users.messages.modify({ userId: 'me', id: message_id, requestBody: { removeLabelIds: ['INBOX'] } });
@@ -1780,7 +1785,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (!oauth2) return { success: false, error: 'Google OAuth not configured.' };
         oauth2.setCredentials(tokens);
         oauth2.on('tokens', async (nt) => {
-          await saveGmailTokensForAccount(db, userId, account_email, { ...tokens, ...nt }).catch(() => {});
+          await mergeAndSaveGmailTokens(db, userId, account_email, nt).catch(() => {});
         });
         const gmail = google.gmail({ version: 'v1', auth: oauth2 });
         try {

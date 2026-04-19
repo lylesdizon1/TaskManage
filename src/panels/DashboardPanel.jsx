@@ -742,6 +742,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (!currentUser?.id || ccInitRunningRef.current) return;
     ccInitRunningRef.current = true;
     setCcLoading(true);
+    // Guard against duplicate intervals on re-init (e.g. user-id change).
+    // Prior code only set ccInitRunningRef = false on the error path, so
+    // a successful init would lock the ref true forever AND each accepted
+    // re-entry could leak a fresh setInterval.
+    if (ccPollIntervalRef.current) {
+      clearInterval(ccPollIntervalRef.current);
+      ccPollIntervalRef.current = null;
+    }
     try {
       // Step 1: get or create today's session
       const sessionRes = await apiFetch('/api/dashboard/command-center/session', {
@@ -797,6 +805,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     } catch (err) {
       console.error('[CommandCenter] init failed:', err);
       setCcLoading(false);
+    } finally {
+      // Always release the ref so a future user-change or remount can
+      // re-init. Prior code only released on error → success locked
+      // it forever.
       ccInitRunningRef.current = false;
     }
   };
