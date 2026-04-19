@@ -1345,8 +1345,118 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
   useEffect(() => { if (tab === 'assistant') loadLearnings(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   const [personaStatus, setPersonaStatus] = useState(null);
 
-  // WhatsApp phone state
-  const [whatsappPhone, setWhatsappPhone] = useState(currentUser?.whatsappPhone || '');
+  // WhatsApp phone verification state — phone CHANGES route through the
+  // OTP flow; the read-only display sources from currentUser directly so
+  // it reacts to onUserUpdated callbacks after confirm/clear.
+  const [waMode, setWaMode] = useState('idle'); // 'idle' | 'editing' | 'awaiting'
+  const [waPhoneInput, setWaPhoneInput] = useState('');
+  const [waCodeInput, setWaCodeInput] = useState('');
+  const [waPendingPhone, setWaPendingPhone] = useState(''); // phone we sent the code to
+  const [waBusy, setWaBusy] = useState(false);
+  const [waStatus, setWaStatus] = useState(null); // { ok: bool, msg: string }
+
+  function waErrorText(reason) {
+    switch (reason) {
+      case 'invalid_phone':       return 'Phone must be 7–15 digits.';
+      case 'send_failed':         return "Couldn't send the code. Try again in a moment.";
+      case 'invalid_code':        return 'Code must be 4–8 digits.';
+      case 'no_pending':          return 'No verification in progress. Start over.';
+      case 'expired':             return 'Code expired. Request a new one.';
+      case 'too_many_attempts':   return 'Too many wrong codes. Start over.';
+      case 'bad_code':            return 'Wrong code. Try again.';
+      case 'already_claimed':     return 'That number is already in use on another account.';
+      default:                    return reason || 'Something went wrong.';
+    }
+  }
+
+  async function waStartVerify() {
+    const phone = waPhoneInput.trim();
+    if (!phone) return;
+    setWaBusy(true); setWaStatus(null);
+    try {
+      const res = await apiFetch('/api/users/whatsapp-phone/start-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ phone }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setWaPendingPhone(phone);
+        setWaCodeInput('');
+        setWaMode('awaiting');
+        setWaStatus({ ok: true, msg: `Code sent to ${phone}. Check your WhatsApp.` });
+      } else {
+        setWaStatus({ ok: false, msg: waErrorText(data.error) });
+      }
+    } catch (err) {
+      setWaStatus({ ok: false, msg: err.message });
+    } finally { setWaBusy(false); }
+  }
+
+  async function waConfirm() {
+    const code = waCodeInput.trim();
+    if (!code) return;
+    setWaBusy(true); setWaStatus(null);
+    try {
+      const res = await apiFetch('/api/users/whatsapp-phone/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        // Re-fetch the user via the settings PUT (no-op body) just to grab
+        // the updated whatsappPhone + verifiedAt — simpler than adding a
+        // dedicated /me endpoint right now.
+        const refreshed = await apiFetch('/api/users/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({}),
+        });
+        const refreshedData = await refreshed.json().catch(() => null);
+        if (refreshed.ok && refreshedData && onUserUpdated) onUserUpdated(refreshedData);
+        setWaMode('idle');
+        setWaPhoneInput(''); setWaCodeInput(''); setWaPendingPhone('');
+        setWaStatus({ ok: true, msg: 'WhatsApp number verified.' });
+      } else {
+        setWaStatus({ ok: false, msg: waErrorText(data.error) });
+      }
+    } catch (err) {
+      setWaStatus({ ok: false, msg: err.message });
+    } finally { setWaBusy(false); }
+  }
+
+  async function waRemove() {
+    if (!window.confirm('Remove your WhatsApp number? Aria will stop messaging you there.')) return;
+    setWaBusy(true); setWaStatus(null);
+    try {
+      const res = await apiFetch('/api/users/whatsapp-phone', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const refreshed = await apiFetch('/api/users/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({}),
+        });
+        const refreshedData = await refreshed.json().catch(() => null);
+        if (refreshed.ok && refreshedData && onUserUpdated) onUserUpdated(refreshedData);
+        setWaMode('idle');
+        setWaStatus({ ok: true, msg: 'Number removed.' });
+      } else {
+        setWaStatus({ ok: false, msg: 'Failed to remove number.' });
+      }
+    } catch (err) {
+      setWaStatus({ ok: false, msg: err.message });
+    } finally { setWaBusy(false); }
+  }
+
+  function waCancel() {
+    setWaMode('idle');
+    setWaPhoneInput(''); setWaCodeInput(''); setWaPendingPhone('');
+    setWaStatus(null);
+  }
 
   // Profile fields
   const [profileName, setProfileName] = useState(currentUser?.profileName || '');
@@ -1820,14 +1930,61 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">WhatsApp Phone Number</label>
-                    <input
-                      type="tel"
-                      value={whatsappPhone}
-                      onChange={(e) => setWhatsappPhone(e.target.value)}
-                      placeholder="+1 555 123 4567"
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
-                    />
-                    <p className="text-xs text-gray-400 mt-1">Your WhatsApp number — enables two-way messaging with Aria.</p>
+                    {waMode === 'idle' && currentUser?.whatsappPhone && (
+                      <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl">
+                        <span className="text-sm text-gray-900 flex-1">{currentUser.whatsappPhone}</span>
+                        {currentUser.whatsappVerifiedAt ? (
+                          <span className="text-[10px] uppercase tracking-wide font-semibold text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">Verified</span>
+                        ) : (
+                          <span className="text-[10px] uppercase tracking-wide font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full" title="Set before verification was required — re-verify to confirm">Legacy</span>
+                        )}
+                        <button type="button" onClick={() => { setWaPhoneInput(''); setWaMode('editing'); setWaStatus(null); }} disabled={waBusy} className="text-xs text-indigo-600 hover:text-indigo-700 font-medium disabled:opacity-50">Change</button>
+                        <button type="button" onClick={waRemove} disabled={waBusy} className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50">Remove</button>
+                      </div>
+                    )}
+                    {waMode === 'idle' && !currentUser?.whatsappPhone && (
+                      <button type="button" onClick={() => { setWaPhoneInput(''); setWaMode('editing'); setWaStatus(null); }} className="w-full px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-700 hover:bg-indigo-100 font-medium">+ Add WhatsApp number</button>
+                    )}
+                    {waMode === 'editing' && (
+                      <div className="space-y-2">
+                        <input
+                          type="tel"
+                          value={waPhoneInput}
+                          onChange={(e) => setWaPhoneInput(e.target.value)}
+                          placeholder="+1 555 123 4567"
+                          autoFocus
+                          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={waStartVerify} disabled={waBusy || !waPhoneInput.trim()} className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors disabled:opacity-50">{waBusy ? 'Sending\u2026' : 'Send code via WhatsApp'}</button>
+                          <button type="button" onClick={waCancel} disabled={waBusy} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium disabled:opacity-50">Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                    {waMode === 'awaiting' && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-gray-600">Code sent to <span className="font-semibold text-gray-900">{waPendingPhone}</span> via WhatsApp. Enter it below (valid 10 minutes).</p>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={6}
+                          value={waCodeInput}
+                          onChange={(e) => setWaCodeInput(e.target.value.replace(/[^0-9]/g, ''))}
+                          placeholder="123456"
+                          autoFocus
+                          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition tracking-widest font-mono text-center"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={waConfirm} disabled={waBusy || waCodeInput.length < 4} className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-medium text-sm transition-colors disabled:opacity-50">{waBusy ? 'Verifying\u2026' : 'Verify'}</button>
+                          <button type="button" onClick={() => { setWaPhoneInput(waPendingPhone); setWaMode('editing'); setWaStatus(null); }} disabled={waBusy} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium disabled:opacity-50">Resend / change</button>
+                        </div>
+                      </div>
+                    )}
+                    {waStatus && (
+                      <p className={`text-xs mt-2 ${waStatus.ok ? 'text-green-700' : 'text-red-600'}`}>{waStatus.msg}</p>
+                    )}
+                    <p className="text-xs text-gray-400 mt-2">Two-way messaging with Aria. Verification is sent via WhatsApp to prove you own the number.</p>
                   </div>
                 </div>
               </div>
@@ -1852,7 +2009,8 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                       body: JSON.stringify({
                         persona: personaType,
                         assistantName: personaName.trim() || 'Aria',
-                        whatsappPhone: whatsappPhone.trim() || null,
+                        // whatsappPhone intentionally omitted — changes route
+                        // through the verification flow (start-verify + confirm).
                         profileName: profileName.trim() || null,
                         profileBusinesses: profileBusinesses.trim() || null,
                         profileHousehold: profileHousehold.trim() || null,

@@ -1827,6 +1827,7 @@ async function updateUser(id, fields) {
      RETURNING id, username, display_name AS "displayName", email, role,
                entity_ids AS "entityIds", active, created_at AS "createdAt",
                persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
+               whatsapp_verified_at AS "whatsappVerifiedAt",
                profile_name AS "profileName", profile_businesses AS "profileBusinesses",
                profile_household AS "profileHousehold", profile_location AS "profileLocation",
                profile_notes AS "profileNotes", timezone`,
@@ -4443,6 +4444,7 @@ async function getUserById(id) {
     `SELECT id, username, display_name AS "displayName", password_hash AS "passwordHash",
             email, role, entity_ids AS "entityIds", active,
             persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
+            whatsapp_verified_at AS "whatsappVerifiedAt",
             profile_name AS "profileName", profile_businesses AS "profileBusinesses",
             profile_household AS "profileHousehold", profile_location AS "profileLocation",
             profile_notes AS "profileNotes", timezone
@@ -4468,6 +4470,7 @@ async function getUserByWhatsAppPhone(normalizedPhone) {
     `SELECT id, username, display_name AS "displayName",
             email, role, entity_ids AS "entityIds", active,
             persona, assistant_name AS "assistantName", whatsapp_phone AS "whatsappPhone",
+            whatsapp_verified_at AS "whatsappVerifiedAt",
             profile_name AS "profileName", profile_businesses AS "profileBusinesses",
             profile_household AS "profileHousehold", profile_location AS "profileLocation",
             profile_notes AS "profileNotes", timezone
