@@ -313,6 +313,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
   const [showCreateEvent, setShowCreateEvent]   = useState(false);
   const [showTaskModal, setShowTaskModal]       = useState(false);
   const [editingTask, setEditingTask]           = useState(null);
+  // Pass C — inline title edit. Separate from the full-detail modal
+  // (editingTask) so a quick rename doesn't pop the modal.
+  const [inlineEditId, setInlineEditId]         = useState(null);
+  const [inlineEditTitle, setInlineEditTitle]   = useState('');
   const [completionNoteTaskId, setCompletionNoteTaskId] = useState(null);
   const [completionNoteDraft, setCompletionNoteDraft]   = useState('');
   // Completed task history inline expansion
@@ -970,6 +974,25 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     );
   }
 
+  // Pass C inline-edit helpers. enterInlineEdit captures current title
+  // so a rapid Esc reverts cleanly; commitInlineEdit only fires editTask
+  // if the title actually changed (skip a no-op server roundtrip).
+  function enterInlineEdit(t) {
+    setInlineEditId(t.id);
+    setInlineEditTitle(t.title || '');
+  }
+  function cancelInlineEdit() {
+    setInlineEditId(null);
+    setInlineEditTitle('');
+  }
+  async function commitInlineEdit(t) {
+    const next = inlineEditTitle.trim();
+    setInlineEditId(null);
+    if (!next || next === t.title) { setInlineEditTitle(''); return; }
+    await editTask(t.id, { title: next });
+    setInlineEditTitle('');
+  }
+
   async function editTask(id, fields) {
     const prevTask = tasks.find((t) => t.id === id);
     if (!prevTask) return;
@@ -1284,13 +1307,33 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               const completedToday = base.filter((t) => t.completed && t.completedAt && t.completedAt.slice(0,10) === todayStr);
 
               const taskRow = (t, isOverdue = false) => (
-                <div key={t.id} onClick={() => setEditingTask(t)} className={`flex items-center gap-3 p-3 rounded-xl transition-colors group cursor-pointer ${isOverdue ? 'bg-error/5 border border-error/10 hover:bg-error/10' : 'bg-surface-container-lowest border border-surface-container-low hover:bg-surface-container-low'}`}>
+                <div key={t.id} onClick={() => { if (inlineEditId !== t.id) setEditingTask(t); }} className={`flex items-center gap-3 p-3 rounded-xl transition-colors group cursor-pointer ${isOverdue ? 'bg-error/5 border border-error/10 hover:bg-error/10' : 'bg-surface-container-lowest border border-surface-container-low hover:bg-surface-container-low'}`}>
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleTask(t.id); }}
                     className={`h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors ${isOverdue ? 'border-error' : 'border-outline-variant hover:border-primary'}`}
                   />
                   <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-bold leading-tight truncate ${isOverdue ? 'text-on-background' : 'text-on-background'}`}>{t.title}</p>
+                    {inlineEditId === t.id ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={inlineEditTitle}
+                        onChange={(e) => setInlineEditTitle(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onBlur={() => commitInlineEdit(t)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+                          else if (e.key === 'Escape') { e.preventDefault(); cancelInlineEdit(); }
+                        }}
+                        className="w-full text-xs font-bold leading-tight bg-white border border-primary/30 rounded px-1.5 py-0.5 text-on-background focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                    ) : (
+                      <p
+                        onDoubleClick={(e) => { e.stopPropagation(); enterInlineEdit(t); }}
+                        title="Double-click to rename"
+                        className={`text-xs font-bold leading-tight truncate ${isOverdue ? 'text-on-background' : 'text-on-background'}`}
+                      >{t.title}</p>
+                    )}
                     {isOverdue && t.dueDate && (
                       <p className="text-[9px] text-error font-bold mt-0.5">
                         {Math.floor((new Date(todayStr) - new Date(t.dueDate)) / 86400000)} day{Math.floor((new Date(todayStr) - new Date(t.dueDate)) / 86400000) !== 1 ? 's' : ''} overdue
@@ -1320,7 +1363,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               const priorityLabel = { high: 'High Priority', medium: 'Medium Priority', low: 'Low Priority' };
 
               const taskCard = (t) => (
-                <div key={t.id} onClick={() => setEditingTask(t)} className="group bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md hover:scale-[1.01] transition-all border border-transparent hover:border-primary/10 cursor-pointer">
+                <div key={t.id} onClick={() => { if (inlineEditId !== t.id) setEditingTask(t); }} className="group bg-surface-container-lowest p-4 rounded-xl shadow-sm hover:shadow-md hover:scale-[1.01] transition-all border border-transparent hover:border-primary/10 cursor-pointer">
                   <div className="flex items-start gap-3">
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleTask(t.id); }}
@@ -1331,7 +1374,27 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${priorityDot[t.priority] || priorityDot.medium}`} />
                         <span className="text-[10px] font-bold uppercase text-on-surface-variant">{priorityLabel[t.priority] || 'Medium Priority'}</span>
                       </div>
-                      <h3 className="text-sm font-bold text-on-background truncate group-hover:text-primary transition-colors">{t.title}</h3>
+                      {inlineEditId === t.id ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={inlineEditTitle}
+                          onChange={(e) => setInlineEditTitle(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onBlur={() => commitInlineEdit(t)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+                            else if (e.key === 'Escape') { e.preventDefault(); cancelInlineEdit(); }
+                          }}
+                          className="w-full text-sm font-bold bg-white border border-primary/30 rounded px-1.5 py-0.5 text-on-background focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                      ) : (
+                        <h3
+                          onDoubleClick={(e) => { e.stopPropagation(); enterInlineEdit(t); }}
+                          title="Double-click to rename"
+                          className="text-sm font-bold text-on-background truncate group-hover:text-primary transition-colors"
+                        >{t.title}</h3>
+                      )}
                       <div className="flex items-center gap-2 mt-3">
                         {t.tags?.[0] && (
                           <span className="text-[10px] px-2 py-0.5 bg-secondary-container text-on-secondary-container rounded-full font-bold">{t.tags[0]}</span>
