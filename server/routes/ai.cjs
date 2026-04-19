@@ -56,6 +56,7 @@ const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
+const { closeDecisionWithFeedback } = require('../lib/trustFeedback.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
@@ -425,7 +426,12 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         if (engineDisposition === 'hard_stop') {
           logger.info('chat.decisionEngine.hardStop', { requestId: req.requestId, userId, tool, reason: engineReason });
           if (engineDecisionId) {
-            db.updateDecisionOutcome(userId, engineDecisionId, 'rejected').catch(() => {});
+            // Phase 4 — a hard_stop is effectively a system-initiated
+            // rejection. Counts toward trust deltas + correction pattern.
+            closeDecisionWithFeedback({
+              userId, decisionId: engineDecisionId, outcome: 'rejected',
+              actionType: tool, contextSummary: engineReason || null,
+            }).catch(() => {});
           }
           return { action: 'deny', reason: 'hard_stop', message: engineReason || `I can't do ${tool} — it conflicts with one of your rules.` };
         }
@@ -434,7 +440,14 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         const toolWantsConfirm = requiresConfirmation(tool, decision);
         if (!engineWantsConfirm && !toolWantsConfirm) {
           if (engineDecisionId) {
-            db.updateDecisionOutcome(userId, engineDecisionId, 'executed').catch(() => {});
+            // auto_proceed path — 'executed' carries no trust signal
+            // (Phase 4 deltas are 0 here); the call is just to close
+            // the audit row. Kept on the helper so all outcome flips
+            // go through one surface.
+            closeDecisionWithFeedback({
+              userId, decisionId: engineDecisionId, outcome: 'executed',
+              actionType: tool,
+            }).catch(() => {});
           }
           return { action: 'allow' };
         }
@@ -484,12 +497,17 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
           const resolution = await db.listenForConfirmation(pending.id, 2 * 60 * 1000, { signal: listenController.signal });
           res.removeListener('close', onResClose);
           logger.info('chat.gate.waiter.resolved', { requestId: req.requestId, userId, tool, confirmId: pending.id, action: resolution?.action, alreadyExecuted: !!resolution?.alreadyExecuted });
-          // Phase 3 — close the audit loop. confirmed/rejected/timeout map to
-          // decision_log.outcome; Phase 4 will use this for trust adjustment.
+          // Phase 4 — close the audit loop AND apply the trust delta
+          // in one transaction. confirmed/rejected trigger the feedback
+          // loop (counter bump + score delta + maybe-generate-rule on
+          // repeated rejections); 'executed' is treated as audit-only.
           if (engineDecisionId) {
             const outcome = resolution?.action === 'allow' ? 'confirmed'
               : resolution?.action === 'deny' ? 'rejected' : 'executed';
-            db.updateDecisionOutcome(userId, engineDecisionId, outcome).catch(() => {});
+            closeDecisionWithFeedback({
+              userId, decisionId: engineDecisionId, outcome,
+              actionType: tool, contextSummary: engineReason || null,
+            }).catch(() => {});
           }
           return resolution;
         } catch (err) {

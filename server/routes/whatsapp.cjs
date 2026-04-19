@@ -46,6 +46,7 @@
 const express   = require('express');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
+const { closeDecisionWithFeedback } = require('../lib/trustFeedback.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
@@ -361,7 +362,12 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         }
 
         if (engineDisposition === 'hard_stop') {
-          if (engineDecisionId) db.updateDecisionOutcome(userId, engineDecisionId, 'rejected').catch(() => {});
+          if (engineDecisionId) {
+            closeDecisionWithFeedback({
+              userId, decisionId: engineDecisionId, outcome: 'rejected',
+              actionType: tool, contextSummary: engineReason || null,
+            }).catch(() => {});
+          }
           // WhatsApp doesn't have a confirmation-card UI — surface the
           // hard stop as the assistant's textual reply by sending it
           // directly to the user via UltraMsg.
@@ -372,7 +378,12 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         const engineWantsConfirm = engineDisposition === 'confirm_required' || engineDisposition === 'soft_confirm';
         const toolWantsConfirm = requiresConfirmation(tool, decision);
         if (!engineWantsConfirm && !toolWantsConfirm) {
-          if (engineDecisionId) db.updateDecisionOutcome(userId, engineDecisionId, 'executed').catch(() => {});
+          if (engineDecisionId) {
+            closeDecisionWithFeedback({
+              userId, decisionId: engineDecisionId, outcome: 'executed',
+              actionType: tool,
+            }).catch(() => {});
+          }
           return { action: 'allow' };
         }
 

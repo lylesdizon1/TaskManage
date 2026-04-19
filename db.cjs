@@ -3546,6 +3546,109 @@ async function updateTrustScore(userId, actionType, delta) {
 }
 
 /**
+ * Phase 4 — atomic trust-feedback application. In one transaction:
+ *   1. Flip decision_log.outcome (the existing audit step).
+ *   2. Bump trust_scores counters (times_confirmed/rejected/corrected).
+ *   3. Apply trust_score delta per the Phase 4 deltas:
+ *        confirmed → +0.02
+ *        rejected  → -0.05
+ *        corrected → -0.10  (caller signals via outcome='corrected'
+ *          when a correction_event was logged in the same flow)
+ *
+ * Counter columns + delta both move so the matrix view (admin Decisions
+ * tab) shows both the magnitude and the cumulative pattern.
+ *
+ * actionType is the tool name from the agentic loop. It maps 1:1 with
+ * DEFAULT_TRUST_MATRIX rows; rows that aren't in the matrix silently
+ * no-op the trust_score side (no row to update) but still flip outcome.
+ */
+async function applyTrustFeedback(userId, decisionId, outcome, actionType) {
+  const COUNTER_COL = {
+    confirmed: 'times_confirmed',
+    rejected:  'times_rejected',
+    corrected: 'times_corrected',
+    executed:  null, // auto_proceed pass-through; no trust signal
+    timeout:   null,
+  };
+  const DELTA = {
+    confirmed: +0.02,
+    rejected:  -0.05,
+    corrected: -0.10,
+  };
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Flip decision_log.outcome (same shape as updateDecisionOutcome).
+    await client.query(
+      `UPDATE decision_log SET outcome = $3 WHERE id = $1 AND user_id = $2`,
+      [decisionId, userId, outcome],
+    );
+
+    // 2 + 3. Counter + delta (skip if outcome doesn't carry a trust signal,
+    // or if the action isn't in the trust matrix yet).
+    const counterCol = COUNTER_COL[outcome];
+    const delta = DELTA[outcome] || 0;
+    let trustRow = null;
+    if (counterCol && actionType) {
+      const { rows } = await client.query(
+        `UPDATE trust_scores
+            SET ${counterCol} = ${counterCol} + 1,
+                trust_score = LEAST(1.0, GREATEST(0.0, trust_score + $3)),
+                updated_at = NOW()
+          WHERE user_id = $1 AND action_type = $2
+          RETURNING id, action_type AS "actionType",
+                    trust_score AS "trustScore", disposition,
+                    times_confirmed AS "timesConfirmed",
+                    times_rejected AS "timesRejected",
+                    times_corrected AS "timesCorrected"`,
+        [userId, actionType, delta],
+      );
+      trustRow = rows[0] || null;
+    }
+
+    await client.query('COMMIT');
+    return { decisionId, outcome, trustRow };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Phase 4 — count unprocessed correction events for one action_type.
+ * "Unprocessed" = generated_rule_id IS NULL. Used by the rule-generator
+ * to decide whether the user has corrected this action enough times to
+ * warrant materialising the pattern as an explicit behavior_rule.
+ */
+async function countPendingCorrections(userId, actionType) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n
+       FROM correction_events
+      WHERE user_id = $1 AND original_action = $2 AND generated_rule_id IS NULL`,
+    [userId, actionType],
+  );
+  return rows[0]?.n || 0;
+}
+
+/**
+ * Mark all unprocessed corrections for (userId, actionType) as having
+ * been folded into the given behavior_rule id. Single UPDATE.
+ */
+async function markCorrectionsProcessed(userId, actionType, generatedRuleId) {
+  const { rowCount } = await pool.query(
+    `UPDATE correction_events
+        SET generated_rule_id = $3, trust_score_adjusted = TRUE
+      WHERE user_id = $1 AND original_action = $2 AND generated_rule_id IS NULL`,
+    [userId, actionType, generatedRuleId],
+  );
+  return rowCount;
+}
+
+/**
  * Idempotent — uses ON CONFLICT DO NOTHING so re-seeding never clobbers
  * a trust_score the user has already moved through Phase 4 signals.
  * Called per user at registration (wired in Phase 1).
@@ -8430,6 +8533,9 @@ module.exports = {
   getTrustScore,
   updateTrustScore,
   seedDefaultTrustScores,
+  applyTrustFeedback,
+  countPendingCorrections,
+  markCorrectionsProcessed,
   getDisposition,
   logCorrection,
   getCorrections,
