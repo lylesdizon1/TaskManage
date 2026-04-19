@@ -78,7 +78,11 @@ module.exports = function createQuickbooksRouter({ authenticateToken, db }) {
     }
 
     // Verify the user can actually see this entity before binding tokens to it.
-    const entities = await db.getEntitiesForUser(req.user.id);
+    // Uses the canonical membership-aware helper (same as entities.cjs) so a
+    // user who only sees an entity via the legacy `shared = true` flag can NO
+    // LONGER bind a QB realm against it — they need created_by, org-wide
+    // visibility within their org, OR an explicit entity_members row.
+    const entities = await db.getEntitiesForUserWithMembership(req.user.id, req.user.orgId || null);
     const owned = entities.find((e) => String(e.id) === entityId);
     if (!owned) return res.status(404).json({ error: 'Entity not found' });
 
