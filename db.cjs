@@ -3200,25 +3200,47 @@ async function flagInboxItem(id, userId, reason) {
 async function unflagInboxItem(id, userId) {
   if (!userId) throw new Error('unflagInboxItem requires userId');
   const result = await pool.query(
-    `UPDATE inbox_items SET flagged_at = NULL, flagged_reason = NULL
+    `UPDATE inbox_items SET flagged_at = NULL, flagged_reason = NULL, flagged_acked_at = NULL
      WHERE id = $1 AND user_id = $2`,
     [id, userId],
   );
   return result.rowCount > 0;
 }
 
-async function getFlaggedInboxItems(userId, limit = 100, offset = 0) {
+async function ackInboxItem(id, userId) {
+  if (!userId) throw new Error('ackInboxItem requires userId');
+  const result = await pool.query(
+    `UPDATE inbox_items SET flagged_acked_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND flagged_at IS NOT NULL`,
+    [id, userId],
+  );
+  return result.rowCount > 0;
+}
+
+async function unackInboxItem(id, userId) {
+  if (!userId) throw new Error('unackInboxItem requires userId');
+  const result = await pool.query(
+    `UPDATE inbox_items SET flagged_acked_at = NULL
+     WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return result.rowCount > 0;
+}
+
+async function getFlaggedInboxItems(userId, { includeAcked = false, limit = 100, offset = 0 } = {}) {
+  const ackedFilter = includeAcked ? '' : ' AND flagged_acked_at IS NULL';
   const { rows } = await pool.query(
-    `SELECT * FROM inbox_items WHERE user_id = $1 AND flagged_at IS NOT NULL
+    `SELECT * FROM inbox_items WHERE user_id = $1 AND flagged_at IS NOT NULL${ackedFilter}
      ORDER BY flagged_at DESC LIMIT $2 OFFSET $3`,
     [userId, limit, offset],
   );
   return rows;
 }
 
-async function getFlaggedInboxCount(userId) {
+async function getFlaggedInboxCount(userId, { includeAcked = false } = {}) {
+  const ackedFilter = includeAcked ? '' : ' AND flagged_acked_at IS NULL';
   const { rows } = await pool.query(
-    'SELECT COUNT(*)::int AS count FROM inbox_items WHERE user_id = $1 AND flagged_at IS NOT NULL',
+    `SELECT COUNT(*)::int AS count FROM inbox_items WHERE user_id = $1 AND flagged_at IS NOT NULL${ackedFilter}`,
     [userId],
   );
   return rows[0].count;
@@ -6174,7 +6196,9 @@ async function runMigrations() {
   // ── Inbox flagged state (email persistence) ──────────────────────────────
   await pool.query(`ALTER TABLE inbox_items ADD COLUMN IF NOT EXISTS flagged_at TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE inbox_items ADD COLUMN IF NOT EXISTS flagged_reason TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE inbox_items ADD COLUMN IF NOT EXISTS flagged_acked_at TIMESTAMPTZ`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_flagged ON inbox_items(user_id, flagged_at DESC) WHERE flagged_at IS NOT NULL`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_flagged_unacked ON inbox_items(user_id, flagged_at DESC) WHERE flagged_at IS NOT NULL AND flagged_acked_at IS NULL`).catch(() => {});
 
   // ── Task/note source email linking ───────────────────────────────────────
   await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_email_id TEXT`).catch(() => {});
@@ -8845,6 +8869,8 @@ module.exports = {
   updateInboxItemAction,
   flagInboxItem,
   unflagInboxItem,
+  ackInboxItem,
+  unackInboxItem,
   getFlaggedInboxItems,
   getFlaggedInboxCount,
   getInboxItemById,
