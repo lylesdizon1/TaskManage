@@ -145,15 +145,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             if (highOpen > 0) parts.push(`${highOpen} high-priority still open`);
             const summary = parts.length ? ` Today: ${parts.join(', ')}.` : '';
             const now = new Date().toISOString();
-            setCcMessages((prev) => [
-              ...prev,
-              {
-                role: 'assistant',
-                content: `Ready to wrap your day?${summary} Want to capture how it went?`,
-                createdAt: now,
-                ts: Date.now(),
-              },
-            ]);
+            setCcMessages((prev) => {
+              // Dedup: skip if a daily_wrap proactive message already exists
+              if (prev.some(m => m.update_type === 'daily_wrap')) return prev;
+              return [
+                ...prev,
+                {
+                  role: 'assistant',
+                  content: `Ready to wrap your day?${summary} Want to capture how it went?`,
+                  update_type: 'daily_wrap',
+                  createdAt: now,
+                  ts: Date.now(),
+                },
+              ];
+            });
           }
         } else if (data.activeZoneSuggestion === 'close_loop') {
           // Prefer a pending_close_loop row (task/project_task) when present,
@@ -1465,10 +1470,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${r.status}` } : prev));
           return;
         }
-        setCcMessages((prev) => [
-          ...prev,
-          { role: 'system', content: 'Wrap saved — nice close.', createdAt: new Date().toISOString(), ts: Date.now() },
-        ]);
+        setCcMessages((prev) => {
+          // Dedup: skip if a wrap_saved message already exists this session
+          if (prev.some(m => m.update_type === 'wrap_saved')) return prev;
+          return [
+            ...prev,
+            { role: 'system', content: 'Wrap saved — nice close.', update_type: 'wrap_saved', createdAt: new Date().toISOString(), ts: Date.now() },
+          ];
+        });
         // Reset blocking refs so the next handleCcSend isn't gated by stale
         // state from a previous stopped stream or abort controller.
         ccStoppedRef.current = false;
@@ -1531,7 +1540,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         // "it didn't dismiss" even though state was cleared.
         setCcMessages((prev) => [
           ...prev,
-          { role: 'system', content: 'Note saved.', createdAt: new Date().toISOString(), ts: Date.now() },
+          { role: 'system', content: 'Note saved.', update_type: `close_loop_saved:${sourceType}:${sourceId}`, createdAt: new Date().toISOString(), ts: Date.now() },
         ]);
         // Reset blocking refs so the next handleCcSend isn't gated by stale
         // state from a previous stopped stream or abort controller.
