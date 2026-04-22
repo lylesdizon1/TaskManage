@@ -221,7 +221,9 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [interactedIds, setInteractedIds] = useState(() => new Set());
   const [needsAttentionIds, setNeedsAttentionIds] = useState(() => new Set());
   const [lowPriorityIds, setLowPriorityIds] = useState(() => new Set());
-  const [pillFilter, setPillFilter] = useState('all'); // 'all' | 'unread' | 'action'
+  const [pillFilter, setPillFilter] = useState('all'); // 'all' | 'unread' | 'action' | 'flagged'
+  const [flaggedThreadIds, setFlaggedThreadIds] = useState(() => new Set());
+  const [flaggedCount, setFlaggedCount] = useState(0);
   const [expandedZones, setExpandedZones] = useState({ attn: true, review: true, low: false, read: false });
   const [touchedZones, setTouchedZones] = useState(() => new Set());
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
@@ -256,6 +258,17 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   // navigate with nextCursor to go Older. Empty stack = at first page.
   const [cursorStack, setCursorStack] = useState([]);
   const [nextCursor, setNextCursor] = useState(null);
+
+  const loadFlagged = useCallback(async () => {
+    try {
+      const r = await apiFetch('/api/inbox/flagged', { headers: { Authorization: `Bearer ${authToken}` } });
+      if (!r.ok) return;
+      const data = await r.json();
+      const ids = new Set((data.items || []).map(i => i.source_id).filter(Boolean));
+      setFlaggedThreadIds(ids);
+      setFlaggedCount(data.count || 0);
+    } catch {}
+  }, [apiFetch, authToken]);
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -354,7 +367,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     }
   }, [apiFetch, authToken]);
 
-  useEffect(() => { loadAccounts(); }, [loadAccounts]);
+  useEffect(() => { loadAccounts(); loadFlagged(); }, [loadAccounts, loadFlagged]);
   useEffect(() => {
     const ctrl = new AbortController();
     loadThreads(ctrl.signal);
@@ -612,6 +625,46 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
   // Star toggle. Tracked on the thread row optimistically so swipe-right
   // gives instant feedback even before the server round-trip completes.
+  async function toggleFlag(t) {
+    const isFlagged = flaggedThreadIds.has(t.id);
+    // Optimistic update
+    setFlaggedThreadIds(prev => {
+      const next = new Set(prev);
+      if (isFlagged) next.delete(t.id); else next.add(t.id);
+      return next;
+    });
+    setFlaggedCount(prev => isFlagged ? Math.max(0, prev - 1) : prev + 1);
+    try {
+      if (isFlagged) {
+        await apiFetch('/api/inbox/unflag-thread', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ thread_id: t.id }),
+        });
+      } else {
+        await apiFetch('/api/inbox/flag-thread', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({
+            thread_id: t.id,
+            account_email: t.accountEmail,
+            subject: t.subject,
+            sender: t.from,
+            snippet: t.snippet,
+          }),
+        });
+      }
+    } catch {
+      // Revert optimistic update
+      setFlaggedThreadIds(prev => {
+        const next = new Set(prev);
+        if (isFlagged) next.add(t.id); else next.delete(t.id);
+        return next;
+      });
+      setFlaggedCount(prev => isFlagged ? prev + 1 : Math.max(0, prev - 1));
+    }
+  }
+
   async function starSingle(t, nextState) {
     const messageId = t.latestMessageId || t.id;
     if (!messageId) return;
@@ -775,6 +828,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     const base = threads.filter(t => !accountFilter || t.accountEmail === accountFilter);
     const filtered = base.filter(t => {
       if (pillFilter === 'unread') return !t.isRead;
+      if (pillFilter === 'flagged') return flaggedThreadIds.has(t.id);
       if (pillFilter === 'action') {
         const mid = t.latestMessageId || t.id;
         const cls = classifications[mid];
@@ -790,7 +844,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       review.push(t);
     }
     return { attn, review, low, read };
-  }, [threads, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds]);
+  }, [threads, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds, flaggedThreadIds]);
 
   const needsAttentionThreads = useMemo(() => threads.filter(t => {
     if (t.isRead) return false;
@@ -929,6 +983,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
             {[
               { key: 'all',    label: 'All' },
               { key: 'unread', label: 'Unread' },
+              { key: 'flagged', label: 'Flagged' },
               { key: 'action', label: 'Action' },
             ].map(({ key, label }) => (
               <button
@@ -939,7 +994,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   ? { backgroundColor: '#4f4dcf', color: '#fff' }
                   : { backgroundColor: 'transparent', color: '#6b7280', border: '1px solid rgba(0,0,0,0.08)' }}
               >
-                {label}
+                {label}{key === 'flagged' && flaggedCount > 0 ? ` (${flaggedCount})` : ''}
               </button>
             ))}
           </div>
@@ -1000,7 +1055,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="Nothing urgent right now."
                 showCountSuffix
               >
-                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
+                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
               </Zone>
 
               {/* Zone 2 — For Your Review */}
@@ -1014,7 +1069,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="No emails to review."
                 showCountSuffix
               >
-                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
+                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
               </Zone>
 
               {/* Zone 3 — Low Priority */}
@@ -1042,7 +1097,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   )
                 }
               >
-                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
+                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
               </Zone>
 
               {/* Zone 4 — Read */}
@@ -1055,7 +1110,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 onToggle={() => toggleZone('read')}
                 emptyText="No read threads."
               >
-                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }))}
+                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
               </Zone>
             </>
           )}
@@ -1734,7 +1789,8 @@ function renderThreadRow(props) {
 const SWIPE_THRESHOLD = 60;
 const SWIPE_DRAWER_WIDTH = 140; // px — width of the revealed action panel
 
-function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, labelLookup }) {
+function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }) {
+  const isFlagged = flaggedThreadIds?.has(t.id);
   const tint = tintForAccount(t.accountEmail);
   const active = t.id === activeThreadId;
   const mid = t.latestMessageId || t.id;
@@ -1819,7 +1875,7 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
       style={{
         borderRadius: 10,
         backgroundColor: active ? '#ededff' : 'transparent',
-        borderLeft: active ? '3px solid #4f4dcf' : '3px solid transparent',
+        borderLeft: active ? '3px solid #4f4dcf' : isFlagged ? '3px solid #4f4dcf' : '3px solid transparent',
       }}
     >
       {/* Mobile swipe drawer — sits behind the row, revealed on left-swipe.
@@ -1977,6 +2033,17 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
           >
             <span className="material-symbols-outlined" style={{ fontSize: '15px', color: t.starred ? '#f59e0b' : '#9ca3af' }}>
               {t.starred ? 'star' : 'star_outline'}
+            </span>
+          </button>
+        )}
+        {toggleFlag && (
+          <button
+            onClick={(e) => { e.stopPropagation(); toggleFlag(t); }}
+            title={isFlagged ? 'Unflag' : 'Flag as important'}
+            className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: isFlagged ? '#4f4dcf' : '#9ca3af' }}>
+              {isFlagged ? 'flag' : 'outlined_flag'}
             </span>
           </button>
         )}

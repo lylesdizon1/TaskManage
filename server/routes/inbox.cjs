@@ -124,6 +124,72 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
 
   // ── Provider-backed thread routes (no DB persistence) ────���─────────────
 
+  /**
+   * POST /api/inbox/flag-thread
+   * Body: { thread_id, account_email, subject, sender, snippet, reason? }
+   * Upserts an inbox_item for the thread and flags it.
+   */
+  router.post('/api/inbox/flag-thread', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { thread_id, account_email, subject, sender, snippet, reason } = req.body;
+      if (!thread_id) return res.status(400).json({ error: 'thread_id required' });
+
+      const exists = await db.inboxItemExistsBySourceId(userId, thread_id);
+      if (!exists) {
+        const id = `inbox-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        await db.createInboxItem({
+          id, userId, type: 'EMAIL',
+          title: subject || '(no subject)',
+          summary: snippet || '',
+          source: (account_email || '').includes('outlook') ? 'outlook' : 'gmail',
+          sourceId: thread_id,
+          gmailThreadId: thread_id,
+          gmailLink: `https://mail.google.com/mail/u/0/#inbox/${thread_id}`,
+          sender: sender || null,
+        });
+      }
+
+      const { rows } = await db.pool.query(
+        'SELECT id FROM inbox_items WHERE user_id = $1 AND source_id = $2',
+        [userId, thread_id],
+      );
+      if (rows[0]) {
+        await db.flagInboxItem(rows[0].id, userId, reason || 'manual');
+      }
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.flagThread.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * POST /api/inbox/unflag-thread
+   * Body: { thread_id }
+   */
+  router.post('/api/inbox/unflag-thread', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { thread_id } = req.body;
+      if (!thread_id) return res.status(400).json({ error: 'thread_id required' });
+
+      const { rows } = await db.pool.query(
+        'SELECT id FROM inbox_items WHERE user_id = $1 AND source_id = $2',
+        [userId, thread_id],
+      );
+      if (rows[0]) {
+        await db.unflagInboxItem(rows[0].id, userId);
+      }
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.unflagThread.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // ── Provider-backed thread routes ──────────────────────────────────────
+
   router.get('/api/inbox/accounts', authenticateToken, async (req, res) => {
     try {
       const rows = await db.getUserIntegrationsByType(req.user.id, 'gmail');
