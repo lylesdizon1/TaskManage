@@ -313,14 +313,50 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
       }
     }
 
+    // ── Suppress pass: apply inferred classification rules ──────────────
+    // Inferred rules are suppress-only — they downgrade dimensions that
+    // users have repeatedly corrected. Never upgrade/add classifications.
+    const suppressedDims = [];
+    try {
+      const inferredRules = (db.getActiveInferredClassificationRules
+        ? await db.getActiveInferredClassificationRules(userId).catch(() => [])
+        : []);
+      const fromLower = _norm(from);
+      const fromDomain = (fromLower.match(/@([^>]+)/) || [])[1] || '';
+      for (const rule of inferredRules) {
+        let match = false;
+        if (rule.patternType === 'sender_email' && fromLower.includes(rule.patternValue)) match = true;
+        if (rule.patternType === 'sender_domain' && fromDomain === rule.patternValue) match = true;
+        if (!match) continue;
+        const dim = rule.suppressDimension;
+        if (dim === 'not_critical' && (importance === 'critical' || importance === 'high')) {
+          importance = 'normal';
+          suppressedDims.push(`suppress: ${dim} via ${rule.patternType}:${rule.patternValue}`);
+        }
+        if (dim === 'not_financial' && FINANCIAL_CATEGORIES.has(category)) {
+          category = 'general';
+          amount = null;
+          suppressedDims.push(`suppress: ${dim} via ${rule.patternType}:${rule.patternValue}`);
+        }
+        if (dim === 'not_otp') {
+          // Can't un-detect OTP, but prevent auto-flagging by lowering importance
+          suppressedDims.push(`suppress: ${dim} via ${rule.patternType}:${rule.patternValue}`);
+        }
+        if (dim === 'wrong_priority' || dim === 'wrong_entity') {
+          suppressedDims.push(`suppress: ${dim} via ${rule.patternType}:${rule.patternValue}`);
+        }
+      }
+    } catch { /* suppress lookup failure → proceed with original classification */ }
+
     // Build reasoning snapshot for the "Why?" surface
     const classificationReasoning = {
       source,
       category,
       importance,
-      matched_patterns: matchedPatterns,
+      matched_patterns: [...matchedPatterns, ...suppressedDims],
       has_confirmation_code: _hasConfirmationCode(subject, body),
       classifier_version: 'v1.3',
+      suppressed: suppressedDims.length > 0 ? suppressedDims : undefined,
     };
     if (amount != null) classificationReasoning.amount = amount;
     if (vendor) classificationReasoning.vendor = vendor;
@@ -338,10 +374,11 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     // Fire-and-forget: if the classification suggests this email is crucial,
     // create an inbox_item (if missing) and flag it. Skips if already flagged.
     try {
+      const otpSuppressed = suppressedDims.some(d => d.includes('not_otp'));
       const shouldAutoFlag =
         importance === 'critical'
         || (FINANCIAL_CATEGORIES.has(category) && amount != null)
-        || _hasConfirmationCode(subject, body);
+        || (!otpSuppressed && _hasConfirmationCode(subject, body));
 
       if (shouldAutoFlag && db.flagInboxItem && db.inboxItemExistsBySourceId) {
         const flagReason = importance === 'critical' ? 'aria_decision'
