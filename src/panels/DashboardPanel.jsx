@@ -78,6 +78,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // resolveCloseLoopSilent is fire-and-forget and may not have landed by
   // the next fetchBriefContext poll).
   const closeLoopPromptedIdsRef = useRef(new Set());
+  // "Acted-on" guard: once the user submits a daily_wrap or close_loop
+  // tile, lock that tile type for the session so fetchBriefContext can't
+  // re-promote it during the success→empty transition window.
+  const dailyWrapActedOnRef = useRef(false);
   // Last project task created via chat — enables "yes" / "add subtasks"
   // follow-ups to resolve to the right task without asking again. Stale
   // after 60 seconds.
@@ -115,8 +119,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       // server as data.activeZoneSuggestion ('daily_wrap' > 'close_loop'
       // > null). meetingsNeedingNotes is the V1 close_loop source; the
       // closeLoopQueue slot covers task/project-task follow-ups.
-      if (!ccSendingRef.current && activeZoneStateRef.current === 'empty') {
-        if (data.activeZoneSuggestion === 'daily_wrap' && data.wrapReminderReady) {
+      const zoneIdle = activeZoneStateRef.current === 'empty';
+      if (!ccSendingRef.current && zoneIdle) {
+        if (data.activeZoneSuggestion === 'daily_wrap' && data.wrapReminderReady && !dailyWrapActedOnRef.current) {
           const tasksCompleted = data.stats?.tasksCompletedToday || 0;
           const tasksStillOpen = (data.tasks?.overdue?.length || 0) + (data.tasks?.dueToday?.length || 0);
           setActiveTile({
@@ -1470,6 +1475,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: data.error || `HTTP ${r.status}` } : prev));
           return;
         }
+        dailyWrapActedOnRef.current = true;
         setCcMessages((prev) => {
           // Dedup: skip if a wrap_saved message already exists this session
           if (prev.some(m => m.update_type === 'wrap_saved')) return prev;
