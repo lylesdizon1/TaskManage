@@ -370,9 +370,11 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
       classificationReasoning,
     }).catch(() => null);
 
-    // ── Auto-flag high-importance emails ──────────────────────────────────
-    // Fire-and-forget: if the classification suggests this email is crucial,
-    // create an inbox_item (if missing) and flag it. Skips if already flagged.
+    // ── Auto-flag: single source of truth for the Flagged view ─────────
+    // This is the ONE path that creates flagged inbox_items from classification.
+    // New flags have flagged_acked_at=NULL so they appear in the unacked
+    // triage queue. Manual flags via toggleFlag use the /flag-thread endpoint.
+    // Conditions: critical importance, financial with amount, or OTP codes.
     try {
       const otpSuppressed = suppressedDims.some(d => d.includes('not_otp'));
       const shouldAutoFlag =
