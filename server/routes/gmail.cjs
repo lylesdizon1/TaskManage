@@ -204,9 +204,19 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
         }
       } catch (err) {
         logger.error('gmail.status.upgradeFailed', { requestId: req.requestId, userId, error: err.message });
-        // Placeholder tokens no longer work — remove so the user can reconnect.
-        await db.deleteUserIntegrationById(placeholder.id, userId).catch(() => {});
-        return res.json({ connected: false });
+
+        // Only delete tokens on confirmed auth revocation — not transient errors
+        const isAuthRevoked = err.message?.includes('invalid_grant')
+          || err.response?.data?.error === 'invalid_grant'
+          || err.code === 401
+          || err.response?.status === 401;
+
+        if (isAuthRevoked) {
+          await db.deleteUserIntegrationById(placeholder.id, userId).catch(() => {});
+          logger.warn('gmail.status.tokensCleared', { requestId: req.requestId, userId, reason: err.message });
+        }
+
+        return res.json({ connected: false, error: isAuthRevoked ? 'expired' : 'transient' });
       }
     }
 
@@ -276,6 +286,16 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
     oauth2.on('tokens', async (newTokens) => {
       await mergeAndSaveGmailTokens(db, userId, account.accountEmail || '', newTokens).catch(() => {});
     });
+
+    // Proactively refresh token if it's close to expiry or already expired
+    try {
+      const { credentials } = await oauth2.refreshAccessToken();
+      await mergeAndSaveGmailTokens(db, userId, account.accountEmail || '', credentials).catch(() => {});
+      oauth2.setCredentials(credentials);
+    } catch (refreshErr) {
+      logger.warn('gmailScan.tokenRefresh.failed', { requestId, userId, error: refreshErr.message });
+      // Continue anyway — the existing token may still be valid
+    }
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2 });
 

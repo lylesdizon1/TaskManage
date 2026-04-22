@@ -2912,6 +2912,13 @@ async function setGcalPrimaryAccount(userId, googleEmail) {
 
 // ── Gmail config (tokens moved to user_integrations) ────────────────────────
 
+async function getAllGmailConnectedUsers() {
+  const { rows } = await pool.query(
+    "SELECT DISTINCT user_id FROM user_integrations WHERE integration_type = 'gmail'"
+  );
+  return rows.map((r) => r.user_id);
+}
+
 /**
  * Load Gmail sync configuration for a user (label filters, sync frequency, etc.).
  *
@@ -8601,6 +8608,7 @@ module.exports = {
   deleteTransaction,
   updateTransaction,
   getFinancialSummary,
+  getAllGmailConnectedUsers,
   getGmailConfigForUser,
   setGmailConfigForUser,
   getInboxItemsForUser,

@@ -656,3 +656,55 @@ console.log('[cron] Outlook sync scheduler started');
     cronLogger.error('outlook-sync.startup.failed', { error: e.message });
   }
 })();
+
+// ── Gmail token refresh cron — runs every 30 minutes ─────────────────────
+// Keeps Gmail tokens alive even when no user opens the app, preventing
+// invalid_grant expiry. Uses the same user_integrations-backed helpers
+// as the refactored gmail.cjs.
+const { encryptTokens: _encTokens, decryptTokens: _decTokens, ENCRYPTION_KEY } = require('./server/utils/crypto.cjs');
+
+cron.schedule('*/30 * * * *', async () => {
+  try {
+    const userIds = await db.getAllGmailConnectedUsers();
+    if (!userIds.length) return;
+
+    for (const userId of userIds) {
+      try {
+        const rows = await db.getUserIntegrationsByType(userId, 'gmail');
+        if (!rows.length) continue;
+
+        for (const row of rows) {
+          try {
+            let tokens = row.config?.tokens;
+            if (!tokens) continue;
+            if (tokens._enc) tokens = _decTokens(tokens._enc);
+
+            const oauth2 = makeGmailOAuth2Client();
+            if (!oauth2) continue;
+
+            oauth2.setCredentials(tokens);
+            const { credentials } = await oauth2.refreshAccessToken();
+
+            // Merge refreshed credentials back into stored config
+            const merged = { ...tokens, ...credentials };
+            const wrapped = ENCRYPTION_KEY ? { _enc: _encTokens(merged) } : merged;
+            await db.upsertUserIntegration(userId, 'gmail', { tokens: wrapped }, true, row.accountEmail || '');
+            cronLogger.info('gmail-refresh.ok', { userId, account: row.accountEmail });
+          } catch (acctErr) {
+            cronLogger.error('gmail-refresh.account-failed', { userId, account: row.accountEmail, error: acctErr.message });
+
+            if (acctErr.message?.includes('invalid_grant')) {
+              await db.deleteUserIntegrationById(row.id, userId).catch(() => {});
+              cronLogger.warn('gmail-refresh.tokensCleared', { userId, account: row.accountEmail });
+            }
+          }
+        }
+      } catch (err) {
+        cronLogger.error('gmail-refresh.user-failed', { userId, error: err.message });
+      }
+    }
+  } catch (err) {
+    cronLogger.error('gmail-refresh.cron-failed', { error: err.message });
+  }
+});
+console.log('[cron] Gmail token refresh scheduler started');
