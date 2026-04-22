@@ -107,16 +107,50 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
   });
 
   /**
+   * PATCH /api/inbox/items/:id/ack
+   * Marks a flagged item as acknowledged. Idempotent; only updates if flagged.
+   */
+  router.patch('/api/inbox/items/:id/ack', authenticateToken, async (req, res) => {
+    try {
+      const ok = await db.ackInboxItem(req.params.id, req.user.id);
+      if (!ok) return res.status(404).json({ error: 'Item not found or not flagged' });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.ack.failed', { requestId: req.requestId, userId: req.user?.id, itemId: req.params.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * PATCH /api/inbox/items/:id/unack
+   * Puts a flagged item back into the unacked queue.
+   */
+  router.patch('/api/inbox/items/:id/unack', authenticateToken, async (req, res) => {
+    try {
+      const ok = await db.unackInboxItem(req.params.id, req.user.id);
+      if (!ok) return res.status(404).json({ error: 'Item not found' });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.unack.failed', { requestId: req.requestId, userId: req.user?.id, itemId: req.params.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
    * GET /api/inbox/flagged
-   * Returns only flagged inbox items + count, newest first.
+   * Returns flagged inbox items + count.
+   * ?include_acked=true returns all flagged; default returns unacked only.
    */
   router.get('/api/inbox/flagged', authenticateToken, async (req, res) => {
     try {
-      const [items, count] = await Promise.all([
-        db.getFlaggedInboxItems(req.user.id),
-        db.getFlaggedInboxCount(req.user.id),
+      const includeAcked = req.query.include_acked === 'true';
+      const opts = { includeAcked };
+      const [items, count, unackedCount] = await Promise.all([
+        db.getFlaggedInboxItems(req.user.id, opts),
+        db.getFlaggedInboxCount(req.user.id, opts),
+        includeAcked ? db.getFlaggedInboxCount(req.user.id, { includeAcked: false }) : null,
       ]);
-      res.json({ items, count });
+      res.json({ items, count, unackedCount: unackedCount ?? count });
     } catch (err) {
       logger.error('inbox.flagged.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: 'Internal server error' });
