@@ -188,6 +188,92 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
     }
   });
 
+  // ── Classification feedback ──────────────────────────────────────────────
+
+  /**
+   * POST /api/inbox/items/:id/feedback
+   * Logs a thumbs-up/down signal for the classification on this inbox item.
+   * Thumbs-down without corrections: generic negative + unflag.
+   * Thumbs-down with corrections: applies specific dimension corrections.
+   */
+  router.post('/api/inbox/items/:id/feedback', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const inboxItemId = req.params.id;
+      const { feedback_type, corrections, message_id, sender, subject, classification } = req.body;
+
+      if (!feedback_type || !['thumbs_up', 'thumbs_down'].includes(feedback_type)) {
+        return res.status(400).json({ error: 'feedback_type must be thumbs_up or thumbs_down' });
+      }
+
+      // Idempotency: skip if feedback already exists for this message
+      if (message_id) {
+        const exists = await db.hasExistingFeedback(userId, message_id);
+        if (exists) return res.json({ success: true, deduplicated: true });
+      }
+
+      // Extract sender domain for pattern matching
+      const senderEmail = (sender || '').toLowerCase().trim();
+      const domainMatch = senderEmail.match(/@([^>]+)/);
+      const senderDomain = domainMatch ? domainMatch[1] : null;
+      const subjectSnippet = (subject || '').slice(0, 100);
+
+      // Build classification snapshot from what the caller sends
+      const classificationSnapshot = classification || null;
+
+      await db.insertClassificationFeedback(userId, {
+        inboxItemId,
+        messageId: message_id || null,
+        feedbackType: feedback_type,
+        classificationSnapshot,
+        correctionDimensions: corrections || null,
+        senderEmail: senderEmail || null,
+        senderDomain,
+        subjectSnippet,
+      });
+
+      // Immediate state corrections for thumbs_down
+      if (feedback_type === 'thumbs_down') {
+        if (!corrections) {
+          // Generic thumbs-down: unflag the email
+          await db.unflagInboxItem(inboxItemId, userId).catch(() => {});
+        } else {
+          // Dimension-specific corrections
+          if (corrections.not_critical || corrections.not_financial || corrections.not_otp) {
+            await db.unflagInboxItem(inboxItemId, userId).catch(() => {});
+          }
+          // Update classification if message_id provided
+          if (message_id) {
+            const updates = {};
+            if (corrections.wrong_priority) updates.importance = corrections.wrong_priority;
+            if (corrections.not_financial) updates.category = 'general';
+            if (corrections.wrong_entity !== undefined) updates.entityId = corrections.wrong_entity || null;
+            if (Object.keys(updates).length > 0) {
+              const sets = [];
+              const vals = [userId, message_id];
+              let idx = 3;
+              if (updates.importance) { sets.push(`importance = $${idx}`); vals.push(updates.importance); idx++; }
+              if (updates.category) { sets.push(`category = $${idx}`); vals.push(updates.category); idx++; }
+              if (updates.entityId !== undefined) { sets.push(`entity_id = $${idx}`); vals.push(updates.entityId); idx++; }
+              if (sets.length) {
+                await db.pool.query(
+                  `UPDATE email_classifications SET ${sets.join(', ')}, classified_at = NOW()
+                   WHERE user_id = $1 AND message_id = $2`,
+                  vals,
+                ).catch(() => {});
+              }
+            }
+          }
+        }
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.feedback.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   // ── Provider-backed thread routes ──────────────────────────────────────
 
   router.get('/api/inbox/accounts', authenticateToken, async (req, res) => {
