@@ -1928,6 +1928,122 @@ async function getImportantUnread(userId, minRank = 3) {
   return rows;
 }
 
+// ── Classification Feedback Loop ──────────────────────────────────────────────
+
+async function insertClassificationFeedback(userId, data) {
+  const { rows } = await pool.query(
+    `INSERT INTO classification_feedback
+       (user_id, inbox_item_id, message_id, feedback_type, classification_snapshot,
+        correction_dimensions, sender_email, sender_domain, subject_snippet)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT DO NOTHING
+     RETURNING id, user_id AS "userId", feedback_type AS "feedbackType", created_at AS "createdAt"`,
+    [
+      userId,
+      data.inboxItemId || null,
+      data.messageId || null,
+      data.feedbackType,
+      data.classificationSnapshot ? JSON.stringify(data.classificationSnapshot) : null,
+      data.correctionDimensions ? JSON.stringify(data.correctionDimensions) : null,
+      data.senderEmail || null,
+      data.senderDomain || null,
+      data.subjectSnippet || null,
+    ],
+  );
+  return rows[0] || null;
+}
+
+async function hasExistingFeedback(userId, messageId) {
+  const { rows } = await pool.query(
+    `SELECT id FROM classification_feedback WHERE user_id = $1 AND message_id = $2 LIMIT 1`,
+    [userId, messageId],
+  );
+  return rows.length > 0;
+}
+
+async function getClassificationFeedbackByPattern(userId, patternType, patternValue, suppressDimension) {
+  let where;
+  if (patternType === 'sender_email') {
+    where = `sender_email = $2`;
+  } else if (patternType === 'sender_domain') {
+    where = `sender_domain = $2`;
+  } else {
+    where = `subject_snippet ILIKE '%' || $2 || '%'`;
+  }
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM classification_feedback
+     WHERE user_id = $1 AND ${where} AND feedback_type = 'thumbs_down'
+       AND correction_dimensions ? $3`,
+    [userId, patternValue, suppressDimension],
+  );
+  return rows[0]?.count || 0;
+}
+
+async function getPositiveFeedbackCount(userId, patternType, patternValue) {
+  let where;
+  if (patternType === 'sender_email') {
+    where = `sender_email = $2`;
+  } else if (patternType === 'sender_domain') {
+    where = `sender_domain = $2`;
+  } else {
+    where = `subject_snippet ILIKE '%' || $2 || '%'`;
+  }
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM classification_feedback
+     WHERE user_id = $1 AND ${where} AND feedback_type = 'thumbs_up'`,
+    [userId, patternValue],
+  );
+  return rows[0]?.count || 0;
+}
+
+// ── Inferred Classification Rules ────────────────────────────────────────────
+
+async function upsertInferredClassificationRule(userId, data) {
+  const { rows } = await pool.query(
+    `INSERT INTO inferred_classification_rules
+       (user_id, pattern_type, pattern_value, suppress_dimension, strength)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (user_id, pattern_type, pattern_value, suppress_dimension) DO UPDATE SET
+       signal_count = inferred_classification_rules.signal_count + 1,
+       strength = LEAST(1.0, inferred_classification_rules.strength + 0.05),
+       last_reinforced_at = NOW(),
+       is_active = TRUE,
+       updated_at = NOW()
+     RETURNING id, signal_count AS "signalCount", strength`,
+    [userId, data.patternType, data.patternValue, data.suppressDimension, data.strength || 0.3],
+  );
+  return rows[0] || null;
+}
+
+async function getActiveInferredClassificationRules(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", pattern_type AS "patternType",
+            pattern_value AS "patternValue", suppress_dimension AS "suppressDimension",
+            strength, signal_count AS "signalCount",
+            last_reinforced_at AS "lastReinforcedAt", is_active AS "isActive",
+            created_at AS "createdAt"
+     FROM inferred_classification_rules
+     WHERE user_id = $1 AND is_active = TRUE AND strength >= 0.3
+     ORDER BY strength DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function decayInferredClassificationRules() {
+  const { rowCount } = await pool.query(
+    `UPDATE inferred_classification_rules
+     SET strength = strength * POWER(0.95, EXTRACT(EPOCH FROM (NOW() - COALESCE(last_reinforced_at, created_at))) / 86400.0),
+         updated_at = NOW()
+     WHERE is_active = TRUE`,
+  );
+  const { rowCount: archived } = await pool.query(
+    `UPDATE inferred_classification_rules SET is_active = FALSE, updated_at = NOW()
+     WHERE is_active = TRUE AND strength < 0.1`,
+  );
+  return { decayed: rowCount, archived };
+}
+
 /** Find the most recent pending row for a user on a given channel (for WhatsApp YES/NO matching). */
 /**
  * Nightly/hourly sweep:
@@ -6063,6 +6179,43 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS source_email_id TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS source_email_subject TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS source_email_sender TEXT`).catch(() => {});
+
+  // ── Classification feedback loop ──────────────────────────────────────────
+  await pool.query(`CREATE TABLE IF NOT EXISTS classification_feedback (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    inbox_item_id TEXT REFERENCES inbox_items(id) ON DELETE SET NULL,
+    message_id TEXT,
+    feedback_type TEXT NOT NULL CHECK (feedback_type IN ('thumbs_up', 'thumbs_down')),
+    classification_snapshot JSONB,
+    correction_dimensions JSONB,
+    sender_email TEXT,
+    sender_domain TEXT,
+    subject_snippet TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cf_user_domain ON classification_feedback(user_id, sender_domain)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cf_user_type_created ON classification_feedback(user_id, feedback_type, created_at DESC)`).catch(() => {});
+
+  // Classification reasoning — persisted by the classifier on every call
+  await pool.query(`ALTER TABLE email_classifications ADD COLUMN IF NOT EXISTS classification_reasoning JSONB`).catch(() => {});
+
+  // Inferred classification rules — auto-generated from 2+ same-pattern corrections
+  await pool.query(`CREATE TABLE IF NOT EXISTS inferred_classification_rules (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pattern_type TEXT NOT NULL CHECK (pattern_type IN ('sender_email', 'sender_domain', 'subject_pattern')),
+    pattern_value TEXT NOT NULL,
+    suppress_dimension TEXT NOT NULL,
+    strength FLOAT DEFAULT 0.3,
+    signal_count INT DEFAULT 1,
+    last_reinforced_at TIMESTAMPTZ DEFAULT NOW(),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, pattern_type, pattern_value, suppress_dimension)
+  )`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_icr_user_active ON inferred_classification_rules(user_id, is_active) WHERE is_active = TRUE`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -8830,4 +8983,12 @@ module.exports = {
   getRecentClassifications,
   getEmailCleanPolicy,
   upsertEmailCleanPolicy,
+  // Classification feedback loop
+  insertClassificationFeedback,
+  hasExistingFeedback,
+  getClassificationFeedbackByPattern,
+  getPositiveFeedbackCount,
+  upsertInferredClassificationRule,
+  getActiveInferredClassificationRules,
+  decayInferredClassificationRules,
 };
