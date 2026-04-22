@@ -73,6 +73,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // already enforces once-per-day system-wide; this ref covers the
   // session-local case (e.g. repeated polls in the same window).
   const wrapPromptFiredRef = useRef(false);
+  // Once-per-session guard for close-loop proactive tiles — prevents the
+  // same close-loop item from re-surfacing after the user submits (since
+  // resolveCloseLoopSilent is fire-and-forget and may not have landed by
+  // the next fetchBriefContext poll).
+  const closeLoopPromptedIdsRef = useRef(new Set());
   // Last project task created via chat — enables "yes" / "add subtasks"
   // follow-ups to resolve to the right task without asking again. Stale
   // after 60 seconds.
@@ -153,9 +158,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         } else if (data.activeZoneSuggestion === 'close_loop') {
           // Prefer a pending_close_loop row (task/project_task) when present,
           // else fall back to a meeting-needs-notes event.
-          const queued = Array.isArray(data.closeLoopQueue) ? data.closeLoopQueue : [];
+          const queued = (Array.isArray(data.closeLoopQueue) ? data.closeLoopQueue : [])
+            .filter(it => !closeLoopPromptedIdsRef.current.has(`${it.sourceType}:${it.sourceId}`));
           if (queued.length > 0) {
             const it = queued[0];
+            closeLoopPromptedIdsRef.current.add(`${it.sourceType}:${it.sourceId}`);
             setActiveTile({
               role: 'close_loop',
               type: it.sourceType === 'event' ? 'event' : 'task',
@@ -173,7 +180,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             });
             setActiveZoneState('close_loop');
           } else if (Array.isArray(data.meetingsNeedingNotes) && data.meetingsNeedingNotes.length > 0) {
-            const ev = data.meetingsNeedingNotes[0];
+            const ev = data.meetingsNeedingNotes.find(e => !closeLoopPromptedIdsRef.current.has(`event:${e.id}`));
+            if (!ev) { /* all meetings already prompted this session */ }
+            else {
+            closeLoopPromptedIdsRef.current.add(`event:${ev.id}`);
             setActiveTile({
               role: 'close_loop',
               type: 'event',
@@ -188,6 +198,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               ts: Date.now(),
             });
             setActiveZoneState('close_loop');
+          }
           }
         }
       }
@@ -1394,6 +1405,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         }).catch(() => {});
       }
     }
+    // Reset blocking refs so the next handleCcSend isn't gated by stale state.
+    ccStoppedRef.current = false;
+    ccAbortRef.current = null;
     setActiveTile(null);
     setActiveZoneState('empty');
   }, [activeTile, apiFetch, authToken]);
@@ -1442,6 +1456,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           ...prev,
           { role: 'system', content: 'Wrap saved — nice close.', createdAt: new Date().toISOString(), ts: Date.now() },
         ]);
+        // Reset blocking refs so the next handleCcSend isn't gated by stale
+        // state from a previous stopped stream or abort controller.
+        ccStoppedRef.current = false;
+        ccAbortRef.current = null;
+        // Expire any unresolved pending confirmations in the chat.
+        setCcMessages((prev) => prev.map((m) =>
+          m.role === 'confirm' && m.status === 'pending'
+            ? { ...m, status: 'expired' }
+            : m
+        ));
         setActiveZoneState('success');
         setTimeout(() => { setActiveTile(null); setActiveZoneState('empty'); }, 1500);
       } catch (err) {
@@ -1496,6 +1520,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           ...prev,
           { role: 'system', content: 'Note saved.', createdAt: new Date().toISOString(), ts: Date.now() },
         ]);
+        // Reset blocking refs so the next handleCcSend isn't gated by stale
+        // state from a previous stopped stream or abort controller.
+        ccStoppedRef.current = false;
+        ccAbortRef.current = null;
+        // Expire any unresolved pending confirmations in the chat so
+        // they don't block future agentic turns.
+        setCcMessages((prev) => prev.map((m) =>
+          m.role === 'confirm' && m.status === 'pending'
+            ? { ...m, status: 'expired' }
+            : m
+        ));
         setActiveZoneState('success');
         setTimeout(() => {
           setActiveTile(null);
@@ -2273,6 +2308,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                         )}
                         {msg.status === 'approved' && <div style={{ fontSize: '12px', color: '#059669', fontWeight: 600 }}>Sent ✓</div>}
                         {msg.status === 'rejected' && <div style={{ fontSize: '12px', color: '#6b7280' }}>Cancelled</div>}
+                        {msg.status === 'expired' && <div style={{ fontSize: '12px', color: '#6b7280' }}>Expired</div>}
                         {msg.status === 'error' && <div style={{ fontSize: '12px', color: '#dc2626' }}>Confirmation failed</div>}
                       </div>
                     </div>
