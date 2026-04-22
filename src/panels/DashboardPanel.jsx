@@ -638,6 +638,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // latest committed state without depending on ccMessages in their deps.
   useEffect(() => { ccMessagesRef.current = ccMessages; }, [ccMessages]);
   useEffect(() => { ccSendingRef.current = ccSending; }, [ccSending]);
+  // 60s safety-net: if ccSending stays true for a full minute, force-
+  // reset it. This covers edge cases where the SSE stream silently dies
+  // (network change, server restart) and the finally block never fires.
+  useEffect(() => {
+    if (!ccSending) return;
+    const timer = setTimeout(() => {
+      console.warn('[CC] 60s input-lock timeout — force-resetting ccSending');
+      ccStoppedRef.current = false;
+      ccAbortRef.current = null;
+      setCcSending(false);
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [ccSending]);
   useEffect(() => { activeZoneStateRef.current = activeZoneState; }, [activeZoneState]);
 
   // Persist CC messages to localStorage on every change
