@@ -1758,8 +1758,8 @@ async function upsertClassification(userId, d) {
     `INSERT INTO email_classifications
        (user_id, message_id, thread_id, account_email, entity_id,
         category, importance, importance_rank, action_required, is_read,
-        amount, currency, vendor, summary, source, classified_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+        amount, currency, vendor, summary, source, classification_reasoning, classified_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
      ON CONFLICT (user_id, message_id) DO UPDATE SET
        thread_id = EXCLUDED.thread_id,
        account_email = EXCLUDED.account_email,
@@ -1774,12 +1774,14 @@ async function upsertClassification(userId, d) {
        vendor = EXCLUDED.vendor,
        summary = EXCLUDED.summary,
        source = EXCLUDED.source,
+       classification_reasoning = COALESCE(EXCLUDED.classification_reasoning, email_classifications.classification_reasoning),
        classified_at = NOW()
      RETURNING id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
                account_email AS "accountEmail", entity_id AS "entityId",
                category, importance, importance_rank AS "importanceRank",
                action_required AS "actionRequired", is_read AS "isRead",
                amount, currency, vendor, summary, source,
+               classification_reasoning AS "classificationReasoning",
                classified_at AS "classifiedAt"`,
     [
       userId, d.messageId, d.threadId, d.accountEmail,
@@ -1794,6 +1796,7 @@ async function upsertClassification(userId, d) {
       d.vendor || null,
       d.summary || null,
       d.source || 'rule',
+      d.classificationReasoning ? JSON.stringify(d.classificationReasoning) : null,
     ],
   );
   return rows[0];
@@ -1807,6 +1810,7 @@ async function batchGetClassifications(userId, messageIds) {
             category, importance, importance_rank AS "importanceRank",
             action_required AS "actionRequired", is_read AS "isRead",
             amount, currency, vendor, summary, source,
+            classification_reasoning AS "classificationReasoning",
             classified_at AS "classifiedAt"
      FROM email_classifications
      WHERE user_id = $1 AND message_id = ANY($2::text[])`,

@@ -244,6 +244,7 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     let vendor = null;
     let summary = null;
     let source = 'rule';
+    const matchedPatterns = [];
 
     let resolved = false;
 
@@ -253,6 +254,7 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
       importance = matched.importance || 'normal';
       source = 'rule';
       resolved = true;
+      matchedPatterns.push(`rule: "${matched.ruleName || matched.id}" matched`);
 
       const shouldExtract = matched.extractAmount || FINANCIAL_CATEGORIES.has(category);
       if (shouldExtract) {
@@ -275,16 +277,19 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
         importance = label.importance;
         source = 'label';
         resolved = true;
+        matchedPatterns.push(`gmail_label: ${label.id}`);
       }
     }
 
     // Step 4 — sender heuristics (bulk / newsletter signals).
     if (!resolved) {
-      if (_matchBulkHeuristic({ from, body, headers })) {
+      const bulkMatch = _matchBulkHeuristic({ from, body, headers });
+      if (bulkMatch) {
         category = 'newsletter';
         importance = 'low';
         source = 'heuristic';
         resolved = true;
+        matchedPatterns.push(`heuristic: ${bulkMatch}`);
       }
     }
 
@@ -302,8 +307,23 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
         if (ai.vendor) vendor = ai.vendor;
         if (ai.summary) summary = ai.summary;
         source = 'ai';
+        matchedPatterns.push('ai_classifier: haiku');
+        if (ai.entity) matchedPatterns.push(`ai_entity: ${ai.entity}`);
+        if (ai.amount != null) matchedPatterns.push(`ai_amount: ${ai.amount}`);
       }
     }
+
+    // Build reasoning snapshot for the "Why?" surface
+    const classificationReasoning = {
+      source,
+      category,
+      importance,
+      matched_patterns: matchedPatterns,
+      has_confirmation_code: _hasConfirmationCode(subject, body),
+      classifier_version: 'v1.3',
+    };
+    if (amount != null) classificationReasoning.amount = amount;
+    if (vendor) classificationReasoning.vendor = vendor;
 
     const saved = await db.upsertClassification(userId, {
       messageId, threadId, accountEmail,
@@ -311,6 +331,7 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
       category, importance,
       actionRequired, isRead: !!isRead,
       amount, currency, vendor, summary, source,
+      classificationReasoning,
     }).catch(() => null);
 
     // ── Auto-flag high-importance emails ──────────────────────────────────
