@@ -299,5 +299,94 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  /**
+   * POST /api/admin/backfill-flagged-from-critical
+   * One-time backfill: finds all critical/high-classified emails without
+   * a flagged inbox_item and creates+flags them. Acked_at is set to NOW()
+   * because users have already seen these via the alerts panel.
+   * Idempotent: skips rows that already have flagged_at.
+   * Query param ?dry_run=true to preview without writing.
+   */
+  router.post('/api/admin/backfill-flagged-from-critical', async (req, res) => {
+    const dryRun = req.query.dry_run === 'true';
+    const stats = { scanned: 0, matched: 0, backfilled: 0, already_flagged: 0, created_item: 0, unmatched: 0, errors: [] };
+    try {
+      // Find all critical/high classified emails (importance_rank >= 3)
+      const { rows: classifications } = await db.pool.query(
+        `SELECT ec.user_id, ec.message_id, ec.thread_id, ec.account_email,
+                ec.category, ec.importance, ec.importance_rank, ec.summary,
+                ec.classified_at, ec.vendor
+         FROM email_classifications ec
+         WHERE ec.importance_rank >= 3
+         ORDER BY ec.classified_at DESC`,
+      );
+      stats.scanned = classifications.length;
+
+      for (const cls of classifications) {
+        try {
+          // Check if inbox_item already exists for this thread
+          const { rows: existing } = await db.pool.query(
+            'SELECT id, flagged_at FROM inbox_items WHERE user_id = $1 AND source_id = $2',
+            [cls.user_id, cls.thread_id],
+          );
+
+          if (existing[0]?.flagged_at) {
+            stats.already_flagged++;
+            stats.matched++;
+            continue;
+          }
+
+          stats.matched++;
+
+          if (dryRun) {
+            stats.backfilled++;
+            continue;
+          }
+
+          // Create inbox_item if missing
+          if (!existing[0]) {
+            const id = `inbox-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+            await db.createInboxItem({
+              id,
+              userId: cls.user_id,
+              type: 'EMAIL',
+              title: cls.summary || '(classified email)',
+              summary: cls.vendor ? `${cls.category} — ${cls.vendor}` : cls.category,
+              source: cls.account_email?.includes('outlook') ? 'outlook' : 'gmail',
+              sourceId: cls.thread_id,
+              gmailThreadId: cls.thread_id,
+              gmailLink: `https://mail.google.com/mail/u/0/#inbox/${cls.thread_id}`,
+            });
+            stats.created_item++;
+          }
+
+          // Flag + ack the item
+          const { rows: itemRows } = await db.pool.query(
+            'SELECT id FROM inbox_items WHERE user_id = $1 AND source_id = $2',
+            [cls.user_id, cls.thread_id],
+          );
+          if (itemRows[0]) {
+            await db.pool.query(
+              `UPDATE inbox_items SET flagged_at = $3, flagged_reason = 'aria_critical_backfill', flagged_acked_at = NOW()
+               WHERE id = $1 AND user_id = $2 AND flagged_at IS NULL`,
+              [itemRows[0].id, cls.user_id, cls.classified_at || new Date()],
+            );
+            stats.backfilled++;
+          } else {
+            stats.unmatched++;
+          }
+        } catch (rowErr) {
+          stats.errors.push({ threadId: cls.thread_id, error: rowErr.message });
+        }
+      }
+
+      logger.info('admin.backfillFlagged.complete', { dryRun, ...stats });
+      res.json({ dryRun, ...stats });
+    } catch (err) {
+      logger.error('admin.backfillFlagged.failed', { error: err.message });
+      res.status(500).json({ error: err.message, stats });
+    }
+  });
+
   return router;
 };
