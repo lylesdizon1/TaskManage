@@ -43,6 +43,14 @@ async function processRuleDecay() {
     for (const userId of ids) {
       await invalidateRulesCache(userId).catch(() => {});
     }
+    // Decay inferred classification rules with the same formula
+    try {
+      const clsDecay = await db.decayInferredClassificationRules();
+      logger.info('ruleDecay.classificationRules', clsDecay);
+    } catch (clsErr) {
+      logger.warn('ruleDecay.classificationRules.failed', { error: clsErr.message });
+    }
+
     logger.info('ruleDecay.complete', { users, decayed, archived });
   } catch (err) {
     logger.error('ruleDecay.failed', { error: err.message });

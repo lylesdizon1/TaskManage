@@ -4,6 +4,7 @@ const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const googleProvider = require('../lib/providers/googleEmailProvider.cjs');
 const { classifyEmail } = require('../lib/classificationEngine.cjs');
+const { processClassificationFeedback } = require('../lib/classificationFeedback.cjs');
 
 // Resolve the provider implementation for a given integration row.
 // Single-provider today — Gmail. Future-ready lookup table.
@@ -231,6 +232,14 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
         senderDomain,
         subjectSnippet,
       });
+
+      // Fire-and-forget Phase 4 pipeline: check for pattern matches → inferred rules
+      processClassificationFeedback(db, userId, {
+        feedbackType: feedback_type,
+        senderEmail: senderEmail || null,
+        senderDomain,
+        correctionDimensions: corrections || null,
+      }).catch(() => {});
 
       // Immediate state corrections for thumbs_down
       if (feedback_type === 'thumbs_down') {
