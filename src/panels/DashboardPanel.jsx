@@ -394,21 +394,29 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   // ── Command Center state ──────────────────────────────────────────────────
   const ccStorageKey = `cc_messages_${getTodayLocal(userTZ)}`;
-  const [ccMessages, setCcMessages] = useState(() => {
+  // Read cached messages once; share between ccMessages and ccLoading init
+  // so we don't double-parse localStorage.
+  const [ccCacheInit] = useState(() => {
     try {
-      const cached = localStorage.getItem(ccStorageKey);
-      if (cached) return JSON.parse(cached);
+      const raw = localStorage.getItem(`cc_messages_${getTodayLocal(userTZ)}`);
+      if (raw) {
+        const msgs = JSON.parse(raw);
+        if (Array.isArray(msgs) && msgs.length > 0) return msgs;
+      }
     } catch {}
-    return [];
+    return null;
   });
+  const [ccMessages, setCcMessages] = useState(ccCacheInit || []);
   const [ccConvId, setCcConvId] = useState(null);
-  const [ccLoading, setCcLoading] = useState(true);
+  // Skip the loading spinner when localStorage already has today's messages —
+  // show cached messages immediately and let initCommandCenter sync silently.
+  const [ccLoading, setCcLoading] = useState(!ccCacheInit);
   const [ccInput, setCcInput] = useState('');
   const [ccSending, setCcSending] = useState(false);
   const ccAbortRef   = useRef(null);   // active AbortController for chat stream
   const ccStoppedRef = useRef(false);  // set true on user Stop so late events are ignored
   const ccSendRef    = useRef(null);   // holds latest handleCcSend for cross-surface triggers
-  const ccMessagesRef = useRef([]);    // mirror of ccMessages for stable reads inside callbacks
+  const ccMessagesRef = useRef(ccCacheInit || []);    // mirror of ccMessages for stable reads inside callbacks
   const ccSendingRef = useRef(false);  // mirror of ccSending for reads inside fetchBriefContext
   const activeZoneStateRef = useRef('empty'); // mirror of activeZoneState for reads inside fetchBriefContext
 
@@ -775,7 +783,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   initCommandCenterRef.current = async () => {
     if (!currentUser?.id || ccInitRunningRef.current) return;
     ccInitRunningRef.current = true;
-    setCcLoading(true);
+    // Only show spinner if we have NO cached messages — otherwise the
+    // cached messages are already visible and we sync silently.
+    const hasCachedMessages = ccMessagesRef.current.length > 0;
+    if (!hasCachedMessages) setCcLoading(true);
     // Guard against duplicate intervals on re-init (e.g. user-id change).
     // Prior code only set ccInitRunningRef = false on the error path, so
     // a successful init would lock the ref true forever AND each accepted
