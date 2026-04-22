@@ -167,5 +167,48 @@ module.exports = function createTasksRouter({ authenticateToken, db }) {
     }
   });
 
+  /**
+   * POST /api/tasks/from-email
+   * Body: { email_id, title?, due_date?, notes? }
+   * Creates a task linked to the source email. Auto-populates from inbox_item if title omitted.
+   */
+  router.post('/api/tasks/from-email', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { email_id, title, due_date, notes } = req.body;
+      if (!email_id) return res.status(400).json({ error: 'email_id required' });
+
+      const emailItem = await db.getInboxItemById(email_id, userId);
+      if (!emailItem) return res.status(404).json({ error: 'Email not found' });
+
+      const taskId = `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const taskTitle = title || emailItem.title || '(no subject)';
+
+      await db.upsertTask({
+        id: taskId,
+        title: taskTitle,
+        description: notes || emailItem.summary || '',
+        priority: 'medium',
+        status: 'pending',
+        dueDate: due_date || '',
+        tags: [],
+        visibility: 'private',
+        completed: false,
+        owner: userId,
+        createdBy: userId,
+        sourceEmailId: email_id,
+        sourceEmailSubject: emailItem.title || '',
+        sourceEmailSender: emailItem.sender || '',
+      });
+
+      const task = await db.getTaskById(taskId, userId);
+      logger.info('tasks.fromEmail.created', { requestId: req.requestId, userId, taskId, emailId: email_id });
+      return res.json(task);
+    } catch (err) {
+      logger.error('tasks.fromEmail.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   return router;
 };

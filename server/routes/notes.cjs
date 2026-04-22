@@ -324,5 +324,40 @@ Respond in JSON only:
     }
   });
 
+  /**
+   * POST /api/notes/from-email
+   * Body: { email_id, title?, body? }
+   * Creates a note linked to the source email. Auto-populates from inbox_item if title/body omitted.
+   */
+  router.post('/api/notes/from-email', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { email_id, title, body } = req.body;
+      if (!email_id) return res.status(400).json({ error: 'email_id required' });
+
+      const emailItem = await db.getInboxItemById(email_id, userId);
+      if (!emailItem) return res.status(404).json({ error: 'Email not found' });
+
+      const noteId = `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const note = await db.createNote({
+        id: noteId,
+        userId,
+        title: title || emailItem.title || '(no subject)',
+        content: body || emailItem.summary || '',
+        visibility: 'private',
+        type: 'quick',
+        sourceEmailId: email_id,
+        sourceEmailSubject: emailItem.title || '',
+        sourceEmailSender: emailItem.sender || '',
+      });
+
+      logger.info('notes.fromEmail.created', { requestId: req.requestId, userId, noteId, emailId: email_id });
+      return res.json(note);
+    } catch (err) {
+      logger.error('notes.fromEmail.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   return router;
 };

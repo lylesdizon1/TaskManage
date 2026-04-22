@@ -75,7 +75,54 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
     }
   });
 
-  // ── Provider-backed thread routes (no DB persistence) ──────────────────
+  /**
+   * PATCH /api/inbox/items/:id/flag
+   * Body: { reason?: string } — defaults to 'manual'
+   */
+  router.patch('/api/inbox/items/:id/flag', authenticateToken, async (req, res) => {
+    try {
+      const { reason } = req.body || {};
+      const ok = await db.flagInboxItem(req.params.id, req.user.id, reason || 'manual');
+      if (!ok) return res.status(404).json({ error: 'Item not found' });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.flag.failed', { requestId: req.requestId, userId: req.user?.id, itemId: req.params.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * PATCH /api/inbox/items/:id/unflag
+   */
+  router.patch('/api/inbox/items/:id/unflag', authenticateToken, async (req, res) => {
+    try {
+      const ok = await db.unflagInboxItem(req.params.id, req.user.id);
+      if (!ok) return res.status(404).json({ error: 'Item not found' });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('inbox.unflag.failed', { requestId: req.requestId, userId: req.user?.id, itemId: req.params.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/inbox/flagged
+   * Returns only flagged inbox items + count, newest first.
+   */
+  router.get('/api/inbox/flagged', authenticateToken, async (req, res) => {
+    try {
+      const [items, count] = await Promise.all([
+        db.getFlaggedInboxItems(req.user.id),
+        db.getFlaggedInboxCount(req.user.id),
+      ]);
+      res.json({ items, count });
+    } catch (err) {
+      logger.error('inbox.flagged.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // ── Provider-backed thread routes (no DB persistence) ────���─────────────
 
   router.get('/api/inbox/accounts', authenticateToken, async (req, res) => {
     try {

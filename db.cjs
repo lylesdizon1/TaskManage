@@ -2700,8 +2700,10 @@ async function replaceTasks(tasks, userId) {
 async function upsertTask(t) {
   const { rows } = await pool.query(
     `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
-                        tags, visibility, completed, owner, created_by, google_event_id, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())
+                        tags, visibility, completed, owner, created_by, google_event_id,
+                        source_email_id, source_email_subject, source_email_sender,
+                        created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, NOW())
      ON CONFLICT (id) DO UPDATE SET
        title = EXCLUDED.title,
        description = EXCLUDED.description,
@@ -2713,6 +2715,9 @@ async function upsertTask(t) {
        visibility = EXCLUDED.visibility,
        completed = EXCLUDED.completed,
        google_event_id = EXCLUDED.google_event_id,
+       source_email_id = COALESCE(EXCLUDED.source_email_id, tasks.source_email_id),
+       source_email_subject = COALESCE(EXCLUDED.source_email_subject, tasks.source_email_subject),
+       source_email_sender = COALESCE(EXCLUDED.source_email_sender, tasks.source_email_sender),
        updated_at = NOW()
      RETURNING *`,
     [
@@ -2729,6 +2734,9 @@ async function upsertTask(t) {
       t.owner || '',
       t.createdBy || t.owner || '',
       t.googleEventId || null,
+      t.sourceEmailId || null,
+      t.sourceEmailSubject || null,
+      t.sourceEmailSender || null,
       t.createdAt || new Date().toISOString(),
     ],
   );
@@ -4191,6 +4199,8 @@ async function getCorrections(userId, opts = {}) {
  */
 const NOTE_RETURNING = `id, user_id AS "userId", title, content, visibility,
   type, pillar, category, subcategory, tags, pinned, archived, entity_id AS "entityId",
+  source_email_id AS "sourceEmailId", source_email_subject AS "sourceEmailSubject",
+  source_email_sender AS "sourceEmailSender",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 /**
@@ -4292,14 +4302,16 @@ async function getPrivateNotesForAI(userId) {
  * @returns {Promise<Object>} Created note record.
  * @throws {Error} If the database query fails.
  */
-async function createNote({ id, userId, title, content, visibility, type, pillar, category, subcategory, tags, entityId }) {
+async function createNote({ id, userId, title, content, visibility, type, pillar, category, subcategory, tags, entityId, sourceEmailId, sourceEmailSubject, sourceEmailSender }) {
   const { rows } = await pool.query(
-    `INSERT INTO notes (id, user_id, title, content, visibility, type, pillar, category, subcategory, tags, entity_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO notes (id, user_id, title, content, visibility, type, pillar, category, subcategory, tags, entity_id,
+                        source_email_id, source_email_subject, source_email_sender)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING ${NOTE_RETURNING}`,
     [id, userId, title || '', content || '', visibility || 'private',
      type || 'quick', pillar || null, category || '', subcategory || '',
-     JSON.stringify(tags || []), entityId || null],
+     JSON.stringify(tags || []), entityId || null,
+     sourceEmailId || null, sourceEmailSubject || null, sourceEmailSender || null],
   );
   return rows[0];
 }
