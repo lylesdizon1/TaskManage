@@ -3059,6 +3059,51 @@ async function updateInboxItemAction(id, action, userId) {
   return result.rowCount > 0;
 }
 
+async function flagInboxItem(id, userId, reason) {
+  if (!userId) throw new Error('flagInboxItem requires userId');
+  const result = await pool.query(
+    `UPDATE inbox_items SET flagged_at = NOW(), flagged_reason = $3
+     WHERE id = $1 AND user_id = $2`,
+    [id, userId, reason || 'manual'],
+  );
+  return result.rowCount > 0;
+}
+
+async function unflagInboxItem(id, userId) {
+  if (!userId) throw new Error('unflagInboxItem requires userId');
+  const result = await pool.query(
+    `UPDATE inbox_items SET flagged_at = NULL, flagged_reason = NULL
+     WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return result.rowCount > 0;
+}
+
+async function getFlaggedInboxItems(userId, limit = 100, offset = 0) {
+  const { rows } = await pool.query(
+    `SELECT * FROM inbox_items WHERE user_id = $1 AND flagged_at IS NOT NULL
+     ORDER BY flagged_at DESC LIMIT $2 OFFSET $3`,
+    [userId, limit, offset],
+  );
+  return rows;
+}
+
+async function getFlaggedInboxCount(userId) {
+  const { rows } = await pool.query(
+    'SELECT COUNT(*)::int AS count FROM inbox_items WHERE user_id = $1 AND flagged_at IS NOT NULL',
+    [userId],
+  );
+  return rows[0].count;
+}
+
+async function getInboxItemById(id, userId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM inbox_items WHERE id = $1 AND user_id = $2',
+    [id, userId],
+  );
+  return rows[0] || null;
+}
+
 // ── Email labels (Gmail labels + Outlook folders) ─────────────────────────
 
 /**
@@ -5993,6 +6038,19 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_task_id    ON project_notes(task_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_entity_id  ON project_notes(entity_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS project_notes_created_by ON project_notes(created_by)`).catch(() => {});
+
+  // ── Inbox flagged state (email persistence) ──────────────────────────────
+  await pool.query(`ALTER TABLE inbox_items ADD COLUMN IF NOT EXISTS flagged_at TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE inbox_items ADD COLUMN IF NOT EXISTS flagged_reason TEXT`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inbox_items_flagged ON inbox_items(user_id, flagged_at DESC) WHERE flagged_at IS NOT NULL`).catch(() => {});
+
+  // ── Task/note source email linking ───────────────────────────────────────
+  await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_email_id TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_email_subject TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_email_sender TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS source_email_id TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS source_email_subject TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS source_email_sender TEXT`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -8616,6 +8674,11 @@ module.exports = {
   inboxItemExistsBySourceId,
   inboxItemsExistingBySourceIds,
   updateInboxItemAction,
+  flagInboxItem,
+  unflagInboxItem,
+  getFlaggedInboxItems,
+  getFlaggedInboxCount,
+  getInboxItemById,
   searchInboxItems,
   upsertEmailLabel,
   getEmailLabelsForUser,
