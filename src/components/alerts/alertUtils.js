@@ -61,7 +61,7 @@ export const DEFAULT_ALERT_RULES = [
   {
     id: 'rule-critical-mail',
     name: 'Critical Mail',
-    description: 'Alert when VIP sender or trigger keyword email arrives',
+    description: 'Managed by Flagged inbox — auto-flags VIP/keyword emails via classification engine',
     enabled: false,
     condition: { type: 'critical-mail' },
     channels: { whatsapp: true, slack: true, sms: false, email: true },
@@ -79,7 +79,7 @@ export const CONDITION_META = {
   'daily-digest':   { label: 'Daily summary (all tasks)',  hasTag: false, hasHours: false },
   'morning-brief':  { label: 'Morning brief (scheduled)',  hasTag: false, hasHours: false, hasTime: true },
   'event-reminder': { label: 'Cal event reminder',         hasTag: false, hasHours: false, hasMinutes: true },
-  'critical-mail':  { label: 'Critical mail (VIP/keyword)',hasTag: false, hasHours: false },
+  'critical-mail':  { label: 'Critical mail → Flagged inbox', hasTag: false, hasHours: false },
 };
 
 export const EMPTY_NEW_RULE = {
@@ -122,6 +122,12 @@ export function evaluateRule(rule, tasks, tz) {
 
     case 'daily-digest':
       return active;
+
+    case 'critical-mail':
+      // Handled by classification engine auto-flag → Flagged inbox.
+      // flagged_acked_at is the canonical dismissed state; fired_alerts
+      // is no longer used for critical-mail dedup.
+      return [];
 
     default:
       return [];
@@ -290,6 +296,9 @@ export async function runAlertRules(tasks, rules, emailSettings, firedRef, addTo
   const candidates = [];
   for (const rule of rules) {
     if (!rule.enabled) continue;
+    // critical-mail is handled by classification engine → Flagged inbox;
+    // flagged_acked_at is the canonical dismiss state, not fired_alerts.
+    if (rule.condition.type === 'critical-mail') continue;
     const matching = evaluateRule(rule, tasks, userTZ);
     if (matching.length === 0) continue;
     const scope = getRuleScope(rule.condition.type);

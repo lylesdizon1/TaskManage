@@ -27,7 +27,7 @@ export function conditionDescription(condition) {
     case 'daily-digest':   return 'All active tasks (session summary)';
     case 'morning-brief':  return `Morning brief at ${condition.time || '08:00'}`;
     case 'event-reminder': return `${condition.minutesBefore || 15} min before event`;
-    case 'critical-mail':  return 'VIP sender or trigger keyword match';
+    case 'critical-mail':  return 'Auto-flags VIP/keyword emails → Flagged inbox';
     default:               return 'Unknown condition';
   }
 }

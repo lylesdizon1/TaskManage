@@ -46,6 +46,11 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
                 custom
               </span>
             )}
+            {rule.condition?.type === 'critical-mail' && (
+              <span className="text-[10px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded font-medium">
+                flagged inbox
+              </span>
+            )}
           </div>
           <p className="text-xs text-gray-400 mt-0.5 truncate">{rule.description}</p>
         </div>
