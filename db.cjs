@@ -696,6 +696,42 @@ async function initTables() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_id)`).catch(() => {});
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolution_json JSONB`).catch(() => {});
+
+  // ── active_zone_tiles — Aria's orchestration surface ──────────────────
+  // One row per (user, candidate_key). candidate_key is a stable hash of
+  // (candidate_type, sorted item ids) so detector re-runs UPSERT onto
+  // the same row instead of flickering the UI. status transitions:
+  //   pending → resolved        (primary_action fired)
+  //   pending → deferred        ("not now" — returns after deferred_until)
+  //   pending → dismissed       ("X" — returns after dismissed_until)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS active_zone_tiles (
+      id                TEXT PRIMARY KEY,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      candidate_type    TEXT NOT NULL,
+      candidate_key     TEXT NOT NULL,
+      priority_score    INT NOT NULL DEFAULT 0,
+      urgency           TEXT,
+      headline          TEXT NOT NULL DEFAULT '',
+      body              TEXT DEFAULT '',
+      primary_action    JSONB DEFAULT '{}',
+      secondary_action  JSONB DEFAULT '{}',
+      items_preview     JSONB DEFAULT '[]',
+      status            TEXT NOT NULL DEFAULT 'pending',
+      deferred_until    TIMESTAMPTZ,
+      dismissed_until   TIMESTAMPTZ,
+      composer_source   TEXT,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, candidate_key)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_az_user_status ON active_zone_tiles(user_id, status, priority_score DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_az_deferred ON active_zone_tiles(user_id, deferred_until) WHERE deferred_until IS NOT NULL`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_az_dismissed ON active_zone_tiles(user_id, dismissed_until) WHERE dismissed_until IS NOT NULL`).catch(() => {});
+  // composer_source tracks llm|fallback|cache for the metrics dashboard.
+  await pool.query(`ALTER TABLE active_zone_tiles ADD COLUMN IF NOT EXISTS composer_source TEXT`).catch(() => {});
+
   // Phase 5 — link back to decision_log so the WhatsApp YES/NO webhook
   // can close the original decision with trust feedback at resolution
   // time (was previously orphaned because the webhook had no way to
@@ -8709,6 +8745,165 @@ async function getRecentOutcomeContext(userId, limit = 5) {
   return rows;
 }
 
+// ── active_zone_tiles helpers ────────────────────────────────────────────
+
+/**
+ * UPSERT a tile by (user_id, candidate_key). Detector re-runs always flow
+ * through this helper so an unchanged situation updates the same row
+ * rather than flickering the UI with delete+insert. Preserves user-set
+ * status/deferred_until/dismissed_until across re-runs — the detector
+ * doesn't get to override a "not now" the user just clicked.
+ */
+async function upsertActiveZoneTile(tile) {
+  const {
+    id, userId, candidateType, candidateKey, priorityScore, urgency,
+    headline, body, primaryAction, secondaryAction, itemsPreview,
+    composerSource,
+  } = tile;
+  const { rows } = await pool.query(
+    `INSERT INTO active_zone_tiles
+       (id, user_id, candidate_type, candidate_key, priority_score, urgency,
+        headline, body, primary_action, secondary_action, items_preview,
+        composer_source, status, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb,
+             $12, 'pending', NOW(), NOW())
+     ON CONFLICT (user_id, candidate_key) DO UPDATE SET
+       priority_score   = EXCLUDED.priority_score,
+       urgency          = EXCLUDED.urgency,
+       headline         = EXCLUDED.headline,
+       body             = EXCLUDED.body,
+       primary_action   = EXCLUDED.primary_action,
+       secondary_action = EXCLUDED.secondary_action,
+       items_preview    = EXCLUDED.items_preview,
+       composer_source  = EXCLUDED.composer_source,
+       updated_at       = NOW()
+     RETURNING id, user_id AS "userId", candidate_type AS "candidateType",
+               candidate_key AS "candidateKey", priority_score AS "priorityScore",
+               urgency, headline, body,
+               primary_action AS "primaryAction",
+               secondary_action AS "secondaryAction",
+               items_preview AS "itemsPreview",
+               status, deferred_until AS "deferredUntil",
+               dismissed_until AS "dismissedUntil",
+               composer_source AS "composerSource",
+               created_at AS "createdAt", updated_at AS "updatedAt"`,
+    [id, userId, candidateType, candidateKey, priorityScore, urgency || null,
+     headline || '', body || '',
+     JSON.stringify(primaryAction || {}),
+     JSON.stringify(secondaryAction || {}),
+     JSON.stringify(itemsPreview || []),
+     composerSource || null],
+  );
+  return rows[0];
+}
+
+/**
+ * Active tiles for a user, ranked by priority. Excludes tiles currently
+ * deferred/dismissed with a future resume time. Returns up to `limit`
+ * (default 3).
+ */
+async function getActiveZoneTiles(userId, limit = 3) {
+  const { rows } = await pool.query(
+    `SELECT id, candidate_type AS "candidateType", candidate_key AS "candidateKey",
+            priority_score AS "priorityScore", urgency,
+            headline, body,
+            primary_action AS "primaryAction",
+            secondary_action AS "secondaryAction",
+            items_preview AS "itemsPreview",
+            status, deferred_until AS "deferredUntil",
+            dismissed_until AS "dismissedUntil",
+            composer_source AS "composerSource",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM active_zone_tiles
+      WHERE user_id = $1
+        AND status = 'pending'
+        AND (deferred_until IS NULL OR deferred_until <= NOW())
+        AND (dismissed_until IS NULL OR dismissed_until <= NOW())
+      ORDER BY priority_score DESC, updated_at ASC
+      LIMIT $2`,
+    [userId, Math.min(parseInt(limit, 10) || 3, 10)],
+  );
+  return rows;
+}
+
+/** Single tile by id, tenant-scoped. */
+async function getActiveZoneTileById(id, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", candidate_type AS "candidateType",
+            candidate_key AS "candidateKey", priority_score AS "priorityScore",
+            urgency, headline, body,
+            primary_action AS "primaryAction",
+            secondary_action AS "secondaryAction",
+            items_preview AS "itemsPreview",
+            status, deferred_until AS "deferredUntil",
+            dismissed_until AS "dismissedUntil",
+            composer_source AS "composerSource"
+       FROM active_zone_tiles WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rows[0] || null;
+}
+
+/** Update tile status with optional time-gate (deferred/dismissed). */
+async function updateActiveZoneTileStatus(id, userId, status, resumeAt = null) {
+  const col = status === 'deferred' ? 'deferred_until'
+            : status === 'dismissed' ? 'dismissed_until'
+            : null;
+  if (col) {
+    const { rowCount } = await pool.query(
+      `UPDATE active_zone_tiles SET status = $3, ${col} = $4, updated_at = NOW()
+         WHERE id = $1 AND user_id = $2`,
+      [id, userId, status, resumeAt],
+    );
+    return rowCount > 0;
+  }
+  const { rowCount } = await pool.query(
+    `UPDATE active_zone_tiles SET status = $3, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2`,
+    [id, userId, status],
+  );
+  return rowCount > 0;
+}
+
+/**
+ * Mark every pending tile whose candidate_key is NOT in the active set as
+ * resolved — used by the detector to drop tiles whose underlying situation
+ * no longer exists (task completed, meeting ended, etc.). Preserves
+ * deferred/dismissed tiles since those are explicit user actions.
+ */
+async function resolveStaleActiveZoneTiles(userId, activeKeys) {
+  if (!Array.isArray(activeKeys)) return 0;
+  const { rowCount } = await pool.query(
+    `UPDATE active_zone_tiles
+        SET status = 'resolved', updated_at = NOW()
+      WHERE user_id = $1
+        AND status = 'pending'
+        AND NOT (candidate_key = ANY($2))`,
+    [userId, activeKeys.length ? activeKeys : ['__none__']],
+  );
+  return rowCount;
+}
+
+/**
+ * Aggregate metrics for the admin Active Zone dashboard: tile counts per
+ * composer_source (llm/fallback/cache) + status + candidate_type in the
+ * last N hours. Caller is super-admin.
+ */
+async function getActiveZoneMetrics({ sinceHours = 24 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT candidate_type AS "candidateType",
+            composer_source AS "composerSource",
+            status,
+            COUNT(*)::int AS n
+       FROM active_zone_tiles
+      WHERE updated_at >= NOW() - ($1 || ' hours')::interval
+      GROUP BY candidate_type, composer_source, status
+      ORDER BY n DESC`,
+    [String(sinceHours)],
+  );
+  return rows;
+}
+
 module.exports = {
   pool,
   initTables,
@@ -9021,4 +9216,11 @@ module.exports = {
   upsertInferredClassificationRule,
   getActiveInferredClassificationRules,
   decayInferredClassificationRules,
+  // Active Zone
+  upsertActiveZoneTile,
+  getActiveZoneTiles,
+  getActiveZoneTileById,
+  updateActiveZoneTileStatus,
+  resolveStaleActiveZoneTiles,
+  getActiveZoneMetrics,
 };
