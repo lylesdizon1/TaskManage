@@ -22,6 +22,15 @@ const VALID_CATEGORIES = new Set([
 const VALID_IMPORTANCE = new Set(['critical', 'high', 'normal', 'low']);
 const FINANCIAL_CATEGORIES = new Set(['invoice', 'receipt', 'purchase', 'financial', 'contract']);
 
+// Confirmation code / OTP detection — regex for 4-8 digit codes and
+// common OTP patterns in subject or body.
+const CONFIRMATION_CODE_RE = /\b(verification|confirmation|security)\s+code[:\s]+\d{4,8}\b|\bOTP[:\s]+\d{4,8}\b|\b\d{4,8}\s+is your (code|pin|otp)\b/i;
+
+function _hasConfirmationCode(subject, body) {
+  const text = `${subject || ''} ${(body || '').slice(0, 2000)}`;
+  return CONFIRMATION_CODE_RE.test(text);
+}
+
 let _anthropic = null;
 function _defaultClient() {
   if (_anthropic) return _anthropic;
@@ -303,6 +312,50 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
       actionRequired, isRead: !!isRead,
       amount, currency, vendor, summary, source,
     }).catch(() => null);
+
+    // ── Auto-flag high-importance emails ──────────────────────────────────
+    // Fire-and-forget: if the classification suggests this email is crucial,
+    // create an inbox_item (if missing) and flag it. Skips if already flagged.
+    try {
+      const shouldAutoFlag =
+        importance === 'critical'
+        || (FINANCIAL_CATEGORIES.has(category) && amount != null)
+        || _hasConfirmationCode(subject, body);
+
+      if (shouldAutoFlag && db.flagInboxItem && db.inboxItemExistsBySourceId) {
+        const flagReason = importance === 'critical' ? 'aria_decision'
+          : FINANCIAL_CATEGORIES.has(category) ? 'financial'
+          : 'confirmation_code';
+
+        const exists = await db.inboxItemExistsBySourceId(userId, threadId);
+        if (!exists && db.createInboxItem) {
+          const id = `inbox-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+          await db.createInboxItem({
+            id, userId, type: 'EMAIL',
+            title: subject || '(no subject)',
+            summary: summary || '',
+            source: accountEmail?.includes('outlook') ? 'outlook' : 'gmail',
+            sourceId: threadId,
+            gmailThreadId: threadId,
+            gmailLink: `https://mail.google.com/mail/u/0/#inbox/${threadId}`,
+            sender: from || null,
+          });
+        }
+
+        // Flag only if not already flagged (skip re-flag on every sync)
+        const { rows } = await db.pool.query(
+          'SELECT id, flagged_at FROM inbox_items WHERE user_id = $1 AND source_id = $2',
+          [userId, threadId],
+        );
+        if (rows[0] && !rows[0].flagged_at) {
+          await db.flagInboxItem(rows[0].id, userId, flagReason);
+          logger.info('classifyEmail.autoFlagged', { userId, threadId, reason: flagReason });
+        }
+      }
+    } catch (autoFlagErr) {
+      // Fire-and-forget — never break classification for flag failure
+      logger.warn('classifyEmail.autoFlag.failed', { userId, threadId, error: autoFlagErr.message });
+    }
 
     return saved || null;
   } catch (err) {

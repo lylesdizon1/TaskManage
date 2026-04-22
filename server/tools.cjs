@@ -551,6 +551,24 @@ const ARIA_TOOLS = [
     },
   },
   {
+    name: 'flag_email_as_crucial',
+    group: 'communication',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Flag an email thread as crucial for later review. Creates a persistent flagged entry in the user\'s inbox. Use when the user says "flag this", "save this for later", "mark as important", or when you detect a high-importance email during conversation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        thread_id:     { type: 'string', description: 'The Gmail/Outlook thread ID' },
+        account_email: { type: 'string', description: 'The connected email account' },
+        subject:       { type: 'string', description: 'Email subject for display' },
+        sender:        { type: 'string', description: 'Email sender for display' },
+        reason:        { type: 'string', enum: ['manual', 'vip_sender', 'financial', 'confirmation_code', 'aria_decision'], description: 'Why this email is being flagged' },
+      },
+      required: ['thread_id', 'account_email', 'reason'],
+    },
+  },
+  {
     name: 'bulk_archive_emails',
     group: 'communication',
     risk: 'high',
@@ -1361,6 +1379,38 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         } catch (err) {
           return { success: false, ...sanitizeApiError(err, 'reply_email', { userId, account: fromAddress, thread_id }) };
         }
+      }
+
+      case 'flag_email_as_crucial': {
+        const { thread_id, account_email, subject, sender, reason } = input;
+        if (!thread_id) return { error: 'thread_id required' };
+
+        // Ensure inbox_item exists
+        const flagExists = await db.inboxItemExistsBySourceId(userId, thread_id);
+        if (!flagExists) {
+          const flagId = `inbox-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+          await db.createInboxItem({
+            id: flagId, userId, type: 'EMAIL',
+            title: subject || '(no subject)',
+            summary: '',
+            source: (account_email || '').includes('outlook') ? 'outlook' : 'gmail',
+            sourceId: thread_id,
+            gmailThreadId: thread_id,
+            gmailLink: `https://mail.google.com/mail/u/0/#inbox/${thread_id}`,
+            sender: sender || null,
+          });
+        }
+
+        const { rows: flagRows } = await db.pool.query(
+          'SELECT id FROM inbox_items WHERE user_id = $1 AND source_id = $2',
+          [userId, thread_id],
+        );
+        if (flagRows[0]) {
+          await db.flagInboxItem(flagRows[0].id, userId, reason || 'aria_decision');
+        }
+
+        try { await db.logMemory({ userId, tool: 'flag_email_as_crucial', content: `Flagged email "${subject || thread_id}" as ${reason}`, metadata: { thread_id, reason } }); } catch {}
+        return { success: true, flagged: true, reason };
       }
 
       case 'archive_email': {
