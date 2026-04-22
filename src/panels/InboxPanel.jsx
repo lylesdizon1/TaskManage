@@ -1373,6 +1373,29 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   </div>
                 );
               })()}
+              {/* Classification badge + reasoning tooltip in detail view */}
+              {(() => {
+                const latest = thread?.messages?.[thread.messages.length - 1];
+                const detMid = latest?.id || thread?.id;
+                const detCls = detMid ? classifications[detMid] : null;
+                if (!detCls || !IMPORTANCE_STYLES[detCls.importance]) return null;
+                const detImp = IMPORTANCE_STYLES[detCls.importance];
+                const showChip = detCls.importanceRank >= 3 && !SUPPRESS_PILL.has(detCls.category);
+                if (!showChip) return null;
+                return (
+                  <div className="mt-2 flex items-center gap-1">
+                    <span
+                      className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ backgroundColor: detImp.bg, color: detImp.fg }}
+                    >
+                      {CATEGORY_LABELS[detCls.category] || detCls.category}
+                    </span>
+                    {detCls.classificationReasoning && (
+                      <ClassificationReasoningTooltip cls={detCls} onOpenCorrections={() => setCorrectionOpenId(detMid)} />
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
@@ -2041,6 +2064,67 @@ function renderThreadRow(props) {
   return <ThreadRow key={`${props.t.accountEmail}:${props.t.id}`} {...props} />;
 }
 
+// ── Classification Reasoning Tooltip ─────────────────────────────────────────
+function ClassificationReasoningTooltip({ cls, onOpenCorrections }) {
+  const [open, setOpen] = useState(false);
+  const r = cls.classificationReasoning || {};
+  const patterns = Array.isArray(r.matched_patterns) ? r.matched_patterns : [];
+  const categoryLabel = CATEGORY_LABELS[cls.category] || cls.category;
+  const importanceLabel = cls.importance ? cls.importance.charAt(0).toUpperCase() + cls.importance.slice(1) : '';
+
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+    >
+      <span
+        className="material-symbols-outlined cursor-pointer"
+        style={{ fontSize: '12px', color: '#9ca3af', verticalAlign: 'middle' }}
+      >
+        info
+      </span>
+      {open && (
+        <div
+          className="absolute left-0 bottom-full mb-1 z-50 w-56 rounded-lg shadow-lg border border-gray-200 bg-white p-2.5"
+          style={{ fontFamily: 'Manrope, sans-serif', fontSize: '11px', lineHeight: '1.4' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '11px', color: '#4f4dcf', marginBottom: '4px' }}>
+            {importanceLabel} {categoryLabel}
+          </div>
+          {patterns.length > 0 && (
+            <ul className="list-disc pl-3 text-gray-600 mb-1.5">
+              {patterns.map((p, i) => <li key={i}>{p}</li>)}
+            </ul>
+          )}
+          {r.has_confirmation_code && (
+            <div className="text-gray-600 mb-1">Contains confirmation/OTP code</div>
+          )}
+          {r.amount != null && (
+            <div className="text-gray-600 mb-1">Amount: {r.currency || '$'}{r.amount}</div>
+          )}
+          {r.vendor && (
+            <div className="text-gray-600 mb-1">Vendor: {r.vendor}</div>
+          )}
+          <div className="text-gray-400 text-[10px] mt-1.5">
+            Source: {r.source || cls.source} {r.classifier_version ? `(${r.classifier_version})` : ''}
+          </div>
+          {onOpenCorrections && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenCorrections(); }}
+              className="mt-1.5 text-[10px] text-red-500 hover:text-red-700 underline"
+            >
+              Thumbs down with corrections
+            </button>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 // ── Inline Correction Panel (thumbs-down expansion) ─────────────────────────
 function InlineCorrectionPanel({ cls, t, submitFeedback, onClose }) {
   const [checks, setChecks] = useState({});
@@ -2356,11 +2440,16 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
                 </span>
               )}
               {showClsChip && (
-                <span
-                  className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full truncate"
-                  style={{ backgroundColor: impStyle.bg, color: impStyle.fg, maxWidth: 120 }}
-                >
-                  {CATEGORY_LABELS[cls.category] || cls.category}
+                <span className="inline-flex items-center gap-0.5">
+                  <span
+                    className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full truncate"
+                    style={{ backgroundColor: impStyle.bg, color: impStyle.fg, maxWidth: 120 }}
+                  >
+                    {CATEGORY_LABELS[cls.category] || cls.category}
+                  </span>
+                  {cls.classificationReasoning && (
+                    <ClassificationReasoningTooltip cls={cls} onOpenCorrections={() => setCorrectionOpenId?.(mid)} />
+                  )}
                 </span>
               )}
             </div>
