@@ -245,6 +245,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [threadError, setThreadError] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
   const [compose, setCompose] = useState(null);
+  const [createFromEmail, setCreateFromEmail] = useState(null); // { type: 'task'|'note', emailId, subject, sender, snippet }
   const [mobileShowThread, setMobileShowThread] = useState(false);
 
   // V2 Phase 1A: search + cursor pagination over /api/inbox/threads.
@@ -1419,6 +1420,31 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                       onClick={starCurrent}
                     />
                     <ActionBtn icon="drive_file_move" label="Move to..." onClick={openMovePicker} />
+                    <ActionBtn
+                      icon={flaggedThreadIds.has(thread.id) ? 'flag' : 'outlined_flag'}
+                      label={flaggedThreadIds.has(thread.id) ? 'Unflag' : 'Flag'}
+                      onClick={() => { if (currentRow) toggleFlag(currentRow); }}
+                    />
+                    <ActionBtn icon="add_task" label="Create Task" onClick={() => {
+                      const latest = thread.messages?.[thread.messages.length - 1];
+                      setCreateFromEmail({
+                        type: 'task',
+                        threadId: thread.id,
+                        subject: latest?.subject || thread.messages?.[0]?.subject || '',
+                        sender: latest?.from || '',
+                        snippet: latest?.snippet || '',
+                      });
+                    }} />
+                    <ActionBtn icon="note_add" label="Create Note" onClick={() => {
+                      const latest = thread.messages?.[thread.messages.length - 1];
+                      setCreateFromEmail({
+                        type: 'note',
+                        threadId: thread.id,
+                        subject: latest?.subject || thread.messages?.[0]?.subject || '',
+                        sender: latest?.from || '',
+                        snippet: latest?.snippet || '',
+                      });
+                    }} />
                   </div>
                 </div>
               );
@@ -1523,6 +1549,155 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
             )}
           </>
         )}
+      </div>
+
+      {/* Create Task/Note from Email modal */}
+      {createFromEmail && (
+        <CreateFromEmailModal
+          data={createFromEmail}
+          authToken={authToken}
+          apiFetch={apiFetch}
+          toast={toast}
+          onClose={() => setCreateFromEmail(null)}
+          onNavigate={onNavigate}
+        />
+      )}
+    </div>
+  );
+}
+
+function CreateFromEmailModal({ data, authToken, apiFetch, toast, onClose, onNavigate }) {
+  const isTask = data.type === 'task';
+  const [title, setTitle] = useState(data.subject || '');
+  const [body, setBody] = useState(data.snippet || '');
+  const [dueDate, setDueDate] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      // First ensure the thread has an inbox_item (flag-thread creates one)
+      await apiFetch('/api/inbox/flag-thread', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          thread_id: data.threadId,
+          subject: data.subject,
+          sender: data.sender,
+          snippet: data.snippet,
+          reason: 'manual',
+        }),
+      });
+
+      // Find the inbox_item id for this thread
+      const itemsRes = await apiFetch('/api/inbox/items', { headers: { Authorization: `Bearer ${authToken}` } });
+      const items = await itemsRes.json();
+      const emailItem = items.find(i => i.source_id === data.threadId);
+      const emailId = emailItem?.id;
+
+      if (!emailId) {
+        toast?.({ type: 'error', message: 'Could not link email — try again' });
+        setSaving(false);
+        return;
+      }
+
+      const endpoint = isTask ? '/api/tasks/from-email' : '/api/notes/from-email';
+      const payload = isTask
+        ? { email_id: emailId, title: title.trim(), notes: body.trim(), due_date: dueDate || undefined }
+        : { email_id: emailId, title: title.trim(), body: body.trim() };
+
+      const res = await apiFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const created = await res.json();
+
+      toast?.({ type: 'success', message: `${isTask ? 'Task' : 'Note'} created from email` });
+      onClose();
+    } catch (err) {
+      toast?.({ type: 'error', message: `Failed: ${err.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-bold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+            {isTask ? 'Create Task from Email' : 'Create Note from Email'}
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>close</span>
+          </button>
+        </div>
+
+        {/* Source email pill */}
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg" style={{ backgroundColor: '#ededff' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 16, color: '#4f4dcf' }}>email</span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-semibold text-gray-700 truncate">{data.subject}</div>
+            <div className="text-[10px] text-gray-500 truncate">{data.sender}</div>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-[11px] font-semibold text-gray-600 mb-1 block">Title</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              autoFocus
+            />
+          </div>
+          {isTask && (
+            <div>
+              <label className="text-[11px] font-semibold text-gray-600 mb-1 block">Due Date</label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+          )}
+          <div>
+            <label className="text-[11px] font-semibold text-gray-600 mb-1 block">{isTask ? 'Notes' : 'Body'}</label>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={4}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-semibold text-gray-600 rounded-lg hover:bg-gray-100"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || !title.trim()}
+            className="px-4 py-2 text-sm font-semibold text-white rounded-lg disabled:opacity-50"
+            style={{ backgroundColor: '#4f4dcf' }}
+          >
+            {saving ? 'Creating...' : `Create ${isTask ? 'Task' : 'Note'}`}
+          </button>
+        </div>
       </div>
     </div>
   );
