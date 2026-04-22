@@ -224,6 +224,10 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [pillFilter, setPillFilter] = useState('all'); // 'all' | 'unread' | 'action' | 'flagged'
   const [flaggedThreadIds, setFlaggedThreadIds] = useState(() => new Set());
   const [flaggedCount, setFlaggedCount] = useState(0);
+  // Classification feedback: tracks which messages got thumbs feedback
+  const [feedbackGiven, setFeedbackGiven] = useState(() => new Set());
+  // Which message_id currently has the correction panel open (null = none)
+  const [correctionOpenId, setCorrectionOpenId] = useState(null);
   const [expandedZones, setExpandedZones] = useState({ attn: true, review: true, low: false, read: false });
   const [touchedZones, setTouchedZones] = useState(() => new Set());
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
@@ -666,6 +670,64 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     }
   }
 
+  // Classification feedback: thumbs up/down with optional corrections
+  async function submitFeedback(t, feedbackType, corrections) {
+    const mid = t.latestMessageId || t.id;
+    const cls = classifications[mid];
+    // Optimistic: mark feedback given
+    setFeedbackGiven(prev => new Set(prev).add(mid));
+    // If thumbs_down without corrections or with unflag-worthy corrections, optimistically unflag
+    const shouldUnflag = feedbackType === 'thumbs_down' && (!corrections || corrections.not_critical || corrections.not_financial || corrections.not_otp);
+    if (shouldUnflag && flaggedThreadIds.has(t.id)) {
+      setFlaggedThreadIds(prev => { const n = new Set(prev); n.delete(t.id); return n; });
+      setFlaggedCount(prev => Math.max(0, prev - 1));
+    }
+    // Optimistic classification correction
+    if (feedbackType === 'thumbs_down' && corrections && mid && cls) {
+      setClassifications(prev => {
+        const updated = { ...prev };
+        const c = { ...updated[mid] };
+        if (corrections.not_financial) c.category = 'general';
+        if (corrections.wrong_priority) c.importance = corrections.wrong_priority;
+        if (corrections.wrong_entity !== undefined) c.entityId = corrections.wrong_entity || null;
+        updated[mid] = c;
+        return updated;
+      });
+    }
+    setCorrectionOpenId(null);
+    // Find the inbox_item id for this thread
+    let inboxItemId = null;
+    try {
+      const r = await apiFetch('/api/inbox/items', { headers: { Authorization: `Bearer ${authToken}` } });
+      if (r.ok) {
+        const items = await r.json();
+        const item = (Array.isArray(items) ? items : []).find(i => i.source_id === t.id || i.sourceId === t.id);
+        if (item) inboxItemId = item.id;
+      }
+    } catch { /* best-effort */ }
+    try {
+      await apiFetch(`/api/inbox/items/${inboxItemId || 'unknown'}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          feedback_type: feedbackType,
+          corrections: corrections || undefined,
+          message_id: mid,
+          sender: t.from || '',
+          subject: t.subject || '',
+          classification: cls ? { category: cls.category, importance: cls.importance, entityId: cls.entityId, source: cls.source } : null,
+        }),
+      });
+    } catch {
+      // Rollback optimistic feedback marker
+      setFeedbackGiven(prev => { const n = new Set(prev); n.delete(mid); return n; });
+      if (shouldUnflag) {
+        setFlaggedThreadIds(prev => { const n = new Set(prev); n.add(t.id); return n; });
+        setFlaggedCount(prev => prev + 1);
+      }
+    }
+  }
+
   async function starSingle(t, nextState) {
     const messageId = t.latestMessageId || t.id;
     if (!messageId) return;
@@ -1056,7 +1118,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="Nothing urgent right now."
                 showCountSuffix
               >
-                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
+                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
               {/* Zone 2 — For Your Review */}
@@ -1070,7 +1132,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="No emails to review."
                 showCountSuffix
               >
-                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
+                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
               {/* Zone 3 — Low Priority */}
@@ -1098,7 +1160,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   )
                 }
               >
-                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
+                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
               {/* Zone 4 — Read */}
@@ -1111,7 +1173,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 onToggle={() => toggleZone('read')}
                 emptyText="No read threads."
               >
-                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }))}
+                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
             </>
           )}
@@ -1445,7 +1507,27 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                         snippet: latest?.snippet || '',
                       });
                     }} />
+                    {(() => {
+                      const detailMid = currentRow?.latestMessageId || thread.id;
+                      const detailCls = classifications[detailMid];
+                      const detailHasFb = feedbackGiven.has(detailMid);
+                      if (!detailCls) return null;
+                      if (detailHasFb) return <ActionBtn icon="check_circle" label="Feedback sent" onClick={() => {}} />;
+                      return (
+                        <>
+                          <ActionBtn icon="thumb_up" label="Good" onClick={() => { if (currentRow) submitFeedback(currentRow, 'thumbs_up'); }} />
+                          <ActionBtn icon="thumb_down" label="Wrong" onClick={() => { setCorrectionOpenId(correctionOpenId === detailMid ? null : detailMid); }} />
+                        </>
+                      );
+                    })()}
                   </div>
+                  {/* Inline correction panel in detail view */}
+                  {(() => {
+                    const detailMid = currentRow?.latestMessageId || thread.id;
+                    const detailCls = classifications[detailMid];
+                    if (correctionOpenId !== detailMid || !detailCls || !currentRow) return null;
+                    return <InlineCorrectionPanel cls={detailCls} t={currentRow} submitFeedback={submitFeedback} onClose={() => setCorrectionOpenId(null)} />;
+                  })()}
                 </div>
               );
             })()}
@@ -1959,17 +2041,122 @@ function renderThreadRow(props) {
   return <ThreadRow key={`${props.t.accountEmail}:${props.t.id}`} {...props} />;
 }
 
+// ── Inline Correction Panel (thumbs-down expansion) ─────────────────────────
+function InlineCorrectionPanel({ cls, t, submitFeedback, onClose }) {
+  const [checks, setChecks] = useState({});
+  const toggle = (key) => setChecks(prev => ({ ...prev, [key]: !prev[key] }));
+  const isCritical = cls.importance === 'critical' || cls.importance === 'high';
+  const isFinancial = ['invoice', 'receipt', 'purchase', 'financial', 'contract'].includes(cls.category);
+  const hasEntity = !!cls.entityId;
+  const [selectedPriority, setSelectedPriority] = useState('');
+  const [selectedEntity, setSelectedEntity] = useState('');
+
+  const handleSubmit = () => {
+    const corrections = {};
+    if (checks.not_critical) corrections.not_critical = true;
+    if (checks.not_financial) corrections.not_financial = true;
+    if (checks.not_otp) corrections.not_otp = true;
+    if (selectedPriority) corrections.wrong_priority = selectedPriority;
+    if (selectedEntity !== '') corrections.wrong_entity = selectedEntity || null;
+    if (checks.should_be_vip) corrections.should_be_vip = true;
+    submitFeedback(t, 'thumbs_down', Object.keys(corrections).length > 0 ? corrections : undefined);
+  };
+
+  return (
+    <div
+      className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50/50 p-3"
+      style={{ fontFamily: 'Manrope, sans-serif', fontSize: '12px' }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '12px', color: '#dc2626' }}>
+          What's wrong?
+        </span>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
+        </button>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {isCritical && (
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={!!checks.not_critical} onChange={() => toggle('not_critical')} className="rounded" />
+            <span>Not critical</span>
+          </label>
+        )}
+        {isFinancial && (
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={!!checks.not_financial} onChange={() => toggle('not_financial')} className="rounded" />
+            <span>Not financial</span>
+          </label>
+        )}
+        {cls.classificationReasoning?.has_confirmation_code && (
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={!!checks.not_otp} onChange={() => toggle('not_otp')} className="rounded" />
+            <span>Not a confirmation code</span>
+          </label>
+        )}
+        <div className="flex items-center gap-1.5">
+          <span className="text-gray-600">Priority:</span>
+          <select
+            value={selectedPriority}
+            onChange={(e) => setSelectedPriority(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-1 py-0.5"
+          >
+            <option value="">Keep current</option>
+            <option value="high">High</option>
+            <option value="normal">Normal</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        {hasEntity && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-gray-600">Entity:</span>
+            <select
+              value={selectedEntity}
+              onChange={(e) => setSelectedEntity(e.target.value)}
+              className="text-xs border border-gray-300 rounded px-1 py-0.5"
+            >
+              <option value="">Keep current</option>
+              <option value="">None</option>
+            </select>
+          </div>
+        )}
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={!!checks.should_be_vip} onChange={() => toggle('should_be_vip')} className="rounded" />
+          <span>Should be VIP sender</span>
+        </label>
+      </div>
+      <div className="flex items-center gap-2 mt-2.5">
+        <button
+          onClick={handleSubmit}
+          className="text-xs font-semibold px-3 py-1 rounded-lg text-white"
+          style={{ backgroundColor: '#dc2626', fontFamily: 'Plus Jakarta Sans, sans-serif' }}
+        >
+          Apply corrections
+        </button>
+        <button
+          onClick={() => submitFeedback(t, 'thumbs_down')}
+          className="text-xs text-gray-500 hover:text-gray-700 underline"
+        >
+          Just wrong
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // SWIPE_THRESHOLD: minimum horizontal travel (px) before we commit to
 // revealing the action drawer. Below this we treat the gesture as a tap.
 const SWIPE_THRESHOLD = 60;
 const SWIPE_DRAWER_WIDTH = 140; // px — width of the revealed action panel
 
-function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup }) {
+function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }) {
   const isFlagged = flaggedThreadIds?.has(t.id);
   const tint = tintForAccount(t.accountEmail);
   const active = t.id === activeThreadId;
   const mid = t.latestMessageId || t.id;
   const cls = classifications[mid];
+  const hasFeedback = feedbackGiven?.has(mid);
   const impStyle = cls ? IMPORTANCE_STYLES[cls.importance] : null;
   const senderDisplay = senderName(t.from) || shortAccount(t.accountEmail);
   const avatar = avatarColorForSender(senderEmail(t.from) || senderDisplay);
@@ -2222,7 +2409,34 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
             </span>
           </button>
         )}
+        {cls && !hasFeedback && submitFeedback && (
+          <>
+            <button
+              onClick={(e) => { e.stopPropagation(); submitFeedback(t, 'thumbs_up'); }}
+              title="Good classification"
+              className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-green-50"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '15px', color: '#9ca3af' }}>thumb_up</span>
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setCorrectionOpenId?.(correctionOpenId === mid ? null : mid); }}
+              title="Wrong classification"
+              className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-red-50"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '15px', color: '#9ca3af' }}>thumb_down</span>
+            </button>
+          </>
+        )}
+        {hasFeedback && (
+          <span className="w-7 h-7 rounded-lg flex items-center justify-center" title="Feedback sent">
+            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: '#059669' }}>check_circle</span>
+          </span>
+        )}
       </div>
+      {/* Inline correction panel — opens below the row on thumbs-down */}
+      {correctionOpenId === mid && cls && (
+        <InlineCorrectionPanel cls={cls} t={t} submitFeedback={submitFeedback} onClose={() => setCorrectionOpenId(null)} />
+      )}
     </div>
   );
 }
