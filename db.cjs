@@ -8745,6 +8745,24 @@ async function getRecentOutcomeContext(userId, limit = 5) {
   return rows;
 }
 
+/**
+ * Open pending_confirmations for a user — ones that are still waiting for
+ * YES/NO and haven't expired. Used by the Active Zone candidate detector
+ * to surface a "pending_confirmation" tile at priority 95.
+ */
+async function getOpenPendingConfirmations(userId, limit = 5) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
+            channel, status, expires_at AS "expiresAt", created_at AS "createdAt"
+       FROM pending_confirmations
+      WHERE user_id = $1 AND status = 'pending' AND expires_at > NOW()
+      ORDER BY created_at ASC
+      LIMIT $2`,
+    [userId, Math.min(parseInt(limit, 10) || 5, 50)],
+  );
+  return rows;
+}
+
 // ── active_zone_tiles helpers ────────────────────────────────────────────
 
 /**
@@ -9216,6 +9234,7 @@ module.exports = {
   upsertInferredClassificationRule,
   getActiveInferredClassificationRules,
   decayInferredClassificationRules,
+  getOpenPendingConfirmations,
   // Active Zone
   upsertActiveZoneTile,
   getActiveZoneTiles,
