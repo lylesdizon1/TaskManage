@@ -591,6 +591,24 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     setMobileShowThread(true);
     markInteracted(t.id);
     loadThread(t.id, t.accountEmail);
+    // Auto-ack: when opening a flagged email FROM the Flagged view,
+    // mark it as acknowledged. Other views don't auto-ack.
+    if (pillFilter === 'flagged' && flaggedThreadIds.has(t.id) && !ackedThreadIds.has(t.id)) {
+      const itemId = threadToItemId[t.id];
+      if (itemId) {
+        // Optimistic: mark as acked immediately
+        setAckedThreadIds(prev => { const n = new Set(prev); n.add(t.id); return n; });
+        setFlaggedCount(prev => Math.max(0, prev - 1));
+        apiFetch(`/api/inbox/items/${itemId}/ack`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}` },
+        }).catch(() => {
+          // Rollback on failure
+          setAckedThreadIds(prev => { const n = new Set(prev); n.delete(t.id); return n; });
+          setFlaggedCount(prev => prev + 1);
+        });
+      }
+    }
   }
 
   async function archiveCurrent() {
@@ -1581,6 +1599,32 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                     const detailCls = classifications[detailMid];
                     if (correctionOpenId !== detailMid || !detailCls || !currentRow) return null;
                     return <InlineCorrectionPanel cls={detailCls} t={currentRow} submitFeedback={submitFeedback} onClose={() => setCorrectionOpenId(null)} />;
+                  })()}
+                  {/* Unack escape hatch — only for acked flagged items */}
+                  {ackedThreadIds.has(thread.id) && flaggedThreadIds.has(thread.id) && (() => {
+                    const itemId = threadToItemId[thread.id];
+                    if (!itemId) return null;
+                    return (
+                      <div className="flex items-center pt-1">
+                        <button
+                          onClick={() => {
+                            setAckedThreadIds(prev => { const n = new Set(prev); n.delete(thread.id); return n; });
+                            setFlaggedCount(prev => prev + 1);
+                            apiFetch(`/api/inbox/items/${itemId}/unack`, {
+                              method: 'PATCH',
+                              headers: { Authorization: `Bearer ${authToken}` },
+                            }).catch(() => {
+                              setAckedThreadIds(prev => { const n = new Set(prev); n.add(thread.id); return n; });
+                              setFlaggedCount(prev => Math.max(0, prev - 1));
+                            });
+                          }}
+                          className="text-[11px] text-gray-500 hover:text-indigo-600 underline"
+                          style={{ fontFamily: 'Manrope, sans-serif' }}
+                        >
+                          Put back in triage queue
+                        </button>
+                      </div>
+                    );
                   })()}
                 </div>
               );
