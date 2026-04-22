@@ -224,6 +224,11 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [pillFilter, setPillFilter] = useState('all'); // 'all' | 'unread' | 'action' | 'flagged'
   const [flaggedThreadIds, setFlaggedThreadIds] = useState(() => new Set());
   const [flaggedCount, setFlaggedCount] = useState(0);
+  // Acked flagged items: thread IDs that have been acknowledged
+  const [ackedThreadIds, setAckedThreadIds] = useState(() => new Set());
+  const [showAcked, setShowAcked] = useState(false);
+  // Map thread_id → inbox_item_id for ack/unack API calls
+  const [threadToItemId, setThreadToItemId] = useState({});
   // Classification feedback: tracks which messages got thumbs feedback
   const [feedbackGiven, setFeedbackGiven] = useState(() => new Set());
   // Which message_id currently has the correction panel open (null = none)
@@ -264,14 +269,24 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [cursorStack, setCursorStack] = useState([]);
   const [nextCursor, setNextCursor] = useState(null);
 
-  const loadFlagged = useCallback(async () => {
+  const loadFlagged = useCallback(async (includeAcked = false) => {
     try {
-      const r = await apiFetch('/api/inbox/flagged', { headers: { Authorization: `Bearer ${authToken}` } });
+      const url = includeAcked
+        ? '/api/inbox/flagged?include_acked=true'
+        : '/api/inbox/flagged';
+      const r = await apiFetch(url, { headers: { Authorization: `Bearer ${authToken}` } });
       if (!r.ok) return;
       const data = await r.json();
-      const ids = new Set((data.items || []).map(i => i.source_id).filter(Boolean));
+      const items = data.items || [];
+      const ids = new Set(items.map(i => i.source_id).filter(Boolean));
+      const acked = new Set(items.filter(i => i.flagged_acked_at).map(i => i.source_id).filter(Boolean));
+      const itemMap = {};
+      for (const i of items) { if (i.source_id) itemMap[i.source_id] = i.id; }
       setFlaggedThreadIds(ids);
-      setFlaggedCount(data.count || 0);
+      setAckedThreadIds(acked);
+      setThreadToItemId(prev => ({ ...prev, ...itemMap }));
+      // Pill count = unacked only
+      setFlaggedCount(data.unackedCount ?? data.count ?? 0);
     } catch {}
   }, [apiFetch, authToken]);
 
@@ -372,7 +387,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     }
   }, [apiFetch, authToken]);
 
-  useEffect(() => { loadAccounts(); loadFlagged(); }, [loadAccounts, loadFlagged]);
+  useEffect(() => { loadAccounts(); loadFlagged(showAcked); }, [loadAccounts, loadFlagged, showAcked]);
   useEffect(() => {
     const ctrl = new AbortController();
     loadThreads(ctrl.signal);
@@ -891,7 +906,12 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     const base = threads.filter(t => !accountFilter || t.accountEmail === accountFilter);
     const filtered = base.filter(t => {
       if (pillFilter === 'unread') return !t.isRead;
-      if (pillFilter === 'flagged') return flaggedThreadIds.has(t.id);
+      if (pillFilter === 'flagged') {
+        if (!flaggedThreadIds.has(t.id)) return false;
+        // Default: hide acked items unless "Show acknowledged" is on
+        if (!showAcked && ackedThreadIds.has(t.id)) return false;
+        return true;
+      }
       if (pillFilter === 'action') {
         const mid = t.latestMessageId || t.id;
         const cls = classifications[mid];
@@ -1060,6 +1080,17 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 {label}{key === 'flagged' && flaggedCount > 0 ? ` (${flaggedCount})` : ''}
               </button>
             ))}
+            {pillFilter === 'flagged' && (
+              <button
+                onClick={() => setShowAcked(!showAcked)}
+                className="px-2 py-1 text-[10px] font-semibold rounded-full transition-colors ml-1"
+                style={showAcked
+                  ? { backgroundColor: '#ededff', color: '#4f4dcf' }
+                  : { backgroundColor: 'transparent', color: '#9ca3af', border: '1px solid rgba(0,0,0,0.06)' }}
+              >
+                {showAcked ? 'Hide acknowledged' : 'Show acknowledged'}
+              </button>
+            )}
           </div>
           {accounts.length > 0 && (
             <select
@@ -1118,7 +1149,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="Nothing urgent right now."
                 showCountSuffix
               >
-                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
+                {zones.attn.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
               {/* Zone 2 — For Your Review */}
@@ -1132,7 +1163,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 emptyText="No emails to review."
                 showCountSuffix
               >
-                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
+                {zones.review.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
               {/* Zone 3 — Low Priority */}
@@ -1160,7 +1191,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                   )
                 }
               >
-                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
+                {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
               {/* Zone 4 — Read */}
@@ -1173,7 +1204,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 onToggle={() => toggleZone('read')}
                 emptyText="No read threads."
               >
-                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
+                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
             </>
           )}
@@ -2234,8 +2265,9 @@ function InlineCorrectionPanel({ cls, t, submitFeedback, onClose }) {
 const SWIPE_THRESHOLD = 60;
 const SWIPE_DRAWER_WIDTH = 140; // px — width of the revealed action panel
 
-function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }) {
+function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }) {
   const isFlagged = flaggedThreadIds?.has(t.id);
+  const isAcked = ackedThreadIds?.has(t.id);
   const tint = tintForAccount(t.accountEmail);
   const active = t.id === activeThreadId;
   const mid = t.latestMessageId || t.id;
@@ -2321,7 +2353,8 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
       style={{
         borderRadius: 10,
         backgroundColor: active ? '#ededff' : 'transparent',
-        borderLeft: active ? '3px solid #4f4dcf' : isFlagged ? '3px solid #4f4dcf' : '3px solid transparent',
+        borderLeft: active ? '3px solid #4f4dcf' : (isFlagged && !isAcked) ? '3px solid #4f4dcf' : '3px solid transparent',
+        opacity: isAcked ? 0.65 : 1,
       }}
     >
       {/* Mobile swipe drawer — sits behind the row, revealed on left-swipe.
@@ -2450,6 +2483,11 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
                   {cls.classificationReasoning && (
                     <ClassificationReasoningTooltip cls={cls} onOpenCorrections={() => setCorrectionOpenId?.(mid)} />
                   )}
+                </span>
+              )}
+              {isFlagged && isAcked && (
+                <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: '#f3f4f6', color: '#9ca3af' }}>
+                  Seen
                 </span>
               )}
             </div>
