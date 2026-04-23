@@ -24,6 +24,7 @@ const {
   detectAllCandidates,
 } = require('../lib/activeZone/candidateDetector.cjs');
 const { composeTiles } = require('../lib/activeZone/tileComposer.cjs');
+const { composeVoice } = require('../lib/activeZone/voice.cjs');
 
 // Compute end of user's local day for the dismiss timeout. Returns an
 // ISO-string timestamp corresponding to tomorrow 00:00 in their tz.
@@ -153,6 +154,49 @@ module.exports = function createActiveZoneRouter({ authenticateToken, db }) {
     } catch (err) {
       logger.error('activeZone.defer.failed', { requestId: req.requestId, userId: req.user?.id, tileId: req.params.id, error: err.message });
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/active-zone/voice — empty-state line.
+   * Pulls a small slice of recent context (last 3 completed tasks, today's
+   * wrapped meetings) and asks Haiku for a 1-2 sentence Aria voice line.
+   * Cached 30 min per user; falls back to a static line on LLM failure.
+   * Frontend should only call this when the orchestrator returns 0 tiles.
+   */
+  router.get('/api/active-zone/voice', authenticateToken, async (req, res) => {
+    try {
+      const user = await db.getUserById(req.user.id).catch(() => null);
+      const firstName = (user?.displayName || user?.username || 'there').split(/[\s@]/)[0];
+      const timezone = user?.timezone || DEFAULT_TIMEZONE;
+
+      const [recentTasks, events] = await Promise.all([
+        db.getTasksForUser(req.user.id, user?.entityIds || []).catch(() => []),
+        db.getCalendarEventsForUser(
+          req.user.id,
+          new Date(Date.now() - 8 * 3600 * 1000).toISOString(),
+          new Date().toISOString(),
+        ).catch(() => []),
+      ]);
+
+      const recentCompletions = (recentTasks || [])
+        .filter((t) => t.completed && t.completedAt)
+        .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
+        .slice(0, 3);
+      const wrappedMeetings = (events || [])
+        .filter((e) => {
+          const end = Date.parse(e.endTime || e.end_time || e.end || '');
+          return Number.isFinite(end) && end < Date.now();
+        })
+        .slice(0, 3);
+
+      const { line, source } = await composeVoice({
+        userId: req.user.id, firstName, timezone, recentCompletions, wrappedMeetings,
+      });
+      res.json({ line, source });
+    } catch (err) {
+      logger.warn('activeZone.voice.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.json({ line: "You're all clear. Nice work.", source: 'fallback' });
     }
   });
 

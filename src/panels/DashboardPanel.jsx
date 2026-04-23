@@ -5,6 +5,7 @@ import buildSystemPrompt from '../utils/systemPrompt';
 import { getTodayLocal } from '../utils/helpers.js';
 import { parseActionDraft } from '../utils/parseActionDraft.js';
 import ActiveZoneOrchestrator from '../components/dashboard/ActiveZoneOrchestrator.jsx';
+import ActiveZoneVoice from '../components/dashboard/ActiveZoneVoice.jsx';
 import TaskDraftTile from '../components/command-center/TaskDraftTile.jsx';
 import EventDraftTile from '../components/command-center/EventDraftTile.jsx';
 import ProjectDraftTile from '../components/command-center/ProjectDraftTile.jsx';
@@ -1934,10 +1935,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </p>
       </div>
 
-      {/* ROW 1.5: Active Zone — Aria's orchestration surface (AZ5).
-          Renders up to 3 tiles ranked by priority. Empty state lands
-          in AZ6. Refresh-debounced via azRefreshKey wired by AZ7. */}
-      <div className="px-1 md:px-0 mb-3 hidden md:block">
+      {/* ROW 1.5: Active Zone — Aria's orchestration surface (AZ5/6).
+          Renders up to 3 tiles ranked by priority, or the empty-state
+          Aria voice panel when there's nothing to surface. Refresh-
+          debounced via azRefreshKey wired by AZ7. */}
+      <div className="px-1 md:px-0 mb-3 hidden md:block space-y-2">
+        {azIsEmpty && (
+          <ActiveZoneVoice apiFetch={apiFetch} authToken={authToken} refreshKey={azRefreshKey} />
+        )}
         <ActiveZoneOrchestrator
           apiFetch={apiFetch}
           authToken={authToken}
