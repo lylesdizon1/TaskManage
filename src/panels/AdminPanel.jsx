@@ -13,6 +13,9 @@ export default function AdminPanel({ authToken }) {
   const [memoryPage, setMemoryPage] = useState(1);
   // Phase 5 — Aria decisions visibility
   const [decisions, setDecisions] = useState([]);
+  // AZ8 — Active Zone metrics
+  const [azMetrics, setAzMetrics] = useState(null);
+  const [azWindow, setAzWindow] = useState(24);
   const [trustMatrix, setTrustMatrix] = useState([]);
   const [corrections, setCorrections] = useState([]);
   const [decisionsUserFilter, setDecisionsUserFilter] = useState('');
@@ -80,7 +83,15 @@ export default function AdminPanel({ authToken }) {
     else if (tab === 'audit') fetchAuditLog(auditPage);
     else if (tab === 'memory') { fetchUsers(); fetchMemories(memoryPage, memoryUserFilter); }
     else if (tab === 'decisions') { fetchUsers(); fetchDecisionsBundle(decisionsUserFilter); }
-  }, [tab, auditPage, memoryPage, memoryUserFilter, decisionsUserFilter]);
+    else if (tab === 'activeZone') {
+      (async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/admin/active-zone/metrics?sinceHours=${azWindow}`, { headers });
+          if (r.ok) setAzMetrics(await r.json()); else setAzMetrics(null);
+        } catch { setAzMetrics(null); }
+      })();
+    }
+  }, [tab, auditPage, memoryPage, memoryUserFilter, decisionsUserFilter, azWindow]);
 
   async function handleCreateOrg(e) {
     e.preventDefault();
@@ -239,6 +250,7 @@ export default function AdminPanel({ authToken }) {
         <button onClick={() => setTab('audit')} className={tabClass('audit')}>Audit Log</button>
         <button onClick={() => setTab('memory')} className={tabClass('memory')}>Memory</button>
         <button onClick={() => setTab('decisions')} className={tabClass('decisions')}>Decisions</button>
+        <button onClick={() => setTab('activeZone')} className={tabClass('activeZone')}>Active Zone</button>
       </div>
 
       {error && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg">{error}</div>}
@@ -667,6 +679,89 @@ export default function AdminPanel({ authToken }) {
           </div>
         </div>
       )}
+
+      {/* Active Zone Tab — AZ8 metrics */}
+      {tab === 'activeZone' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Active Zone</h3>
+            <select
+              value={azWindow}
+              onChange={(e) => setAzWindow(parseInt(e.target.value, 10))}
+              className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-white"
+            >
+              <option value={1}>Last 1 h</option>
+              <option value={6}>Last 6 h</option>
+              <option value={24}>Last 24 h</option>
+              <option value={168}>Last 7 days</option>
+            </select>
+          </div>
+
+          {!azMetrics ? (
+            <div className="text-sm text-gray-400">Loading…</div>
+          ) : (
+            <>
+              {/* Headline counters */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Stat label="Tiles composed" value={azMetrics.totalTiles} />
+                <Stat label="LLM call rate"  value={`${azMetrics.llmCallRate}%`} />
+                <Stat label="Cache hit rate" value={`${azMetrics.cacheHitRate}%`} sub={`${azMetrics.cache} hits`} />
+                <Stat label="Fallback rate"  value={`${azMetrics.fallbackRate}%`} sub={`${azMetrics.fallback} renders`} subClass={azMetrics.fallbackRate > 10 ? 'text-red-600' : 'text-gray-500'} />
+              </div>
+
+              {/* Per-(candidate × source × status) breakdown */}
+              <div>
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Breakdown</h4>
+                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
+                        <th className="px-3 py-2 text-left">Candidate type</th>
+                        <th className="px-3 py-2 text-left">Composer source</th>
+                        <th className="px-3 py-2 text-left">Status</th>
+                        <th className="px-3 py-2 text-right">N</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(azMetrics.breakdown || []).map((r, i) => (
+                        <tr key={i} className="border-t border-gray-100">
+                          <td className="px-3 py-2 text-gray-800">{r.candidateType}</td>
+                          <td className="px-3 py-2 text-xs"><SourceBadge source={r.composerSource} /></td>
+                          <td className="px-3 py-2 text-xs text-gray-600">{r.status}</td>
+                          <td className="px-3 py-2 text-right font-mono text-gray-900">{r.n}</td>
+                        </tr>
+                      ))}
+                      {(!azMetrics.breakdown || !azMetrics.breakdown.length) && (
+                        <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400">No tile activity in window</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function Stat({ label, value, sub, subClass }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-3">
+      <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">{label}</div>
+      <div className="text-2xl font-bold text-gray-900 mt-1">{value}</div>
+      {sub && <div className={`text-[11px] mt-0.5 ${subClass || 'text-gray-500'}`}>{sub}</div>}
+    </div>
+  );
+}
+
+function SourceBadge({ source }) {
+  const styles = {
+    llm:      'bg-indigo-50 text-indigo-700 border-indigo-200',
+    cache:    'bg-green-50 text-green-700 border-green-200',
+    fallback: 'bg-amber-50 text-amber-700 border-amber-200',
+  };
+  const cls = styles[source] || 'bg-gray-50 text-gray-600 border-gray-200';
+  return <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wide ${cls}`}>{source || 'unknown'}</span>;
 }

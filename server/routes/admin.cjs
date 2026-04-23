@@ -286,6 +286,40 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  /**
+   * GET /api/admin/active-zone/metrics?sinceHours=24
+   * Aggregate counts grouped by candidate_type × composer_source × status.
+   * The frontend rolls these into cache-hit-rate, fallback-rate, and
+   * candidate-distribution numbers. Caller is super-admin via the
+   * `router.use('/api/admin', requireSuperAdmin)` mount above.
+   */
+  router.get('/api/admin/active-zone/metrics', async (req, res) => {
+    try {
+      const sinceHours = Math.max(1, Math.min(parseInt(req.query.sinceHours, 10) || 24, 168));
+      const rows = await db.getActiveZoneMetrics({ sinceHours });
+      // Roll up into the headline metrics the dashboard wants.
+      let totalTiles = 0, llm = 0, cache = 0, fallback = 0;
+      for (const r of rows) {
+        totalTiles += r.n;
+        if (r.composerSource === 'llm') llm += r.n;
+        else if (r.composerSource === 'cache') cache += r.n;
+        else if (r.composerSource === 'fallback') fallback += r.n;
+      }
+      const composerCalls = llm + cache + fallback;
+      const cacheHitRate  = composerCalls ? Math.round((cache / composerCalls) * 1000) / 10 : 0;
+      const fallbackRate  = composerCalls ? Math.round((fallback / composerCalls) * 1000) / 10 : 0;
+      const llmCallRate   = composerCalls ? Math.round((llm / composerCalls) * 1000) / 10 : 0;
+      res.json({
+        sinceHours, totalTiles, llm, cache, fallback,
+        cacheHitRate, fallbackRate, llmCallRate,
+        breakdown: rows,
+      });
+    } catch (err) {
+      logger.error('admin.activeZone.metrics.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   router.get('/api/admin/corrections', async (req, res) => {
     try {
       const rows = await db.getAdminCorrections({
