@@ -226,7 +226,9 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [flaggedCount, setFlaggedCount] = useState(0);
   // Acked flagged items: thread IDs that have been acknowledged
   const [ackedThreadIds, setAckedThreadIds] = useState(() => new Set());
-  const [showAcked, setShowAcked] = useState(false);
+  // FU3 — flagged pill default shows ALL flagged (including acked).
+  // Acked items are de-emphasized inline rather than hidden by default.
+  const [showAcked, setShowAcked] = useState(true);
   // Map thread_id → inbox_item_id for ack/unack API calls
   const [threadToItemId, setThreadToItemId] = useState({});
   // Classification feedback: tracks which messages got thumbs feedback
@@ -533,12 +535,14 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
   // Zone placement: grow-only Sets. A thread moves into Needs Attention
   // or Low Priority at most once; user-interacted threads are frozen.
+  // FU3 — read-state filter REMOVED. Read emails belong in the same
+  // priority zone as their classification (Gmail-style), just visually
+  // de-emphasized. Reading an email doesn't change its importance.
   useEffect(() => {
     if (!threads.length || !Object.keys(classifications).length) return;
     const candAttn = new Set();
     const candLow = new Set();
     for (const t of threads) {
-      if (t.isRead) continue;
       if (interactedIds.has(t.id)) continue;
       const mid = t.latestMessageId || t.id;
       const cls = classifications[mid];
@@ -937,15 +941,19 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       }
       return true;
     });
-    const attn = [], review = [], low = [], read = [];
+    // FU3 — read state no longer routes to a separate "read" bucket.
+    // Threads land in their classification zone regardless of read state;
+    // the row renderer dims read items in-place. The `read` bucket is
+    // kept as `[]` so the existing Zone 4 just renders empty (Zone 4
+    // removal is a separate decision, flagged for follow-up).
+    const attn = [], review = [], low = [];
     for (const t of filtered) {
-      if (t.isRead) { read.push(t); continue; }
       if (needsAttentionIds.has(t.id)) { attn.push(t); continue; }
       if (lowPriorityIds.has(t.id)) { low.push(t); continue; }
       review.push(t);
     }
-    return { attn, review, low, read };
-  }, [threads, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds, flaggedThreadIds]);
+    return { attn, review, low, read: [] };
+  }, [threads, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds, flaggedThreadIds, ackedThreadIds, showAcked]);
 
   const needsAttentionThreads = useMemo(() => threads.filter(t => {
     if (t.isRead) return false;
@@ -1162,6 +1170,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 label="Needs Your Attention"
                 badgeClass="bg-red-50 text-red-700 border-red-200"
                 count={zones.attn.length}
+                unreadCount={zones.attn.filter((t) => !t.isRead).length}
                 expanded={expandedZones.attn}
                 onToggle={() => toggleZone('attn')}
                 emptyText="Nothing urgent right now."
@@ -1176,6 +1185,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 label="For Your Review"
                 badgeClass="bg-indigo-50 text-indigo-700 border-indigo-200"
                 count={zones.review.length}
+                unreadCount={zones.review.filter((t) => !t.isRead).length}
                 expanded={expandedZones.review}
                 onToggle={() => toggleZone('review')}
                 emptyText="No emails to review."
@@ -1190,6 +1200,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 label="Low Priority"
                 badgeClass="bg-gray-50 text-gray-600 border-gray-200"
                 count={zones.low.length}
+                unreadCount={zones.low.filter((t) => !t.isRead).length}
                 expanded={expandedZones.low}
                 onToggle={() => toggleZone('low')}
                 emptyText="No low priority emails."
@@ -1212,7 +1223,13 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
-              {/* Zone 4 — Read */}
+              {/* Zone 4 — Read.
+                  FU3 NOTE: read threads are no longer routed here. They
+                  bucket into their classification zone (attn/review/low)
+                  with a de-emphasized row style. zones.read is now [].
+                  Question for Lyle: keep this zone as a manual "show
+                  read-only history" toggle? Or remove entirely? Held
+                  pending decision — section just renders empty for now. */}
               <Zone
                 icon="drafts" iconColor="#9ca3af"
                 label="Read"
@@ -2068,8 +2085,12 @@ function AriaSummaryCard({ items, total }) {
   );
 }
 
-function Zone({ icon, iconColor, label, count, badgeClass, expanded, onToggle, children, emptyText, hideBadge, showCountSuffix, footer }) {
+function Zone({ icon, iconColor, label, count, unreadCount, badgeClass, expanded, onToggle, children, emptyText, hideBadge, showCountSuffix, footer }) {
   const hasChildren = Array.isArray(children) ? children.length > 0 : !!children;
+  // FU3 — when unreadCount is supplied AND ≥1 unread within the zone,
+  // surface "5 of 18 unread" alongside the total count badge so users
+  // see at a glance how much new attention the zone needs.
+  const showUnreadSubcount = typeof unreadCount === 'number' && unreadCount > 0 && unreadCount < count;
   return (
     <div className="mb-2 px-1">
       <button
@@ -2083,6 +2104,9 @@ function Zone({ icon, iconColor, label, count, badgeClass, expanded, onToggle, c
         >
           {label}{hideBadge && showCountSuffix ? ` (${count})` : ''}
         </span>
+        {showUnreadSubcount && (
+          <span className="text-[10px] text-gray-400 font-medium">{unreadCount} unread</span>
+        )}
         {!hideBadge && (
           <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${badgeClass || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
             {count}
