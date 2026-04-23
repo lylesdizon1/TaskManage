@@ -8884,6 +8884,49 @@ async function updateActiveZoneTileStatus(id, userId, status, resumeAt = null) {
 }
 
 /**
+ * Re-pend any deferred/dismissed tiles whose resume time has elapsed.
+ * Run BEFORE the detector's upsert loop so a tile dismissed yesterday
+ * comes back as 'pending' today (assuming the underlying situation
+ * still triggers a candidate). Without this, dismissed/deferred tiles
+ * stayed locked in their non-pending status forever, since
+ * upsertActiveZoneTile preserves status on conflict.
+ *
+ * Returns the count of rows re-pended.
+ */
+async function rependElapsedActiveZoneTiles(userId) {
+  const { rowCount } = await pool.query(
+    `UPDATE active_zone_tiles
+        SET status = 'pending',
+            dismissed_until = NULL,
+            deferred_until = NULL,
+            updated_at = NOW()
+      WHERE user_id = $1
+        AND status IN ('deferred','dismissed')
+        AND COALESCE(dismissed_until, deferred_until) <= NOW()`,
+    [userId],
+  );
+  return rowCount || 0;
+}
+
+/**
+ * Active candidate_keys the user is currently hiding (deferred or
+ * dismissed with future resume time). The detector consults this set
+ * to skip composition for situations the user has explicitly silenced
+ * — saves the LLM cost of a tile we'd never display.
+ */
+async function getHiddenActiveZoneCandidateKeys(userId) {
+  const { rows } = await pool.query(
+    `SELECT candidate_key
+       FROM active_zone_tiles
+      WHERE user_id = $1
+        AND status IN ('deferred','dismissed')
+        AND COALESCE(dismissed_until, deferred_until) > NOW()`,
+    [userId],
+  );
+  return new Set(rows.map((r) => r.candidate_key));
+}
+
+/**
  * Mark every pending tile whose candidate_key is NOT in the active set as
  * resolved — used by the detector to drop tiles whose underlying situation
  * no longer exists (task completed, meeting ended, etc.). Preserves
@@ -9241,5 +9284,7 @@ module.exports = {
   getActiveZoneTileById,
   updateActiveZoneTileStatus,
   resolveStaleActiveZoneTiles,
+  rependElapsedActiveZoneTiles,
+  getHiddenActiveZoneCandidateKeys,
   getActiveZoneMetrics,
 };

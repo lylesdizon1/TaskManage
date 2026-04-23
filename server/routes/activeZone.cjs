@@ -27,25 +27,43 @@ const { composeTiles } = require('../lib/activeZone/tileComposer.cjs');
 const { composeVoice } = require('../lib/activeZone/voice.cjs');
 
 // Compute end of user's local day for the dismiss timeout. Returns an
-// ISO-string timestamp corresponding to tomorrow 00:00 in their tz.
+// ISO-string timestamp corresponding to tomorrow 00:00 IN THE USER'S
+// TIMEZONE, expressed as UTC.
+//
+// Prior version returned tomorrow-00:00-UTC, which for any tz west of
+// UTC fell BEFORE user's local midnight. For Lyle in PT this meant
+// dismissed_until landed at 5pm PT today — so a tile dismissed after
+// 5pm PT immediately resurfaced. Bug FU2 root cause.
 function _nextLocalMidnightIso(timezone) {
   const now = new Date();
   try {
-    // Find the offset for this tz right now.
-    const fmt = new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    });
-    const todayLocal = fmt.format(now);
-    const [Y, M, D] = todayLocal.split('-').map(Number);
-    // Next midnight in user's tz: add one day to today's local date, then
-    // parse as if that string were UTC — the actual absolute moment is
-    // then offset by the tz; close enough for dismiss semantics (±1h is
-    // inconsequential; user gets tile back in the morning either way).
-    const tomorrow = new Date(Date.UTC(Y, M - 1, D + 1, 0, 0, 0));
-    return tomorrow.toISOString();
+    // Find the user's tz offset (minutes ahead of UTC) at THIS moment.
+    const fmtParts = (tz) => new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(now);
+    const get = (parts, type) => parseInt(parts.find((p) => p.type === type).value, 10);
+    const userP = fmtParts(timezone);
+    const utcP  = fmtParts('UTC');
+    // Hour 24 means midnight; some locales emit 24 for the start-of-day moment.
+    const fixHour = (h) => (h === 24 ? 0 : h);
+    const userMs = Date.UTC(get(userP, 'year'), get(userP, 'month') - 1, get(userP, 'day'),
+                            fixHour(get(userP, 'hour')), get(userP, 'minute'), get(userP, 'second'));
+    const utcMs  = Date.UTC(get(utcP,  'year'), get(utcP,  'month') - 1, get(utcP,  'day'),
+                            fixHour(get(utcP,  'hour')), get(utcP,  'minute'), get(utcP,  'second'));
+    const offsetMin = (userMs - utcMs) / 60000; // user-local minus UTC
+
+    // Tomorrow's user-local date.
+    const userY = get(userP, 'year');
+    const userM = get(userP, 'month');
+    const userD = get(userP, 'day');
+    // Construct "tomorrow 00:00 UTC of the user's date" then subtract the
+    // user's offset to land on the actual user-local midnight as UTC.
+    const tomorrowAsUtcMidnight = new Date(Date.UTC(userY, userM - 1, userD + 1, 0, 0, 0));
+    return new Date(tomorrowAsUtcMidnight.getTime() - offsetMin * 60000).toISOString();
   } catch {
-    const d = new Date(now.getTime() + 24 * 3600 * 1000);
-    return d.toISOString();
+    return new Date(now.getTime() + 24 * 3600 * 1000).toISOString();
   }
 }
 
@@ -62,8 +80,27 @@ module.exports = function createActiveZoneRouter({ authenticateToken, db }) {
   async function runDetectorAndCompose(userId) {
     if (_inFlight.has(userId)) return _inFlight.get(userId);
     const p = (async () => {
+      // Step 0: re-pend any deferred/dismissed tiles whose resume time
+      // has elapsed. Without this, an upsert preserves the prior
+      // non-pending status forever and the tile never re-surfaces.
+      try {
+        const rependCount = await db.rependElapsedActiveZoneTiles(userId);
+        if (rependCount) logger.info('activeZone.repend', { userId, count: rependCount });
+      } catch (err) {
+        logger.warn('activeZone.repend.failed', { userId, error: err.message });
+      }
+
       const state = await loadUserStateForActiveZone(userId, db);
-      const candidates = detectAllCandidates(state, { topN: 3 });
+      const allCandidates = detectAllCandidates(state, { topN: 3 });
+
+      // Filter out candidates the user has actively hidden (defer/dismiss
+      // with future resume time). Saves the LLM cost of a tile we'd
+      // never show, and avoids confusing the audit metrics.
+      let hiddenKeys = new Set();
+      try { hiddenKeys = await db.getHiddenActiveZoneCandidateKeys(userId); }
+      catch (err) { logger.warn('activeZone.hiddenKeys.failed', { userId, error: err.message }); }
+      const candidates = allCandidates.filter((c) => !hiddenKeys.has(c.candidate_key));
+
       const user = state.userId ? await db.getUserById(userId).catch(() => null) : null;
       const firstName = (user?.displayName || user?.username || 'there').split(/[\s@]/)[0];
       const localTime = new Intl.DateTimeFormat('en-US', {
@@ -96,8 +133,16 @@ module.exports = function createActiveZoneRouter({ authenticateToken, db }) {
       }
 
       // Resolve stale — candidate_keys that disappeared from this run.
+      // CRITICAL: must include hidden candidate_keys in the active set,
+      // otherwise resolveStale would mark currently-hidden tiles as
+      // 'resolved' (terminal) and they'd never re-surface when their
+      // dismissed_until / deferred_until elapsed.
       try {
-        await db.resolveStaleActiveZoneTiles(userId, candidates.map((c) => c.candidate_key));
+        const allActiveKeys = [
+          ...candidates.map((c) => c.candidate_key),
+          ...allCandidates.filter((c) => hiddenKeys.has(c.candidate_key)).map((c) => c.candidate_key),
+        ];
+        await db.resolveStaleActiveZoneTiles(userId, allActiveKeys);
       } catch (err) {
         logger.warn('activeZone.resolveStale.failed', { userId, error: err.message });
       }
