@@ -114,6 +114,7 @@ app.use('/', require('./server/routes/sharedAccess.cjs')({ authenticateToken, db
 app.use('/', require('./server/routes/connections.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/closeLoop.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/journal.cjs')({ authenticateToken, db }));
+app.use('/', require('./server/routes/activeZone.cjs')({ authenticateToken, db }));
 
 // ── Sentry error handler ────────────────────────────────────────────────────
 const Sentry = require('./guardrails/instrument.cjs');
