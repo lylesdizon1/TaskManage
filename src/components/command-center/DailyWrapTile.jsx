@@ -1,6 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
+ * Module-scope LabeledTextarea — MUST live outside the parent render
+ * function. Defining it inside DailyWrapTile (the prior shape) created
+ * a new component reference on every render, which made React unmount
+ * and remount the underlying <textarea> on every keystroke — the input
+ * would lose focus after each character. (FU4 root cause.)
+ */
+function LabeledTextarea({ label, value, onChange, onKeyDown, placeholder, inputRef, minHeight = 44, disabled }) {
+  return (
+    <div>
+      <div
+        className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400 mb-0.5"
+        style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+      >
+        {label}
+      </div>
+      <textarea
+        ref={inputRef}
+        value={value}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        disabled={disabled}
+        placeholder={placeholder}
+        style={{
+          width: '100%', minHeight, fontSize: 13, padding: '6px 8px',
+          border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none',
+          resize: 'vertical', fontFamily: 'Manrope, sans-serif',
+          background: disabled ? '#f9fafb' : '#fff',
+        }}
+      />
+    </div>
+  );
+}
+
+/**
  * DailyWrapTile — multi-field end-of-day reflection capture.
  * Mirrors the draft-tile pattern (ProjectDraftTile / ProjectTaskDraftTile):
  * header chip + field stack + footer actions. All four fields are
@@ -53,31 +87,6 @@ export default function DailyWrapTile({ payload = {}, status = 'draft', error, o
   if (Number.isFinite(payload.tasksStillOpen) && payload.tasksStillOpen > 0) statsBits.push(`${payload.tasksStillOpen} still open`);
   const statsLine = statsBits.join(' · ');
 
-  const LabeledTextarea = ({ label, value, setValue, placeholder, inputRef, minHeight = 44 }) => (
-    <div>
-      <div
-        className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400 mb-0.5"
-        style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
-      >
-        {label}
-      </div>
-      <textarea
-        ref={inputRef}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={onKeyDown}
-        disabled={executing}
-        placeholder={placeholder}
-        style={{
-          width: '100%', minHeight, fontSize: 13, padding: '6px 8px',
-          border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none',
-          resize: 'vertical', fontFamily: 'Manrope, sans-serif',
-          background: executing ? '#f9fafb' : '#fff',
-        }}
-      />
-    </div>
-  );
-
   return (
     <div
       className="bg-white border border-gray-200 rounded-xl"
@@ -98,26 +107,34 @@ export default function DailyWrapTile({ payload = {}, status = 'draft', error, o
         <LabeledTextarea
           label="Wins"
           value={wins}
-          setValue={setWins}
+          onChange={(e) => setWins(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={executing}
           placeholder="What went well today?"
           inputRef={firstRef}
         />
         <LabeledTextarea
           label="Frustrations"
           value={frustrations}
-          setValue={setFrustrations}
+          onChange={(e) => setFrustrations(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={executing}
           placeholder="Any blockers or frustrations?"
         />
         <LabeledTextarea
           label="Tomorrow's focus"
           value={tomorrowFocus}
-          setValue={setTomorrowFocus}
+          onChange={(e) => setTomorrowFocus(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={executing}
           placeholder="What's the priority for tomorrow?"
         />
         <LabeledTextarea
           label="Free reflection"
           value={rawFreeform}
-          setValue={setRawFreeform}
+          onChange={(e) => setRawFreeform(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={executing}
           placeholder="Anything else worth capturing?"
           minHeight={36}
         />
