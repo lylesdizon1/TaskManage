@@ -88,7 +88,7 @@ Situation: ${type}`;
 Max days overdue: ${context.max_days_overdue}. Frame it as: acknowledge + invitation to resolve.`,
 
     close_the_loops_batch:
-`Items: ${context.count} unresolved close-the-loops: ${items.slice(0, 5).map((l) => `"${l.title_snapshot || l.source_type}"`).join(', ')}.
+`Items: ${context.count} unresolved close-the-loops: ${items.slice(0, 5).map((l) => `"${l.titleSnapshot || l.title_snapshot || l.sourceType || l.source_type || 'untitled'}"`).join(', ')}.
 Has stale (>48h old): ${context.has_stale}. Frame as: batch them and knock them out.`,
 
     upcoming_meeting_with_prep:
@@ -214,7 +214,17 @@ function _itemsPreview(candidate) {
     case 'overdue_tasks_batch':
       return items.slice(0, 10).map((t) => ({ id: t.id, title: t.title, dueDate: t.dueDate || t.due_date, priority: t.priority }));
     case 'close_the_loops_batch':
-      return items.slice(0, 10).map((l) => ({ id: l.id, source_type: l.source_type, source_id: l.source_id, title: l.title_snapshot }));
+      // db.getOpenCloseLoopItems aliases to camelCase (sourceType, sourceId,
+      // titleSnapshot). Read those, fall back to snake_case for any future
+      // caller that bypasses the alias path. Same defensive shape as
+      // critical_email_unacked (FU1, 1537e88) — should be the universal
+      // pattern for items_preview going forward.
+      return items.slice(0, 10).map((l) => ({
+        id: l.id,
+        source_type: l.sourceType || l.source_type,
+        source_id:   l.sourceId   || l.source_id,
+        title:       l.titleSnapshot || l.title_snapshot,
+      }));
     case 'upcoming_meeting_with_prep':
       return [{ event: { id: context.event?.id, title: context.event?.title, startTime: context.event?.startTime || context.event?.start_time } },
               ...(context.related_tasks || []).slice(0, 5).map((t) => ({ id: t.id, title: t.title }))];

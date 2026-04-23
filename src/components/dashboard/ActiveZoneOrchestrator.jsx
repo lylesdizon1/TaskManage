@@ -332,6 +332,17 @@ function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrim
   );
 }
 
+// Defensive: any item field that's null/undefined renders as a generic
+// label rather than literal "undefined undefined". Belt-and-suspenders so
+// the next contributor adding a candidate without proper items_preview
+// shape doesn't ship "undefined undefined" rows.
+function _safeText(...candidates) {
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && String(c).trim() !== '' && String(c) !== 'undefined') return String(c);
+  }
+  return 'Item';
+}
+
 function ItemPreviewRow({ item, candidateType, completed, onCheck }) {
   const baseRowClass = `flex items-center gap-2 text-xs ${completed ? 'opacity-50' : ''}`;
   const titleClass = `text-on-background truncate flex-1 ${completed ? 'line-through' : ''}`;
@@ -340,19 +351,23 @@ function ItemPreviewRow({ item, candidateType, completed, onCheck }) {
     return (
       <div className={baseRowClass}>
         <CheckBox checked={completed} onChange={onCheck} />
-        <span className={titleClass}>{item.title}</span>
+        <span className={titleClass}>{_safeText(item.title)}</span>
         {item.dueDate && <span className="text-on-surface-variant/60 flex-shrink-0">{item.dueDate}</span>}
       </div>
     );
   }
   if (candidateType === 'close_the_loops_batch') {
+    const iconKey = (item.source_type === 'event') ? 'event' : 'task_alt';
+    const fallbackLabel = item.source_type && item.source_id
+      ? `${item.source_type} ${item.source_id}`
+      : 'Loop';
     return (
       <div className={baseRowClass}>
         <CheckBox checked={completed} onChange={onCheck} />
         <span className="material-symbols-outlined text-primary/60 flex-shrink-0" style={{ fontSize: '12px' }}>
-          {item.source_type === 'event' ? 'event' : 'task_alt'}
+          {iconKey}
         </span>
-        <span className={titleClass}>{item.title || `${item.source_type} ${item.source_id}`}</span>
+        <span className={titleClass}>{_safeText(item.title, fallbackLabel)}</span>
       </div>
     );
   }
@@ -361,7 +376,7 @@ function ItemPreviewRow({ item, candidateType, completed, onCheck }) {
       <div className={baseRowClass}>
         <CheckBox checked={completed} onChange={onCheck} />
         <span className="material-symbols-outlined text-error/70 flex-shrink-0" style={{ fontSize: '12px' }}>flag</span>
-        <span className={titleClass}>{item.title}</span>
+        <span className={titleClass}>{_safeText(item.title, '(no subject)')}</span>
         {item.sender && <span className="text-on-surface-variant/60 truncate max-w-[40%]">{item.sender}</span>}
       </div>
     );
