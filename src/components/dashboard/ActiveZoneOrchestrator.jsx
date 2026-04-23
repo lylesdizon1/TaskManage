@@ -114,25 +114,112 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
     fetchTiles();
   }
 
+  // Set of tile-id strings whose items list is currently expanded.
+  const isExpanded = (tileId) => expandedTileId === tileId;
+  // Set of "candidate_key:item_id" strings the user has just checked off
+  // in the expanded list. Used for optimistic strikethrough; the real
+  // completion fires via apiFetch below.
+  const [completedItemIds, setCompletedItemIds] = useState(() => new Set());
+
+  const EXPAND_ACTIONS = new Set([
+    'expand_overdue_tasks',
+    'expand_close_the_loops',
+    'expand_critical_emails',
+  ]);
+
   function handlePrimary(tile) {
     const a = tile.primaryAction || tile.primary_action;
     if (!a) return;
-    // Inline-expand actions toggle local state without backend call.
-    if (a.action === 'expand_overdue_tasks' || a.action === 'expand_close_the_loops') {
-      setExpandedTileId((cur) => (cur === tile.id ? null : tile.id));
+    // Two cases for batch tiles:
+    //   collapsed → primary expands the items list (no backend call)
+    //   expanded  → primary fires "complete all unchecked items" batch
+    if (EXPAND_ACTIONS.has(a.action)) {
+      if (!isExpanded(tile.id)) {
+        setExpandedTileId(tile.id);
+        return;
+      }
+      // Expanded — batch-complete every item not already checked off.
+      handleBatchComplete(tile);
       return;
     }
-    // All other actions hand off to the parent (which knows how to open
-    // composition surfaces, navigate, etc.). Optimistically remove the
-    // tile from the local list and mark resolved server-side; on next
-    // detector run it'll either re-surface (if situation persists) or
-    // stay gone (if user took action that resolved the underlying state).
+    // Singleton tile actions hand off to parent (composition surface).
     if (onAction) onAction(a, tile);
     postTileStatus(tile.id, 'resolve');
   }
 
+  // Per-candidate-type item completion. Each fires the appropriate
+  // existing API. Returns a promise so the caller can chain.
+  async function completeItem(tile, item) {
+    const ctype = tile.candidateType || tile.candidate_type;
+    try {
+      if (ctype === 'overdue_tasks_batch') {
+        await apiFetch(`/api/tasks/${encodeURIComponent(item.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ completed: true, completedAt: new Date().toISOString() }),
+        });
+      } else if (ctype === 'close_the_loops_batch') {
+        await apiFetch('/api/close-loop/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ source_type: item.source_type, source_id: item.source_id }),
+        });
+      } else if (ctype === 'critical_email_unacked') {
+        await apiFetch(`/api/inbox/items/${encodeURIComponent(item.id)}/ack`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+      }
+    } catch { /* non-fatal — refetch reconciles */ }
+  }
+
+  function markItemDone(tile, item) {
+    const key = `${tile.candidate_key || tile.candidateKey || tile.id}:${item.id}`;
+    setCompletedItemIds((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    completeItem(tile, item);
+  }
+
+  async function handleBatchComplete(tile) {
+    const items = tile.itemsPreview || tile.items_preview || [];
+    const ctype = tile.candidateType || tile.candidate_type;
+    const remaining = items.filter((it) => {
+      const key = `${tile.candidate_key || tile.candidateKey || tile.id}:${it.id}`;
+      return !completedItemIds.has(key);
+    });
+    if (!remaining.length) {
+      // Everything already checked — just resolve the tile.
+      postTileStatus(tile.id, 'resolve');
+      return;
+    }
+    // Optimistically mark all as done, fire APIs in parallel.
+    setCompletedItemIds((prev) => {
+      const next = new Set(prev);
+      for (const it of remaining) next.add(`${tile.candidate_key || tile.candidateKey || tile.id}:${it.id}`);
+      return next;
+    });
+    await Promise.all(remaining.map((it) => completeItem(tile, it)));
+    postTileStatus(tile.id, 'resolve');
+    // Notify parent so task list / inbox / etc. re-render.
+    if (onAction) onAction({ action: `batch_done:${ctype}` }, tile);
+  }
+
   function handleDefer(tile)  { postTileStatus(tile.id, 'defer'); }
   function handleDismiss(tile) { postTileStatus(tile.id, 'dismiss'); }
+
+  // Per-batch-type primary label when expanded.
+  function expandedPrimaryLabel(ctype, remainingCount) {
+    if (remainingCount === 0) return 'Done';
+    switch (ctype) {
+      case 'overdue_tasks_batch':    return remainingCount === 1 ? 'Mark done' : `Mark all ${remainingCount} done`;
+      case 'close_the_loops_batch':  return remainingCount === 1 ? 'Resolve'   : `Resolve all ${remainingCount}`;
+      case 'critical_email_unacked': return remainingCount === 1 ? 'Acknowledge' : `Acknowledge all ${remainingCount}`;
+      default:                        return 'Mark all done';
+    }
+  }
 
   if (!tiles.length) return null;
 
@@ -140,15 +227,20 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
     <div className="space-y-2">
       {tiles.map((t) => {
         const wasAlreadyShown = !appearedIds.has(t.id);
-        // Tiles in the appearedIds set on first render don't animate —
-        // see the appearedIds effect above.
+        const ckey = t.candidate_key || t.candidateKey || t.id;
+        // Per-tile completed-id list for optimistic strikethrough.
+        const itemCompleted = (itemId) => completedItemIds.has(`${ckey}:${itemId}`);
         return (
           <ActiveZoneTile
             key={t.id}
             tile={t}
-            expanded={expandedTileId === t.id}
+            expanded={isExpanded(t.id)}
             isFresh={!wasAlreadyShown && initialLoadDoneRef.current}
+            isItemCompleted={itemCompleted}
+            expandedPrimaryLabel={expandedPrimaryLabel}
             onPrimary={() => handlePrimary(t)}
+            onItemCheck={(item) => markItemDone(t, item)}
+            onShowLess={() => setExpandedTileId(null)}
             onDefer={() => handleDefer(t)}
             onDismiss={() => handleDismiss(t)}
           />
@@ -158,11 +250,24 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
   );
 }
 
-function ActiveZoneTile({ tile, expanded, isFresh, onPrimary, onDefer, onDismiss }) {
+function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrimaryLabel, onPrimary, onItemCheck, onShowLess, onDefer, onDismiss }) {
   const primary = tile.primaryAction || tile.primary_action || {};
   const secondary = tile.secondaryAction || tile.secondary_action || {};
   const itemsPreview = tile.itemsPreview || tile.items_preview || [];
-  const expandAction = primary.action === 'expand_overdue_tasks' || primary.action === 'expand_close_the_loops';
+  const ctype = tile.candidateType || tile.candidate_type;
+  const isExpandable = primary.action === 'expand_overdue_tasks'
+                    || primary.action === 'expand_close_the_loops'
+                    || primary.action === 'expand_critical_emails';
+
+  // When expanded, primary label flips to the BATCH-COMPLETE verb so the
+  // user can resolve everything in one tap. The collapsed label stays as
+  // composer-supplied (e.g. "See them" / "Close them" / "Open inbox").
+  const remainingCount = isExpandable
+    ? itemsPreview.filter((it) => !isItemCompleted(it.id)).length
+    : 0;
+  const primaryLabel = (isExpandable && expanded)
+    ? expandedPrimaryLabel(ctype, remainingCount)
+    : (primary.label || 'Open');
 
   return (
     <div
@@ -191,17 +296,30 @@ function ActiveZoneTile({ tile, expanded, isFresh, onPrimary, onDefer, onDismiss
       {expanded && itemsPreview.length > 0 && (
         <div className="mt-3 pt-3 border-t border-surface-container-low space-y-1.5">
           {itemsPreview.map((item, i) => (
-            <ItemPreviewRow key={item.id || i} item={item} candidateType={tile.candidateType || tile.candidate_type} />
+            <ItemPreviewRow
+              key={item.id || i}
+              item={item}
+              candidateType={ctype}
+              completed={!!isItemCompleted(item.id)}
+              onCheck={() => onItemCheck(item)}
+            />
           ))}
+          <button
+            onClick={onShowLess}
+            className="text-[11px] text-on-surface-variant/60 hover:text-on-surface-variant mt-2 transition-colors"
+          >
+            Show less
+          </button>
         </div>
       )}
 
       <div className="flex items-center gap-2 mt-3">
         <button
           onClick={onPrimary}
-          className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors"
+          className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50"
+          disabled={isExpandable && expanded && remainingCount === 0}
         >
-          {expandAction && expanded ? 'Hide' : (primary.label || 'Open')}
+          {primaryLabel}
         </button>
         <button
           onClick={onDefer}
@@ -214,25 +332,59 @@ function ActiveZoneTile({ tile, expanded, isFresh, onPrimary, onDefer, onDismiss
   );
 }
 
-function ItemPreviewRow({ item, candidateType }) {
+function ItemPreviewRow({ item, candidateType, completed, onCheck }) {
+  const baseRowClass = `flex items-center gap-2 text-xs ${completed ? 'opacity-50' : ''}`;
+  const titleClass = `text-on-background truncate flex-1 ${completed ? 'line-through' : ''}`;
+
   if (candidateType === 'overdue_tasks_batch') {
     return (
-      <div className="flex items-center gap-2 text-xs">
-        <span className="w-1 h-1 rounded-full bg-error flex-shrink-0" />
-        <span className="text-on-background truncate flex-1">{item.title}</span>
-        {item.dueDate && <span className="text-on-surface-variant/60">{item.dueDate}</span>}
+      <div className={baseRowClass}>
+        <CheckBox checked={completed} onChange={onCheck} />
+        <span className={titleClass}>{item.title}</span>
+        {item.dueDate && <span className="text-on-surface-variant/60 flex-shrink-0">{item.dueDate}</span>}
       </div>
     );
   }
   if (candidateType === 'close_the_loops_batch') {
     return (
-      <div className="flex items-center gap-2 text-xs">
-        <span className="material-symbols-outlined text-primary/60" style={{ fontSize: '12px' }}>
+      <div className={baseRowClass}>
+        <CheckBox checked={completed} onChange={onCheck} />
+        <span className="material-symbols-outlined text-primary/60 flex-shrink-0" style={{ fontSize: '12px' }}>
           {item.source_type === 'event' ? 'event' : 'task_alt'}
         </span>
-        <span className="text-on-background truncate flex-1">{item.title || `${item.source_type} ${item.source_id}`}</span>
+        <span className={titleClass}>{item.title || `${item.source_type} ${item.source_id}`}</span>
+      </div>
+    );
+  }
+  if (candidateType === 'critical_email_unacked') {
+    return (
+      <div className={baseRowClass}>
+        <CheckBox checked={completed} onChange={onCheck} />
+        <span className="material-symbols-outlined text-error/70 flex-shrink-0" style={{ fontSize: '12px' }}>flag</span>
+        <span className={titleClass}>{item.title}</span>
+        {item.sender && <span className="text-on-surface-variant/60 truncate max-w-[40%]">{item.sender}</span>}
       </div>
     );
   }
   return null;
+}
+
+function CheckBox({ checked, onChange }) {
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      aria-checked={checked}
+      role="checkbox"
+      className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+        checked
+          ? 'bg-primary border-primary'
+          : 'border-on-surface-variant/40 hover:border-primary'
+      }`}
+    >
+      {checked && (
+        <span className="material-symbols-outlined text-white" style={{ fontSize: '12px', fontVariationSettings: "'FILL' 1, 'wght' 700" }}>check</span>
+      )}
+    </button>
+  );
 }

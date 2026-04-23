@@ -261,14 +261,16 @@ function detectDailyWrapDue(state) {
 
 /** 8. 3+ unacked flagged-critical emails. Priority 60. */
 function detectCriticalEmailUnacked(state) {
-  const { flaggedUnackedCount = 0 } = state;
+  const { flaggedUnackedCount = 0, flaggedItems = [] } = state;
   if (flaggedUnackedCount < 3) return null;
   return {
     candidate_type: 'critical_email_unacked',
-    candidate_key: hashItems('critical_email_unacked', [`count_${flaggedUnackedCount}`]),
+    candidate_key: hashItems('critical_email_unacked', flaggedItems.length
+      ? flaggedItems.map((i) => i.id)
+      : [`count_${flaggedUnackedCount}`]),
     priority_score: 60,
     urgency: 'today',
-    items: [],
+    items: flaggedItems,
     context: { count: flaggedUnackedCount },
   };
 }
@@ -349,7 +351,7 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
   const winStart = new Date(now.getTime() - 3600000).toISOString();
   const winEnd   = new Date(now.getTime() + 4 * 3600000).toISOString();
 
-  const [tasks, events, closeLoops, pendingConfirmations, flaggedRes, todayJournal] = await Promise.all([
+  const [tasks, events, closeLoops, pendingConfirmations, flaggedRes, flaggedItems, todayJournal] = await Promise.all([
     db.getTasksForUser(userId, user?.entityIds || []).catch(() => []),
     db.getCalendarEventsForUser(userId, winStart, winEnd).catch(() => []),
     db.getOpenCloseLoopItems
@@ -361,6 +363,9 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
     db.getFlaggedInboxCount
       ? db.getFlaggedInboxCount(userId, { includeAcked: false }).catch(() => 0)
       : Promise.resolve(0),
+    db.getFlaggedInboxItems
+      ? db.getFlaggedInboxItems(userId, { includeAcked: false, limit: 10 }).catch(() => [])
+      : Promise.resolve([]),
     db.getJournalEntryByDate
       ? db.getJournalEntryByDate(userId, todayLocalIso).catch(() => null)
       : Promise.resolve(null),
@@ -378,6 +383,7 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
     closeLoops,
     pendingConfirmations,
     flaggedUnackedCount,
+    flaggedItems: Array.isArray(flaggedItems) ? flaggedItems : [],
     todayJournal,
     drafts: [], // no persistence yet — see detectDraftResume comment
   };

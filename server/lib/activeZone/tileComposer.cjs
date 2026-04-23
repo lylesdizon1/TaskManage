@@ -199,7 +199,7 @@ function _actionsFor(candidate, primaryLabel) {
       case 'pending_confirmation':      return { label: primaryLabel, action: 'open_confirmation',   target: items[0]?.id };
       case 'draft_resume':              return { label: primaryLabel, action: 'resume_draft',        target: items[0]?.id };
       case 'daily_wrap_due':            return { label: primaryLabel, action: 'open_daily_wrap' };
-      case 'critical_email_unacked':    return { label: primaryLabel, action: 'open_flagged_inbox' };
+      case 'critical_email_unacked':    return { label: primaryLabel, action: 'expand_critical_emails' };
       case 'single_urgent_task':        return { label: primaryLabel, action: 'open_task',           target: items[0]?.id };
       default:                           return { label: primaryLabel, action: 'open' };
     }
@@ -224,6 +224,14 @@ function _itemsPreview(candidate) {
       return [{ id: items[0]?.id, tool_name: items[0]?.toolName, params: items[0]?.params }];
     case 'single_urgent_task':
       return [{ id: context.task?.id, title: context.task?.title, dueDate: context.task?.dueDate }];
+    case 'critical_email_unacked':
+      return items.slice(0, 10).map((it) => ({
+        id: it.id,
+        title: it.title || it.subject || '(no subject)',
+        sender: it.sender || '',
+        sourceId: it.sourceId || it.source_id || null,
+        gmailLink: it.gmailLink || it.gmail_link || null,
+      }));
     default:
       return [];
   }
