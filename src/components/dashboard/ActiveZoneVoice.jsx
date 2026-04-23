@@ -45,19 +45,27 @@ export default function ActiveZoneVoice({ apiFetch, authToken, refreshKey }) {
     return () => { cancelled = true; };
   }, [apiFetch, authToken, refreshKey, line]);
 
+  // Diagnostic — surfaces in DevTools so we can confirm the panel
+  // mounted and the API roundtrip succeeded. Cheap; remove later if
+  // it gets noisy.
+  if (typeof window !== 'undefined' && !window.__activeZoneVoiceLogged) {
+    window.__activeZoneVoiceLogged = true;
+    console.log('[ActiveZoneVoice] mounted');
+  }
+
   return (
     <div
-      className="rounded-2xl border border-surface-container-low bg-surface-container-lowest/50 px-4 py-3"
+      className="rounded-2xl border-2 border-primary/15 bg-surface-container-lowest px-4 py-3 shadow-sm"
       style={{ animation: 'azSlideIn 200ms ease-out' }}
     >
       <div className="flex items-start gap-2.5">
-        <span className="material-symbols-outlined text-primary/70 flex-shrink-0 mt-0.5" style={{ fontSize: '16px' }}>auto_awesome</span>
+        <span className="material-symbols-outlined text-primary flex-shrink-0 mt-0.5" style={{ fontSize: '18px' }}>auto_awesome</span>
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-primary/60 mb-0.5">Aria</p>
+          <p className="text-[10px] font-extrabold uppercase tracking-wider text-primary mb-1">Aria</p>
           {loading && !line ? (
-            <p className="text-sm text-on-surface-variant/40 italic">…</p>
+            <p className="text-sm text-on-surface-variant italic">Catching up…</p>
           ) : (
-            <p className="text-sm text-on-background leading-relaxed">{line}</p>
+            <p className="text-sm text-on-background leading-relaxed">{line || "You're all clear. Nice work."}</p>
           )}
         </div>
       </div>

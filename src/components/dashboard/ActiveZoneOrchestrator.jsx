@@ -26,6 +26,15 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
   const refreshTimerRef = useRef(null);
   const inFlightRef = useRef(null);
 
+  // Notify parent immediately on mount so the empty-state Voice panel
+  // renders before the first fetch resolves. Without this, azIsEmpty
+  // stays at its parent default for the duration of the fetch — fine
+  // when the default is true (current contract), but spelling it out
+  // makes the contract robust against parents that init it false.
+  useEffect(() => {
+    if (onEmptyChange) onEmptyChange(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const fetchTiles = useCallback(async () => {
     if (inFlightRef.current) return inFlightRef.current;
     setLoading(true);
@@ -37,9 +46,15 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
         const next = Array.isArray(data?.tiles) ? data.tiles : [];
+        if (typeof window !== 'undefined') {
+          console.log(`[ActiveZoneOrchestrator] fetched ${next.length} tile(s)`, next.map((t) => t.candidateType || t.candidate_type));
+        }
         setTiles(next);
         if (onEmptyChange) onEmptyChange(next.length === 0);
-      } catch {
+      } catch (err) {
+        if (typeof window !== 'undefined') {
+          console.warn('[ActiveZoneOrchestrator] fetch failed', err?.message);
+        }
         setTiles([]);
         if (onEmptyChange) onEmptyChange(true);
       } finally {

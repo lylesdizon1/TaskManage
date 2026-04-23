@@ -1950,11 +1950,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           Renders up to 3 tiles ranked by priority, or the empty-state
           Aria voice panel when there's nothing to surface. Refresh-
           debounced via azRefreshKey wired by AZ7. */}
-      <div className="px-1 md:px-0 mb-3 hidden md:block space-y-2">
-        {azIsEmpty && (
-          <ActiveZoneVoice apiFetch={apiFetch} authToken={authToken} refreshKey={azRefreshKey} />
-        )}
-        <ActiveZoneOrchestrator
+      <section className="px-1 md:px-0 mb-3 hidden md:block" aria-label="Active Zone">
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className="material-symbols-outlined text-primary" style={{ fontSize: '14px' }}>auto_awesome</span>
+          <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-primary">Active Zone</h2>
+        </div>
+        <div className="space-y-2">
+          {azIsEmpty && (
+            <ActiveZoneVoice apiFetch={apiFetch} authToken={authToken} refreshKey={azRefreshKey} />
+          )}
+          <ActiveZoneOrchestrator
           apiFetch={apiFetch}
           authToken={authToken}
           refreshKey={azRefreshKey}
@@ -2006,7 +2011,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             }
           }}
         />
-      </div>
+        </div>
+      </section>
 
       {/* ROW 2: Command Center. Mobile: position fixed between the top
           bar (56px / top-14) and the bottom nav (64px / bottom-16) so
