@@ -4,6 +4,7 @@ import { useToast } from '../contexts/ToastContext';
 import buildSystemPrompt from '../utils/systemPrompt';
 import { getTodayLocal } from '../utils/helpers.js';
 import { parseActionDraft } from '../utils/parseActionDraft.js';
+import ActiveZoneOrchestrator from '../components/dashboard/ActiveZoneOrchestrator.jsx';
 import TaskDraftTile from '../components/command-center/TaskDraftTile.jsx';
 import EventDraftTile from '../components/command-center/EventDraftTile.jsx';
 import ProjectDraftTile from '../components/command-center/ProjectDraftTile.jsx';
@@ -57,6 +58,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // transition, 30+ min return, or an explicit intent ("what's going on").
   const [activeZoneState, setActiveZoneState] = useState('empty');
   const [activeTile, setActiveTile] = useState(null);
+  // Active Zone orchestration surface (the new top-of-dashboard tile area).
+  // azRefreshKey bumps to force a re-fetch from the orchestrator after
+  // significant state changes (task complete, meeting end, loop close).
+  // Wired to AZ7 hooks below.
+  const [azRefreshKey, setAzRefreshKey] = useState(0);
+  const [azIsEmpty, setAzIsEmpty] = useState(true);
+  const bumpAzRefresh = useCallback(() => setAzRefreshKey((k) => k + 1), []);
   const draftFromRef = useRef({});
   const draftToRef = useRef({});
   const draftBodyRef = useRef({});
@@ -114,103 +122,39 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       firstBriefFetchRef.current = false;
       if (data.timeState) lastTimeStateRef.current = data.timeState;
 
-      // Ambient capture: promote ONE tile at a time when the zone is
-      // empty and the user isn't mid-send. Priority comes from the
-      // server as data.activeZoneSuggestion ('daily_wrap' > 'close_loop'
-      // > null). meetingsNeedingNotes is the V1 close_loop source; the
-      // closeLoopQueue slot covers task/project-task follow-ups.
-      const zoneIdle = activeZoneStateRef.current === 'empty';
-      if (!ccSendingRef.current && zoneIdle) {
-        if (data.activeZoneSuggestion === 'daily_wrap' && data.wrapReminderReady && !dailyWrapActedOnRef.current) {
-          const tasksCompleted = data.stats?.tasksCompletedToday || 0;
-          const tasksStillOpen = (data.tasks?.overdue?.length || 0) + (data.tasks?.dueToday?.length || 0);
-          setActiveTile({
-            role: 'daily_wrap',
-            type: 'daily_wrap',
-            id: `dw-${Date.now()}`,
-            status: 'draft',
-            payload: {
-              title: 'Ready to wrap your day?',
-              tasksCompleted,
-              tasksStillOpen,
+      // AZ5 — orchestration moved out of fetchBriefContext. The new
+      // ActiveZoneOrchestrator (top of dashboard) owns the
+      // "should we surface a daily_wrap / close_loop tile" decision via
+      // the candidate detector + tile composer. activeZoneState /
+      // activeTile remain for the DOWNSTREAM composition surfaces
+      // (daily wrap form, close-loop note input, email draft tile, etc.)
+      // which are invoked by the user clicking a tile's primary action.
+      // The ambient proactive CC message for daily_wrap is preserved
+      // below so users still get a chat nudge — fires only once per day
+      // via wrapReminderReady's DB-side claim.
+      if (!ccSendingRef.current && data.activeZoneSuggestion === 'daily_wrap' && data.wrapReminderReady && !wrapPromptFiredRef.current) {
+        wrapPromptFiredRef.current = true;
+        const done = data.stats?.tasksCompletedToday || 0;
+        const highOpen = (data.tasks?.overdue?.filter((t) => t.priority === 'high') || []).length
+          + (data.tasks?.dueToday?.filter((t) => t.priority === 'high' && !t.completed) || []).length;
+        const parts = [];
+        if (done > 0) parts.push(`${done} task${done === 1 ? '' : 's'} done`);
+        if (highOpen > 0) parts.push(`${highOpen} high-priority still open`);
+        const summary = parts.length ? ` Today: ${parts.join(', ')}.` : '';
+        const now = new Date().toISOString();
+        setCcMessages((prev) => {
+          if (prev.some(m => m.update_type === 'daily_wrap')) return prev;
+          return [
+            ...prev,
+            {
+              role: 'assistant',
+              content: `Ready to wrap your day?${summary} Want to capture how it went?`,
+              update_type: 'daily_wrap',
+              createdAt: now,
+              ts: Date.now(),
             },
-            ts: Date.now(),
-          });
-          setActiveZoneState('daily_wrap');
-          // Proactive CC message — once per session. wrapReminderReady
-          // itself is once-per-day system-wide via the DB claim, so this
-          // ref is belt-and-suspenders against same-session fetch races.
-          if (!wrapPromptFiredRef.current) {
-            wrapPromptFiredRef.current = true;
-            const done = data.stats?.tasksCompletedToday || 0;
-            const highOpen = (data.tasks?.overdue?.filter((t) => t.priority === 'high') || []).length
-              + (data.tasks?.dueToday?.filter((t) => t.priority === 'high' && !t.completed) || []).length;
-            const parts = [];
-            if (done > 0) parts.push(`${done} task${done === 1 ? '' : 's'} done`);
-            if (highOpen > 0) parts.push(`${highOpen} high-priority still open`);
-            const summary = parts.length ? ` Today: ${parts.join(', ')}.` : '';
-            const now = new Date().toISOString();
-            setCcMessages((prev) => {
-              // Dedup: skip if a daily_wrap proactive message already exists
-              if (prev.some(m => m.update_type === 'daily_wrap')) return prev;
-              return [
-                ...prev,
-                {
-                  role: 'assistant',
-                  content: `Ready to wrap your day?${summary} Want to capture how it went?`,
-                  update_type: 'daily_wrap',
-                  createdAt: now,
-                  ts: Date.now(),
-                },
-              ];
-            });
-          }
-        } else if (data.activeZoneSuggestion === 'close_loop') {
-          // Prefer a pending_close_loop row (task/project_task) when present,
-          // else fall back to a meeting-needs-notes event.
-          const queued = (Array.isArray(data.closeLoopQueue) ? data.closeLoopQueue : [])
-            .filter(it => !closeLoopPromptedIdsRef.current.has(`${it.sourceType}:${it.sourceId}`));
-          if (queued.length > 0) {
-            const it = queued[0];
-            closeLoopPromptedIdsRef.current.add(`${it.sourceType}:${it.sourceId}`);
-            setActiveTile({
-              role: 'close_loop',
-              type: it.sourceType === 'event' ? 'event' : 'task',
-              id: `close-${it.id}`,
-              status: 'draft',
-              payload: {
-                title: it.sourceType === 'event'
-                  ? `How did "${it.titleSnapshot || 'your meeting'}" go?`
-                  : `Any color on "${it.titleSnapshot || 'that task'}"?`,
-                source_type: it.sourceType,
-                source_id: it.sourceId,
-                event_title: it.sourceType === 'event' ? it.titleSnapshot || '' : '',
-              },
-              ts: Date.now(),
-            });
-            setActiveZoneState('close_loop');
-          } else if (Array.isArray(data.meetingsNeedingNotes) && data.meetingsNeedingNotes.length > 0) {
-            const ev = data.meetingsNeedingNotes.find(e => !closeLoopPromptedIdsRef.current.has(`event:${e.id}`));
-            if (!ev) { /* all meetings already prompted this session */ }
-            else {
-            closeLoopPromptedIdsRef.current.add(`event:${ev.id}`);
-            setActiveTile({
-              role: 'close_loop',
-              type: 'event',
-              id: `close-${ev.id || ev.title || Date.now()}`,
-              status: 'draft',
-              payload: {
-                title: `How did "${ev.title || 'your meeting'}" go?`,
-                source_type: 'event',
-                source_id: ev.id || null,
-                event_title: ev.title || '',
-              },
-              ts: Date.now(),
-            });
-            setActiveZoneState('close_loop');
-          }
-          }
-        }
+          ];
+        });
       }
     } catch { /* silent */ }
   }, [apiFetch, authToken]);
@@ -1988,6 +1932,64 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
           {dateStr}
         </p>
+      </div>
+
+      {/* ROW 1.5: Active Zone — Aria's orchestration surface (AZ5).
+          Renders up to 3 tiles ranked by priority. Empty state lands
+          in AZ6. Refresh-debounced via azRefreshKey wired by AZ7. */}
+      <div className="px-1 md:px-0 mb-3 hidden md:block">
+        <ActiveZoneOrchestrator
+          apiFetch={apiFetch}
+          authToken={authToken}
+          refreshKey={azRefreshKey}
+          onEmptyChange={setAzIsEmpty}
+          onAction={(action, tile) => {
+            // Route the tile's primary action into the existing
+            // composition surfaces. Keeping activeZoneState/activeTile
+            // as the downstream composer so we don't break drafting.
+            switch (action.action) {
+              case 'open_daily_wrap':
+                setActiveTile({
+                  role: 'daily_wrap', type: 'daily_wrap',
+                  id: `dw-${Date.now()}`, status: 'draft',
+                  payload: { title: 'Ready to wrap your day?' },
+                  ts: Date.now(),
+                });
+                setActiveZoneState('daily_wrap');
+                break;
+              case 'add_event_outcome': {
+                const ev = (tile.itemsPreview || tile.items_preview || [])[0]?.event;
+                if (!ev) break;
+                setActiveTile({
+                  role: 'close_loop', type: 'event',
+                  id: `close-${ev.id}`, status: 'draft',
+                  payload: { title: `How did "${ev.title || 'your meeting'}" go?`, source_type: 'event', source_id: ev.id, event_title: ev.title || '' },
+                  ts: Date.now(),
+                });
+                setActiveZoneState('close_loop');
+                break;
+              }
+              case 'open_confirmation':
+                // Surface the pending confirmation card via existing chat
+                // flow — chat panel watches pending_confirmations.
+                ccSendRef.current?.('Show me the pending confirmation');
+                break;
+              case 'open_flagged_inbox':
+                if (typeof window !== 'undefined') window.location.hash = '#inbox?filter=flagged';
+                break;
+              case 'open_meeting_prep':
+              case 'open_task':
+              case 'resume_draft':
+                // No dedicated UI yet — surface via chat for now.
+                ccSendRef.current?.(`Open ${action.action.replace(/_/g, ' ')}: ${action.target || ''}`);
+                break;
+              default:
+                // expand_* actions are handled inline by the orchestrator
+                // and never reach this callback.
+                break;
+            }
+          }}
+        />
       </div>
 
       {/* ROW 2: Command Center. Mobile: position fixed between the top
