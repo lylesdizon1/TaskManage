@@ -929,22 +929,33 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       // Routes through composeBriefOnce so a race with initCommandCenter's
       // fallback brief call doesn't double-compose.
       const aName = currentUser?.assistantName || 'Aria';
+      const briefData = {
+        overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
+        highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+        todayTasks: todayTasks.map((t) => t.title).join(', ') || 'None',
+        events: calendarEvents.map((e) => e.title).join(', ') || 'None',
+        notesCount: notes?.length || 0,
+        entities: (entities || []).map((e) => e.name).join(', ') || 'None',
+      };
+      // Semantic dedup: hash the composer INPUTS (not the LLM output).
+      // Identical inputs → identical meaning regardless of wording. djb2
+      // is plenty for short deterministic strings on a single session;
+      // collision risk is negligible for this vocabulary.
+      const inputHash = (() => {
+        const s = JSON.stringify(briefData);
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i);
+        return (h >>> 0).toString(16);
+      })();
       const { brief, source: briefSource } = await composeBriefOnce(() => ({
         apiKey: apiKeys?.claude || '',
         assistantName: aName,
         persona: 'executive_assistant',
         userName: firstName,
-        data: {
-          overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
-          highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
-          todayTasks: todayTasks.map((t) => t.title).join(', ') || 'None',
-          events: calendarEvents.map((e) => e.title).join(', ') || 'None',
-          notesCount: notes?.length || 0,
-          entities: (entities || []).map((e) => e.name).join(', ') || 'None',
-        },
+        data: briefData,
       }));
       if (typeof window !== 'undefined') {
-        console.log('[CC.freshUpdate] brief composed', { source: briefSource });
+        console.log('[CC.freshUpdate] brief composed', { source: briefSource, inputHash });
       }
       // If init just composed and we're inside the fresh window, we'd be
       // echoing its brief into the conversation as a new message. Skip
@@ -955,12 +966,42 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       }
       const content = brief || 'Nothing new to report — you\'re all caught up!';
       const now = new Date().toISOString();
-      await apiFetch(`/api/conversations/${ccConvId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ role: 'assistant', content, model: 'claude' }),
+
+      // Result handling — three paths driven by semantic dedup on inputHash.
+      // NOTE: proactive narrations are CLIENT-ONLY ephemeral. They used to
+      // POST to /api/conversations/:id/messages, which persisted a growing
+      // stack across reloads. Now they only update ccMessages; init's
+      // brief remains the sole server-persisted entry for the day.
+      setCcMessages((prev) => {
+        // Find the most recent prior proactive narration.
+        let prevProactiveIdx = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i]?.update_type === 'proactive_brief') { prevProactiveIdx = i; break; }
+        }
+        // Path 1 — same inputs as the prior proactive. Skip entirely.
+        if (prevProactiveIdx >= 0 && prev[prevProactiveIdx]?.input_hash === inputHash) {
+          if (typeof window !== 'undefined') console.log('[CC.freshUpdate] skipped', { reason: 'semantic_dedup', inputHash });
+          return prev;
+        }
+        const newMsg = {
+          role: 'assistant',
+          update_type: 'proactive_brief',
+          input_hash: inputHash,
+          content,
+          createdAt: now,
+          ts: Date.now(),
+        };
+        // Path 2 — different inputs and a prior proactive exists. Replace in place.
+        if (prevProactiveIdx >= 0) {
+          if (typeof window !== 'undefined') console.log('[CC.freshUpdate] replaced', { inputHash });
+          const updated = [...prev];
+          updated[prevProactiveIdx] = newMsg;
+          return updated;
+        }
+        // Path 3 — no prior proactive (first one this session). Append.
+        if (typeof window !== 'undefined') console.log('[CC.freshUpdate] appended', { inputHash });
+        return [...prev, newMsg];
       });
-      setCcMessages((prev) => [...prev, { role: 'assistant', content, createdAt: now, ts: Date.now() }]);
     } catch (err) {
       console.error('[CommandCenter] fresh update failed:', err);
       setCcMessages((prev) => [...prev, { role: 'assistant', content: 'Couldn\'t fetch an update right now — try again in a moment.', createdAt: new Date().toISOString(), ts: Date.now() }]);
