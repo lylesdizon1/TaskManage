@@ -762,6 +762,45 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const ccInitRunningRef = useRef(false);
   const ccPollIntervalRef = useRef(null);
 
+  // Cross-trigger brief-composition guard. Multiple callsites
+  // (initCommandCenter + handleFreshUpdate) both hit /api/dashboard/aria-brief;
+  // without coordination, a hard refresh could fire two LLM composes back-to-
+  // back when the visibility-change fresh-update path races init's fallback.
+  // `composeBriefOnce` serializes the two sites:
+  //   - in-flight: any concurrent caller awaits the same promise
+  //   - fresh: if the last compose resolved <10s ago, reuse its result
+  const briefInFlightRef = useRef(null);        // Promise|null
+  const briefLastResultRef = useRef(null);      // { brief: string, ts: number } | null
+  const BRIEF_FRESH_MS = 10_000;
+  const composeBriefOnce = useCallback(async (payloadFn) => {
+    // Fresh cache — skip LLM entirely.
+    const cached = briefLastResultRef.current;
+    if (cached && Date.now() - cached.ts < BRIEF_FRESH_MS) {
+      return { brief: cached.brief, source: 'fresh_cache' };
+    }
+    // In-flight coalesce — second caller piggybacks on the first's Promise.
+    if (briefInFlightRef.current) {
+      return briefInFlightRef.current.then((brief) => ({ brief, source: 'in_flight_join' }));
+    }
+    const p = (async () => {
+      const briefRes = await apiFetch('/api/dashboard/aria-brief', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(payloadFn()),
+      });
+      const { brief } = await briefRes.json();
+      briefLastResultRef.current = { brief, ts: Date.now() };
+      return brief;
+    })();
+    briefInFlightRef.current = p;
+    try {
+      const brief = await p;
+      return { brief, source: 'llm' };
+    } finally {
+      briefInFlightRef.current = null;
+    }
+  }, [apiFetch, authToken]);
+
   const initCommandCenterRef = useRef(null);
   initCommandCenterRef.current = async () => {
     if (!currentUser?.id || ccInitRunningRef.current) return;
@@ -796,26 +835,26 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
       // Step 3: no messages — generate brief first. Server derives time
       // state from req.user.timezone so no timeOfDay needed here.
+      // Routes through composeBriefOnce so handleFreshUpdate firing
+      // moments later doesn't double-compose.
       const aName = currentUser?.assistantName || 'Aria';
-      const briefRes = await apiFetch('/api/dashboard/aria-brief', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({
-          apiKey: apiKeys?.claude || '',
-          assistantName: aName,
-          persona: 'executive_assistant',
-          userName: firstName,
-          data: {
-            overdue: initialBriefData?.overdue || overdueTasks.map((t) => t.title).join(', ') || 'None',
-            highPriority: initialBriefData?.highPriority || highPriorityTasks.map((t) => t.title).join(', ') || 'None',
-            todayTasks: initialBriefData?.todayTasks || todayTasks.map((t) => t.title).join(', ') || 'None',
-            events: calendarEvents.map((e) => e.title).join(', ') || 'None',
-            notesCount: notes?.length || 0,
-            entities: (entities || []).map((e) => e.name).join(', ') || 'None',
-          },
-        }),
-      });
-      const { brief } = await briefRes.json();
+      const { brief, source: briefSource } = await composeBriefOnce(() => ({
+        apiKey: apiKeys?.claude || '',
+        assistantName: aName,
+        persona: 'executive_assistant',
+        userName: firstName,
+        data: {
+          overdue: initialBriefData?.overdue || overdueTasks.map((t) => t.title).join(', ') || 'None',
+          highPriority: initialBriefData?.highPriority || highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+          todayTasks: initialBriefData?.todayTasks || todayTasks.map((t) => t.title).join(', ') || 'None',
+          events: calendarEvents.map((e) => e.title).join(', ') || 'None',
+          notesCount: notes?.length || 0,
+          entities: (entities || []).map((e) => e.name).join(', ') || 'None',
+        },
+      }));
+      if (typeof window !== 'undefined') {
+        console.log('[CC.init] brief composed', { source: briefSource });
+      }
 
       // Step 4: save brief as message 1
       if (brief) {
@@ -887,26 +926,33 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     setCcRefreshing(true);
     try {
       // Server derives time state from req.user.timezone.
+      // Routes through composeBriefOnce so a race with initCommandCenter's
+      // fallback brief call doesn't double-compose.
       const aName = currentUser?.assistantName || 'Aria';
-      const briefRes = await apiFetch('/api/dashboard/aria-brief', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({
-          apiKey: apiKeys?.claude || '',
-          assistantName: aName,
-          persona: 'executive_assistant',
-          userName: firstName,
-          data: {
-            overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
-            highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
-            todayTasks: todayTasks.map((t) => t.title).join(', ') || 'None',
-            events: calendarEvents.map((e) => e.title).join(', ') || 'None',
-            notesCount: notes?.length || 0,
-            entities: (entities || []).map((e) => e.name).join(', ') || 'None',
-          },
-        }),
-      });
-      const { brief } = await briefRes.json();
+      const { brief, source: briefSource } = await composeBriefOnce(() => ({
+        apiKey: apiKeys?.claude || '',
+        assistantName: aName,
+        persona: 'executive_assistant',
+        userName: firstName,
+        data: {
+          overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
+          highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
+          todayTasks: todayTasks.map((t) => t.title).join(', ') || 'None',
+          events: calendarEvents.map((e) => e.title).join(', ') || 'None',
+          notesCount: notes?.length || 0,
+          entities: (entities || []).map((e) => e.name).join(', ') || 'None',
+        },
+      }));
+      if (typeof window !== 'undefined') {
+        console.log('[CC.freshUpdate] brief composed', { source: briefSource });
+      }
+      // If init just composed and we're inside the fresh window, we'd be
+      // echoing its brief into the conversation as a new message. Skip
+      // the append entirely when the source is cache/in_flight — init
+      // already rendered it.
+      if (briefSource === 'fresh_cache' || briefSource === 'in_flight_join') {
+        return;
+      }
       const content = brief || 'Nothing new to report — you\'re all caught up!';
       const now = new Date().toISOString();
       await apiFetch(`/api/conversations/${ccConvId}/messages`, {
@@ -921,7 +967,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     } finally {
       setCcRefreshing(false);
     }
-  }, [ccConvId, ccRefreshing, currentUser, firstName, apiKeys, authToken, apiFetch, overdueTasks, highPriorityTasks, todayTasks, calendarEvents, notes, entities]);
+  }, [ccConvId, ccRefreshing, currentUser, firstName, apiKeys, authToken, apiFetch, overdueTasks, highPriorityTasks, todayTasks, calendarEvents, notes, entities, composeBriefOnce]);
 
   // Auto-refresh on visibility change (returning to tab after 5min)
   useEffect(() => {
