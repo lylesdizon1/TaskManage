@@ -1765,8 +1765,11 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
 function CreateFromEmailModal({ data, authToken, apiFetch, toast, onClose, onNavigate }) {
   const isTask = data.type === 'task';
-  const [title, setTitle] = useState(data.subject || '');
-  const [body, setBody] = useState(data.snippet || '');
+  // FU5b — decode HTML entities at the prefill boundary. Gmail snippets
+  // contain literal "&amp;" etc; the decoder is the same helper used by
+  // the row renderer above.
+  const [title, setTitle] = useState(decodeHtmlEntities(data.subject || ''));
+  const [body, setBody]   = useState(decodeHtmlEntities(data.snippet || ''));
   const [dueDate, setDueDate] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -1794,7 +1797,9 @@ function CreateFromEmailModal({ data, authToken, apiFetch, toast, onClose, onNav
       const emailId = emailItem?.id;
 
       if (!emailId) {
-        toast?.({ type: 'error', message: 'Could not link email — try again' });
+        // FU5a — toast is a {success, error, ...} object, not a function.
+        // Calling toast?.({...}) threw TypeError and prevented onClose().
+        toast?.error?.('Could not link email — try again');
         setSaving(false);
         return;
       }
@@ -1811,12 +1816,15 @@ function CreateFromEmailModal({ data, authToken, apiFetch, toast, onClose, onNav
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const created = await res.json();
+      await res.json().catch(() => null); // discard payload — only need success signal
 
-      toast?.({ type: 'success', message: `${isTask ? 'Task' : 'Note'} created from email` });
+      // Order matters: close FIRST, then toast. If the toast throws for any
+      // reason in the future (e.g. provider unmounted), the modal is
+      // already gone — user isn't stuck.
       onClose();
+      toast?.success?.(`${isTask ? 'Task' : 'Note'} created from email`);
     } catch (err) {
-      toast?.({ type: 'error', message: `Failed: ${err.message}` });
+      toast?.error?.(`Failed: ${err.message}`);
     } finally {
       setSaving(false);
     }
