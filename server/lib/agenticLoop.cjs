@@ -19,10 +19,20 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const crypto = require('crypto');
 const logger = require('../../guardrails/logger.cjs');
+const { getToolByName } = require('../tools.cjs');
 const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 const MAX_ITERATIONS = 5;
+// Stagnation guard — when the model retries the SAME (tool, input) twice
+// in a row, force it to stop tool-calling and respond in plain text on
+// the next turn. Catches the "locate the file" hang where the LLM
+// hallucinates a non-existent tool and keeps re-trying it.
+const REPEAT_FAILURE_LIMIT = 2;
+function _toolFingerprint(toolName, toolInput) {
+  return `${toolName}:${crypto.createHash('sha1').update(JSON.stringify(toolInput || {})).digest('hex').slice(0, 12)}`;
+}
 
 /** Centralised logAction wrapper that surfaces failures instead of swallowing
  *  them — Phase 4 trust scoring + decision_log analytics depend on these
@@ -53,6 +63,9 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
   let currentMessages = [...messages];
   const toolSummaries = [];
   let iterations = 0;
+  // Tracks consecutive failures of the same (tool, input) so we can break
+  // out of a tool-hallucination loop instead of burning all iterations.
+  const failureFingerprintCounts = new Map();
 
   while (iterations < MAX_ITERATIONS) {
     iterations++;
@@ -95,6 +108,43 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
 
       let resultContent;
       let success = true;
+
+      // ── Short-circuit: tool name not in the registry ─────────────────
+      // The "locate the file" hang root cause: model hallucinates a tool
+      // (find_file, search_filesystem, etc.), executeTool's default case
+      // returns "Unknown tool", model retries, repeat. Catch it here so
+      // the failure message tells the model the tool DOESN'T EXIST and
+      // to respond in plain text, instead of just "Unknown tool" which
+      // the model often interprets as a transient error worth retrying.
+      const isKnownTool = !!getToolByName(toolUse.name);
+      if (!isKnownTool) {
+        const errorPayload = {
+          success: false,
+          error: `Tool "${toolUse.name}" does not exist. Do not retry. Tell the user in plain text that you can't perform that action and suggest the closest alternative from your available tools.`,
+        };
+        resultContent = JSON.stringify(errorPayload);
+        toolSummaries.push({ tool: toolUse.name, success: false, error: 'unknown_tool' });
+        if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: 'unknown_tool' });
+        await _safeLogAction(logAction, { eventType: 'tool_unknown', toolName: toolUse.name, input: toolUse.input, status: 'failure' });
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent, is_error: true });
+        continue;
+      }
+
+      // ── Stagnation: same (tool, input) failing repeatedly ────────────
+      // After REPEAT_FAILURE_LIMIT identical failures, force the model
+      // to respond in text instead of letting it keep retrying.
+      const fp = _toolFingerprint(toolUse.name, toolUse.input);
+      if ((failureFingerprintCounts.get(fp) || 0) >= REPEAT_FAILURE_LIMIT) {
+        const errorPayload = {
+          success: false,
+          error: `You have already tried "${toolUse.name}" with these exact inputs ${REPEAT_FAILURE_LIMIT} times and it failed each time. STOP trying this tool. Respond to the user in plain text — explain what you tried and why you can't proceed.`,
+        };
+        resultContent = JSON.stringify(errorPayload);
+        toolSummaries.push({ tool: toolUse.name, success: false, error: 'stagnation' });
+        if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: 'stagnation' });
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent, is_error: true });
+        continue;
+      }
 
       // Gate: optional pre-execution hook that can short-circuit with its own result.
       let gateDecision = null;
@@ -151,12 +201,20 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         toolSummaries.push({ tool: toolUse.name, success: true, result });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result });
         await _safeLogAction(logAction, { eventType: 'tool_executed', toolName: toolUse.name, input: effectiveInput, output: result, status: result?.success === false ? 'failure' : 'success' });
+        // Stagnation tracking — bump failure count on result-level failures
+        // too (success=false), reset on success.
+        if (result?.success === false) {
+          const fp = _toolFingerprint(toolUse.name, effectiveInput);
+          failureFingerprintCounts.set(fp, (failureFingerprintCounts.get(fp) || 0) + 1);
+        }
       } catch (err) {
         success = false;
         resultContent = `Error executing ${toolUse.name}: ${err.message}`;
         toolSummaries.push({ tool: toolUse.name, success: false, error: err.message });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: err.message });
         await _safeLogAction(logAction, { eventType: 'tool_failed', toolName: toolUse.name, input: toolUse.input, errorMsg: err.message, status: 'failure' });
+        const fp = _toolFingerprint(toolUse.name, effectiveInput);
+        failureFingerprintCounts.set(fp, (failureFingerprintCounts.get(fp) || 0) + 1);
       }
 
       toolResults.push({
@@ -170,9 +228,25 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
     currentMessages.push({ role: 'user', content: toolResults });
   }
 
+  // Max iterations reached. The text used to be a flat list of
+  // tool successes/failures — fine when tools mostly worked, but for
+  // the unknown-tool-loop case (now rare thanks to short-circuit
+  // above) it read like a system error. Surface a more conversational
+  // message that matches what Aria would say if she knew she'd run
+  // out of steps.
+  const successes = toolSummaries.filter((s) => s.success);
+  const failures  = toolSummaries.filter((s) => !s.success);
+  const text = (() => {
+    if (successes.length && !failures.length) {
+      return `I got partway through that — finished ${successes.length} step${successes.length === 1 ? '' : 's'} but hit my limit before wrapping up. Want me to keep going?`;
+    }
+    if (failures.length && !successes.length) {
+      return `I tried a few approaches but couldn't get there. Could you give me a bit more detail about what you're after?`;
+    }
+    return `I made some progress (${successes.length} done, ${failures.length} stuck) but hit my step limit. Tell me what's most important to finish first?`;
+  })();
   return {
-    text: `I completed ${toolSummaries.length} action(s) but hit the step limit. Here's what I finished:\n` +
-      toolSummaries.map(s => `• ${s.tool}: ${s.success ? 'done' : `failed — ${s.error || s.reason || ''}`}`).join('\n'),
+    text,
     toolSummaries,
     maxIterationsReached: true,
   };

@@ -635,6 +635,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // Poll for command center updates — Aria narrates updates via /api/chat/stream
   const pollUpdatesRef = useRef(null);
   pollUpdatesRef.current = async (convId) => {
+    // Bug 2 guard — never narrate background updates while a user turn
+    // is in flight. The narration call hits /api/chat/execute (the
+    // SAME endpoint as the user turn) and pushes an assistant bubble
+    // alongside the user's still-streaming placeholder, racing the
+    // primary response. Skip this cycle; the next 60s poll picks it up
+    // (cursor doesn't advance, so updates aren't lost).
+    if (ccSendingRef.current) {
+      return;
+    }
     try {
       const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -645,8 +654,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       // next poll skipped the missed window forever.
       if (!res.ok) return;
       const { updates } = await res.json();
-      lastCheckedRef.current = new Date().toISOString();
-      if (!updates || updates.length === 0) return;
+      if (!updates || updates.length === 0) {
+        // Empty page — safe to advance cursor.
+        lastCheckedRef.current = new Date().toISOString();
+        return;
+      }
+
+      // Second-chance gate — user may have started typing during the
+      // updates fetch above. Re-check before launching the narration
+      // turn (which holds the SSE channel for up to 30s).
+      // Cursor is intentionally NOT advanced here — the next poll will
+      // pick up these same updates and try again, so we don't drop them.
+      if (ccSendingRef.current) return;
+      // Cursor advance moved to AFTER successful narration save below
+      // so an interrupted narration doesn't lose its updates either.
 
       // Build a natural prompt for Aria from the raw updates
       const updateSummary = updates.map((u) => u.content).join('\n');
@@ -716,6 +737,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
       if (!ariaResponse) return;
 
+      // Final gate before commit — if the user typed while we were
+      // streaming, suppress the narration to keep the chat focused on
+      // the user's question. Cursor stays unadvanced so next poll
+      // re-narrates these updates when the channel is free.
+      if (ccSendingRef.current) return;
+
       // Save and append as Aria message
       await apiFetch(`/api/conversations/${convId}/messages`, {
         method: 'POST',
@@ -724,6 +751,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       });
 
       setCcMessages((prev) => [...prev, { role: 'assistant', content: ariaResponse, createdAt: new Date().toISOString(), ts: Date.now() }]);
+      // Advance cursor only after we successfully committed the narration.
+      lastCheckedRef.current = new Date().toISOString();
     } catch (err) {
       console.error('[CommandCenter] poll failed:', err);
     }
