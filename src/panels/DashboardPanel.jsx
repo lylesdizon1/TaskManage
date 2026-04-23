@@ -66,6 +66,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [azRefreshKey, setAzRefreshKey] = useState(0);
   const [azIsEmpty, setAzIsEmpty] = useState(true);
   const bumpAzRefresh = useCallback(() => setAzRefreshKey((k) => k + 1), []);
+  // AZ7 — listen for the global 'aria:zone-refresh' event dispatched by
+  // App.jsx after task mutations + by close-loop save below. The
+  // orchestrator already debounces 2s, so a burst coalesces into one
+  // detector run.
+  useEffect(() => {
+    const handler = () => setAzRefreshKey((k) => k + 1);
+    window.addEventListener('aria:zone-refresh', handler);
+    return () => window.removeEventListener('aria:zone-refresh', handler);
+  }, []);
   const draftFromRef = useRef({});
   const draftToRef = useRef({});
   const draftBodyRef = useRef({});
@@ -1452,6 +1461,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         ));
         setActiveZoneState('success');
         setTimeout(() => { setActiveTile(null); setActiveZoneState('empty'); }, 1500);
+        bumpAzRefresh(); // AZ7 — daily_wrap_due tile should now drop
       } catch (err) {
         setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: err.message || 'Network error' } : prev));
       }
@@ -1520,6 +1530,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           setActiveTile(null);
           setActiveZoneState('empty');
         }, 1200);
+        bumpAzRefresh(); // AZ7 — close-loop completed; tile should drop
       } catch (err) {
         setActiveTile((prev) => (prev ? { ...prev, status: 'error', error: err.message || 'Network error' } : prev));
       }

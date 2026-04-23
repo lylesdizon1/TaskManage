@@ -51,6 +51,16 @@ async function refreshToken() {
 }
 
 /**
+ * Fire a dashboard-side custom event that bumps the Active Zone
+ * orchestrator's refresh key. The orchestrator already debounces 2s,
+ * so a burst of mutations (5 task completions in 30s) coalesces into
+ * one detector run.
+ */
+function dispatchAriaZoneRefresh(reason) {
+  try { window.dispatchEvent(new CustomEvent('aria:zone-refresh', { detail: { reason } })); } catch {}
+}
+
+/**
  * Drop-in replacement for fetch() that auto-refreshes on 401 or 403.
  * - 401 (no/invalid/expired token) and 403 (refresh-needed) both attempt
  *   silent token refresh and retry once. Prior code only handled 403, which
@@ -910,6 +920,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         body: JSON.stringify({ completed: nowCompleted, completedAt }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      dispatchAriaZoneRefresh('task_toggle'); // AZ7 — completed/reopened changes the orchestrator state
     } catch (err) {
       setTasks((prev) => prev.map((t) => t.id === id ? { ...t, ...snapshot } : t));
       if (nowCompleted && completionNoteTaskId === id) setCompletionNoteTaskId(null);
@@ -1011,6 +1022,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         body: JSON.stringify(fields),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      dispatchAriaZoneRefresh('task_edit'); // AZ7 — due-date/priority shifts may flip overdue/single_urgent
     } catch (err) {
       setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...snapshot } : t)));
       addToast({ type: 'error', message: "Couldn't save task — change reverted." });
