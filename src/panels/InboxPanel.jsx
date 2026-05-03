@@ -215,12 +215,11 @@ const SUPPRESS_PILL = new Set(['general', 'newsletter']);
 export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCountChange }) {
   const toast = useToast();
   const [classifications, setClassifications] = useState({});
-  // Zone placement state — all grow-only Sets so we never demote a
-  // thread the user has already seen in a zone. Interaction also
-  // freezes a thread's position for the current session.
+  // Zone placement is derived from current classifications on every
+  // render. The previous grow-only Sets stranded threads in zones
+  // chosen from stale classification rows; demotions (e.g. a v-bump
+  // re-classify of a promotional thread) never landed.
   const [interactedIds, setInteractedIds] = useState(() => new Set());
-  const [needsAttentionIds, setNeedsAttentionIds] = useState(() => new Set());
-  const [lowPriorityIds, setLowPriorityIds] = useState(() => new Set());
   const [pillFilter, setPillFilter] = useState('all'); // 'all' | 'unread' | 'action' | 'flagged'
   const [flaggedThreadIds, setFlaggedThreadIds] = useState(() => new Set());
   const [flaggedCount, setFlaggedCount] = useState(0);
@@ -533,39 +532,22 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     return () => { cancelled = true; clearTimeout(t1); clearTimeout(t2); };
   }, [threads, apiFetch, authToken]);
 
-  // Zone placement: grow-only Sets. A thread moves into Needs Attention
-  // or Low Priority at most once; user-interacted threads are frozen.
-  // FU3 — read-state filter REMOVED. Read emails belong in the same
-  // priority zone as their classification (Gmail-style), just visually
-  // de-emphasized. Reading an email doesn't change its importance.
-  useEffect(() => {
-    if (!threads.length || !Object.keys(classifications).length) return;
-    const candAttn = new Set();
-    const candLow = new Set();
+  // Zone placement: derived purely from current classifications.
+  // Promotion (rank>=3 or actionRequired) beats demotion (rank==1 or
+  // category in {newsletter, general}). Unclassified threads fall
+  // through to Review.
+  const { needsAttentionIds, lowPriorityIds } = useMemo(() => {
+    const attn = new Set();
+    const low = new Set();
     for (const t of threads) {
-      if (interactedIds.has(t.id)) continue;
       const mid = t.latestMessageId || t.id;
       const cls = classifications[mid];
       if (!cls) continue;
-      if (cls.importanceRank >= 3 || cls.actionRequired) candAttn.add(t.id);
-      else if (cls.importanceRank === 1 || cls.category === 'newsletter' || cls.category === 'general') candLow.add(t.id);
+      if (cls.importanceRank >= 3 || cls.actionRequired) { attn.add(t.id); continue; }
+      if (cls.importanceRank === 1 || cls.category === 'newsletter' || cls.category === 'general') low.add(t.id);
     }
-    setNeedsAttentionIds((prev) => {
-      let changed = false;
-      const next = new Set(prev);
-      for (const id of candAttn) if (!next.has(id)) { next.add(id); changed = true; }
-      return changed ? next : prev;
-    });
-    setLowPriorityIds((prev) => {
-      let changed = false;
-      const next = new Set(prev);
-      for (const id of candLow) {
-        if (candAttn.has(id)) continue;           // promotion beats demotion
-        if (!next.has(id)) { next.add(id); changed = true; }
-      }
-      return changed ? next : prev;
-    });
-  }, [classifications, threads, interactedIds]);
+    return { needsAttentionIds: attn, lowPriorityIds: low };
+  }, [threads, classifications]);
 
   // Auto-collapse For Your Review when Needs Attention has items, unless
   // the user has manually toggled the Review zone already.
@@ -582,11 +564,6 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
   function markInteracted(threadId) {
     setInteractedIds((prev) => prev.has(threadId) ? prev : new Set([...prev, threadId]));
-  }
-
-  function removeThreadFromZones(threadId) {
-    setNeedsAttentionIds((prev) => { if (!prev.has(threadId)) return prev; const n = new Set(prev); n.delete(threadId); return n; });
-    setLowPriorityIds((prev)  => { if (!prev.has(threadId)) return prev; const n = new Set(prev); n.delete(threadId); return n; });
   }
 
   function openThread(t) {
@@ -624,7 +601,6 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ account_email: activeAccount, message_id: lastMsg.id }),
       });
-      removeThreadFromZones(thread.id);
       setThreads((prev) => prev.filter(x => x.id !== thread.id));
       setThread(null);
       setActiveThreadId(null);
@@ -642,7 +618,6 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ account_email: t.accountEmail, message_id: messageId }),
       });
-      removeThreadFromZones(t.id);
       setThreads((prev) => prev.filter(x => x.id !== t.id));
       if (activeThreadId === t.id) {
         setActiveThreadId(null); setActiveAccount(null); setThread(null); setMobileShowThread(false);
@@ -654,7 +629,6 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     const messageId = t.latestMessageId || t.id;
     if (!messageId) return;
     markInteracted(t.id);
-    removeThreadFromZones(t.id);
     setThreads((prev) => prev.map(x => x.id === t.id ? { ...x, isRead: true } : x));
     try {
       await apiFetch('/api/inbox/mark-read', {
@@ -835,7 +809,6 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         }),
       });
       toast.success(`Moved to ${moveSelectedLabel.labelName}`);
-      removeThreadFromZones(thread.id);
       setThreads((prev) => prev.filter(x => x.id !== thread.id));
       setThread(null);
       setActiveThreadId(null);
@@ -907,9 +880,8 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       });
       const data = await r.json();
       const n = data?.archived ?? 0;
-      // Optimistically drop Low Priority threads from the local zone.
+      // Drop Low Priority threads from the list; derived Sets follow.
       setThreads((prev) => prev.filter(t => !lowPriorityIds.has(t.id)));
-      setLowPriorityIds(new Set());
       try { toast.info(`Archived ${n} low priority emails.`, 3000); } catch {}
     } catch {}
     finally {
