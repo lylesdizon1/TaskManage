@@ -533,9 +533,10 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   }, [threads, apiFetch, authToken]);
 
   // Zone placement: derived purely from current classifications.
-  // Promotion (rank>=3 or actionRequired) beats demotion (rank==1 or
-  // category in {newsletter, general}). Unclassified threads fall
-  // through to Review.
+  // Needs Attention is "unread urgency" — once read, an item has been
+  // addressed and shouldn't keep clamoring. Low Priority retains read
+  // items dimmed in place (FU3 intent). Promotion beats demotion.
+  // Unclassified threads fall through to Review.
   const { needsAttentionIds, lowPriorityIds } = useMemo(() => {
     const attn = new Set();
     const low = new Set();
@@ -543,7 +544,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       const mid = t.latestMessageId || t.id;
       const cls = classifications[mid];
       if (!cls) continue;
-      if (cls.importanceRank >= 3 || cls.actionRequired) { attn.add(t.id); continue; }
+      if (!t.isRead && (cls.importanceRank >= 3 || cls.actionRequired)) { attn.add(t.id); continue; }
       if (cls.importanceRank === 1 || cls.category === 'newsletter' || cls.category === 'general') low.add(t.id);
     }
     return { needsAttentionIds: attn, lowPriorityIds: low };
@@ -927,13 +928,12 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     return { attn, review, low, read: [] };
   }, [threads, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds, flaggedThreadIds, ackedThreadIds, showAcked]);
 
-  const needsAttentionThreads = useMemo(() => threads.filter(t => {
-    if (t.isRead) return false;
-    const mid = t.latestMessageId || t.id;
-    const cls = classifications[mid];
-    if (!cls) return false;
-    return cls.importanceRank >= 3 || cls.actionRequired;
-  }), [threads, classifications]);
+  // Single-source projection of needsAttentionIds for the summary card.
+  // Section count + summary count must agree; both go through the same Set.
+  const needsAttentionThreads = useMemo(
+    () => threads.filter(t => needsAttentionIds.has(t.id)),
+    [threads, needsAttentionIds],
+  );
 
   function openCompose(mode) {
     const latest = thread?.messages?.[thread.messages.length - 1];
