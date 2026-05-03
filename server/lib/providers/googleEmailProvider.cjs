@@ -88,21 +88,27 @@ async function listThreads({ db, userId, accountEmail, maxResults, pageToken, qu
       // latest message's headers/labels — no separate messages.get needed.
       const t2 = await gmail.users.threads.get({
         userId: 'me', id: t.id, format: 'metadata',
-        metadataHeaders: ['From', 'Subject', 'Date'],
+        metadataHeaders: ['From', 'Subject', 'Date', 'List-Unsubscribe', 'List-ID', 'Precedence'],
       });
       const msgs = t2.data?.messages || [];
       if (!msgs.length) return null;
       const last = msgs[msgs.length - 1];
       const labelIds = last.labelIds || [];
+      const rawHeaders = last.payload?.headers || [];
+      const BULK_HEADER_NAMES = new Set(['list-unsubscribe', 'list-id', 'precedence']);
+      const bulkHeaders = rawHeaders
+        .filter(h => BULK_HEADER_NAMES.has(String(h.name || '').toLowerCase()))
+        .map(h => ({ name: h.name, value: h.value }));
       return {
         id: t.id,
         latestMessageId: last.id,
-        subject: _headerVal(last.payload?.headers, 'Subject') || '(no subject)',
+        subject: _headerVal(rawHeaders, 'Subject') || '(no subject)',
         snippet: last.snippet || '',
-        from: _headerVal(last.payload?.headers, 'From') || '',
-        date: _headerVal(last.payload?.headers, 'Date') || '',
+        from: _headerVal(rawHeaders, 'From') || '',
+        date: _headerVal(rawHeaders, 'Date') || '',
         isRead: !labelIds.includes('UNREAD'),
         labelIds,
+        headers: bulkHeaders,
         messageCount: msgs.length,
       };
     } catch {

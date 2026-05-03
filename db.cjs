@@ -1780,6 +1780,7 @@ async function getClassification(userId, messageId) {
             category, importance, importance_rank AS "importanceRank",
             action_required AS "actionRequired", is_read AS "isRead",
             amount, currency, vendor, summary, source,
+            classification_reasoning AS "classificationReasoning",
             classified_at AS "classifiedAt"
      FROM email_classifications
      WHERE user_id = $1 AND message_id = $2`,

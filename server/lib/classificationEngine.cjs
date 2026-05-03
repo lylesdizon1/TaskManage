@@ -184,6 +184,12 @@ Body (first 300 chars): ${String(body || '').slice(0, 300)}`;
 // ── 4. Orchestrator ────────────────────────────────────────────────────────
 const FRESHNESS_MS = 24 * 60 * 60 * 1000;
 
+// Bump when the deterministic pipeline changes shape. Cached rows whose
+// reasoning.classifier_version differs are treated as cache misses so the
+// new logic re-decides them on next sight. Keep `classifier_version` in
+// the reasoning blob below in sync with this constant.
+const CLASSIFIER_VERSION = 'v1.4';
+
 // Gmail system label → (importance, category) mapping. Match is short-
 // circuit: if any label hits, we skip heuristics and AI entirely.
 const LABEL_MAP = {
@@ -200,9 +206,16 @@ const BULK_PATTERNS = [
   'mailer@', 'bounce@', 'automated@',
 ];
 
-function _hasListUnsubscribe(headers) {
-  if (!Array.isArray(headers)) return false;
-  return headers.some(h => String(h?.name || '').toLowerCase() === 'list-unsubscribe');
+// Subject patterns canonical to marketing/promotional mail. Tuned to be
+// specific — no bare \boffer\b, which would catch "job offer" / "offer
+// letter" / "counter-offer".
+const PROMO_SUBJECT_RE = /\b\d{1,3}%\s*off\b|\bmember offer\b|\bends soon\b|\blimited time\b/i;
+
+function _findHeader(headers, name) {
+  if (!Array.isArray(headers)) return null;
+  const target = String(name).toLowerCase();
+  const h = headers.find(x => String(x?.name || '').toLowerCase() === target);
+  return h ? String(h.value || '') : null;
 }
 
 function _matchLabel(labelIds) {
@@ -213,10 +226,14 @@ function _matchLabel(labelIds) {
   return null;
 }
 
-function _matchBulkHeuristic({ from, body, headers }) {
-  if (_hasListUnsubscribe(headers)) return 'list_unsubscribe';
+function _matchBulkHeuristic({ from, subject, body, headers }) {
+  if (_findHeader(headers, 'list-unsubscribe')) return 'list_unsubscribe';
+  if (_findHeader(headers, 'list-id')) return 'list_id';
+  const precedence = _findHeader(headers, 'precedence');
+  if (precedence && /\b(bulk|list|junk)\b/i.test(precedence)) return 'precedence_bulk';
   const fromLower = String(from || '').toLowerCase();
   if (BULK_PATTERNS.some(p => fromLower.includes(p))) return 'bulk_sender';
+  if (subject && PROMO_SUBJECT_RE.test(subject)) return 'promo_subject';
   const b = String(body || '').toLowerCase();
   if (b.includes('unsubscribe') && b.includes('email preferences')) return 'unsubscribe_body';
   return null;
@@ -229,7 +246,9 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     const existing = await db.getClassification(userId, messageId).catch(() => null);
     if (existing && existing.classifiedAt) {
       const age = Date.now() - new Date(existing.classifiedAt).getTime();
-      if (Number.isFinite(age) && age < FRESHNESS_MS) return existing;
+      const cachedVersion = existing.classificationReasoning?.classifier_version || null;
+      const versionFresh = cachedVersion === CLASSIFIER_VERSION;
+      if (Number.isFinite(age) && age < FRESHNESS_MS && versionFresh) return existing;
     }
 
     const rules = await db.getRules(userId).catch(() => []);
@@ -283,7 +302,7 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
 
     // Step 4 — sender heuristics (bulk / newsletter signals).
     if (!resolved) {
-      const bulkMatch = _matchBulkHeuristic({ from, body, headers });
+      const bulkMatch = _matchBulkHeuristic({ from, subject, body, headers });
       if (bulkMatch) {
         category = 'newsletter';
         importance = 'low';
@@ -355,7 +374,7 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
       importance,
       matched_patterns: [...matchedPatterns, ...suppressedDims],
       has_confirmation_code: _hasConfirmationCode(subject, body),
-      classifier_version: 'v1.3',
+      classifier_version: CLASSIFIER_VERSION,
       suppressed: suppressedDims.length > 0 ? suppressedDims : undefined,
     };
     if (amount != null) classificationReasoning.amount = amount;
@@ -435,4 +454,5 @@ module.exports = {
   classifyEmail,
   VALID_CATEGORIES,
   VALID_IMPORTANCE,
+  CLASSIFIER_VERSION,
 };

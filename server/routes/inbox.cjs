@@ -3,7 +3,7 @@
 const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const googleProvider = require('../lib/providers/googleEmailProvider.cjs');
-const { classifyEmail } = require('../lib/classificationEngine.cjs');
+const { classifyEmail, CLASSIFIER_VERSION } = require('../lib/classificationEngine.cjs');
 const { processClassificationFeedback } = require('../lib/classificationFeedback.cjs');
 
 // Resolve the provider implementation for a given integration row.
@@ -422,14 +422,16 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
           const existing = await db.batchGetClassifications(userId, ids).catch(() => ({}));
           for (const t of finalThreads) {
             const mid = t.latestMessageId || t.id;
-            if (!mid || existing[mid]) continue;
+            if (!mid) continue;
+            const cached = existing[mid];
+            if (cached && cached.classificationReasoning?.classifier_version === CLASSIFIER_VERSION) continue;
             classifyEmail({
               userId, messageId: mid, threadId: t.id,
               accountEmail: t.accountEmail,
               from: t.from, subject: t.subject, body: t.snippet,
               isRead: !!t.isRead,
               labelIds: t.labelIds || [],
-              headers: [], // not available at list level
+              headers: t.headers || [],
               db,
             }).catch(() => {});
           }
