@@ -3987,6 +3987,37 @@ async function rejectRuleProposal(proposalId, userId, reason = null, reviewedBy 
   return rowCount > 0;
 }
 
+/**
+ * Fetch the most recent N rejected tool inputs for a (user, action_type)
+ * pattern. Joins correction_events → decision_log so we get the actual
+ * tool_input JSONB the rejection was against, even though logCorrection
+ * doesn't currently populate correction_events.original_tool_input.
+ *
+ * Used by the rule-proposal LLM enrichment to look for shared patterns
+ * across rejections (e.g. all rejected sends to the same recipient).
+ */
+async function getRecentRejectionInputs(userId, actionType, limit = 5) {
+  if (!userId || !actionType) return [];
+  const cap = Math.min(Math.max(parseInt(limit, 10) || 5, 1), 20);
+  try {
+    const { rows } = await pool.query(
+      `SELECT dl.tool_input AS input
+         FROM correction_events ce
+         JOIN decision_log dl ON dl.id = ce.decision_log_id
+        WHERE ce.user_id = $1
+          AND ce.original_action = $2
+          AND ce.correction_type = 'reject'
+          AND dl.tool_input IS NOT NULL
+        ORDER BY ce.created_at DESC
+        LIMIT $3`,
+      [userId, actionType, cap],
+    );
+    return rows.map((r) => r.input).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function countPendingRuleProposals(userId) {
   if (!userId) return 0;
   const { rows } = await pool.query(
@@ -9608,6 +9639,7 @@ module.exports = {
   acceptRuleProposal,
   rejectRuleProposal,
   countPendingRuleProposals,
+  getRecentRejectionInputs,
   RULE_PROPOSAL_EXPIRY_DAYS,
   logDecision,
   getDecisionHistory,

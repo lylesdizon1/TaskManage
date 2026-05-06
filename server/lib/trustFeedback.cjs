@@ -26,6 +26,7 @@
 const logger = require('../../guardrails/logger.cjs');
 const db = require('../../db.cjs');
 const { invalidateRulesCache } = require('./ruleCache.cjs');
+const { proposeRichPredicate } = require('./ruleProposalLlm.cjs');
 
 const CORRECTION_THRESHOLD = 2; // 2+ corrections → auto-rule
 
@@ -113,19 +114,44 @@ async function maybeProposeCorrectionRule({ userId, actionType, decisionId, cont
   const pending = await db.countPendingCorrections(userId, actionType);
   if (pending < CORRECTION_THRESHOLD) return null;
 
-  // Build the proposed rule. Uses Ext 2's predicate language so the
-  // accepted rule fires deterministically on the action_type — no
-  // reliance on keyword matching against rule_text.
+  // Try to enrich the predicate via Haiku — examines the actual rejected
+  // tool_inputs and proposes a SHARED-PATTERN predicate (e.g. "you keep
+  // rejecting send_email to stranger@x.com" → predicate matching that
+  // recipient specifically) instead of the coarse "any call to this
+  // tool" fallback. Failure-soft: any LLM error / parse error /
+  // validation failure returns null, fall back to the simple shape.
+  let predicate = { tool_names: [actionType] };
+  let llmEnriched = false;
+  let ruleTextSpecifics = null;
+  try {
+    const recentInputs = await db.getRecentRejectionInputs(userId, actionType, 5);
+    if (recentInputs.length >= CORRECTION_THRESHOLD) {
+      const llmPredicate = await proposeRichPredicate(actionType, recentInputs);
+      if (llmPredicate) {
+        predicate = llmPredicate;
+        llmEnriched = true;
+        // If Haiku produced an input tree, extract a short human-readable
+        // summary for the rule_text — the user reviewing the proposal sees
+        // exactly what shared pattern was detected.
+        ruleTextSpecifics = _summarizePredicateInput(llmPredicate.input);
+      }
+    }
+  } catch (err) {
+    // Enrichment failure shouldn't block the proposal — fall through to
+    // the simple predicate.
+    logger.warn('trustFeedback.proposal.llmEnrich.failed', { userId, actionType, error: err.message });
+  }
+
   const proposedRule = {
     ruleType: 'preference',
-    ruleText: `You've rejected ${actionType} ${pending} times in recent history. Confirm before this action runs autonomously.`,
+    ruleText: ruleTextSpecifics
+      ? `You've rejected ${actionType} ${pending} times where ${ruleTextSpecifics}. Confirm before this pattern runs autonomously.`
+      : `You've rejected ${actionType} ${pending} times in recent history. Confirm before this action runs autonomously.`,
     source: 'inferred',
     strength: 0.5,                         // mid-strength; lands in Tier 2 via ask_first
     category: _toolCategory(actionType),
     preferenceType: 'ask_first',
-    predicate: {
-      tool_names: [actionType],
-    },
+    predicate,
     triggerContext: actionType,
   };
 
@@ -133,12 +159,15 @@ async function maybeProposeCorrectionRule({ userId, actionType, decisionId, cont
   try {
     proposalRow = await db.createRuleProposal(userId, {
       proposed_rule: proposedRule,
-      reasoning: `Trust loop detected ${pending} rejections of ${actionType} without a rule covering it yet.`,
-      source: 'correction_pattern',
+      reasoning: llmEnriched && ruleTextSpecifics
+        ? `Trust loop detected ${pending} rejections of ${actionType} sharing a pattern: ${ruleTextSpecifics}.`
+        : `Trust loop detected ${pending} rejections of ${actionType} without a rule covering it yet.`,
+      source: llmEnriched ? 'correction_pattern_llm' : 'correction_pattern',
       trigger_data: {
         action_type: actionType,
         rejection_count: pending,
         latest_decision_id: decisionId || null,
+        llm_enriched: llmEnriched,
       },
     });
   } catch (err) {
@@ -158,6 +187,33 @@ async function maybeProposeCorrectionRule({ userId, actionType, decisionId, cont
     userId, actionType, proposalId: proposalRow.id, fromCorrections: pending,
   });
   return proposalRow.id;
+}
+
+// Render the leaves of a predicate input tree into a short English
+// description for embedding in the proposed rule's rule_text. Best-
+// effort — depth-first, comma-separated, capped at 120 chars. Used so
+// the user reviewing a proposal in admin / chat can see WHY this rule
+// is being suggested without having to read the JSON predicate.
+function _summarizePredicateInput(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 4) return null;
+  if (Array.isArray(node.and)) {
+    const parts = node.and.map((c) => _summarizePredicateInput(c, depth + 1)).filter(Boolean);
+    return parts.length ? parts.join(' AND ') : null;
+  }
+  if (Array.isArray(node.or)) {
+    const parts = node.or.map((c) => _summarizePredicateInput(c, depth + 1)).filter(Boolean);
+    return parts.length ? `(${parts.join(' OR ')})` : null;
+  }
+  if (node.not) {
+    const inner = _summarizePredicateInput(node.not, depth + 1);
+    return inner ? `NOT ${inner}` : null;
+  }
+  if (typeof node.field === 'string' && typeof node.op === 'string') {
+    const v = JSON.stringify(node.value);
+    const summary = `${node.field} ${node.op} ${v}`;
+    return summary.length > 120 ? summary.slice(0, 117) + '...' : summary;
+  }
+  return null;
 }
 
 // Map action_type → preference category for the proposed rule's category

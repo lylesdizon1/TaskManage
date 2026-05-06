@@ -432,6 +432,112 @@ test('RULE_PROPOSAL_EXPIRY_DAYS constant is 30', () => {
   assert.equal(db.RULE_PROPOSAL_EXPIRY_DAYS, 30);
 });
 
+// ── ruleProposalLlm.validatePredicate (LLM enrichment safety) ────────────
+test('validatePredicate accepts a well-formed simple predicate', () => {
+  const { validatePredicate } = require('../server/lib/ruleProposalLlm.cjs');
+  assert.equal(validatePredicate({ tool_names: ['send_email'] }), null);
+  assert.equal(validatePredicate({
+    tool_names: ['send_email'],
+    input: { field: 'to', op: 'contains', value: 'stranger@x.com' },
+  }), null);
+});
+
+test('validatePredicate accepts and/or/not composition', () => {
+  const { validatePredicate } = require('../server/lib/ruleProposalLlm.cjs');
+  assert.equal(validatePredicate({
+    tool_names: ['update_task'],
+    input: {
+      and: [
+        { field: 'priority', op: 'eq', value: 'high' },
+        { not: { field: 'completion_note', op: 'exists', value: null } },
+      ],
+    },
+  }), null);
+  assert.equal(validatePredicate({
+    input: { or: [
+      { field: 'a', op: 'eq', value: 1 },
+      { field: 'b', op: 'eq', value: 2 },
+    ] },
+  }), null);
+});
+
+test('validatePredicate rejects unknown ops + reserved keys + bad shapes', () => {
+  const { validatePredicate } = require('../server/lib/ruleProposalLlm.cjs');
+  assert.match(validatePredicate({ input: { field: 'x', op: 'frobnicate', value: 1 } }), /unknown op/);
+  assert.match(validatePredicate({ trust: { lt: 0.6 } }), /reserved/);
+  assert.match(validatePredicate({ rate: { count: 1 } }), /reserved/);
+  assert.match(validatePredicate({ external_recipients: true }), /reserved/);
+  assert.match(validatePredicate({ wat: true }), /unknown top-level key/);
+  assert.match(validatePredicate({ input: { wat: true } }), /unknown predicate node shape/);
+  assert.match(validatePredicate(null), /must be a non-array object/);
+  assert.match(validatePredicate([]), /must be a non-array object/);
+  assert.match(validatePredicate({ tool_names: 'send_email' }), /must be an array of strings/);
+  assert.match(validatePredicate({ tool_names: [123] }), /must be an array of strings/);
+  assert.match(validatePredicate({ input: { and: [] } }), /at least one child/);
+});
+
+test('validatePredicate caps depth at 8 levels', () => {
+  const { validatePredicate } = require('../server/lib/ruleProposalLlm.cjs');
+  // build a nested NOT chain 10-deep
+  let n = { field: 'x', op: 'eq', value: 1 };
+  for (let i = 0; i < 10; i++) n = { not: n };
+  assert.match(validatePredicate({ input: n }), /too deep/);
+});
+
+test('proposeRichPredicate falls back to null on no inputs / no client', async () => {
+  const { proposeRichPredicate } = require('../server/lib/ruleProposalLlm.cjs');
+  // no inputs → null
+  assert.equal(await proposeRichPredicate('send_email', [], null), null);
+  // no actionType → null
+  assert.equal(await proposeRichPredicate(null, [{ to: 'a@x.com' }], null), null);
+  // no client + no env → null
+  const orig = process.env.CLAUDE_API_KEY;
+  delete process.env.CLAUDE_API_KEY;
+  try {
+    assert.equal(await proposeRichPredicate('send_email', [{ to: 'a@x.com' }], null), null);
+  } finally {
+    if (orig) process.env.CLAUDE_API_KEY = orig;
+  }
+});
+
+test('proposeRichPredicate validates LLM response and falls back on bad shape', async () => {
+  const { proposeRichPredicate } = require('../server/lib/ruleProposalLlm.cjs');
+  // Mock client that returns an invalid predicate (unknown op)
+  const badClient = {
+    messages: { create: async () => ({ content: [{ text: '{"tool_names":["send_email"],"input":{"field":"to","op":"frobnicate","value":"x"}}' }] }) },
+  };
+  assert.equal(await proposeRichPredicate('send_email', [{ to: 'a@x.com' }], badClient), null);
+
+  // Mock client that returns wrong tool_names
+  const wrongToolClient = {
+    messages: { create: async () => ({ content: [{ text: '{"tool_names":["delete_task"]}' }] }) },
+  };
+  assert.equal(await proposeRichPredicate('send_email', [{ to: 'a@x.com' }], wrongToolClient), null);
+
+  // Mock client that returns valid predicate
+  const goodClient = {
+    messages: { create: async () => ({ content: [{ text: '{"tool_names":["send_email"],"input":{"field":"to","op":"contains","value":"stranger@x.com"}}' }] }) },
+  };
+  const result = await proposeRichPredicate('send_email', [{ to: 'stranger@x.com' }], goodClient);
+  assert.deepEqual(result, {
+    tool_names: ['send_email'],
+    input: { field: 'to', op: 'contains', value: 'stranger@x.com' },
+  });
+});
+
+test('proposeRichPredicate handles malformed LLM JSON', async () => {
+  const { proposeRichPredicate } = require('../server/lib/ruleProposalLlm.cjs');
+  const noJsonClient = {
+    messages: { create: async () => ({ content: [{ text: 'Sure! Here is your predicate: not actually JSON' }] }) },
+  };
+  assert.equal(await proposeRichPredicate('send_email', [{ to: 'a@x.com' }], noJsonClient), null);
+
+  const partialJsonClient = {
+    messages: { create: async () => ({ content: [{ text: '{ "tool_names": [' }] }) },
+  };
+  assert.equal(await proposeRichPredicate('send_email', [{ to: 'a@x.com' }], partialJsonClient), null);
+});
+
 // ── Performance: predicate evaluation stays well under budget ────────────
 test('1000 evaluations of a 5-deep nested predicate complete in <50ms', () => {
   const p = {
