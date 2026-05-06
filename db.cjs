@@ -3744,6 +3744,75 @@ async function setTrustFloorThreshold(userId, threshold) {
   return setPreference(userId, 'trust_floor_threshold', n, 'explicit');
 }
 
+// ── Autonomous-action rate limit (decisionEngine extensions v1, ext 4) ──
+// Counts decisions in a rolling window where the engine auto-allowed AND
+// the action actually executed. Confirmation flows (confirm_required →
+// confirmed/rejected) are NOT counted — those already have user
+// awareness, so they don't contribute to the "Aria ran 20 things without
+// asking" budget.
+//
+// V1 design choice: derive from decision_log instead of a dedicated
+// counter table. No write-cost added per decision; one indexed query per
+// evaluateAction. Single-digit ms on the user_id + created_at index.
+//
+// Default: 20 autonomous executions per 60-minute rolling window.
+// count is per-user tunable via user_preferences_v2. Window is hardcoded
+// at 60min in v1 (tunable window deferred — small change when needed).
+const DEFAULT_RATE_LIMIT = { count: 20, windowMinutes: 60 };
+const RATE_LIMIT_WINDOW_MINUTES_V1 = 60;
+
+async function getRateLimit(userId) {
+  if (!userId) return { ...DEFAULT_RATE_LIMIT };
+  try {
+    const row = await getPreference(userId, 'autonomous_rate_limit');
+    if (!row || row.preferenceValue == null) return { ...DEFAULT_RATE_LIMIT };
+    const v = row.preferenceValue;
+    const count = Number(v.count);
+    if (!Number.isFinite(count) || count < 1) return { ...DEFAULT_RATE_LIMIT };
+    return { count: Math.min(1000, Math.max(1, Math.floor(count))), windowMinutes: RATE_LIMIT_WINDOW_MINUTES_V1 };
+  } catch {
+    return { ...DEFAULT_RATE_LIMIT };
+  }
+}
+
+async function setRateLimit(userId, config) {
+  if (!userId) throw new Error('setRateLimit requires userId');
+  const count = Number(config?.count);
+  if (!Number.isFinite(count) || count < 1 || count > 1000) {
+    throw new Error(`Invalid rate limit count ${config?.count} — must be a finite integer in [1, 1000]`);
+  }
+  return setPreference(
+    userId,
+    'autonomous_rate_limit',
+    { count: Math.floor(count), windowMinutes: RATE_LIMIT_WINDOW_MINUTES_V1 },
+    'explicit',
+  );
+}
+
+/**
+ * Count autonomous executions for a user in the last N minutes.
+ * Used by the engine's rate-limit gate. Always-pos integer.
+ * Failure-soft: returns 0 on query error (engine treats as "rate OK").
+ */
+async function countAutonomousActions(userId, windowMinutes = RATE_LIMIT_WINDOW_MINUTES_V1) {
+  if (!userId) return 0;
+  const w = Math.max(1, Math.floor(Number(windowMinutes) || RATE_LIMIT_WINDOW_MINUTES_V1));
+  try {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS n
+         FROM decision_log
+        WHERE user_id = $1
+          AND disposition = 'auto_allowed'
+          AND outcome = 'executed'
+          AND created_at > NOW() - ($2 || ' minutes')::interval`,
+      [userId, String(w)],
+    );
+    return rows[0]?.n || 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ── decision_log ──
 
 /**
@@ -9293,6 +9362,11 @@ module.exports = {
   getTrustFloorThreshold,
   setTrustFloorThreshold,
   DEFAULT_TRUST_FLOOR_THRESHOLD,
+  getRateLimit,
+  setRateLimit,
+  countAutonomousActions,
+  DEFAULT_RATE_LIMIT,
+  RATE_LIMIT_WINDOW_MINUTES_V1,
   logDecision,
   getDecisionHistory,
   getAdminDecisions,

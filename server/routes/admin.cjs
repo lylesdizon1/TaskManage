@@ -591,6 +591,43 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  // ── Autonomous-action rate limit (Ext 4 of engine-extensions workstream)
+  // GET  /api/admin/aria-health/rate-limit?userId=<id>
+  // POST /api/admin/aria-health/rate-limit  body: { userId, count }
+  // count is per-user tunable (1..1000). Window is hardcoded 60min v1.
+  router.get('/api/admin/aria-health/rate-limit', async (req, res) => {
+    try {
+      const userId = req.query.userId ? String(req.query.userId) : null;
+      if (!userId) return res.status(400).json({ error: 'userId query param required' });
+      const config = await db.getRateLimit(userId);
+      const recentCount = await db.countAutonomousActions(userId, config.windowMinutes);
+      res.json({
+        userId,
+        config,
+        default: db.DEFAULT_RATE_LIMIT,
+        is_default: config.count === db.DEFAULT_RATE_LIMIT.count,
+        recent_autonomous_count: recentCount,
+        approaching_limit: recentCount >= Math.floor(config.count * 0.8),
+      });
+    } catch (err) {
+      logger.error('admin.rateLimit.get.failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/admin/aria-health/rate-limit', async (req, res) => {
+    try {
+      const { userId, count } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId required in body' });
+      const row = await db.setRateLimit(userId, { count });
+      logger.info('admin.rateLimit.set', { triggeredBy: req.user.id, userId, count });
+      res.json({ userId, config: row.preferenceValue, updated_at: row.updatedAt });
+    } catch (err) {
+      logger.error('admin.rateLimit.set.failed', { error: err.message });
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ── Stale classification sweep — manual trigger ─────────────────────────
   // Fires the same sweep that runs at 4am UTC daily. Useful right after
   // a CLASSIFIER_VERSION bump to drop the critical_email_unacked tile

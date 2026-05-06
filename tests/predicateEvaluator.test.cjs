@@ -278,6 +278,34 @@ test('setTrustFloorThreshold rejects out-of-range values', async () => {
   await assert.rejects(() => db.setTrustFloorThreshold(null, 0.5), /requires userId/);
 });
 
+// ── Extension 4: autonomous-action rate limit ────────────────────────────
+test('getRateLimit defaults to {count: 20, windowMinutes: 60} with no userId', async () => {
+  const db = require('../db.cjs');
+  const r = await db.getRateLimit(null);
+  assert.deepEqual(r, { count: 20, windowMinutes: 60 });
+});
+
+test('DEFAULT_RATE_LIMIT constant is {count: 20, windowMinutes: 60}', () => {
+  const db = require('../db.cjs');
+  assert.deepEqual(db.DEFAULT_RATE_LIMIT, { count: 20, windowMinutes: 60 });
+});
+
+test('setRateLimit rejects out-of-range counts', async () => {
+  const db = require('../db.cjs');
+  await assert.rejects(() => db.setRateLimit('any-user', { count: 0 }), /Invalid rate limit/);
+  await assert.rejects(() => db.setRateLimit('any-user', { count: -5 }), /Invalid rate limit/);
+  await assert.rejects(() => db.setRateLimit('any-user', { count: 1001 }), /Invalid rate limit/);
+  await assert.rejects(() => db.setRateLimit('any-user', { count: 'abc' }), /Invalid rate limit/);
+  await assert.rejects(() => db.setRateLimit('any-user', null), /Invalid rate limit/);
+  await assert.rejects(() => db.setRateLimit(null, { count: 10 }), /requires userId/);
+});
+
+test('countAutonomousActions returns 0 with no userId', async () => {
+  const db = require('../db.cjs');
+  const n = await db.countAutonomousActions(null);
+  assert.equal(n, 0);
+});
+
 // ── Performance: predicate evaluation stays well under budget ────────────
 test('1000 evaluations of a 5-deep nested predicate complete in <50ms', () => {
   const p = {

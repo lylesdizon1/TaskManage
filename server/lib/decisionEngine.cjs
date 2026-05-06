@@ -313,15 +313,23 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
   let riskScore = null;
 
   try {
-    // Pull rules + trust + trust-floor threshold in parallel.
-    // getCachedRules hits Redis first; the other two are single indexed
-    // queries (~ms each on cold path; cached at the connection pool).
-    const [bundle, ts, trustFloor] = await Promise.all([
+    // Pull rules + trust + trust-floor threshold + rate-limit config +
+    // recent-autonomous count in parallel. getCachedRules hits Redis
+    // first; the others are single indexed queries (~ms each on cold
+    // path; cached at the connection pool). Five concurrent fetches stay
+    // within the 300ms decisionEngine budget — current avg is ~10ms.
+    const [bundle, ts, trustFloor, rateLimit, recentAutoCount] = await Promise.all([
       getCachedRules(userId).catch(() => ({ explicit: [], inferred: [] })),
       db.getTrustScore(userId, toolName).catch(() => null),
       db.getTrustFloorThreshold
         ? db.getTrustFloorThreshold(userId).catch(() => 0.3)
         : Promise.resolve(0.3),
+      db.getRateLimit
+        ? db.getRateLimit(userId).catch(() => ({ count: 20, windowMinutes: 60 }))
+        : Promise.resolve({ count: 20, windowMinutes: 60 }),
+      db.countAutonomousActions
+        ? db.countAutonomousActions(userId, 60).catch(() => 0)
+        : Promise.resolve(0),
     ]);
     trust = ts;
     const explicit = (bundle?.explicit || []).filter((p) => p.isActive !== false && p.preferenceType);
@@ -460,6 +468,18 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
       disposition = 'confirm_required';
       conflictLevel = 'low_trust';
       reason = `I want to confirm before ${toolName.replace(/_/g, ' ')} — your trust score for this action (${Number(trust.trustScore).toFixed(2)}) is below your floor of ${trustFloor.toFixed(2)}.`;
+    }
+
+    // Tier 6 — autonomous-action rate limit (Extension 4). Catches runaway
+    // loops: if the user has had >= rateLimit.count autonomous executions
+    // in the last 60 min, the next auto_allow gets escalated to confirm.
+    // Confirmation flows are NOT counted (already user-aware), so this
+    // budget reflects "things Aria did without asking lately." Per-user
+    // tunable count (default 20); window is hardcoded 60min in v1.
+    if (disposition === 'auto_proceed' && rateLimit && recentAutoCount >= rateLimit.count) {
+      disposition = 'confirm_required';
+      conflictLevel = 'rate_limit';
+      reason = `Rate-limit guardrail: you've had ${recentAutoCount} autonomous actions in the last ${rateLimit.windowMinutes} minutes (limit ${rateLimit.count}). Confirming this one before proceeding.`;
     }
 
     // Compute confidence + risk scores for the audit row.
