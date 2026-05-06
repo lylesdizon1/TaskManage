@@ -214,5 +214,7 @@ Full spec: /docs/design-system.md
 - docs/dizon-entity-workspace-spec-v1.md — Entity workspace V1/V2 spec. Projects, tasks, checklists, notes — collaborative execution inside entities. Lightweight, not Asana. (Ray, Apr 14)
 - docs/aria-prompt-patterns-projects-v1.md — Aria intent categories, entity/project resolution rules, prompt patterns, tool call mapping for Projects V1. (Ray, Apr 14)
 - docs/cc-projects-integration-spec.md — Command Center integration spec for projects. Context builder blocks, draft tiles, still open integration, morning brief updates. (Ray, Apr 14)
+- docs/aria-health-audit-2026-05-05.md — 5-phase Aria intelligence audit + overnight ship log. Trust-loop break, close-loop producer gap, classifier-version inventory, fixes shipped 2026-05-05/06. (Claude + Lyle, May 5-6)
+- docs/decisionEngine-extensions-v1.md — Workstream spec for 5 engine extensions (input plumbing, predicate language, trust-floor parameterization, rate limiting, contact-list join). Blocks foundational guardrail authoring AND Phase 2 capability work (aria@ mailbox, research agents, rule-proposal flow). (Claude + Lyle, May 6)
 
 These documents are the source of truth for system design decisions. Read before making architectural changes.
