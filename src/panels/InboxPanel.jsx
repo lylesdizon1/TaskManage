@@ -2201,6 +2201,18 @@ function ClassificationReasoningTooltip({ cls, onOpenCorrections }) {
               {patterns.map((p, i) => <li key={i}>{p}</li>)}
             </ul>
           )}
+          {Array.isArray(r.signals_fired) && r.signals_fired.length > 0 && (
+            <div className="mb-1.5">
+              <div className="text-gray-400 text-[10px] uppercase tracking-wide" style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700 }}>Signals</div>
+              <div className="flex flex-wrap gap-1 mt-0.5">
+                {r.signals_fired.map((s, i) => (
+                  <span key={i} className="inline-block px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200 text-gray-700 text-[10px]" style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {r.has_confirmation_code && (
             <div className="text-gray-600 mb-1">Contains confirmation/OTP code</div>
           )}
