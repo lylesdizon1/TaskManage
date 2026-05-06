@@ -4275,6 +4275,7 @@ async function getUserPreferences(userId, category = null, includeInactive = fal
             source, strength,
             category, preference_type AS "preferenceType",
             removed_reason AS "removedReason",
+            predicate,
             times_reinforced AS "timesReinforced",
             times_violated AS "timesViolated",
             last_reinforced_at AS "lastReinforcedAt",
@@ -4419,6 +4420,7 @@ async function getInferredRulesForUser(userId, opts = {}) {
             context_data AS "contextData",
             rule_text AS "ruleText",
             source, strength,
+            predicate,
             signal_count AS "signalCount",
             times_reinforced AS "timesReinforced",
             times_violated AS "timesViolated",
@@ -5699,6 +5701,13 @@ async function runMigrations() {
     .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.context_data', error: err.message }));
   await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS signal_count INT DEFAULT 1`)
     .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.signal_count', error: err.message }));
+  // Phase 3 — input-aware predicate (decisionEngine extensions v1, ext 2).
+  // Nullable so existing rules fall through to the legacy keyword path
+  // unchanged. Shape: { tool_names?: string[], input: PredicateNode }
+  // Recognized in the engine; rules with NULL predicate use rule_text +
+  // category + preference_type matching as before.
+  await pool.query(`ALTER TABLE behavior_rules ADD COLUMN IF NOT EXISTS predicate JSONB`)
+    .catch((err) => logger.warn('migration.warn', { label: 'behavior_rules.predicate', error: err.message }));
 
   // 2. user_preferences_v2 — explicit key-value preference store. _v2
   // namespace because the legacy user_preferences serves DND/cadence.

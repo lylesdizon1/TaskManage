@@ -482,6 +482,15 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
         ? trustPerUser.rows.filter((r) => r.decisions_30d > 0 && r.trust_rows > 0).length / usersWithDecisions
         : null;
 
+      // Predicate evaluator error tracker — surfaces silently-broken
+      // behavior_rules whose predicate threw during conflictsWithAction.
+      // Counter is in-memory, resets on process restart.
+      let ruleEvalErrors = { count: 0, lastErrors: [] };
+      try {
+        const { getRuleEvaluationErrors } = require('../lib/decisionEngine.cjs');
+        ruleEvalErrors = getRuleEvaluationErrors();
+      } catch { /* engine not loaded yet — leave defaults */ }
+
       const canaries = {
         trust_loop_writes: trust.rows > 0
           ? 'healthy'
@@ -495,6 +504,9 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
         trust_coverage: trustCoverage === null
           ? 'unknown'
           : `${(trustCoverage * 100).toFixed(0)}% of active users have trust_scores rows`,
+        rule_evaluation_errors: ruleEvalErrors.count === 0
+          ? 'healthy'
+          : `${ruleEvalErrors.count} predicate errors since process start — see lastErrors below`,
       };
 
       const out = {
@@ -516,6 +528,7 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
           decisions_30d: r.decisions_30d,
           has_trust: r.trust_rows > 0,
         })),
+        rule_evaluation_errors: ruleEvalErrors,
       };
 
       // Optional per-user deep dive

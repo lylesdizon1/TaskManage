@@ -124,16 +124,141 @@ function _matchesKeywords(text, keywords) {
   });
 }
 
+// ── Predicate evaluator (decisionEngine extensions v1, ext 2) ─────────────
+// Rules with a non-null `predicate` jsonb column bypass the legacy keyword
+// path and evaluate via this function. Existing 11 user rules + 5 system
+// rules have NULL predicate and continue using the keyword path unchanged.
+//
+// Predicate envelope shape:
+//   { tool_names?: string[],     // optional toolName allowlist
+//     input: PredicateNode }     // tree of conditions over toolInput
+//
+// PredicateNode is recursive — composition or leaf:
+//   { and: [PredicateNode, ...] }     — all match
+//   { or:  [PredicateNode, ...] }     — at least one matches
+//   { not: PredicateNode }            — negation
+//   { field: 'dotted.path', op: '<op>', value: <any> }   — leaf
+//
+// Operators: gt, gte, lt, lte, eq, neq, in, not_in, contains, exists, not_exists.
+// Field paths: dotted lookup into toolInput. Missing segments → undefined.
+//
+// Reserved top-level keys (Extensions 3-5) intentionally throw in v1 so a
+// rule that references them before the evaluator lands fails closed:
+//   trust:   reserved for ext 3 (trust-floor)
+//   rate:    reserved for ext 4 (rate limiting)
+//   external_recipients: reserved for ext 5 (contact-list join)
+
+function _getPath(obj, path) {
+  if (obj == null || typeof obj !== 'object' || typeof path !== 'string') return undefined;
+  return path.split('.').reduce((acc, k) => (acc == null ? undefined : acc[k]), obj);
+}
+
+function _applyOp(op, actual, value) {
+  switch (op) {
+    case 'gt':  return Number.isFinite(Number(actual)) && Number(actual) >  Number(value);
+    case 'gte': return Number.isFinite(Number(actual)) && Number(actual) >= Number(value);
+    case 'lt':  return Number.isFinite(Number(actual)) && Number(actual) <  Number(value);
+    case 'lte': return Number.isFinite(Number(actual)) && Number(actual) <= Number(value);
+    case 'eq':  return actual === value;
+    case 'neq': return actual !== value;
+    case 'in':  return Array.isArray(value) && value.includes(actual);
+    case 'not_in': return Array.isArray(value) && !value.includes(actual);
+    case 'contains': return typeof actual === 'string' && typeof value === 'string' && actual.includes(value);
+    case 'exists': return actual !== undefined && actual !== null;
+    case 'not_exists': return actual === undefined || actual === null;
+    default: throw new Error(`Unknown predicate operator: ${op}`);
+  }
+}
+
+function _evalNode(node, input) {
+  if (node == null || typeof node !== 'object') {
+    throw new Error(`Predicate node must be an object, got ${typeof node}`);
+  }
+  if (Array.isArray(node.and)) return node.and.every((c) => _evalNode(c, input));
+  if (Array.isArray(node.or))  return node.or.some((c) => _evalNode(c, input));
+  if (node.not !== undefined)  return !_evalNode(node.not, input);
+  if (typeof node.field === 'string' && typeof node.op === 'string') {
+    return _applyOp(node.op, _getPath(input, node.field), node.value);
+  }
+  throw new Error(`Unknown predicate node shape: ${JSON.stringify(node).slice(0, 120)}`);
+}
+
+const _RESERVED_FUTURE_KEYS = ['trust', 'rate', 'external_recipients'];
+
+function evaluatePredicate(predicate, toolName, toolInput) {
+  if (predicate == null || typeof predicate !== 'object') {
+    throw new Error('predicate must be an object');
+  }
+  for (const k of _RESERVED_FUTURE_KEYS) {
+    if (k in predicate) {
+      throw new Error(`Predicate key "${k}" is reserved for a future engine extension and not yet implemented`);
+    }
+  }
+  if (Array.isArray(predicate.tool_names) && predicate.tool_names.length) {
+    if (!predicate.tool_names.includes(toolName)) return false;
+  }
+  if (predicate.input !== undefined) {
+    return _evalNode(predicate.input, toolInput || {});
+  }
+  // tool_names without input → match purely by tool name being in the list
+  return Array.isArray(predicate.tool_names) && predicate.tool_names.includes(toolName);
+}
+
+// In-memory error tracking — surfaces silently-broken rules to the
+// /api/admin/aria-health endpoint. Counter resets on process restart.
+const _ruleEvaluationErrors = { count: 0, lastErrors: [] };
+const _MAX_TRACKED_ERRORS = 10;
+
+function _trackPredicateError(rule, err) {
+  _ruleEvaluationErrors.count++;
+  const entry = {
+    ts: new Date().toISOString(),
+    rule_id: rule?.id ?? null,
+    rule_user_id: rule?.userId ?? null,
+    error: err.message,
+    predicate: JSON.stringify(rule?.predicate ?? null).slice(0, 200),
+  };
+  _ruleEvaluationErrors.lastErrors.unshift(entry);
+  if (_ruleEvaluationErrors.lastErrors.length > _MAX_TRACKED_ERRORS) {
+    _ruleEvaluationErrors.lastErrors.length = _MAX_TRACKED_ERRORS;
+  }
+  logger.warn('decisionEngine.predicate.error', entry);
+}
+
+function getRuleEvaluationErrors() {
+  return {
+    count: _ruleEvaluationErrors.count,
+    lastErrors: _ruleEvaluationErrors.lastErrors.slice(),
+  };
+}
+
 /**
  * Does this rule conflict with the proposed action?
- * V1 — keyword matching against rule_text. Returns true/false.
  *
- * The conflict semantics depend on preference_type:
- *  - 'never' / 'avoid': matches if action keyword found in rule
- *  - 'ask_first': matches if action category matches the rule's category
- *  - 'always' / 'prefer': don't trigger conflicts here (positive directives)
+ * Two paths:
+ *   - rule.predicate != null  → evaluate the structured predicate against
+ *     toolInput. Predicate path is exhaustive: a predicate-bearing rule
+ *     does NOT also consult the keyword path. Errors are isolated per-
+ *     rule (logged + counted, returns false) so one malformed rule
+ *     can't sink autonomy for the entire turn.
+ *   - rule.predicate == null  → V1 keyword matching against rule_text.
+ *     All 11 existing user rules + 5 system rules use this path.
+ *
+ * Keyword-path conflict semantics by preference_type:
+ *   - 'never' / 'avoid': matches if action keyword found in rule_text
+ *   - 'ask_first': matches if action category matches the rule's category
+ *   - 'always' / 'prefer': don't trigger conflicts (positive directives)
  */
-function conflictsWithAction(rule, toolName) {
+function conflictsWithAction(rule, toolName, toolInput) {
+  if (rule && rule.predicate != null) {
+    try {
+      return evaluatePredicate(rule.predicate, toolName, toolInput);
+    } catch (err) {
+      _trackPredicateError(rule, err);
+      return false; // skip this rule; other rules continue evaluating
+    }
+  }
+
   const ptype = rule.preferenceType || rule.preference_type;
   const ruleCat = rule.category;
   const toolCat = TOOL_CATEGORY[toolName];
@@ -269,7 +394,7 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     const hardConstraints = explicit.filter((p) => {
       if (p.preferenceType === 'ask_first') return false;
       const isHard = p.ruleType === 'constraint' || p.preferenceType === 'never' || p.strength === 5;
-      return isHard && conflictsWithAction(p, toolName);
+      return isHard && conflictsWithAction(p, toolName, toolInput);
     });
     if (hardConstraints.length) {
       disposition = 'hard_stop';
@@ -282,8 +407,8 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     // ask_first triggers regardless of strength; the user has explicitly
     // asked us to confirm before this category of action.
     if (disposition === 'auto_proceed') {
-      const askFirst = explicit.filter((p) => p.preferenceType === 'ask_first' && conflictsWithAction(p, toolName));
-      const strongPrefs = explicit.filter((p) => p.strength === 4 && p.preferenceType !== 'ask_first' && conflictsWithAction(p, toolName));
+      const askFirst = explicit.filter((p) => p.preferenceType === 'ask_first' && conflictsWithAction(p, toolName, toolInput));
+      const strongPrefs = explicit.filter((p) => p.strength === 4 && p.preferenceType !== 'ask_first' && conflictsWithAction(p, toolName, toolInput));
       const t2 = [...askFirst, ...strongPrefs];
       if (t2.length) {
         disposition = 'confirm_required';
@@ -298,7 +423,7 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
 
     // Tier 3 — medium explicit preferences (strength === 3).
     if (disposition === 'auto_proceed') {
-      const medPrefs = explicit.filter((p) => p.strength === 3 && conflictsWithAction(p, toolName));
+      const medPrefs = explicit.filter((p) => p.strength === 3 && conflictsWithAction(p, toolName, toolInput));
       if (medPrefs.length) {
         disposition = 'soft_confirm';
         conflictLevel = 'medium';
@@ -309,7 +434,7 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
 
     // Tier 4 — strong inferred patterns (strength >= 0.7).
     if (disposition === 'auto_proceed') {
-      const strongInferred = inferred.filter((r) => r.strength >= 0.7 && conflictsWithAction(r, toolName));
+      const strongInferred = inferred.filter((r) => r.strength >= 0.7 && conflictsWithAction(r, toolName, toolInput));
       if (strongInferred.length) {
         disposition = 'soft_confirm';
         conflictLevel = 'inferred';
@@ -395,4 +520,10 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
   };
 }
 
-module.exports = { evaluateAction, conflictsWithAction, PERSISTED_DISPOSITION };
+module.exports = {
+  evaluateAction,
+  conflictsWithAction,
+  evaluatePredicate,
+  getRuleEvaluationErrors,
+  PERSISTED_DISPOSITION,
+};
