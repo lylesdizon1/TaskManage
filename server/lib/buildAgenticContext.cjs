@@ -324,6 +324,9 @@ async function buildAgenticContext(opts) {
     // populates from DB on miss. Invalidated on every set_preference,
     // remove_preference, inferRulesFromBehavior, and decay run.
     ['rulesBundle',      () => getCachedRules(userId),                                                                                                  { explicit: [], inferred: [] }],
+    // Pending rule proposals — surfaced to Aria's prompt so she can
+    // proactively mention them without first calling list_rule_proposals.
+    ['pendingProposals', () => (db.listRuleProposals                 ? db.listRuleProposals(userId, { status: 'pending', limit: 10 }) : Promise.resolve([])), []],
   ];
 
   const settled = await Promise.allSettled(
@@ -345,10 +348,11 @@ async function buildAgenticContext(opts) {
     user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings,
     importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx,
     contactsData, sharedAccessData, todayJournal, yesterdayJournal, emailLabels,
-    rulesBundle,
+    rulesBundle, pendingProposals,
   } = ctxValues;
   const userPreferences = rulesBundle?.explicit || [];
   const inferredRules = rulesBundle?.inferred || [];
+  const pendingRuleProposals = Array.isArray(pendingProposals) ? pendingProposals : [];
 
   const todayStr = getTodayLocal(tz);
   const todayDate = todayStr.split(', ')[1];
@@ -448,11 +452,30 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // the model can distinguish "user said X" from "we observed X".
   const preferencesBlock = buildPreferencesBlock(userPreferences, inferredRules);
 
+  // Pending rule proposals (Phase 2 capability — rule-proposal flow).
+  // Surfaces Aria-suggested rules awaiting user review so the LLM can
+  // mention them at appropriate moments (e.g. when the user asks "what
+  // have you noticed" or when a related conversation comes up). The
+  // user accepts/rejects via accept_rule_proposal / reject_rule_proposal
+  // tools — Aria should NOT auto-accept; only call accept when the user
+  // explicitly says to.
+  let proposalsBlock = '';
+  if (pendingRuleProposals.length) {
+    const lines = pendingRuleProposals.slice(0, 5).map((p) => {
+      const r = p.proposedRule || {};
+      const tools = r.predicate?.tool_names?.join(', ') || '?';
+      return `  - id=${p.id} | "${(r.ruleText || '').slice(0, 100)}" | tools: ${tools} | reason: ${p.reasoning || '(none)'}`;
+    });
+    const more = pendingRuleProposals.length > 5 ? `\n  …and ${pendingRuleProposals.length - 5} more.` : '';
+    proposalsBlock =
+`\n\n### PENDING RULE PROPOSALS (${pendingRuleProposals.length}) — patterns I've detected, awaiting your review ###\n${lines.join('\n')}${more}\nUse list_rule_proposals to see full details. Accept with accept_rule_proposal(proposal_id) ONLY when the user explicitly says to. Dismiss with reject_rule_proposal(proposal_id, reason). Mention these naturally if relevant to what the user is working on — don't dump them unprompted.\n### END PENDING RULE PROPOSALS ###\n\n`;
+  }
+
   // Today's + yesterday's journal / daily wrap (fenced — user-authored
   // content, not instructions; see buildJournalBlock header).
   const journalBlock = buildJournalBlock(todayJournal, todayDateKey, yesterdayJournal);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + journalBlock + contextBlock;
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + proposalsBlock + journalBlock + contextBlock;
   console.log('[buildAgenticContext] prompt chars:', systemPrompt.length);
 
   return {
@@ -462,8 +485,8 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     emailLabels,
     tz, todayStr, todayDate, todayDateKey, yesterdayDateKey, currentTime, weekMapStr,
     profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
-    peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, journalBlock,
-    userPreferences, inferredRules,
+    peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, proposalsBlock, journalBlock,
+    userPreferences, inferredRules, pendingRuleProposals,
     decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
   };

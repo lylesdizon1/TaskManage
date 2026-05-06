@@ -682,6 +682,56 @@ const ARIA_TOOLS = [
     },
   },
   {
+    name: 'list_rule_proposals',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "List pending rule proposals — patterns the trust loop has detected (e.g. user rejected an action 2+ times) and is suggesting as new behavior_rules. Show these to the user when they ask 'what's Aria suggested' / 'what rules can I accept' / 'show me proposals' OR when you want to surface a relevant pattern proactively. Each proposal includes a reasoning field explaining why it was suggested. Pair with accept_rule_proposal or reject_rule_proposal to act on one.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['pending', 'accepted', 'rejected', 'expired', 'all'],
+          description: "Filter by status. Default 'pending' (the actionable bucket).",
+        },
+        limit: {
+          type: 'number',
+          description: 'Max rows. Default 20, cap 100.',
+        },
+      },
+    },
+  },
+  {
+    name: 'accept_rule_proposal',
+    group: 'intelligence',
+    risk: 'medium',
+    requires_confirmation: false,
+    description: "Accept a pending rule proposal — materializes it as an active behavior_rule that gates future actions. ONLY call when the user has explicitly said to accept (e.g. 'yes accept that one', 'go ahead', 'sure, add it'). Never auto-accept. After accepting, the rule is live on the next chat turn — surface this to the user ('Done. From now on, [behavior].'). Reversible: the user can list_preferences then remove_preference if they regret it.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        proposal_id: { type: 'string', description: 'id from list_rule_proposals.' },
+      },
+      required: ['proposal_id'],
+    },
+  },
+  {
+    name: 'reject_rule_proposal',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Reject (dismiss) a pending rule proposal. Use when the user says 'no thanks', 'skip that', 'reject it', 'not interested'. Captures an optional reason for the audit trail (e.g. 'too aggressive', 'wrong scope', 'user wants different shape'). Doesn't delete the proposal — just flips status so it doesn't keep showing up in pending. The pattern that triggered it stays stamped, so the same pattern won't immediately re-propose.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        proposal_id: { type: 'string', description: 'id from list_rule_proposals.' },
+        reason: { type: 'string', description: 'Short reason for the audit trail.' },
+      },
+      required: ['proposal_id'],
+    },
+  },
+  {
     name: 'move_email',
     group: 'communication',
     risk: 'low',
@@ -1865,6 +1915,85 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           // from the next system prompt immediately.
           invalidateRulesCache(userId).catch(() => {});
           return { success: true, preference_id, removed_reason: reason };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      // ── Rule-proposal flow (Phase 2 capability) ─────────────────────────
+      case 'list_rule_proposals': {
+        const { status, limit } = toolInput || {};
+        try {
+          const proposals = await db.listRuleProposals(userId, {
+            status: status || 'pending',
+            limit: Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100),
+          });
+          // Slim shape for the LLM — full payload would balloon the
+          // tool response with redundant predicate JSON.
+          const slim = proposals.map((p) => ({
+            proposal_id: p.id,
+            status: p.status,
+            proposed_rule_text: p.proposedRule?.ruleText || '(no text)',
+            preference_type: p.proposedRule?.preferenceType || null,
+            category: p.proposedRule?.category || null,
+            tool_names: p.proposedRule?.predicate?.tool_names || [],
+            reasoning: p.reasoning,
+            source: p.source,
+            created_at: p.createdAt,
+            expires_at: p.expiresAt,
+          }));
+          return {
+            success: true,
+            count: slim.length,
+            status: status || 'pending',
+            proposals: slim,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'accept_rule_proposal': {
+        const { proposal_id } = toolInput || {};
+        if (!proposal_id) return { success: false, error: 'proposal_id is required' };
+        try {
+          const result = await db.acceptRuleProposal(proposal_id, userId, userId);
+          // Drop the rule cache so the new rule shows on the next turn.
+          invalidateRulesCache(userId).catch(() => {});
+          try {
+            await db.logMemory({
+              userId, tool: 'accept_rule_proposal',
+              content: `Accepted rule proposal — new rule active: "${result.rule?.ruleText?.slice(0, 120) || 'no text'}"`,
+              metadata: { proposal_id, applied_rule_id: result.proposal.appliedRuleId },
+            });
+          } catch {}
+          return {
+            success: true,
+            proposal_id,
+            applied_rule_id: result.proposal.appliedRuleId,
+            rule_text: result.rule?.ruleText || null,
+            preference_type: result.rule?.preferenceType || null,
+            strength: result.rule?.strength ?? null,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'reject_rule_proposal': {
+        const { proposal_id, reason } = toolInput || {};
+        if (!proposal_id) return { success: false, error: 'proposal_id is required' };
+        try {
+          const ok = await db.rejectRuleProposal(proposal_id, userId, reason || null, userId);
+          if (!ok) return { success: false, error: 'proposal not found or not pending' };
+          try {
+            await db.logMemory({
+              userId, tool: 'reject_rule_proposal',
+              content: `Rejected rule proposal${reason ? ` — reason: ${reason}` : ''}`,
+              metadata: { proposal_id, reason: reason || null },
+            });
+          } catch {}
+          return { success: true, proposal_id, status: 'rejected', reason: reason || null };
         } catch (err) {
           return { success: false, error: err.message };
         }
