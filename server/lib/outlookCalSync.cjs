@@ -101,6 +101,16 @@ async function syncOutlookForUser(userId, tz, db) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 30);
     await db.deleteStaleCalendarEvents(userId, cutoff);
+
+    // After sync settles, emit close-loop rows for any events that just
+    // ended without an outcome note. The sweep is idempotent so the
+    // GCal sync running on the same tick doesn't double-emit.
+    try {
+      const { sweepEventCloseLoops } = require('./closeLoopEmitter.cjs');
+      await sweepEventCloseLoops(userId);
+    } catch (e) {
+      logger.warn('outlook-sync.closeLoopSweep.failed', { userId, error: e.message });
+    }
   } catch (e) {
     logger.error('outlook-sync.user-failed', { userId, error: e.message });
   }

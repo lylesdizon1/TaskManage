@@ -574,6 +574,17 @@ async function syncGcalForUser(userId, tz) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 30);
     await db.deleteStaleCalendarEvents(userId, cutoff);
+
+    // Emit close-loop rows for events that just ended without an
+    // outcome note. Idempotent across sync paths — sweepEventCloseLoops
+    // uses LEFT JOIN ... IS NULL + the pcl unique index to skip
+    // already-queued events.
+    try {
+      const { sweepEventCloseLoops } = require('./server/lib/closeLoopEmitter.cjs');
+      await sweepEventCloseLoops(userId);
+    } catch (e) {
+      cronLogger.warn('gcal-sync.closeLoopSweep.failed', { userId, error: e.message });
+    }
   } catch (e) {
     cronLogger.error('gcal-sync.user-failed', { userId, error: e.message });
   }

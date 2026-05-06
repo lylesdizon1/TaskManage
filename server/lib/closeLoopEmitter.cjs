@@ -31,4 +31,52 @@ async function emitCloseLoop(userId, sourceType, sourceId, titleSnapshot) {
   }
 }
 
-module.exports = { emitCloseLoop };
+/**
+ * Sweep recently-ended events with no outcome note and no existing
+ * pcl row, emit a 'event' close-loop for each so the Active Zone can
+ * surface "How did your meeting go?" prompts.
+ *
+ * Called from the calendar sync paths (Outlook + GCal) so the sweep
+ * runs every 15 min on the same cron tick that already touches each
+ * user's calendar. Bounded to events that ended within the last 24h
+ * so we don't keep re-emitting on day-old meetings the user ignored.
+ *
+ * Idempotent — the LEFT JOIN ... IS NULL guards plus the unique
+ * (user_id, source_type, source_id) constraint on pending_close_loop
+ * mean repeat sweeps in the same window no-op.
+ *
+ * Fire-and-forget. Never throws.
+ */
+async function sweepEventCloseLoops(userId) {
+  try {
+    if (!userId) return 0;
+    const { rows } = await db.pool.query(
+      `SELECT ce.id, ce.title FROM calendar_events ce
+       LEFT JOIN calendar_notes cn
+         ON cn.user_id = ce.user_id AND cn.event_id = ce.id AND cn.post_note IS NOT NULL
+       LEFT JOIN pending_close_loop pcl
+         ON pcl.user_id = ce.user_id AND pcl.source_type = 'event' AND pcl.source_id = ce.id
+       WHERE ce.user_id = $1
+         AND ce.end_time < NOW()
+         AND ce.end_time > NOW() - INTERVAL '24 hours'
+         AND ce.all_day = false
+         AND cn.id IS NULL
+         AND pcl.id IS NULL`,
+      [userId],
+    );
+    let emitted = 0;
+    for (const r of rows) {
+      const row = await emitCloseLoop(userId, 'event', r.id, r.title);
+      if (row) emitted++;
+    }
+    if (emitted > 0) {
+      logger.info('closeloop.event.swept', { userId, emitted, candidates: rows.length });
+    }
+    return emitted;
+  } catch (err) {
+    logger.error('closeloop.event.sweep.failed', { userId, error: err.message });
+    return 0;
+  }
+}
+
+module.exports = { emitCloseLoop, sweepEventCloseLoops };
