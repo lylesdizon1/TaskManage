@@ -351,7 +351,7 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
   const winStart = new Date(now.getTime() - 3600000).toISOString();
   const winEnd   = new Date(now.getTime() + 4 * 3600000).toISOString();
 
-  const [tasks, events, closeLoops, pendingConfirmations, flaggedRes, flaggedItems, todayJournal] = await Promise.all([
+  const [tasks, events, closeLoops, pendingConfirmations, criticalFlagged, todayJournal] = await Promise.all([
     db.getTasksForUser(userId, user?.entityIds || []).catch(() => []),
     db.getCalendarEventsForUser(userId, winStart, winEnd).catch(() => []),
     db.getOpenCloseLoopItems
@@ -360,18 +360,22 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
     db.getOpenPendingConfirmations
       ? db.getOpenPendingConfirmations(userId, 5).catch(() => [])
       : Promise.resolve([]),
-    db.getFlaggedInboxCount
-      ? db.getFlaggedInboxCount(userId, { includeAcked: false }).catch(() => 0)
-      : Promise.resolve(0),
-    db.getFlaggedInboxItems
-      ? db.getFlaggedInboxItems(userId, { includeAcked: false, limit: 10 }).catch(() => [])
-      : Promise.resolve([]),
+    // Critical = flagged + unacked + classification confirms actionable.
+    // The plain getFlaggedInbox{Items,Count} helpers count raw flags
+    // (no classification join) and overcount when auto-flag's stale
+    // marker outlives the demoting reclassify. Detector uses the joined
+    // helper so the tile reflects current importance/actionRequired
+    // state rather than auto-flag's history.
+    db.getCriticalFlaggedInboxItems
+      ? db.getCriticalFlaggedInboxItems(userId, { limit: 10 }).catch(() => ({ items: [], count: 0 }))
+      : Promise.resolve({ items: [], count: 0 }),
     db.getJournalEntryByDate
       ? db.getJournalEntryByDate(userId, todayLocalIso).catch(() => null)
       : Promise.resolve(null),
   ]);
 
-  const flaggedUnackedCount = typeof flaggedRes === 'object' ? (flaggedRes.count || 0) : (flaggedRes || 0);
+  const flaggedUnackedCount = criticalFlagged?.count || 0;
+  const flaggedItems = Array.isArray(criticalFlagged?.items) ? criticalFlagged.items : [];
 
   return {
     userId,
@@ -383,7 +387,7 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
     closeLoops,
     pendingConfirmations,
     flaggedUnackedCount,
-    flaggedItems: Array.isArray(flaggedItems) ? flaggedItems : [],
+    flaggedItems,
     todayJournal,
     drafts: [], // no persistence yet — see detectDraftResume comment
   };

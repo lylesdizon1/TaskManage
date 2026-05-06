@@ -3283,6 +3283,46 @@ async function getFlaggedInboxCount(userId, { includeAcked = false } = {}) {
   return rows[0].count;
 }
 
+// "Critical" for the Active Zone tile = flagged + unacked AND the
+// CURRENT classification snapshot agrees that it's actionable. Auto-flag
+// fires at classification time and never auto-clears, so a demoted promo
+// keeps its old flag forever; reading inbox_items in isolation overcounts.
+// Predicate: importance_rank >= 3 (high/critical) OR action_required=true,
+// excluding newsletter/general categories as a defense against stale rows
+// that retained an inconsistent rank/ar after an incomplete reclassify.
+// LEFT JOIN preserves manual flags that never went through classifyEmail
+// (flagged_reason='manual') — user explicitly flagged, treat as critical.
+async function getCriticalFlaggedInboxItems(userId, { limit = 10 } = {}) {
+  const predicate = `
+    ii.user_id = $1
+    AND ii.flagged_at IS NOT NULL
+    AND ii.flagged_acked_at IS NULL
+    AND (
+      ec.id IS NULL
+      OR (
+        (ec.importance_rank >= 3 OR ec.action_required = true)
+        AND COALESCE(ec.category, '') NOT IN ('newsletter', 'general')
+      )
+    )
+  `;
+  const join = `LEFT JOIN email_classifications ec
+                  ON ec.user_id = ii.user_id AND ec.thread_id = ii.source_id`;
+  const [items, countRes] = await Promise.all([
+    pool.query(
+      `SELECT ii.* FROM inbox_items ii ${join}
+       WHERE ${predicate}
+       ORDER BY ii.flagged_at DESC LIMIT $2`,
+      [userId, limit],
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS count FROM inbox_items ii ${join}
+       WHERE ${predicate}`,
+      [userId],
+    ),
+  ]);
+  return { items: items.rows, count: countRes.rows[0].count };
+}
+
 async function getInboxItemById(id, userId) {
   const { rows } = await pool.query(
     'SELECT * FROM inbox_items WHERE id = $1 AND user_id = $2',
@@ -9130,6 +9170,7 @@ module.exports = {
   unackInboxItem,
   getFlaggedInboxItems,
   getFlaggedInboxCount,
+  getCriticalFlaggedInboxItems,
   getInboxItemById,
   searchInboxItems,
   upsertEmailLabel,
