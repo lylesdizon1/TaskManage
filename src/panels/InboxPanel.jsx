@@ -223,6 +223,11 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [pillFilter, setPillFilter] = useState('all'); // 'all' | 'unread' | 'action' | 'flagged'
   const [flaggedThreadIds, setFlaggedThreadIds] = useState(() => new Set());
   const [flaggedCount, setFlaggedCount] = useState(0);
+  // Persistent inbox_items snapshot for the flagged view. The local
+  // `threads` array (max_results=25 from Gmail) covers only the recent
+  // inbox; flagged items can be days/weeks old and live entirely in
+  // inbox_items. Synthesized stubs from this list make those reachable.
+  const [flaggedItems, setFlaggedItems] = useState([]);
   // Acked flagged items: thread IDs that have been acknowledged
   const [ackedThreadIds, setAckedThreadIds] = useState(() => new Set());
   // FU3 — flagged pill default shows ALL flagged (including acked).
@@ -234,7 +239,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   const [feedbackGiven, setFeedbackGiven] = useState(() => new Set());
   // Which message_id currently has the correction panel open (null = none)
   const [correctionOpenId, setCorrectionOpenId] = useState(null);
-  const [expandedZones, setExpandedZones] = useState({ attn: true, review: true, low: false, read: false });
+  const [expandedZones, setExpandedZones] = useState({ attn: true, review: true, low: false });
   const [touchedZones, setTouchedZones] = useState(() => new Set());
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   // Header "Ask about your inbox..." chat — wired to /api/chat/execute
@@ -285,6 +290,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       for (const i of items) { if (i.source_id) itemMap[i.source_id] = i.id; }
       setFlaggedThreadIds(ids);
       setAckedThreadIds(acked);
+      setFlaggedItems(items);
       setThreadToItemId(prev => ({ ...prev, ...itemMap }));
       // Pill count = unacked only
       setFlaggedCount(data.unackedCount ?? data.count ?? 0);
@@ -506,12 +512,14 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   // Batch-lookup classifications once the thread list lands, then poll a
   // couple of times to catch classifications produced by the server's
   // fire-and-forget trigger after the threads response.
+  // Also includes flagged source_ids — flagged inbox_items can live
+  // outside the recent thread window, but their synthesized stubs in
+  // the flagged view still need a classification snapshot to bucket
+  // correctly and to recover accountEmail for thread opens.
   useEffect(() => {
-    if (!threads.length) { setClassifications({}); return; }
-    const messageIds = threads
-      .map(t => t.latestMessageId)
-      .filter(Boolean)
-      .slice(0, 50);
+    const fromThreads = threads.map(t => t.latestMessageId).filter(Boolean);
+    const fromFlagged = flaggedItems.map(i => i.source_id).filter(Boolean);
+    const messageIds = Array.from(new Set([...fromThreads, ...fromFlagged])).slice(0, 100);
     if (!messageIds.length) { setClassifications({}); return; }
     let cancelled = false;
     const fetchOnce = async () => {
@@ -530,7 +538,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     const t1 = setTimeout(fetchOnce, 2500);
     const t2 = setTimeout(fetchOnce, 6000);
     return () => { cancelled = true; clearTimeout(t1); clearTimeout(t2); };
-  }, [threads, apiFetch, authToken]);
+  }, [threads, flaggedItems, apiFetch, authToken]);
 
   // Zone placement: derived purely from current classifications.
   // Needs Attention is "unread urgency" — once read, an item has been
@@ -897,8 +905,43 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   }
 
   // Derived zones (apply account + pill filter, then bucket).
+  // Flagged view bucketing operates over the union of local threads and
+  // synthesized stubs from inbox_items — flagged items can be older than
+  // the local Gmail window and would otherwise be unreachable despite
+  // appearing in the pill count. Stubs hydrate from the matching
+  // classification when available (accountEmail, isRead) and fall through
+  // to Review when no classification exists.
   const zones = useMemo(() => {
-    const base = threads.filter(t => !accountFilter || t.accountEmail === accountFilter);
+    let source = threads;
+    if (pillFilter === 'flagged') {
+      const localById = new Map(threads.map(t => [t.id, t]));
+      const stubs = [];
+      for (const item of flaggedItems) {
+        if (!item.source_id || localById.has(item.source_id)) continue;
+        const cls = classifications[item.source_id];
+        const fallbackAccount = accounts.find(a => (item.source === 'outlook')
+          ? (a.account_email || '').includes('outlook')
+          : !(a.account_email || '').includes('outlook'))?.account_email
+          || accounts[0]?.account_email
+          || '';
+        stubs.push({
+          id: item.source_id,
+          accountEmail: cls?.accountEmail || fallbackAccount,
+          latestMessageId: item.source_id,
+          subject: item.title || '(no subject)',
+          from: item.sender || '',
+          snippet: item.summary || '',
+          date: item.flagged_at || item.created_at || null,
+          isRead: cls?.isRead ?? false,
+          starred: false,
+          messageCount: 1,
+          labelIds: [],
+          _synthesized: true,
+        });
+      }
+      source = [...threads, ...stubs];
+    }
+    const base = source.filter(t => !accountFilter || t.accountEmail === accountFilter);
     const filtered = base.filter(t => {
       if (pillFilter === 'unread') return !t.isRead;
       if (pillFilter === 'flagged') {
@@ -916,17 +959,15 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     });
     // FU3 — read state no longer routes to a separate "read" bucket.
     // Threads land in their classification zone regardless of read state;
-    // the row renderer dims read items in-place. The `read` bucket is
-    // kept as `[]` so the existing Zone 4 just renders empty (Zone 4
-    // removal is a separate decision, flagged for follow-up).
+    // the row renderer dims read items in-place.
     const attn = [], review = [], low = [];
     for (const t of filtered) {
       if (needsAttentionIds.has(t.id)) { attn.push(t); continue; }
       if (lowPriorityIds.has(t.id)) { low.push(t); continue; }
       review.push(t);
     }
-    return { attn, review, low, read: [] };
-  }, [threads, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds, flaggedThreadIds, ackedThreadIds, showAcked]);
+    return { attn, review, low };
+  }, [threads, flaggedItems, accounts, classifications, accountFilter, pillFilter, needsAttentionIds, lowPriorityIds, flaggedThreadIds, ackedThreadIds, showAcked]);
 
   // Single-source projection of needsAttentionIds for the summary card.
   // Section count + summary count must agree; both go through the same Set.
@@ -1195,24 +1236,6 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 {zones.low.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
               </Zone>
 
-              {/* Zone 4 — Read.
-                  FU3 NOTE: read threads are no longer routed here. They
-                  bucket into their classification zone (attn/review/low)
-                  with a de-emphasized row style. zones.read is now [].
-                  Question for Lyle: keep this zone as a manual "show
-                  read-only history" toggle? Or remove entirely? Held
-                  pending decision — section just renders empty for now. */}
-              <Zone
-                icon="drafts" iconColor="#9ca3af"
-                label="Read"
-                count={zones.read.length}
-                hideBadge
-                expanded={expandedZones.read}
-                onToggle={() => toggleZone('read')}
-                emptyText="No read threads."
-              >
-                {zones.read.map(t => renderThreadRow({ t, activeThreadId, classifications, openThread, archiveSingle, markThreadRead, starSingle, toggleFlag, flaggedThreadIds, ackedThreadIds, labelLookup, feedbackGiven, submitFeedback, correctionOpenId, setCorrectionOpenId }))}
-              </Zone>
             </>
           )}
         </div>
