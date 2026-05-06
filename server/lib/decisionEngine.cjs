@@ -183,9 +183,67 @@ function _evalNode(node, input) {
   throw new Error(`Unknown predicate node shape: ${JSON.stringify(node).slice(0, 120)}`);
 }
 
-const _RESERVED_FUTURE_KEYS = ['trust', 'rate', 'external_recipients'];
+// Reserved for engine extensions still to ship. Any rule that uses these
+// keys before the corresponding evaluator lands fails closed via the
+// per-rule error path (admin sees the broken rule via aria-health).
+//   trust:   reserved for a future per-rule trust gating extension
+//   rate:    reserved for a future per-rule rate-limit gating
+const _RESERVED_FUTURE_KEYS = ['trust', 'rate'];
 
-function evaluatePredicate(predicate, toolName, toolInput) {
+// Email normalization for the recipients predicate (Extension 5). Accepts
+// "Name <email@host>" forms and bare addresses; returns lowercased atom
+// or null if the value isn't a recognizable email. Strict-but-tolerant —
+// matches the senderEmail() pattern used elsewhere in the codebase.
+function _normalizeEmail(s) {
+  if (typeof s !== 'string') return null;
+  const m = s.match(/<([^>]+)>/);
+  const candidate = (m ? m[1] : s).trim().toLowerCase();
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(candidate) ? candidate : null;
+}
+
+// Extract a normalized list of recipient emails from a toolInput field
+// value. Tolerates string ("a@x.com, b@y.com"), array (["a@x.com", ...]),
+// or undefined. Filters out malformed entries.
+function _extractRecipients(value) {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value.map(_normalizeEmail).filter(Boolean);
+  if (typeof value === 'string') {
+    return value.split(/[,;]/).map(_normalizeEmail).filter(Boolean);
+  }
+  return [];
+}
+
+// Evaluate the `recipients` envelope key (Extension 5). Resolves the
+// recipient list from toolInput[field] (default 'to'), then checks
+// membership against context.contactEmails (a Set of lowercased addresses
+// pre-fetched in evaluateAction). Two semantics:
+//   not_in_contacts: true  → fires if ANY recipient is unknown
+//                            (defensive, the common guardrail shape)
+//   in_contacts:     true  → fires only when ALL recipients are known
+//                            (positive case, e.g. "auto-CC ok if everyone
+//                            is internal")
+function _evalRecipients(spec, toolInput, context) {
+  if (spec == null || typeof spec !== 'object') {
+    throw new Error('recipients predicate must be an object');
+  }
+  if (!context || !(context.contactEmails instanceof Set)) {
+    throw new Error('recipients predicate requires context.contactEmails (Set)');
+  }
+  const fieldPath = typeof spec.field === 'string' && spec.field.length ? spec.field : 'to';
+  const recipients = _extractRecipients(_getPath(toolInput, fieldPath));
+  const known = context.contactEmails;
+  if (spec.not_in_contacts === true) {
+    if (recipients.length === 0) return false; // nothing to gate on
+    return recipients.some((r) => !known.has(r));
+  }
+  if (spec.in_contacts === true) {
+    if (recipients.length === 0) return false;
+    return recipients.every((r) => known.has(r));
+  }
+  throw new Error('recipients predicate must specify in_contacts or not_in_contacts');
+}
+
+function evaluatePredicate(predicate, toolName, toolInput, context) {
   if (predicate == null || typeof predicate !== 'object') {
     throw new Error('predicate must be an object');
   }
@@ -197,10 +255,29 @@ function evaluatePredicate(predicate, toolName, toolInput) {
   if (Array.isArray(predicate.tool_names) && predicate.tool_names.length) {
     if (!predicate.tool_names.includes(toolName)) return false;
   }
+
+  // Recipients envelope (Extension 5). Two surface forms:
+  //   { recipients: { field?, in_contacts?, not_in_contacts? } }
+  //   { external_recipients: true }   ← convenience shorthand for
+  //                                      { recipients: { field: 'to',
+  //                                                      not_in_contacts: true } }
+  if (predicate.external_recipients === true) {
+    if (!_evalRecipients({ field: 'to', not_in_contacts: true }, toolInput || {}, context)) {
+      // shorthand didn't fire; check for an explicit input/recipients block too
+      // before returning false
+    } else {
+      return true;
+    }
+  }
+  if (predicate.recipients !== undefined) {
+    if (_evalRecipients(predicate.recipients, toolInput || {}, context)) return true;
+  }
+
   if (predicate.input !== undefined) {
     return _evalNode(predicate.input, toolInput || {});
   }
-  // tool_names without input → match purely by tool name being in the list
+  // tool_names without input/recipients → match purely by tool name in the list
+  if (predicate.external_recipients === true || predicate.recipients !== undefined) return false;
   return Array.isArray(predicate.tool_names) && predicate.tool_names.includes(toolName);
 }
 
@@ -249,10 +326,10 @@ function getRuleEvaluationErrors() {
  *   - 'ask_first': matches if action category matches the rule's category
  *   - 'always' / 'prefer': don't trigger conflicts (positive directives)
  */
-function conflictsWithAction(rule, toolName, toolInput) {
+function conflictsWithAction(rule, toolName, toolInput, context) {
   if (rule && rule.predicate != null) {
     try {
-      return evaluatePredicate(rule.predicate, toolName, toolInput);
+      return evaluatePredicate(rule.predicate, toolName, toolInput, context);
     } catch (err) {
       _trackPredicateError(rule, err);
       return false; // skip this rule; other rules continue evaluating
@@ -335,6 +412,18 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     const explicit = (bundle?.explicit || []).filter((p) => p.isActive !== false && p.preferenceType);
     const inferred = (bundle?.inferred || []).filter((r) => r.isActive !== false);
 
+    // Extension 5 — contact-list join. Lazy-fetch the user's contact set
+    // ONLY if at least one rule's predicate references it. Most users
+    // have no recipient predicates, so this stays free for them. When
+    // needed, one indexed query over contacts + contact_identities.
+    let contactEmails = null;
+    const _hasRecipientPredicate = (r) =>
+      r && r.predicate && (r.predicate.recipients !== undefined || r.predicate.external_recipients === true);
+    if (explicit.some(_hasRecipientPredicate) || inferred.some(_hasRecipientPredicate)) {
+      contactEmails = await db.getContactEmails(userId).catch(() => new Set());
+    }
+    const ruleContext = { contactEmails };
+
     // ── Tier 0 (Phase 3.1) — content-aware override for email actions.
     // Fetch the message body (Redis cached, 5-min TTL). Confirmation
     // codes / OTP magic links → hard_stop because archiving them can
@@ -407,7 +496,7 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     const hardConstraints = explicit.filter((p) => {
       if (p.preferenceType === 'ask_first') return false;
       const isHard = p.ruleType === 'constraint' || p.preferenceType === 'never' || p.strength === 5;
-      return isHard && conflictsWithAction(p, toolName, toolInput);
+      return isHard && conflictsWithAction(p, toolName, toolInput, ruleContext);
     });
     if (hardConstraints.length) {
       disposition = 'hard_stop';
@@ -420,8 +509,8 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     // ask_first triggers regardless of strength; the user has explicitly
     // asked us to confirm before this category of action.
     if (disposition === 'auto_proceed') {
-      const askFirst = explicit.filter((p) => p.preferenceType === 'ask_first' && conflictsWithAction(p, toolName, toolInput));
-      const strongPrefs = explicit.filter((p) => p.strength === 4 && p.preferenceType !== 'ask_first' && conflictsWithAction(p, toolName, toolInput));
+      const askFirst = explicit.filter((p) => p.preferenceType === 'ask_first' && conflictsWithAction(p, toolName, toolInput, ruleContext));
+      const strongPrefs = explicit.filter((p) => p.strength === 4 && p.preferenceType !== 'ask_first' && conflictsWithAction(p, toolName, toolInput, ruleContext));
       const t2 = [...askFirst, ...strongPrefs];
       if (t2.length) {
         disposition = 'confirm_required';
@@ -436,7 +525,7 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
 
     // Tier 3 — medium explicit preferences (strength === 3).
     if (disposition === 'auto_proceed') {
-      const medPrefs = explicit.filter((p) => p.strength === 3 && conflictsWithAction(p, toolName, toolInput));
+      const medPrefs = explicit.filter((p) => p.strength === 3 && conflictsWithAction(p, toolName, toolInput, ruleContext));
       if (medPrefs.length) {
         disposition = 'soft_confirm';
         conflictLevel = 'medium';
@@ -447,7 +536,7 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
 
     // Tier 4 — strong inferred patterns (strength >= 0.7).
     if (disposition === 'auto_proceed') {
-      const strongInferred = inferred.filter((r) => r.strength >= 0.7 && conflictsWithAction(r, toolName, toolInput));
+      const strongInferred = inferred.filter((r) => r.strength >= 0.7 && conflictsWithAction(r, toolName, toolInput, ruleContext));
       if (strongInferred.length) {
         disposition = 'soft_confirm';
         conflictLevel = 'inferred';

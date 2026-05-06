@@ -3813,6 +3813,39 @@ async function countAutonomousActions(userId, windowMinutes = RATE_LIMIT_WINDOW_
   }
 }
 
+// ── Contact-list lookup (decisionEngine extensions v1, ext 5) ────────────
+// Returns a Set of lowercased email addresses known to the user — both
+// primary_email rows in `contacts` and `email`-kind rows in
+// `contact_identities`. Used by the engine to evaluate the `recipients`
+// predicate envelope: rules can gate on "is this recipient in my contacts."
+//
+// Set rather than Array because the engine does many membership checks
+// per evaluation. Failure-soft: returns empty Set on query error so the
+// calling rule can decide to fail-closed via predicate semantics.
+async function getContactEmails(userId) {
+  if (!userId) return new Set();
+  try {
+    const { rows } = await pool.query(
+      `SELECT LOWER(email) AS email
+         FROM (
+           SELECT primary_email AS email
+             FROM contacts
+            WHERE user_id = $1 AND primary_email IS NOT NULL
+           UNION ALL
+           SELECT ci.value
+             FROM contact_identities ci
+             JOIN contacts c ON c.id = ci.contact_id
+            WHERE c.user_id = $1 AND ci.kind = 'email' AND ci.value IS NOT NULL
+         ) all_emails
+        WHERE email <> ''`,
+      [userId],
+    );
+    return new Set(rows.map((r) => r.email).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 // ── decision_log ──
 
 /**
@@ -9367,6 +9400,7 @@ module.exports = {
   countAutonomousActions,
   DEFAULT_RATE_LIMIT,
   RATE_LIMIT_WINDOW_MINUTES_V1,
+  getContactEmails,
   logDecision,
   getDecisionHistory,
   getAdminDecisions,

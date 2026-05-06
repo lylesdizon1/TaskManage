@@ -203,8 +203,10 @@ test('tool_names without input matches by name alone', () => {
 });
 
 // ── Reserved-key throws (forward-compat for Extensions 3-5) ──────────────
-test('reserved future keys throw (trust / rate / external_recipients)', () => {
-  for (const key of ['trust', 'rate', 'external_recipients']) {
+test('reserved future keys throw (trust / rate)', () => {
+  // external_recipients was reserved in the bc2c464 commit; Ext 5 (this
+  // commit) implements it, so it's no longer reserved.
+  for (const key of ['trust', 'rate']) {
     assert.throws(
       () => evaluatePredicate({ [key]: { whatever: true } }, 'x', {}),
       /reserved for a future engine extension/i,
@@ -304,6 +306,97 @@ test('countAutonomousActions returns 0 with no userId', async () => {
   const db = require('../db.cjs');
   const n = await db.countAutonomousActions(null);
   assert.equal(n, 0);
+});
+
+// ── Extension 5: contact-list / recipients predicate ─────────────────────
+test('recipients not_in_contacts: fires when ANY recipient is unknown', () => {
+  const p = {
+    tool_names: ['send_email'],
+    recipients: { field: 'to', not_in_contacts: true },
+  };
+  const ctx = { contactEmails: new Set(['internal@corp.com', 'lyle@dizon.ai']) };
+  // All known → no fire
+  assert.equal(evaluatePredicate(p, 'send_email', { to: 'internal@corp.com, lyle@dizon.ai' }, ctx), false);
+  // One external → fires
+  assert.equal(evaluatePredicate(p, 'send_email', { to: 'internal@corp.com, stranger@x.com' }, ctx), true);
+  // All external → fires
+  assert.equal(evaluatePredicate(p, 'send_email', { to: 'a@x.com, b@y.com' }, ctx), true);
+  // Empty → no fire
+  assert.equal(evaluatePredicate(p, 'send_email', { to: '' }, ctx), false);
+  assert.equal(evaluatePredicate(p, 'send_email', {}, ctx), false);
+});
+
+test('recipients in_contacts: fires only when ALL are known', () => {
+  const p = {
+    tool_names: ['send_email'],
+    recipients: { field: 'to', in_contacts: true },
+  };
+  const ctx = { contactEmails: new Set(['a@x.com', 'b@y.com']) };
+  assert.equal(evaluatePredicate(p, 'send_email', { to: 'a@x.com, b@y.com' }, ctx), true);
+  assert.equal(evaluatePredicate(p, 'send_email', { to: 'a@x.com, stranger@z.com' }, ctx), false);
+  assert.equal(evaluatePredicate(p, 'send_email', { to: '' }, ctx), false);
+});
+
+test('external_recipients: true is shorthand for { recipients: { field: to, not_in_contacts: true } }', () => {
+  const p = { tool_names: ['send_email'], external_recipients: true };
+  const ctx = { contactEmails: new Set(['known@corp.com']) };
+  assert.equal(evaluatePredicate(p, 'send_email', { to: 'unknown@x.com' }, ctx), true);
+  assert.equal(evaluatePredicate(p, 'send_email', { to: 'known@corp.com' }, ctx), false);
+});
+
+test('recipients accepts array OR comma-separated string', () => {
+  const p = { recipients: { field: 'to', not_in_contacts: true } };
+  const ctx = { contactEmails: new Set(['k@x.com']) };
+  assert.equal(evaluatePredicate(p, 'x', { to: ['k@x.com', 'u@y.com'] }, ctx), true);
+  assert.equal(evaluatePredicate(p, 'x', { to: 'k@x.com; u@y.com' }, ctx), true);
+  assert.equal(evaluatePredicate(p, 'x', { to: ['k@x.com'] }, ctx), false);
+});
+
+test('recipients normalizes "Name <email@host>" form', () => {
+  const p = { recipients: { field: 'to', not_in_contacts: true } };
+  const ctx = { contactEmails: new Set(['alice@x.com']) };
+  assert.equal(evaluatePredicate(p, 'x', { to: 'Alice Wonder <alice@x.com>' }, ctx), false);
+  assert.equal(evaluatePredicate(p, 'x', { to: '"Alice" <alice@x.com>, Bob <bob@y.com>' }, ctx), true);
+});
+
+test('recipients without context throws (forces context plumbing)', () => {
+  const p = { recipients: { field: 'to', not_in_contacts: true } };
+  assert.throws(
+    () => evaluatePredicate(p, 'send_email', { to: 'a@x.com' }, null),
+    /requires context.contactEmails/,
+  );
+});
+
+test('recipients without in_contacts/not_in_contacts throws', () => {
+  const p = { recipients: { field: 'to' } };
+  const ctx = { contactEmails: new Set() };
+  assert.throws(
+    () => evaluatePredicate(p, 'x', { to: 'a@x.com' }, ctx),
+    /must specify in_contacts or not_in_contacts/,
+  );
+});
+
+test('recipients defaults field to "to" when omitted', () => {
+  const p = { recipients: { not_in_contacts: true } };
+  const ctx = { contactEmails: new Set(['known@corp.com']) };
+  assert.equal(evaluatePredicate(p, 'x', { to: 'unknown@x.com' }, ctx), true);
+  assert.equal(evaluatePredicate(p, 'x', { to: 'known@corp.com' }, ctx), false);
+});
+
+test('reserved future keys list now: trust + rate (external_recipients removed)', () => {
+  // trust + rate still throw
+  assert.throws(() => evaluatePredicate({ trust: { lt: 0.6 } }, 'x', {}), /reserved/);
+  assert.throws(() => evaluatePredicate({ rate: { count: 1 } }, 'x', {}), /reserved/);
+  // external_recipients no longer throws — it's the Ext 5 shorthand now
+  const ctx = { contactEmails: new Set() };
+  assert.doesNotThrow(() => evaluatePredicate({ external_recipients: true }, 'x', { to: 'a@x.com' }, ctx));
+});
+
+test('getContactEmails returns empty Set with no userId', async () => {
+  const db = require('../db.cjs');
+  const s = await db.getContactEmails(null);
+  assert.ok(s instanceof Set);
+  assert.equal(s.size, 0);
 });
 
 // ── Performance: predicate evaluation stays well under budget ────────────
