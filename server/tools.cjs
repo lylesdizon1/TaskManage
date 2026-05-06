@@ -572,8 +572,8 @@ const ARIA_TOOLS = [
     name: 'bulk_archive_emails',
     group: 'communication',
     risk: 'high',
-    requires_confirmation: true,
-    description: 'Archive low-priority emails matching criteria (promotions / newsletters / social) for a single account. ALWAYS dry-run first and tell the user the count before re-running with dry_run:false. Capped at ~100 emails per category per call (300 max). older_than_hours must be >= 24 — recent inbox is never bulk-archived.',
+    requires_confirmation: false,
+    description: 'Archive low-priority emails matching criteria (promotions / newsletters / social) for a single account. ALWAYS dry-run first and tell the user the count. Then call dry_run:false. Server-enforced ceilings: ≤50 emails — autonomous (no confirmation needed) — set expected_count to the dry-run count to prove you checked; 51–250 emails — confirmation required (system gate fires the same WhatsApp 4-char / chat confirmation as send_email); >250 emails — REJECTED, server refuses regardless of confirmation; narrow the criteria or run smaller batches. older_than_hours must be ≥24 — recent inbox is never bulk-archived.',
     input_schema: {
       type: 'object',
       properties: {
@@ -587,7 +587,8 @@ const ARIA_TOOLS = [
             older_than_hours:    { type: 'number', description: 'Minimum age in hours. Server enforces a floor of 24h regardless of value provided.' },
           },
         },
-        dry_run: { type: 'boolean', description: 'Defaults true. Set false ONLY after presenting the dry-run count to the user and getting their go.' },
+        dry_run: { type: 'boolean', description: 'Defaults true. Set false ONLY after presenting the dry-run count to the user.' },
+        expected_count: { type: 'number', description: 'When dry_run:false, set to the count from your preceding dry_run. If ≤50, the call is autonomous; if absent or >50, the system gates with a confirmation card.' },
       },
       required: ['account_email', 'criteria'],
     },
@@ -729,12 +730,34 @@ function getToolSchemasForApi() {
   return [...functionTools, WEB_SEARCH_TOOL];
 }
 
-/** Resolve whether a tool requires user confirmation (server-authoritative). */
-function requiresConfirmation(toolName, llmDecision) {
+// Bulk-archive autonomy thresholds — server-authoritative.
+// ≤50 emails: autonomous (model self-reports expected_count)
+// 51–250:    confirmation required via the existing gate (WhatsApp 4-char / chat)
+// >250:      hard cap, refused inside the tool body regardless of confirmation
+const BULK_ARCHIVE_AUTONOMY_THRESHOLD = 50;
+const BULK_ARCHIVE_HARD_CAP = 250;
+
+/**
+ * Resolve whether a tool requires user confirmation (server-authoritative).
+ *
+ * Sources, highest precedence first:
+ *  1. ALWAYS_CONFIRM list (send_email, reply_email, delete_task, delete_event)
+ *  2. Tool-static `requires_confirmation: true` in ARIA_TOOLS
+ *  3. LLM-emitted `<decision>{requires_confirmation: true}</decision>`
+ *  4. Tool-specific dynamic gates (bulk_archive_emails count threshold)
+ */
+function requiresConfirmation(toolName, llmDecision, toolInput) {
   if (ALWAYS_CONFIRM.has(toolName)) return true;
   const tool = getToolByName(toolName);
   if (tool?.requires_confirmation) return true;
   if (llmDecision?.requires_confirmation === true) return true;
+  // bulk_archive_emails count gate. dry_run:true is read-only — never gated.
+  // dry_run:false with expected_count > threshold OR expected_count missing
+  // → require confirmation so a forgotten/lying expected_count fails closed.
+  if (toolName === 'bulk_archive_emails' && toolInput?.dry_run === false) {
+    const expected = Number.parseInt(toolInput?.expected_count, 10);
+    if (!Number.isFinite(expected) || expected > BULK_ARCHIVE_AUTONOMY_THRESHOLD) return true;
+  }
   return false;
 }
 
@@ -1715,9 +1738,36 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
           older_than_hours: Math.max(24, parseInt(criteria.older_than_hours, 10) || 24),
         };
         const { scanAndArchiveForAccount } = require('./lib/emailCleanRunner.cjs');
+        const isDryRun = dry_run !== false;
+
+        // Hard cap on real archives — even with confirmation, a single
+        // call cannot exceed BULK_ARCHIVE_HARD_CAP. Pre-flight a dry-run
+        // to know the count before committing. Only applies when actually
+        // archiving — explicit dry_run:true returns the count untouched.
+        if (!isDryRun) {
+          const preflight = await scanAndArchiveForAccount({
+            db, userId, accountEmail: account_email, criteria: safeCriteria,
+            dryRun: true,
+          });
+          const wouldArchive = preflight.would_archive || 0;
+          if (wouldArchive > BULK_ARCHIVE_HARD_CAP) {
+            console.warn('[bulk_archive] hard_cap_exceeded', { userId, requested: wouldArchive, hard_cap: BULK_ARCHIVE_HARD_CAP });
+            return {
+              success: false,
+              error: `Bulk archive would affect ${wouldArchive} emails — exceeds the per-call hard cap of ${BULK_ARCHIVE_HARD_CAP}. Narrow the criteria (older_than_hours, fewer categories) or run in smaller batches.`,
+              would_archive: wouldArchive,
+              hard_cap: BULK_ARCHIVE_HARD_CAP,
+              breakdown: preflight.breakdown,
+            };
+          }
+          if (wouldArchive > BULK_ARCHIVE_AUTONOMY_THRESHOLD) {
+            console.info('[bulk_archive] confirmation_required', { userId, requested: wouldArchive, threshold: BULK_ARCHIVE_AUTONOMY_THRESHOLD });
+          }
+        }
+
         const result = await scanAndArchiveForAccount({
           db, userId, accountEmail: account_email, criteria: safeCriteria,
-          dryRun: dry_run !== false, // default true
+          dryRun: isDryRun,
         });
         return { success: true, ...result, older_than_hours_applied: safeCriteria.older_than_hours };
       }

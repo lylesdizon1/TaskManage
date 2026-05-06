@@ -393,7 +393,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         }
 
         const engineWantsConfirm = engineDisposition === 'confirm_required' || engineDisposition === 'soft_confirm';
-        const toolWantsConfirm = requiresConfirmation(tool, decision);
+        const toolWantsConfirm = requiresConfirmation(tool, decision, input);
         if (!engineWantsConfirm && !toolWantsConfirm) {
           if (engineDecisionId) {
             closeDecisionWithFeedback({

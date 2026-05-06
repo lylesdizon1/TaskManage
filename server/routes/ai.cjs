@@ -437,7 +437,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         }
 
         const engineWantsConfirm = engineDisposition === 'confirm_required' || engineDisposition === 'soft_confirm';
-        const toolWantsConfirm = requiresConfirmation(tool, decision);
+        const toolWantsConfirm = requiresConfirmation(tool, decision, input);
         if (!engineWantsConfirm && !toolWantsConfirm) {
           if (engineDecisionId) {
             // auto_proceed path — 'executed' carries no trust signal
