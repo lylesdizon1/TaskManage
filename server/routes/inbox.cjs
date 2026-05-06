@@ -299,6 +299,24 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
               if (updates.category) { sets.push(`category = $${idx}`); vals.push(updates.category); idx++; }
               if (updates.entityId !== undefined) { sets.push(`entity_id = $${idx}`); vals.push(updates.entityId); idx++; }
               if (sets.length) {
+                // Replace classification_reasoning with a fresh blob that
+                // honestly reflects this as a user_correction event under
+                // the current classifier version. Without this, a v1.3 row
+                // corrected today would bump classified_at to NOW() while
+                // still wearing its v1.3 stamp — staleness invisible to
+                // both audits and the staleClassificationSweep cron, which
+                // keys off classifier_version.
+                const newReasoning = {
+                  source: 'user_correction',
+                  classifier_version: CLASSIFIER_VERSION,
+                  matched_patterns: ['user_correction:thumbs_down'],
+                  corrections,
+                };
+                if (updates.category) newReasoning.category = updates.category;
+                if (updates.importance) newReasoning.importance = updates.importance;
+                sets.push(`classification_reasoning = $${idx}::jsonb`);
+                vals.push(JSON.stringify(newReasoning));
+                idx++;
                 await db.pool.query(
                   `UPDATE email_classifications SET ${sets.join(', ')}, classified_at = NOW()
                    WHERE user_id = $1 AND message_id = $2`,

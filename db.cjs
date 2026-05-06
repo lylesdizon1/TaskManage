@@ -1790,6 +1790,14 @@ async function getClassification(userId, messageId) {
 }
 
 async function upsertClassification(userId, d) {
+  // Contract: every write through this helper MUST carry a fresh
+  // classification_reasoning blob (which includes classifier_version).
+  // The previous COALESCE behavior preserved the old blob on null —
+  // a silent trapdoor that left rows wearing stale version stamps if a
+  // future caller forgot to provide reasoning. Fail loud at write time.
+  if (d == null || d.classificationReasoning == null) {
+    throw new Error('upsertClassification requires classificationReasoning');
+  }
   const rank = _importanceRank(d.importance);
   const { rows } = await pool.query(
     `INSERT INTO email_classifications
@@ -1811,7 +1819,7 @@ async function upsertClassification(userId, d) {
        vendor = EXCLUDED.vendor,
        summary = EXCLUDED.summary,
        source = EXCLUDED.source,
-       classification_reasoning = COALESCE(EXCLUDED.classification_reasoning, email_classifications.classification_reasoning),
+       classification_reasoning = EXCLUDED.classification_reasoning,
        classified_at = NOW()
      RETURNING id, user_id AS "userId", message_id AS "messageId", thread_id AS "threadId",
                account_email AS "accountEmail", entity_id AS "entityId",
