@@ -313,10 +313,15 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
   let riskScore = null;
 
   try {
-    // Pull rules + trust in parallel. getCachedRules hits Redis first.
-    const [bundle, ts] = await Promise.all([
+    // Pull rules + trust + trust-floor threshold in parallel.
+    // getCachedRules hits Redis first; the other two are single indexed
+    // queries (~ms each on cold path; cached at the connection pool).
+    const [bundle, ts, trustFloor] = await Promise.all([
       getCachedRules(userId).catch(() => ({ explicit: [], inferred: [] })),
       db.getTrustScore(userId, toolName).catch(() => null),
+      db.getTrustFloorThreshold
+        ? db.getTrustFloorThreshold(userId).catch(() => 0.3)
+        : Promise.resolve(0.3),
     ]);
     trust = ts;
     const explicit = (bundle?.explicit || []).filter((p) => p.isActive !== false && p.preferenceType);
@@ -445,12 +450,16 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     }
 
     // Tier 5 — trust score floor. Even with no rule conflicts, if the
-    // user has corrected this action recently, trust can fall below 0.3
-    // and we surface friction.
-    if (disposition === 'auto_proceed' && trust && Number(trust.trustScore) < 0.3) {
+    // user has corrected this action recently, trust can fall below the
+    // configured floor and we surface friction. Threshold is per-user
+    // tunable via user_preferences_v2 ('trust_floor_threshold' key);
+    // defaults to 0.3 when unset (Extension 3 of engine-extensions
+    // workstream — paranoid users can raise to 0.7+, autonomous users
+    // can lower further or keep default).
+    if (disposition === 'auto_proceed' && trust && Number(trust.trustScore) < trustFloor) {
       disposition = 'confirm_required';
       conflictLevel = 'low_trust';
-      reason = `I want to confirm before ${toolName.replace(/_/g, ' ')} — your trust score for this action is low.`;
+      reason = `I want to confirm before ${toolName.replace(/_/g, ' ')} — your trust score for this action (${Number(trust.trustScore).toFixed(2)}) is below your floor of ${trustFloor.toFixed(2)}.`;
     }
 
     // Compute confidence + risk scores for the audit row.

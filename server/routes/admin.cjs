@@ -560,6 +560,37 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  // ── Trust-floor threshold (Ext 3 of engine-extensions workstream) ───────
+  // GET /api/admin/aria-health/trust-floor?userId=<id>
+  // POST /api/admin/aria-health/trust-floor   body: { userId, threshold }
+  // Threshold is a number in [0, 1] stored in user_preferences_v2.
+  // decisionEngine Tier 5 reads it at evaluate-time; default 0.3 when unset.
+  router.get('/api/admin/aria-health/trust-floor', async (req, res) => {
+    try {
+      const userId = req.query.userId ? String(req.query.userId) : null;
+      if (!userId) return res.status(400).json({ error: 'userId query param required' });
+      const threshold = await db.getTrustFloorThreshold(userId);
+      const isDefault = threshold === db.DEFAULT_TRUST_FLOOR_THRESHOLD;
+      res.json({ userId, threshold, default: db.DEFAULT_TRUST_FLOOR_THRESHOLD, is_default: isDefault });
+    } catch (err) {
+      logger.error('admin.trustFloor.get.failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/admin/aria-health/trust-floor', async (req, res) => {
+    try {
+      const { userId, threshold } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId required in body' });
+      const row = await db.setTrustFloorThreshold(userId, threshold);
+      logger.info('admin.trustFloor.set', { triggeredBy: req.user.id, userId, threshold });
+      res.json({ userId, threshold: Number(row.preferenceValue), updated_at: row.updatedAt });
+    } catch (err) {
+      logger.error('admin.trustFloor.set.failed', { error: err.message });
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ── Stale classification sweep — manual trigger ─────────────────────────
   // Fires the same sweep that runs at 4am UTC daily. Useful right after
   // a CLASSIFIER_VERSION bump to drop the critical_email_unacked tile

@@ -3713,6 +3713,37 @@ async function getAllPreferences(userId) {
   return rows;
 }
 
+// ── Trust-floor threshold (decisionEngine extensions v1, ext 3) ──────────
+// Per-user tunable replacement for the previously-hardcoded 0.3 in the
+// engine's Tier 5 trust-floor check. Stored as a JSON number value under
+// the 'trust_floor_threshold' key in user_preferences_v2. Defaults to
+// 0.3 when unset — preserves prior behavior for users who haven't
+// explicitly tuned. Clamped to [0, 1] on read so a malformed value
+// can't escape the trust_score domain.
+const DEFAULT_TRUST_FLOOR_THRESHOLD = 0.3;
+
+async function getTrustFloorThreshold(userId) {
+  if (!userId) return DEFAULT_TRUST_FLOOR_THRESHOLD;
+  try {
+    const row = await getPreference(userId, 'trust_floor_threshold');
+    if (!row || row.preferenceValue == null) return DEFAULT_TRUST_FLOOR_THRESHOLD;
+    const n = Number(row.preferenceValue);
+    if (!Number.isFinite(n)) return DEFAULT_TRUST_FLOOR_THRESHOLD;
+    return Math.max(0, Math.min(1, n));
+  } catch {
+    return DEFAULT_TRUST_FLOOR_THRESHOLD;
+  }
+}
+
+async function setTrustFloorThreshold(userId, threshold) {
+  if (!userId) throw new Error('setTrustFloorThreshold requires userId');
+  const n = Number(threshold);
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
+    throw new Error(`Invalid threshold ${threshold} — must be a finite number in [0, 1]`);
+  }
+  return setPreference(userId, 'trust_floor_threshold', n, 'explicit');
+}
+
 // ── decision_log ──
 
 /**
@@ -9259,6 +9290,9 @@ module.exports = {
   setPreference,
   getPreference,
   getAllPreferences,
+  getTrustFloorThreshold,
+  setTrustFloorThreshold,
+  DEFAULT_TRUST_FLOOR_THRESHOLD,
   logDecision,
   getDecisionHistory,
   getAdminDecisions,

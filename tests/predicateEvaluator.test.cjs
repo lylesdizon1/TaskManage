@@ -256,6 +256,28 @@ test('conflictsWithAction isolates predicate errors per-rule, increments counter
   assert.match(after.lastErrors[0].error, /no_such_op/);
 });
 
+// ── Extension 3: trust-floor threshold helper ─────────────────────────────
+test('getTrustFloorThreshold defaults to 0.3 with no userId', async () => {
+  const db = require('../db.cjs');
+  // Skip the live-DB section; the no-userId path is pure defaulting.
+  const t = await db.getTrustFloorThreshold(null);
+  assert.equal(t, 0.3);
+});
+
+test('DEFAULT_TRUST_FLOOR_THRESHOLD constant is 0.3', () => {
+  const db = require('../db.cjs');
+  assert.equal(db.DEFAULT_TRUST_FLOOR_THRESHOLD, 0.3);
+});
+
+test('setTrustFloorThreshold rejects out-of-range values', async () => {
+  const db = require('../db.cjs');
+  await assert.rejects(() => db.setTrustFloorThreshold('any-user', -0.1), /Invalid threshold/);
+  await assert.rejects(() => db.setTrustFloorThreshold('any-user', 1.5), /Invalid threshold/);
+  await assert.rejects(() => db.setTrustFloorThreshold('any-user', 'abc'), /Invalid threshold/);
+  await assert.rejects(() => db.setTrustFloorThreshold('any-user', NaN), /Invalid threshold/);
+  await assert.rejects(() => db.setTrustFloorThreshold(null, 0.5), /requires userId/);
+});
+
 // ── Performance: predicate evaluation stays well under budget ────────────
 test('1000 evaluations of a 5-deep nested predicate complete in <50ms', () => {
   const p = {
