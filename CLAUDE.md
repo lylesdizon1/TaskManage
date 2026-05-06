@@ -216,5 +216,6 @@ Full spec: /docs/design-system.md
 - docs/cc-projects-integration-spec.md — Command Center integration spec for projects. Context builder blocks, draft tiles, still open integration, morning brief updates. (Ray, Apr 14)
 - docs/aria-health-audit-2026-05-05.md — 5-phase Aria intelligence audit + overnight ship log. Trust-loop break, close-loop producer gap, classifier-version inventory, fixes shipped 2026-05-05/06. (Claude + Lyle, May 5-6)
 - docs/decisionEngine-extensions-v1.md — Workstream spec for 5 engine extensions (input plumbing, predicate language, trust-floor parameterization, rate limiting, contact-list join). Blocks foundational guardrail authoring AND Phase 2 capability work (aria@ mailbox, research agents, rule-proposal flow). (Claude + Lyle, May 6)
+- docs/aria-mailbox-spec-v1.md — V1 spec for aria@dizon.ai as a first-class email participant. Schema changes, tool surface, autonomy contract (always-confirm outbound), 9-step implementation plan, V2 hooks. Multi-day implementation; engine prerequisites (Ext 1-5 + rule-proposal flow) shipped same session. (Claude + Lyle, May 6)
 
 These documents are the source of truth for system design decisions. Read before making architectural changes.
