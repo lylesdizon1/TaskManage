@@ -49,6 +49,10 @@ function _safeParseJson(text) {
 }
 
 // ── 1. Pure rule matcher ───────────────────────────────────────────────────
+// Returns { rule, signals } when a rule matches, null otherwise. `signals`
+// is the list of sub-conditions inside the rule that tripped — surfaces
+// which primitive (subject/from/body) actually caught the email so the
+// reasoning blob can attribute past the rule name.
 function matchClassificationRule(rules, { from, subject, body }) {
   if (!Array.isArray(rules) || !rules.length) return null;
   const f = _norm(from);
@@ -59,23 +63,32 @@ function matchClassificationRule(rules, { from, subject, body }) {
     if (!rule || rule.active === false) continue;
     const c = rule.conditions || {};
     const checks = [];
+    const hits = [];
 
     if (Array.isArray(c.from_domains) && c.from_domains.length) {
-      checks.push(c.from_domains.some(d => f.includes(_norm(d))));
+      const hit = c.from_domains.find(d => f.includes(_norm(d)));
+      checks.push(!!hit);
+      if (hit) hits.push(`rule_from_domain:${_norm(hit)}`);
     }
     if (Array.isArray(c.from_emails) && c.from_emails.length) {
-      checks.push(c.from_emails.some(e => f === _norm(e) || f.includes(_norm(e))));
+      const hit = c.from_emails.find(e => f === _norm(e) || f.includes(_norm(e)));
+      checks.push(!!hit);
+      if (hit) hits.push(`rule_from_email:${_norm(hit)}`);
     }
     if (Array.isArray(c.subject_contains) && c.subject_contains.length) {
-      checks.push(c.subject_contains.some(k => s.includes(_norm(k))));
+      const hit = c.subject_contains.find(k => s.includes(_norm(k)));
+      checks.push(!!hit);
+      if (hit) hits.push(`rule_subject_contains:${_norm(hit)}`);
     }
     if (Array.isArray(c.body_contains) && c.body_contains.length) {
-      checks.push(c.body_contains.some(k => b.includes(_norm(k))));
+      const hit = c.body_contains.find(k => b.includes(_norm(k)));
+      checks.push(!!hit);
+      if (hit) hits.push(`rule_body_contains:${_norm(hit)}`);
     }
     if (!checks.length) continue; // no conditions = not a valid rule to match
 
     const passed = c.any_of ? checks.some(Boolean) : checks.every(Boolean);
-    if (passed) return rule;
+    if (passed) return { rule, signals: hits };
   }
   return null;
 }
@@ -188,7 +201,7 @@ const FRESHNESS_MS = 24 * 60 * 60 * 1000;
 // reasoning.classifier_version differs are treated as cache misses so the
 // new logic re-decides them on next sight. Keep `classifier_version` in
 // the reasoning blob below in sync with this constant.
-const CLASSIFIER_VERSION = 'v1.4';
+const CLASSIFIER_VERSION = 'v1.5';
 
 // Gmail system label → (importance, category) mapping. Match is short-
 // circuit: if any label hits, we skip heuristics and AI entirely.
@@ -226,17 +239,22 @@ function _matchLabel(labelIds) {
   return null;
 }
 
-function _matchBulkHeuristic({ from, subject, body, headers }) {
-  if (_findHeader(headers, 'list-unsubscribe')) return 'list_unsubscribe';
-  if (_findHeader(headers, 'list-id')) return 'list_id';
+// Returns the full list of bulk/promo primitives that match — no
+// short-circuit. Drives both classification (any non-empty result =
+// newsletter/low) and signal-level telemetry. Order matches detection
+// strength: header signals first, then sender, subject, body.
+function _detectBulkSignals({ from, subject, body, headers }) {
+  const out = [];
+  if (_findHeader(headers, 'list-unsubscribe')) out.push('list_unsubscribe');
+  if (_findHeader(headers, 'list-id')) out.push('list_id');
   const precedence = _findHeader(headers, 'precedence');
-  if (precedence && /\b(bulk|list|junk)\b/i.test(precedence)) return 'precedence_bulk';
+  if (precedence && /\b(bulk|list|junk)\b/i.test(precedence)) out.push('precedence_bulk');
   const fromLower = String(from || '').toLowerCase();
-  if (BULK_PATTERNS.some(p => fromLower.includes(p))) return 'bulk_sender';
-  if (subject && PROMO_SUBJECT_RE.test(subject)) return 'promo_subject';
+  if (BULK_PATTERNS.some(p => fromLower.includes(p))) out.push('bulk_sender');
+  if (subject && PROMO_SUBJECT_RE.test(subject)) out.push('promo_subject');
   const b = String(body || '').toLowerCase();
-  if (b.includes('unsubscribe') && b.includes('email preferences')) return 'unsubscribe_body';
-  return null;
+  if (b.includes('unsubscribe') && b.includes('email preferences')) out.push('unsubscribe_body');
+  return out;
 }
 
 async function classifyEmail({ userId, messageId, threadId, accountEmail, from, subject, body, isRead, labelIds, headers, db, anthropicClient }) {
@@ -252,7 +270,16 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     }
 
     const rules = await db.getRules(userId).catch(() => []);
-    const matched = matchClassificationRule(rules, { from, subject, body });
+    const matchResult = matchClassificationRule(rules, { from, subject, body });
+    const matched = matchResult?.rule || null;
+    const ruleSignals = matchResult?.signals || [];
+
+    // Always probe label + bulk signals so signal-level attribution is
+    // complete even when a rule short-circuits the heuristic resolution
+    // path. Cheap (regex/string only, no API) and pure read on already-
+    // loaded headers/subject/body.
+    const probeLabel = _matchLabel(labelIds);
+    const probeBulkSignals = _detectBulkSignals({ from, subject, body, headers });
 
     let entityId = null;
     let category = 'general';
@@ -264,6 +291,9 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     let summary = null;
     let source = 'rule';
     const matchedPatterns = [];
+    const signalsFired = [...ruleSignals];
+    if (probeLabel) signalsFired.push(`gmail_label:${probeLabel.id}`);
+    signalsFired.push(...probeBulkSignals);
 
     let resolved = false;
 
@@ -289,27 +319,21 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     }
 
     // Step 3 — Gmail system label mapping. Short-circuits AI.
-    if (!resolved) {
-      const label = _matchLabel(labelIds);
-      if (label) {
-        category = label.category;
-        importance = label.importance;
-        source = 'label';
-        resolved = true;
-        matchedPatterns.push(`gmail_label: ${label.id}`);
-      }
+    if (!resolved && probeLabel) {
+      category = probeLabel.category;
+      importance = probeLabel.importance;
+      source = 'label';
+      resolved = true;
+      matchedPatterns.push(`gmail_label: ${probeLabel.id}`);
     }
 
     // Step 4 — sender heuristics (bulk / newsletter signals).
-    if (!resolved) {
-      const bulkMatch = _matchBulkHeuristic({ from, subject, body, headers });
-      if (bulkMatch) {
-        category = 'newsletter';
-        importance = 'low';
-        source = 'heuristic';
-        resolved = true;
-        matchedPatterns.push(`heuristic: ${bulkMatch}`);
-      }
+    if (!resolved && probeBulkSignals.length) {
+      category = 'newsletter';
+      importance = 'low';
+      source = 'heuristic';
+      resolved = true;
+      matchedPatterns.push(`heuristic: ${probeBulkSignals[0]}`);
     }
 
     // Step 5 — AI fallback (only if nothing above matched).
@@ -329,6 +353,8 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
         matchedPatterns.push('ai_classifier: haiku');
         if (ai.entity) matchedPatterns.push(`ai_entity: ${ai.entity}`);
         if (ai.amount != null) matchedPatterns.push(`ai_amount: ${ai.amount}`);
+        signalsFired.push('ai_classification');
+        if (ai.entity) signalsFired.push(`ai_entity:${ai.entity}`);
       }
     }
 
@@ -367,12 +393,26 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
       }
     } catch { /* suppress lookup failure → proceed with original classification */ }
 
+    // Invariant: a low-importance newsletter is never action-required.
+    // Promo subjects ("Final Hours", "Ends soon") trick the financial-
+    // extraction Haiku into returning action_required=true on rules with
+    // extract_amount enabled (myQ "50% Off" trace, May 3 2026). Clamp
+    // here so downstream agentic readers (morning brief, narration
+    // counts) see a consistent flag regardless of which path resolved.
+    if (importance === 'low' && category === 'newsletter') {
+      actionRequired = false;
+    }
+
+    // Dedupe signals_fired while preserving insertion order.
+    const uniqueSignals = Array.from(new Set(signalsFired));
+
     // Build reasoning snapshot for the "Why?" surface
     const classificationReasoning = {
       source,
       category,
       importance,
       matched_patterns: [...matchedPatterns, ...suppressedDims],
+      signals_fired: uniqueSignals,
       has_confirmation_code: _hasConfirmationCode(subject, body),
       classifier_version: CLASSIFIER_VERSION,
       suppressed: suppressedDims.length > 0 ? suppressedDims : undefined,
