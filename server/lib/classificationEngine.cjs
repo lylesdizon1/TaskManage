@@ -470,6 +470,18 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
           await db.flagInboxItem(rows[0].id, userId, flagReason);
           logger.info('classifyEmail.autoFlagged', { userId, threadId, reason: flagReason });
         }
+      } else if (db.unflagAutoFlaggedBySourceId) {
+        // Auto-unflag-on-demote — when reclassification drops a row out
+        // of auto-flag eligibility (e.g. v1.5 demotes a Hubstaff weekly
+        // from critical/alert → low/newsletter), clear the stale auto-
+        // flag. Without this, the flag set at first classification
+        // outlives every demotion and the critical_email_unacked tile
+        // overcounts. Manual flags + already-acked flags are preserved
+        // by the helper's WHERE clause.
+        const cleared = await db.unflagAutoFlaggedBySourceId(userId, threadId);
+        if (cleared) {
+          logger.info('classifyEmail.autoUnflagged', { userId, threadId, reason: 'demoted_below_threshold' });
+        }
       }
     } catch (autoFlagErr) {
       // Fire-and-forget — never break classification for flag failure

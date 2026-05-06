@@ -3244,6 +3244,35 @@ async function unflagInboxItem(id, userId) {
   return result.rowCount > 0;
 }
 
+/**
+ * Auto-unflag-on-demote — clears stale auto-flags when the current
+ * classification no longer meets auto-flag thresholds. Called from
+ * classifyEmail when shouldAutoFlag evaluates false on a re-classify.
+ *
+ * Only clears flags whose flagged_reason is one of the auto-flag
+ * sources ('financial', 'aria_decision', 'confirmation_code'). Manual
+ * flags ('manual') are NEVER cleared — user explicitly flagged.
+ *
+ * Already-acked flags (flagged_acked_at IS NOT NULL) are also skipped:
+ * they're history, no triage queue impact, no point churning the row.
+ *
+ * Returns true if a row was unflagged, false otherwise.
+ */
+async function unflagAutoFlaggedBySourceId(userId, sourceId) {
+  if (!userId || !sourceId) return false;
+  const result = await pool.query(
+    `UPDATE inbox_items
+        SET flagged_at = NULL, flagged_reason = NULL
+      WHERE user_id = $1
+        AND source_id = $2
+        AND flagged_at IS NOT NULL
+        AND flagged_acked_at IS NULL
+        AND flagged_reason IN ('financial', 'aria_decision', 'confirmation_code')`,
+    [userId, sourceId],
+  );
+  return result.rowCount > 0;
+}
+
 async function ackInboxItem(id, userId) {
   if (!userId) throw new Error('ackInboxItem requires userId');
   const result = await pool.query(
@@ -9189,6 +9218,7 @@ module.exports = {
   updateInboxItemAction,
   flagInboxItem,
   unflagInboxItem,
+  unflagAutoFlaggedBySourceId,
   ackInboxItem,
   unackInboxItem,
   getFlaggedInboxItems,
