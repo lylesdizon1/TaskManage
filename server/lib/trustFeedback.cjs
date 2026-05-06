@@ -48,20 +48,20 @@ async function closeDecisionWithFeedback({ userId, decisionId, outcome, actionTy
   }
 
   // For rejections (and explicit corrections), check if the user has
-  // hit the threshold for materialising a behavior_rule. We only
-  // generate ONCE per (user, action_type) pattern — markCorrectionsProcessed
-  // flips generated_rule_id so subsequent counts return 0 until the user
-  // corrects in a different way.
-  let ruleGenerated = null;
+  // hit the threshold for proposing a behavior_rule. We only propose
+  // ONCE per (user, action_type) pattern — markCorrectionsProcessed
+  // stamps the contributing correction_events so subsequent counts
+  // return 0 until the user corrects in a different way.
+  let ruleProposed = null;
   if (outcome === 'rejected' || outcome === 'corrected') {
     try {
-      ruleGenerated = await maybeGenerateCorrectionRule({
+      ruleProposed = await maybeProposeCorrectionRule({
         userId, actionType, decisionId, contextSummary,
       });
     } catch (err) {
-      // Rule-generation failure shouldn't roll back the trust update;
+      // Proposal-creation failure shouldn't roll back the trust update;
       // the next correction will retry the threshold check.
-      logger.warn('trustFeedback.ruleGen.failed', {
+      logger.warn('trustFeedback.proposalGen.failed', {
         userId, actionType, error: err.message,
       });
     }
@@ -70,23 +70,33 @@ async function closeDecisionWithFeedback({ userId, decisionId, outcome, actionTy
   logger.info('trustFeedback.applied', {
     userId, decisionId, outcome, actionType,
     trustScore: result.trustRow?.trustScore,
-    ruleGenerated: ruleGenerated || undefined,
+    ruleProposed: ruleProposed || undefined,
   });
 
-  return { ok: true, trust: result.trustRow, ruleGenerated };
+  return { ok: true, trust: result.trustRow, ruleProposed };
 }
 
 /**
  * If the user has rejected this action_type CORRECTION_THRESHOLD+ times
- * without a generated rule yet, materialise a behavior_rule from the
- * pattern. Returns the new rule id or null if no rule was created.
+ * without a generated rule yet, propose a behavior_rule from the
+ * pattern. Returns { proposalId, alreadyProposed } or null.
  *
- * Phase 4 minimum-viable shape: rule_text is "User rejected
- * {action_type} {N} times — confirm before retrying", strength=0.3,
- * source='inferred'. The next reject doesn't double-up because we
- * also mark corrections processed.
+ * Phase 2 capability — rule-proposal flow. Previously this materialized
+ * the rule directly into behavior_rules with strength=0.3. Now it goes
+ * through rule_proposals (pending) so the user reviews via admin
+ * endpoint or future Aria tool before the rule becomes active. The
+ * proposal carries a structured `predicate` with tool_names: [actionType]
+ * + preference_type=ask_first so when accepted it goes through Tier 2
+ * (real friction) rather than the prompt-text-only Tier (the prior
+ * strength=0.3 path).
+ *
+ * Idempotency: the prior implementation called markCorrectionsProcessed
+ * after writing the rule so subsequent rejections didn't duplicate. We
+ * preserve that contract — proposals stamp the correction_events the
+ * same way. A subsequent rejection in the same pattern starts a fresh
+ * proposal counter.
  */
-async function maybeGenerateCorrectionRule({ userId, actionType, decisionId, contextSummary }) {
+async function maybeProposeCorrectionRule({ userId, actionType, decisionId, contextSummary }) {
   if (!actionType) return null;
 
   // First log a correction_event for THIS rejection so the count
@@ -103,30 +113,73 @@ async function maybeGenerateCorrectionRule({ userId, actionType, decisionId, con
   const pending = await db.countPendingCorrections(userId, actionType);
   if (pending < CORRECTION_THRESHOLD) return null;
 
-  // Materialise the pattern as a behavior_rule. Mid-strength (0.3) so it
-  // surfaces in the system prompt but doesn't immediately hard-stop;
-  // user can /strengthen via set_preference if they want it firmer.
-  const ruleRow = await db.upsertBehaviorRule(userId, {
-    ruleType: 'constraint',
-    triggerContext: actionType,
-    ruleText: `User has rejected ${actionType} ${pending} times in recent history — confirm before re-attempting.`,
+  // Build the proposed rule. Uses Ext 2's predicate language so the
+  // accepted rule fires deterministically on the action_type — no
+  // reliance on keyword matching against rule_text.
+  const proposedRule = {
+    ruleType: 'preference',
+    ruleText: `You've rejected ${actionType} ${pending} times in recent history. Confirm before this action runs autonomously.`,
     source: 'inferred',
-    strength: 0.3,
+    strength: 0.5,                         // mid-strength; lands in Tier 2 via ask_first
+    category: _toolCategory(actionType),
+    preferenceType: 'ask_first',
+    predicate: {
+      tool_names: [actionType],
+    },
+    triggerContext: actionType,
+  };
+
+  let proposalRow = null;
+  try {
+    proposalRow = await db.createRuleProposal(userId, {
+      proposed_rule: proposedRule,
+      reasoning: `Trust loop detected ${pending} rejections of ${actionType} without a rule covering it yet.`,
+      source: 'correction_pattern',
+      trigger_data: {
+        action_type: actionType,
+        rejection_count: pending,
+        latest_decision_id: decisionId || null,
+      },
+    });
+  } catch (err) {
+    logger.warn('trustFeedback.proposal.create.failed', { userId, actionType, error: err.message });
+    return null;
+  }
+  if (!proposalRow?.id) return null;
+
+  // Stamp all the contributing correction_events with the proposal id so
+  // we don't re-propose on the next rejection in this same pattern.
+  // markCorrectionsProcessed expects an INT (behavior_rule.id) historically,
+  // but works fine with the proposal id since the column is just an audit
+  // pointer — accepts any non-null value.
+  await db.markCorrectionsProcessed(userId, actionType, proposalRow.id).catch(() => {});
+
+  logger.info('trustFeedback.proposal.created', {
+    userId, actionType, proposalId: proposalRow.id, fromCorrections: pending,
   });
-  if (!ruleRow?.id) return null;
-
-  // Drop the rule cache so the next chat turn picks up the new constraint.
-  await invalidateRulesCache(userId).catch(() => {});
-
-  // Stamp all the contributing correction_events so we don't re-generate
-  // on the next rejection.
-  await db.markCorrectionsProcessed(userId, actionType, ruleRow.id).catch(() => {});
-
-  logger.info('trustFeedback.rule.generated', {
-    userId, actionType, ruleId: ruleRow.id, fromCorrections: pending,
-  });
-  return ruleRow.id;
+  return proposalRow.id;
 }
+
+// Map action_type → preference category for the proposed rule's category
+// field. Best-effort mapping; falls back to 'general' for unknown tools.
+const _ACTION_TO_CATEGORY = {
+  delete_task: 'tasks', complete_task: 'tasks', create_task: 'tasks', update_task: 'tasks',
+  close_task_with_note: 'tasks',
+  create_event: 'calendar', update_event: 'calendar', delete_event: 'calendar',
+  add_event_outcome_note: 'calendar',
+  archive_email: 'email', bulk_archive_emails: 'email',
+  mark_email_read: 'email', move_email: 'email', star_email: 'email',
+  send_email: 'communication', reply_email: 'communication',
+  grant_shared_access: 'communication',
+  create_contact: 'general', update_contact: 'general',
+  create_note: 'general', update_note: 'general',
+};
+function _toolCategory(actionType) {
+  return _ACTION_TO_CATEGORY[actionType] || 'general';
+}
+
+// Backward-compat alias — closeDecisionWithFeedback still calls this name.
+const maybeGenerateCorrectionRule = maybeProposeCorrectionRule;
 
 module.exports = {
   closeDecisionWithFeedback,

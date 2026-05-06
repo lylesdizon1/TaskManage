@@ -3822,6 +3822,181 @@ async function countAutonomousActions(userId, windowMinutes = RATE_LIMIT_WINDOW_
 // Set rather than Array because the engine does many membership checks
 // per evaluation. Failure-soft: returns empty Set on query error so the
 // calling rule can decide to fail-closed via predicate semantics.
+// ── rule_proposals (rule-proposal flow, Phase 2 capability) ──────────────
+// Staged behavior_rule suggestions. The trust loop's correction-pattern
+// detector writes here instead of to behavior_rules directly; users review
+// via admin endpoint or Aria tool and either accept (materialize the rule)
+// or reject (dismiss). Default expiry is 30 days from creation.
+const RULE_PROPOSAL_EXPIRY_DAYS = 30;
+
+/**
+ * Create a pending rule proposal. proposed_rule is the full shape that
+ * would be passed to behavior_rules at accept time — supports the Ext 2
+ * predicate language alongside the legacy keyword fields. Detection
+ * heuristics live in trustFeedback / ruleEngine; this helper just stores.
+ *
+ * Idempotency: callers (e.g. trustFeedback) are responsible for not
+ * proposing the same pattern twice. Detection paths use markCorrections-
+ * Processed to stamp the source events when a proposal is created so a
+ * subsequent rejection in the same pattern doesn't double-propose.
+ */
+async function createRuleProposal(userId, { proposed_rule, reasoning, source, trigger_data, expiresAt } = {}) {
+  if (!userId) throw new Error('createRuleProposal requires userId');
+  if (!proposed_rule || typeof proposed_rule !== 'object') {
+    throw new Error('createRuleProposal requires proposed_rule object');
+  }
+  if (!proposed_rule.ruleText || typeof proposed_rule.ruleText !== 'string') {
+    throw new Error('proposed_rule.ruleText required (non-empty string)');
+  }
+  const exp = expiresAt instanceof Date
+    ? expiresAt.toISOString()
+    : (typeof expiresAt === 'string' ? expiresAt : new Date(Date.now() + RULE_PROPOSAL_EXPIRY_DAYS * 24 * 3600 * 1000).toISOString());
+  const { rows } = await pool.query(
+    `INSERT INTO rule_proposals
+       (user_id, proposed_rule, reasoning, source, trigger_data, expires_at)
+     VALUES ($1, $2::jsonb, $3, $4, $5::jsonb, $6)
+     RETURNING id, user_id AS "userId", proposed_rule AS "proposedRule",
+               reasoning, source, trigger_data AS "triggerData",
+               status, applied_rule_id AS "appliedRuleId",
+               created_at AS "createdAt", reviewed_at AS "reviewedAt",
+               reviewed_by AS "reviewedBy", expires_at AS "expiresAt"`,
+    [
+      userId,
+      JSON.stringify(proposed_rule),
+      reasoning || null,
+      source || 'correction_pattern',
+      trigger_data ? JSON.stringify(trigger_data) : null,
+      exp,
+    ],
+  );
+  return rows[0] || null;
+}
+
+async function listRuleProposals(userId, { status = 'pending', limit = 50 } = {}) {
+  if (!userId) return [];
+  // Lazily expire proposals past their expires_at on each list call so
+  // the pending bucket stays clean without a separate cron.
+  await pool.query(
+    `UPDATE rule_proposals
+        SET status = 'expired'
+      WHERE user_id = $1 AND status = 'pending' AND expires_at < NOW()`,
+    [userId],
+  ).catch(() => { /* don't fail the list on cleanup error */ });
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", proposed_rule AS "proposedRule",
+            reasoning, source, trigger_data AS "triggerData",
+            status, applied_rule_id AS "appliedRuleId",
+            created_at AS "createdAt", reviewed_at AS "reviewedAt",
+            reviewed_by AS "reviewedBy", expires_at AS "expiresAt"
+       FROM rule_proposals
+      WHERE user_id = $1
+        AND ($2::text IS NULL OR status = $2)
+      ORDER BY created_at DESC
+      LIMIT $3`,
+    [userId, status === 'all' ? null : status, Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200)],
+  );
+  return rows;
+}
+
+/**
+ * Atomic accept: materializes the proposed_rule as a behavior_rule row,
+ * then marks the proposal accepted with a link to the resulting rule id.
+ * Supports the full rule shape including predicate, category, and
+ * preference_type — the proposal generator decides what to populate.
+ *
+ * Returns { proposal, rule } on success. Throws on unknown proposal id,
+ * non-pending status, or behavior_rule insert failure.
+ */
+async function acceptRuleProposal(proposalId, userId, reviewedBy = null) {
+  if (!proposalId || !userId) throw new Error('acceptRuleProposal requires proposalId + userId');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: pRows } = await client.query(
+      `SELECT id, user_id, proposed_rule, status
+         FROM rule_proposals
+        WHERE id = $1 AND user_id = $2
+        FOR UPDATE`,
+      [proposalId, userId],
+    );
+    if (!pRows[0]) throw new Error(`proposal not found: ${proposalId}`);
+    if (pRows[0].status !== 'pending') {
+      throw new Error(`proposal status is "${pRows[0].status}" — only pending proposals can be accepted`);
+    }
+    const proposed = pRows[0].proposed_rule || {};
+
+    // Materialize the behavior_rule. Supports the full schema — predicate,
+    // category, preference_type, etc. Strength stored as float per the
+    // existing behavior_rules convention.
+    const ruleType = proposed.ruleType || 'preference';
+    const ruleText = proposed.ruleText;
+    const sourceField = proposed.source || 'inferred';
+    const strength = typeof proposed.strength === 'number' ? proposed.strength : 0.5;
+    const category = proposed.category || null;
+    const preferenceType = proposed.preferenceType || null;
+    const triggerContext = proposed.triggerContext || null;
+    const predicateBlob = proposed.predicate ? JSON.stringify(proposed.predicate) : null;
+
+    const { rows: rRows } = await client.query(
+      `INSERT INTO behavior_rules
+         (user_id, rule_type, trigger_context, rule_text, source, strength,
+          category, preference_type, predicate, last_reinforced_at, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), TRUE)
+       RETURNING id, rule_type AS "ruleType", rule_text AS "ruleText",
+                 source, strength, category,
+                 preference_type AS "preferenceType",
+                 predicate, is_active AS "isActive",
+                 created_at AS "createdAt"`,
+      [userId, ruleType, triggerContext, ruleText, sourceField, strength,
+       category, preferenceType, predicateBlob],
+    );
+    const ruleRow = rRows[0];
+
+    await client.query(
+      `UPDATE rule_proposals
+          SET status = 'accepted',
+              applied_rule_id = $1,
+              reviewed_at = NOW(),
+              reviewed_by = $2
+        WHERE id = $3 AND user_id = $4`,
+      [ruleRow?.id || null, reviewedBy || userId, proposalId, userId],
+    );
+
+    await client.query('COMMIT');
+    return { proposal: { id: proposalId, status: 'accepted', appliedRuleId: ruleRow?.id || null }, rule: ruleRow };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function rejectRuleProposal(proposalId, userId, reason = null, reviewedBy = null) {
+  if (!proposalId || !userId) throw new Error('rejectRuleProposal requires proposalId + userId');
+  const { rowCount } = await pool.query(
+    `UPDATE rule_proposals
+        SET status = 'rejected',
+            reviewed_at = NOW(),
+            reviewed_by = $1,
+            trigger_data = COALESCE(trigger_data, '{}'::jsonb)
+                         || jsonb_build_object('rejection_reason', $2::text)
+      WHERE id = $3 AND user_id = $4 AND status = 'pending'`,
+    [reviewedBy || userId, reason || '', proposalId, userId],
+  );
+  return rowCount > 0;
+}
+
+async function countPendingRuleProposals(userId) {
+  if (!userId) return 0;
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM rule_proposals
+      WHERE user_id = $1 AND status = 'pending' AND expires_at > NOW()`,
+    [userId],
+  );
+  return rows[0]?.n || 0;
+}
+
 async function getContactEmails(userId) {
   if (!userId) return new Set();
   try {
@@ -5859,6 +6034,33 @@ async function runMigrations() {
     )
   `).catch((err) => logger.warn('migration.warn', { label: 'user_preferences_v2 table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS user_preferences_v2_user_idx ON user_preferences_v2(user_id)`).catch(() => {});
+
+  // ── rule_proposals — staged behavior_rule suggestions awaiting user review.
+  // Phase 2 capability foundation: when a correction pattern is detected
+  // (e.g. user rejected the same action_type N times), we PROPOSE a rule
+  // here instead of writing directly to behavior_rules. User accepts via
+  // admin endpoint or future Aria tool, materializing the actual rule.
+  // applied_rule_id links accepted proposals to the resulting behavior_rule
+  // so the audit trail is preserved.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rule_proposals (
+      id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      proposed_rule   JSONB NOT NULL,
+      reasoning       TEXT,
+      source          TEXT NOT NULL DEFAULT 'correction_pattern',
+      trigger_data    JSONB,
+      status          TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','accepted','rejected','expired','superseded')),
+      applied_rule_id INT REFERENCES behavior_rules(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      reviewed_at     TIMESTAMPTZ,
+      reviewed_by     TEXT,
+      expires_at      TIMESTAMPTZ
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'rule_proposals table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS rule_proposals_user_status_idx ON rule_proposals(user_id, status, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS rule_proposals_expires_idx ON rule_proposals(expires_at) WHERE status = 'pending'`).catch(() => {});
 
   // 3. decision_log — append-only audit trail of every action evaluation.
   await pool.query(`
@@ -9401,6 +9603,12 @@ module.exports = {
   DEFAULT_RATE_LIMIT,
   RATE_LIMIT_WINDOW_MINUTES_V1,
   getContactEmails,
+  createRuleProposal,
+  listRuleProposals,
+  acceptRuleProposal,
+  rejectRuleProposal,
+  countPendingRuleProposals,
+  RULE_PROPOSAL_EXPIRY_DAYS,
   logDecision,
   getDecisionHistory,
   getAdminDecisions,

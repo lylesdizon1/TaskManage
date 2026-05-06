@@ -399,6 +399,39 @@ test('getContactEmails returns empty Set with no userId', async () => {
   assert.equal(s.size, 0);
 });
 
+// ── Rule-proposal flow validation (Phase 2 capability) ───────────────────
+test('createRuleProposal rejects empty proposed_rule', async () => {
+  const db = require('../db.cjs');
+  await assert.rejects(() => db.createRuleProposal('any-user', {}), /requires proposed_rule/);
+  await assert.rejects(() => db.createRuleProposal('any-user', { proposed_rule: {} }), /requires proposed_rule|ruleText required/);
+  await assert.rejects(() => db.createRuleProposal(null, { proposed_rule: { ruleText: 'x' } }), /requires userId/);
+});
+
+test('listRuleProposals returns empty array with no userId', async () => {
+  const db = require('../db.cjs');
+  const r = await db.listRuleProposals(null);
+  assert.deepEqual(r, []);
+});
+
+test('countPendingRuleProposals returns 0 with no userId', async () => {
+  const db = require('../db.cjs');
+  const n = await db.countPendingRuleProposals(null);
+  assert.equal(n, 0);
+});
+
+test('acceptRuleProposal / rejectRuleProposal validate inputs', async () => {
+  const db = require('../db.cjs');
+  await assert.rejects(() => db.acceptRuleProposal(null, 'user'), /requires proposalId/);
+  await assert.rejects(() => db.acceptRuleProposal('id', null), /requires proposalId/);
+  await assert.rejects(() => db.rejectRuleProposal(null, 'user'), /requires proposalId/);
+  await assert.rejects(() => db.rejectRuleProposal('id', null), /requires proposalId/);
+});
+
+test('RULE_PROPOSAL_EXPIRY_DAYS constant is 30', () => {
+  const db = require('../db.cjs');
+  assert.equal(db.RULE_PROPOSAL_EXPIRY_DAYS, 30);
+});
+
 // ── Performance: predicate evaluation stays well under budget ────────────
 test('1000 evaluations of a 5-deep nested predicate complete in <50ms', () => {
   const p = {

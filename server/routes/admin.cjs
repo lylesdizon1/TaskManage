@@ -457,17 +457,21 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
                         WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY 1`),
       ]);
 
-      // Per-user trust-row presence (the audit's canary metric).
+      // Per-user trust-row presence + pending-proposal count (canary metrics).
       const trustPerUser = await db.pool.query(
         `SELECT u.id, u.email,
                 COALESCE(ts.row_count, 0)::int AS trust_rows,
-                COALESCE(dl.decisions_30d, 0)::int AS decisions_30d
+                COALESCE(dl.decisions_30d, 0)::int AS decisions_30d,
+                COALESCE(rp.pending_proposals, 0)::int AS pending_proposals
            FROM users u
            LEFT JOIN (SELECT user_id, COUNT(*) AS row_count FROM trust_scores GROUP BY user_id) ts
              ON ts.user_id = u.id
            LEFT JOIN (SELECT user_id, COUNT(*) AS decisions_30d FROM decision_log
                        WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY user_id) dl
              ON dl.user_id = u.id
+           LEFT JOIN (SELECT user_id, COUNT(*) AS pending_proposals FROM rule_proposals
+                       WHERE status = 'pending' AND expires_at > NOW() GROUP BY user_id) rp
+             ON rp.user_id = u.id
           ORDER BY decisions_30d DESC NULLS LAST, trust_rows ASC`,
       );
 
@@ -527,9 +531,16 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
           trust_rows: r.trust_rows,
           decisions_30d: r.decisions_30d,
           has_trust: r.trust_rows > 0,
+          pending_proposals: r.pending_proposals,
         })),
         rule_evaluation_errors: ruleEvalErrors,
       };
+
+      // Pending-proposal totals — surface to the canary dict.
+      const totalPendingProposals = trustPerUser.rows.reduce((a, r) => a + (r.pending_proposals || 0), 0);
+      out.canaries.rule_proposals = totalPendingProposals === 0
+        ? 'healthy — no pending proposals'
+        : `${totalPendingProposals} pending across ${trustPerUser.rows.filter((r) => r.pending_proposals > 0).length} user(s)`;
 
       // Optional per-user deep dive
       if (focusUser) {
@@ -624,6 +635,60 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
       res.json({ userId, config: row.preferenceValue, updated_at: row.updatedAt });
     } catch (err) {
       logger.error('admin.rateLimit.set.failed', { error: err.message });
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ── Rule-proposal review (Phase 2 — rule-proposal flow) ─────────────────
+  // GET    /api/admin/aria-health/rule-proposals?userId=<id>&status=pending
+  // POST   /api/admin/aria-health/rule-proposals/:id/accept   body: { userId }
+  // POST   /api/admin/aria-health/rule-proposals/:id/reject   body: { userId, reason? }
+  router.get('/api/admin/aria-health/rule-proposals', async (req, res) => {
+    try {
+      const userId = req.query.userId ? String(req.query.userId) : null;
+      if (!userId) return res.status(400).json({ error: 'userId query param required' });
+      const status = req.query.status ? String(req.query.status) : 'pending';
+      const proposals = await db.listRuleProposals(userId, { status, limit: 100 });
+      res.json({ userId, status, count: proposals.length, proposals });
+    } catch (err) {
+      logger.error('admin.ruleProposals.list.failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/admin/aria-health/rule-proposals/:id/accept', async (req, res) => {
+    try {
+      const proposalId = String(req.params.id);
+      const { userId } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId required in body' });
+      const result = await db.acceptRuleProposal(proposalId, userId, req.user.id);
+      // Drop the rule cache so the next chat turn picks up the new constraint
+      try {
+        const { invalidateRulesCache } = require('../lib/ruleCache.cjs');
+        await invalidateRulesCache(userId).catch(() => {});
+      } catch { /* cache invalidation is best-effort */ }
+      logger.info('admin.ruleProposals.accept', {
+        triggeredBy: req.user.id, userId, proposalId,
+        appliedRuleId: result.proposal.appliedRuleId,
+      });
+      res.json(result);
+    } catch (err) {
+      logger.error('admin.ruleProposals.accept.failed', { error: err.message });
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/api/admin/aria-health/rule-proposals/:id/reject', async (req, res) => {
+    try {
+      const proposalId = String(req.params.id);
+      const { userId, reason } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId required in body' });
+      const ok = await db.rejectRuleProposal(proposalId, userId, reason || null, req.user.id);
+      if (!ok) return res.status(404).json({ error: 'proposal not found or not pending' });
+      logger.info('admin.ruleProposals.reject', { triggeredBy: req.user.id, userId, proposalId, reason });
+      res.json({ proposalId, status: 'rejected', reason: reason || null });
+    } catch (err) {
+      logger.error('admin.ruleProposals.reject.failed', { error: err.message });
       res.status(400).json({ error: err.message });
     }
   });
