@@ -3925,8 +3925,12 @@ async function updateTrustScore(userId, actionType, delta) {
 /**
  * Phase 4 — atomic trust-feedback application. In one transaction:
  *   1. Flip decision_log.outcome (the existing audit step).
- *   2. Bump trust_scores counters (times_confirmed/rejected/corrected).
- *   3. Apply trust_score delta per the Phase 4 deltas:
+ *   2. UPSERT trust_scores: bump counter + apply delta. Auto-seeds the
+ *      row from DEFAULT_TRUST_MATRIX (or sensible defaults for unknown
+ *      action_types) if it doesn't exist yet — this closes the prior
+ *      silent-failure mode where pre-Phase-4 users had no rows and
+ *      every signal silently no-op'd.
+ *   3. Phase 4 deltas applied during the UPSERT:
  *        confirmed → +0.02
  *        rejected  → -0.05
  *        corrected → -0.10  (caller signals via outcome='corrected'
@@ -3935,9 +3939,10 @@ async function updateTrustScore(userId, actionType, delta) {
  * Counter columns + delta both move so the matrix view (admin Decisions
  * tab) shows both the magnitude and the cumulative pattern.
  *
- * actionType is the tool name from the agentic loop. It maps 1:1 with
- * DEFAULT_TRUST_MATRIX rows; rows that aren't in the matrix silently
- * no-op the trust_score side (no row to update) but still flip outcome.
+ * actionType is the tool name from the agentic loop. Action types not
+ * in DEFAULT_TRUST_MATRIX get seeded with neutral defaults
+ * (trust_score=0.5, disposition='confirm_required', is_reversible=true,
+ * impact_level='medium') so trust accumulation works for new tools too.
  */
 async function applyTrustFeedback(userId, decisionId, outcome, actionType) {
   const COUNTER_COL = {
@@ -3963,24 +3968,42 @@ async function applyTrustFeedback(userId, decisionId, outcome, actionType) {
       [decisionId, userId, outcome],
     );
 
-    // 2 + 3. Counter + delta (skip if outcome doesn't carry a trust signal,
-    // or if the action isn't in the trust matrix yet).
+    // 2 + 3. UPSERT counter + delta. Skip if outcome doesn't carry a
+    // trust signal — 'executed' is audit-only (delta=0, counter=null).
     const counterCol = COUNTER_COL[outcome];
     const delta = DELTA[outcome] || 0;
     let trustRow = null;
     if (counterCol && actionType) {
+      const matrixRow = DEFAULT_TRUST_MATRIX.find((r) => r.actionType === actionType);
+      const seedScore       = matrixRow?.score        ?? 0.5;
+      const seedDisposition = matrixRow?.disposition  ?? 'confirm_required';
+      const seedReversible  = matrixRow?.reversible   ?? true;
+      const seedImpact      = matrixRow?.impact       ?? 'medium';
+      // Initial counter values for the INSERT branch — only the relevant
+      // counter starts at 1; others at 0. UPDATE branch increments only
+      // the relevant counter via the dynamic ${counterCol} expression.
+      const initConfirmed = counterCol === 'times_confirmed' ? 1 : 0;
+      const initRejected  = counterCol === 'times_rejected'  ? 1 : 0;
+      const initCorrected = counterCol === 'times_corrected' ? 1 : 0;
       const { rows } = await client.query(
-        `UPDATE trust_scores
-            SET ${counterCol} = ${counterCol} + 1,
-                trust_score = LEAST(1.0, GREATEST(0.0, trust_score + $3)),
-                updated_at = NOW()
-          WHERE user_id = $1 AND action_type = $2
-          RETURNING id, action_type AS "actionType",
-                    trust_score AS "trustScore", disposition,
-                    times_confirmed AS "timesConfirmed",
-                    times_rejected AS "timesRejected",
-                    times_corrected AS "timesCorrected"`,
-        [userId, actionType, delta],
+        `INSERT INTO trust_scores (
+           user_id, action_type, trust_score, disposition, is_reversible, impact_level,
+           times_confirmed, times_rejected, times_corrected, updated_at
+         )
+         VALUES ($1, $2,
+                 LEAST(1.0, GREATEST(0.0, $3 + $4)),
+                 $5, $6, $7, $8, $9, $10, NOW())
+         ON CONFLICT (user_id, action_type) DO UPDATE
+           SET ${counterCol} = trust_scores.${counterCol} + 1,
+               trust_score  = LEAST(1.0, GREATEST(0.0, trust_scores.trust_score + $4)),
+               updated_at   = NOW()
+         RETURNING id, action_type AS "actionType",
+                   trust_score AS "trustScore", disposition,
+                   times_confirmed AS "timesConfirmed",
+                   times_rejected AS "timesRejected",
+                   times_corrected AS "timesCorrected"`,
+        [userId, actionType, seedScore, delta, seedDisposition, seedReversible, seedImpact,
+         initConfirmed, initRejected, initCorrected],
       );
       trustRow = rows[0] || null;
     }
