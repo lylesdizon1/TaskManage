@@ -632,8 +632,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     return () => clearInterval(timer);
   }, [ccLoading, ccSending, thinkingIntent]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom — but only when the user is already at (or
+  // near) the bottom. If they've scrolled up to read history, leave
+  // them there. ≥100px from bottom = "reading mode."
+  const SCROLL_AT_BOTTOM_THRESHOLD_PX = 100;
+  const userScrolledAwayRef = useRef(false);
+  const handleCcScroll = useCallback(() => {
+    const el = ccScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    userScrolledAwayRef.current = distanceFromBottom > SCROLL_AT_BOTTOM_THRESHOLD_PX;
+  }, []);
   const scrollToBottom = useCallback(() => {
+    if (userScrolledAwayRef.current) return;
     requestAnimationFrame(() => {
       if (ccScrollRef.current) ccScrollRef.current.scrollTop = ccScrollRef.current.scrollHeight;
     });
@@ -2217,7 +2228,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           bar (56px / top-14) and the bottom nav (64px / bottom-16) so
           the input stays above the nav regardless of browser-chrome
           animations. Desktop: static flex-col card with max-height cap. */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:h-auto md:max-h-[1485px] z-30 md:z-auto" style={{ width: '100%' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:h-[calc(100vh-220px)] md:min-h-[480px] md:max-h-[820px] z-30 md:z-auto" style={{ width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5" style={{ flexShrink: 0 }}>
           <div className="flex items-center gap-2">
@@ -2347,7 +2358,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         {/* Messages — content stacks from the top and scrolls naturally
             as it grows. The CC container is fixed on mobile with a
             static input bar below, so no bottom padding is needed. */}
-        <div ref={ccScrollRef} className="flex-1 min-h-0 overflow-y-auto" style={{ fontFamily: 'Manrope, sans-serif' }}>
+        <div ref={ccScrollRef} onScroll={handleCcScroll} className="flex-1 min-h-0 overflow-y-auto" style={{ fontFamily: 'Manrope, sans-serif', scrollBehavior: 'smooth' }}>
          <div className="px-5 py-3 space-y-3">
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
