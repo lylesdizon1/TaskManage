@@ -422,5 +422,130 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  // ── Aria Intelligence health ────────────────────────────────────────────
+  // Cross-tenant health rollup for the 5-phase intelligence stack. Built
+  // after the May 5 audit found the trust loop had been silently no-op'ing
+  // for 2 weeks because nobody had a dashboard to spot the empty
+  // trust_scores table. Surfaces the load-bearing tables + per-user
+  // breakdown so silent failures get loud.
+  //
+  // Optional ?userId=<id> scopes the per-user section to a single user.
+  router.get('/api/admin/aria-health', async (req, res) => {
+    try {
+      const focusUser = req.query.userId ? String(req.query.userId) : null;
+
+      // System-wide rollups — single query each, parallel.
+      const [
+        trustRollup, decisionRollup, behaviorRollup, correctionRollup,
+        pclRollup, classificationRollup, agentActionRollup, pendingConfRollup,
+      ] = await Promise.all([
+        db.pool.query(`SELECT COUNT(*)::int AS rows, COUNT(DISTINCT user_id)::int AS users FROM trust_scores`),
+        db.pool.query(`SELECT disposition, outcome, COUNT(*)::int AS n FROM decision_log
+                        WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY 1,2 ORDER BY n DESC`),
+        db.pool.query(`SELECT source, is_active, COUNT(*)::int AS n FROM behavior_rules GROUP BY 1,2 ORDER BY 1,2`),
+        db.pool.query(`SELECT COUNT(*)::int AS rows, COUNT(*) FILTER (WHERE generated_rule_id IS NOT NULL)::int AS materialized FROM correction_events`),
+        db.pool.query(`SELECT source_type,
+                              COUNT(*) FILTER (WHERE resolved_at IS NULL AND dismissed_at IS NULL)::int AS open,
+                              COUNT(*) FILTER (WHERE resolved_at IS NOT NULL)::int AS resolved,
+                              COUNT(*)::int AS total
+                         FROM pending_close_loop GROUP BY 1`),
+        db.pool.query(`SELECT classification_reasoning->>'classifier_version' AS v, COUNT(*)::int AS n
+                         FROM email_classifications GROUP BY 1 ORDER BY n DESC LIMIT 10`),
+        db.pool.query(`SELECT event_type, COUNT(*)::int AS n FROM agent_actions
+                        WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY 1 ORDER BY n DESC`),
+        db.pool.query(`SELECT status, COUNT(*)::int AS n FROM pending_confirmations
+                        WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY 1`),
+      ]);
+
+      // Per-user trust-row presence (the audit's canary metric).
+      const trustPerUser = await db.pool.query(
+        `SELECT u.id, u.email,
+                COALESCE(ts.row_count, 0)::int AS trust_rows,
+                COALESCE(dl.decisions_30d, 0)::int AS decisions_30d
+           FROM users u
+           LEFT JOIN (SELECT user_id, COUNT(*) AS row_count FROM trust_scores GROUP BY user_id) ts
+             ON ts.user_id = u.id
+           LEFT JOIN (SELECT user_id, COUNT(*) AS decisions_30d FROM decision_log
+                       WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY user_id) dl
+             ON dl.user_id = u.id
+          ORDER BY decisions_30d DESC NULLS LAST, trust_rows ASC`,
+      );
+
+      // Health verdict — load-bearing canaries.
+      const trust = trustRollup.rows[0];
+      const correction = correctionRollup.rows[0];
+      const decisionRows = decisionRollup.rows;
+      const decisionsLast30 = decisionRows.reduce((a, r) => a + r.n, 0);
+      const usersWithDecisions = trustPerUser.rows.filter((r) => r.decisions_30d > 0).length;
+      const usersWithTrust = trustPerUser.rows.filter((r) => r.trust_rows > 0).length;
+      const trustCoverage = usersWithDecisions > 0
+        ? trustPerUser.rows.filter((r) => r.decisions_30d > 0 && r.trust_rows > 0).length / usersWithDecisions
+        : null;
+
+      const canaries = {
+        trust_loop_writes: trust.rows > 0
+          ? 'healthy'
+          : (decisionsLast30 > 0 ? 'BROKEN — 0 trust_scores rows despite recent decisions' : 'unknown — no recent decisions'),
+        correction_loop: correction.rows > 0
+          ? `healthy — ${correction.rows} events, ${correction.materialized} materialized into rules`
+          : (decisionsLast30 > 0 ? 'no rejection signal recorded yet' : 'unknown'),
+        decision_engine_active: decisionsLast30 > 0
+          ? `healthy — ${decisionsLast30} decisions in 30d`
+          : 'no recent decisions',
+        trust_coverage: trustCoverage === null
+          ? 'unknown'
+          : `${(trustCoverage * 100).toFixed(0)}% of active users have trust_scores rows`,
+      };
+
+      const out = {
+        canaries,
+        rollups: {
+          trust_scores: trust,
+          decision_log_30d: decisionRows,
+          behavior_rules: behaviorRollup.rows,
+          correction_events: correction,
+          pending_close_loop: pclRollup.rows,
+          email_classifications_by_version: classificationRollup.rows,
+          agent_actions_7d: agentActionRollup.rows,
+          pending_confirmations_30d: pendingConfRollup.rows,
+        },
+        users: trustPerUser.rows.map((r) => ({
+          id: r.id,
+          email: r.email,
+          trust_rows: r.trust_rows,
+          decisions_30d: r.decisions_30d,
+          has_trust: r.trust_rows > 0,
+        })),
+      };
+
+      // Optional per-user deep dive
+      if (focusUser) {
+        const [behaviorR, decisionsR, correctionR, recentR] = await Promise.all([
+          db.pool.query(`SELECT rule_type, pattern_type, rule_text, source, strength, signal_count, is_active, created_at
+                           FROM behavior_rules WHERE user_id = $1 ORDER BY is_active DESC, strength DESC LIMIT 25`, [focusUser]),
+          db.pool.query(`SELECT tool_called, disposition, outcome, conflict_level, COUNT(*)::int AS n
+                           FROM decision_log WHERE user_id = $1
+                          GROUP BY 1,2,3,4 ORDER BY n DESC LIMIT 30`, [focusUser]),
+          db.pool.query(`SELECT original_action, correction_type, generated_rule_id, created_at
+                           FROM correction_events WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [focusUser]),
+          db.pool.query(`SELECT tool_name, event_type, status, created_at FROM agent_actions
+                          WHERE user_id = $1 ORDER BY created_at DESC LIMIT 15`, [focusUser]),
+        ]);
+        out.focus = {
+          userId: focusUser,
+          behavior_rules: behaviorR.rows,
+          decision_distribution: decisionsR.rows,
+          correction_events: correctionR.rows,
+          recent_agent_actions: recentR.rows,
+        };
+      }
+
+      res.json(out);
+    } catch (err) {
+      logger.error('admin.ariaHealth.failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 };

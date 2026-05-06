@@ -669,6 +669,37 @@ console.log('[cron] Outlook sync scheduler started');
   }
 })();
 
+// ── Trust scores pre-warm at startup ─────────────────────────────────────
+// Pairs with the 174f62a UPSERT fix. The audit found that pre-Phase-4
+// users had no trust_scores rows; UPSERT covers forward decisions but
+// also needs each user to have the matrix-default rows seeded so the
+// Decisions admin view shows a complete picture and trust_score reads
+// (decisionEngine Tier 5) hit something on the very first decision
+// rather than waiting for the first signal-bearing outcome to seed.
+//
+// seedDefaultTrustScores is idempotent — uses ON CONFLICT DO NOTHING —
+// so this is a safe-to-rerun startup migration. Bounded per-user work:
+// ~18 INSERT-or-noop rows from DEFAULT_TRUST_MATRIX. Sequential across
+// users so a transient failure can't fan out.
+(async () => {
+  await new Promise((r) => setTimeout(r, 9000)); // settle after migrations + sync starters
+  try {
+    const userIds = await db.getAllUserIds();
+    let seeded = 0;
+    for (const userId of userIds) {
+      try {
+        const n = await db.seedDefaultTrustScores(userId);
+        if (n > 0) seeded += n;
+      } catch (e) {
+        cronLogger.warn('trust-prewarm.user-failed', { userId, error: e.message });
+      }
+    }
+    cronLogger.info('trust-prewarm.startup.complete', { userCount: userIds.length, rowsSeeded: seeded });
+  } catch (e) {
+    cronLogger.error('trust-prewarm.startup.failed', { error: e.message });
+  }
+})();
+
 // ── Gmail token refresh cron — runs every 30 minutes ─────────────────────
 // Keeps Gmail tokens alive even when no user opens the app, preventing
 // invalid_grant expiry. Uses the same user_integrations-backed helpers
