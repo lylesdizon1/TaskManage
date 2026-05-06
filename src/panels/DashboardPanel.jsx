@@ -45,6 +45,41 @@ function to24hTo12h(t) {
   return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
+// Proactive narration discipline (paths 1+2+3 unified):
+// Path 1 (init) — excluded by design: no prior chat to dedup against.
+// Path 2 (freshUpdate) — has 9896fd7's inputHash dedup AND now this
+//   recency suppression layer.
+// Path 3 (pollUpdatesRef) — has 72ad9ce's in-flight gate AND now this
+//   recency suppression PLUS chat-history context in the LLM prompt.
+// Future trigger paths must route through this same machinery.
+const SUPPRESSION_RECENCY_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Returns { overlap, matchedTokens, recentMsgTs } indicating whether a
+ * planned narration repeats topics the user just discussed with Aria.
+ * Heuristic: 6+ char alphabetic tokens, ≥2 distinct hits within the
+ * recency window. The ≥2 floor avoids stop-word brushes ("today",
+ * "tomorrow", "important") triggering false positives.
+ */
+function topicOverlapsRecentChat(narrationText, ccMessages, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  const recentMsgs = (ccMessages || []).filter((m) => {
+    const ts = m?.ts || (m?.createdAt ? new Date(m.createdAt).getTime() : 0);
+    return ts >= cutoff;
+  });
+  if (!recentMsgs.length) return { overlap: false, matchedTokens: [], recentMsgTs: null };
+  const recentText = recentMsgs.map((m) => String(m?.content || '').toLowerCase()).join(' ');
+  const tokens = Array.from(new Set(String(narrationText || '').toLowerCase().match(/[a-z]{6,}/g) || []));
+  const matched = [];
+  for (const tok of tokens) {
+    if (recentText.includes(tok)) matched.push(tok);
+    if (matched.length >= 5) break; // cap log noise
+  }
+  const lastTs = recentMsgs[recentMsgs.length - 1]?.ts
+    || (recentMsgs[recentMsgs.length - 1]?.createdAt ? new Date(recentMsgs[recentMsgs.length - 1].createdAt).getTime() : null);
+  return { overlap: matched.length >= 2, matchedTokens: matched, recentMsgTs: lastTs };
+}
+
 export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks, onReloadNotes, onReloadCalendar }) {
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(true);
@@ -671,12 +706,43 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
       // Build a natural prompt for Aria from the raw updates
       const updateSummary = updates.map((u) => u.content).join('\n');
-      const ariaPrompt = `The following new events just occurred in the background. Narrate them to the user naturally and concisely in your voice as Aria — do not just repeat the raw text. Be brief, warm, and actionable:\n\n${updateSummary}`;
+
+      // Recency suppression — if the update content overlaps with topics
+      // the user just discussed with Aria, stay silent. Path 3's failure
+      // mode (pre-fix): server-emitted "task overdue" updates fired on
+      // tasks the user literally just created with Aria one turn earlier.
+      // Cursor advances on suppress: the update was seen and consciously
+      // dropped. Refusing to advance creates a guaranteed-suppress hot
+      // loop until the chat goes quiet.
+      const overlap = topicOverlapsRecentChat(updateSummary, ccMessagesRef.current, SUPPRESSION_RECENCY_WINDOW_MS);
+      if (overlap.overlap) {
+        if (typeof window !== 'undefined') {
+          console.log('[CC.poll] suppressed', {
+            reason: 'topic_overlap',
+            matched_tokens: overlap.matchedTokens,
+            recent_msg_ts: overlap.recentMsgTs,
+            update_id: updates[0]?.id || null,
+            cursor: lastCheckedRef.current,
+          });
+        }
+        lastCheckedRef.current = new Date().toISOString();
+        return;
+      }
 
       // Build full context system prompt
       const aName = currentUser?.assistantName || 'Aria';
       const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents, currentUser?.timezone);
-      const sysPrompt = `You are ${aName}, ${firstName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything asked: advice, research, cooking, ideas, business, personal, anything. You also have action tools available to create tasks, notes, and calendar events. Use your tools when the user is asking you to take an action. For everything else, just respond naturally and conversationally. Be warm, direct, and concise. No sign-off.\n\n${fullContext}`;
+      const sysPrompt = `You are ${aName}, ${firstName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything asked: advice, research, cooking, ideas, business, personal, anything. You also have action tools available to create tasks, notes, and calendar events. Use your tools when the user is asking you to take an action. For everything else, just respond naturally and conversationally. Be warm, direct, and concise. No sign-off.\n\nThe user is in active conversation with you in this command center. Recent messages between you and the user are included below as context. Do NOT restate things you and the user just discussed — only narrate genuinely new context. If the new events are things the user already addressed with you, stay silent rather than echo.\n\n${fullContext}`;
+
+      // Last 10 turns as conversation history so the LLM sees what was
+      // just discussed even when the token-overlap heuristic missed it
+      // (paraphrasing, pronouns). Belt-and-suspenders with the gate above.
+      const recentMsgs = (ccMessagesRef.current || [])
+        .slice(-10)
+        .map((m) => ({ role: m.role, content: String(m.content || '') }))
+        .filter((m) => m.role && m.content);
+
+      const ariaPrompt = `The following new events just occurred in the background. Narrate them to the user naturally and concisely in your voice as Aria — do not just repeat the raw text. Be brief, warm, and actionable:\n\n${updateSummary}`;
 
       // Stream Aria's narration
       const streamRes = await apiFetch('/api/chat/execute', {
@@ -685,7 +751,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           systemPrompt: sysPrompt,
-          messages: [{ role: 'user', content: ariaPrompt }],
+          messages: [...recentMsgs, { role: 'user', content: ariaPrompt }],
           timeZone: userTZ,
         }),
       });
@@ -947,6 +1013,23 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i);
         return (h >>> 0).toString(16);
       })();
+      // Recency suppression — orthogonal to inputHash. inputHash catches
+      // identical-payload duplicates; this catches "different payload, but
+      // every meaningful topic is something the user just discussed with
+      // me". Cheaper to skip pre-compose than to LLM-render-and-discard.
+      const briefTopicSummary = [briefData.overdue, briefData.highPriority, briefData.todayTasks, briefData.events].join(' ');
+      const overlap = topicOverlapsRecentChat(briefTopicSummary, ccMessagesRef.current, SUPPRESSION_RECENCY_WINDOW_MS);
+      if (overlap.overlap) {
+        if (typeof window !== 'undefined') {
+          console.log('[CC.freshUpdate] suppressed', {
+            reason: 'topic_overlap',
+            matched_tokens: overlap.matchedTokens,
+            recent_msg_ts: overlap.recentMsgTs,
+            input_hash: inputHash,
+          });
+        }
+        return;
+      }
       const { brief, source: briefSource } = await composeBriefOnce(() => ({
         apiKey: apiKeys?.claude || '',
         assistantName: aName,
