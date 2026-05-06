@@ -2228,7 +2228,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           bar (56px / top-14) and the bottom nav (64px / bottom-16) so
           the input stays above the nav regardless of browser-chrome
           animations. Desktop: static flex-col card with max-height cap. */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:h-[calc(100vh-220px)] md:min-h-[480px] md:max-h-[820px] z-30 md:z-auto" style={{ width: '100%' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:max-h-[calc(100vh-300px)] z-30 md:z-auto" style={{ width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5" style={{ flexShrink: 0 }}>
           <div className="flex items-center gap-2">
