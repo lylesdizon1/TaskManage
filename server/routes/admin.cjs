@@ -547,5 +547,26 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  // ── Stale classification sweep — manual trigger ─────────────────────────
+  // Fires the same sweep that runs at 4am UTC daily. Useful right after
+  // a CLASSIFIER_VERSION bump to drop the critical_email_unacked tile
+  // count without waiting for the cron tick. Optional ?userId=<id>
+  // scopes to a single user (default: all users).
+  router.post('/api/admin/aria-health/sweep-stale-classifications', async (req, res) => {
+    try {
+      const targetUserId = req.query.userId ? String(req.query.userId) : null;
+      const { sweepStaleClassificationsForUser, sweepStaleClassificationsAllUsers } =
+        require('../lib/staleClassificationSweep.cjs');
+      const result = targetUserId
+        ? await sweepStaleClassificationsForUser(targetUserId)
+        : await sweepStaleClassificationsAllUsers();
+      logger.info('admin.sweepStale.complete', { triggeredBy: req.user.id, scope: targetUserId || 'all', ...result });
+      res.json({ scope: targetUserId || 'all', ...result });
+    } catch (err) {
+      logger.error('admin.sweepStale.failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 };

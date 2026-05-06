@@ -499,6 +499,25 @@ cron.schedule('0 3 * * *', async () => {
 });
 console.log('[cron] Aria rule decay scheduler started');
 
+// ── Stale classification sweep — 4am daily ───────────────────────────────
+// Force re-classifies stale unacked flagged emails so they pick up the
+// current CLASSIFIER_VERSION. classifyEmail already invalidates stale-
+// version cache rows on next sight, but old flagged threads aren't in
+// the recent inbox window so they never re-touch organically. This
+// sweep closes the gap, paired with auto-unflag-on-demote (9fd3bb5):
+// demoted rows now actually drop out of the critical_email_unacked tile.
+// Bounded at 20 emails per user per run; Gmail-only in V1.
+const { sweepStaleClassificationsAllUsers } = require('./server/lib/staleClassificationSweep.cjs');
+cron.schedule('0 4 * * *', async () => {
+  try {
+    const totals = await sweepStaleClassificationsAllUsers();
+    cronLogger.info('staleClassification.cron.done', totals);
+  } catch (e) {
+    cronLogger.error('staleClassification.cron.failed', { error: e.message });
+  }
+});
+console.log('[cron] Stale classification sweep scheduler started');
+
 // ── GCal sync — every 15 min, mirrors 14-day window into calendar_events ──
 const { localMidnightUtc } = require('./server/lib/buildAgenticContext.cjs');
 const { resolveOrCreateContact } = require('./server/lib/contactIngestion.cjs');
