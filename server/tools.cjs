@@ -831,6 +831,74 @@ const ARIA_TOOLS = [
       required: ['skill_id'],
     },
   },
+  // ── Sub-agents (agents-foundation v1, M3.7) ──────────────────────────
+  {
+    name: 'start_sub_agent',
+    group: 'intelligence',
+    risk: 'medium',
+    requires_confirmation: false,
+    description: "Spin up a bounded sub-agent for multi-step investigation work that would balloon a single chat turn. Best for: meeting prep ('prep me for tomorrow with Bob'), competitive analysis, catch-up summaries, vendor comparison — anything needing 5-30 read-only tool calls. Returns a session_id immediately; the agent runs async in the background and pings via WhatsApp on completion. Don't use for single-tool answers (just call the tool); don't use for write-heavy actions (sub-agents are READ-ONLY in V1). Max 2 concurrent runs per user — check list_sub_agent_runs first if uncertain.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'What to investigate. Be specific — agents are budget-bounded, vague prompts waste budget.' },
+        definition_id: { type: 'string', description: "Sub-agent type. Default 'research_agent' (V1 ships only this template)." },
+        budget_overrides: {
+          type: 'object',
+          description: 'Optional per-run budget caps (clamped to server max). Defaults from definition.',
+          properties: {
+            tool_calls:   { type: 'number', description: 'Max tool calls. Default 30, cap 50.' },
+            wall_clock_ms:{ type: 'number', description: 'Max wall-clock ms. Default 300000 (5 min), cap 600000.' },
+            tokens:       { type: 'number', description: 'Max LLM tokens across synthesis points. Default 30000, cap 60000.' },
+            spend_usd:    { type: 'number', description: 'Max USD spend. Default 2.0, cap 5.0.' },
+          },
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'list_sub_agent_runs',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "List recent sub-agent runs (default last 20). Use when the user asks 'what's running', 'show me my research', or when checking concurrency before dispatch (V1 cap = 2 active runs).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['queued','running','completed','budget_exhausted','stagnated','failed','killed','active','all'], description: "Filter by status. 'active' = queued+running. 'all' = everything. Default 'all'." },
+        limit:  { type: 'number', description: 'Max rows. Default 20, cap 100.' },
+      },
+    },
+  },
+  {
+    name: 'get_sub_agent_result',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Get the structured result of a completed sub-agent run. Returns summary + key_findings (with sources) + action_items + confidence + budget_used. Use when the user asks 'how did the research go' or 'what did you find on the X investigation'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'id from list_sub_agent_runs.' },
+      },
+      required: ['session_id'],
+    },
+  },
+  {
+    name: 'kill_sub_agent',
+    group: 'intelligence',
+    risk: 'medium',
+    requires_confirmation: true,
+    description: "Cancel a running sub-agent. The orchestrator checks status at every phase boundary — kill takes effect within ~30s. Use when the user explicitly says 'stop the research', 'cancel that run'. Confirmation required (lose in-flight work).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'id from list_sub_agent_runs.' },
+      },
+      required: ['session_id'],
+    },
+  },
   {
     name: 'move_email',
     group: 'communication',
@@ -894,6 +962,30 @@ function _clampPriority(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) return 5;
   return Math.max(0, Math.min(10, Math.round(v)));
+}
+
+// Sub-agent budget composer (M3.7). Server-side caps per spec D4 +
+// research-agents-spec-v1.md. Defaults come from the definition row;
+// overrides clamped to server max.
+const SUB_AGENT_BUDGET_CAPS = {
+  tool_calls: 50,
+  wall_clock_ms: 10 * 60 * 1000,  // 10 min
+  tokens: 60000,
+  spend_usd: 5.0,
+};
+function _composeSubAgentBudget(defaultBudget = {}, overrides = {}) {
+  const out = { ...defaultBudget };
+  for (const k of Object.keys(SUB_AGENT_BUDGET_CAPS)) {
+    if (overrides && overrides[k] !== undefined) {
+      const v = Number(overrides[k]);
+      if (Number.isFinite(v) && v > 0) {
+        out[k] = Math.min(v, SUB_AGENT_BUDGET_CAPS[k]);
+      }
+    } else if (out[k] !== undefined) {
+      out[k] = Math.min(Number(out[k]) || SUB_AGENT_BUDGET_CAPS[k], SUB_AGENT_BUDGET_CAPS[k]);
+    }
+  }
+  return out;
 }
 
 /**
@@ -2267,6 +2359,113 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         }
       }
 
+      // ── Sub-agents (agents-foundation v1, M3.7) ─────────────────────────
+      case 'start_sub_agent': {
+        const { prompt, definition_id, budget_overrides } = toolInput || {};
+        if (!prompt || typeof prompt !== 'string') {
+          return { success: false, error: 'prompt is required' };
+        }
+        const definitionId = definition_id || 'research_agent';
+        try {
+          // Concurrency cap (Q6 = 2 per user, server-enforced).
+          const active = await db.countActiveSubAgentSessions(userId);
+          if (active >= 2) {
+            return {
+              success: false,
+              error: 'max 2 concurrent runs reached — cancel one or wait',
+              active_count: active,
+            };
+          }
+          const definition = await db.getSubAgentDefinition(definitionId);
+          if (!definition) {
+            return { success: false, error: `unknown definition: ${definitionId}` };
+          }
+          const budget = _composeSubAgentBudget(definition.defaultBudget, budget_overrides);
+          const session = await db.createSubAgentSession({
+            userId, definitionId, prompt: prompt.trim(), budget,
+          });
+          return {
+            success: true,
+            session_id: session.id,
+            definition_id: definitionId,
+            status: session.status,
+            budget,
+            note: 'Sub-agent dispatched. Check progress with list_sub_agent_runs / get_sub_agent_result. WhatsApp ping when done.',
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'list_sub_agent_runs': {
+        const { status, limit } = toolInput || {};
+        try {
+          let sessions;
+          if (status === 'active') {
+            const queued = await db.listSubAgentSessions(userId, { status: 'queued', limit });
+            const running = await db.listSubAgentSessions(userId, { status: 'running', limit });
+            sessions = [...queued, ...running];
+          } else if (!status || status === 'all') {
+            sessions = await db.listSubAgentSessions(userId, { limit });
+          } else {
+            sessions = await db.listSubAgentSessions(userId, { status, limit });
+          }
+          const slim = sessions.map((s) => ({
+            session_id: s.id,
+            definition_id: s.definitionId,
+            prompt: (s.prompt || '').slice(0, 200),
+            status: s.status,
+            current_phase: s.currentPhase,
+            started_at: s.startedAt,
+            completed_at: s.completedAt,
+            budget_used: s.budgetUsed,
+            has_result: !!s.result,
+          }));
+          return { success: true, count: slim.length, sessions: slim };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'get_sub_agent_result': {
+        const { session_id } = toolInput || {};
+        if (!session_id) return { success: false, error: 'session_id is required' };
+        try {
+          const session = await db.getSubAgentSession(session_id, userId);
+          if (!session) return { success: false, error: 'session not found' };
+          return {
+            success: true,
+            session_id: session.id,
+            status: session.status,
+            current_phase: session.currentPhase,
+            result: session.result,
+            error: session.error,
+            budget_used: session.budgetUsed,
+            started_at: session.startedAt,
+            completed_at: session.completedAt,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'kill_sub_agent': {
+        const { session_id } = toolInput || {};
+        if (!session_id) return { success: false, error: 'session_id is required' };
+        try {
+          const updated = await db.requestSubAgentKill(session_id, userId);
+          if (!updated) return { success: false, error: 'session not found, not owned, or already terminal' };
+          return {
+            success: true,
+            session_id: updated.id,
+            status: updated.status,
+            note: 'Kill requested. Worker will exit at next phase boundary (≤30s).',
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
       case 'move_email': {
         const { message_id, account_email, target_label_id, target_label_name, scope } = toolInput || {};
         if (!message_id || !account_email || !target_label_id || !scope) {
@@ -2673,4 +2872,6 @@ module.exports = {
   ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation, ALWAYS_CONFIRM,
   // Exported for tests (skills foundation v1, M1.6):
   _composeSkillPredicate, _clampTokenCap, _clampPriority,
+  // Exported for tests (sub-agents, M3.7):
+  _composeSubAgentBudget, SUB_AGENT_BUDGET_CAPS,
 };

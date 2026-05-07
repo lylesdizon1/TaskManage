@@ -193,5 +193,126 @@ module.exports = function createSkillsRouter({ authenticateToken, db }) {
     }
   });
 
+  // ── Sub-agents (agents-foundation v1, M3 / pre-M4 endpoints) ─────────
+  // M4 will add the dedicated UI panel; these endpoints land now so
+  // the worker has a complete surface for the user + Aria chat tools.
+
+  router.get('/api/sub-agents/definitions', authenticateToken, async (req, res) => {
+    try {
+      const defs = await db.listSubAgentDefinitions({ activeOnly: true });
+      return res.json(defs);
+    } catch (err) {
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.get('/api/sub-agents/sessions', authenticateToken, async (req, res) => {
+    try {
+      const status = req.query.status;
+      const limit = req.query.limit;
+      let sessions;
+      if (status === 'active') {
+        const queued = await db.listSubAgentSessions(req.user.id, { status: 'queued', limit });
+        const running = await db.listSubAgentSessions(req.user.id, { status: 'running', limit });
+        sessions = [...queued, ...running];
+      } else if (status && status !== 'all') {
+        sessions = await db.listSubAgentSessions(req.user.id, { status, limit });
+      } else {
+        sessions = await db.listSubAgentSessions(req.user.id, { limit });
+      }
+      return res.json(sessions);
+    } catch (err) {
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.post('/api/sub-agents/sessions', authenticateToken, async (req, res) => {
+    try {
+      const { prompt, definition_id, budget_overrides } = req.body || {};
+      if (!prompt || typeof prompt !== 'string') {
+        return res.status(400).json({ error: 'prompt is required' });
+      }
+      const definitionId = definition_id || 'research_agent';
+      const active = await db.countActiveSubAgentSessions(req.user.id);
+      if (active >= 2) {
+        return res.status(409).json({
+          error: 'max 2 concurrent runs reached — cancel one or wait',
+          active_count: active,
+        });
+      }
+      const definition = await db.getSubAgentDefinition(definitionId);
+      if (!definition) {
+        return res.status(400).json({ error: `unknown definition: ${definitionId}` });
+      }
+      // Use the same budget composer the chat tool uses.
+      const SUB_AGENT_BUDGET_CAPS = {
+        tool_calls: 50,
+        wall_clock_ms: 10 * 60 * 1000,
+        tokens: 60000,
+        spend_usd: 5.0,
+      };
+      const budget = { ...definition.defaultBudget };
+      for (const k of Object.keys(SUB_AGENT_BUDGET_CAPS)) {
+        if (budget_overrides && budget_overrides[k] !== undefined) {
+          const v = Number(budget_overrides[k]);
+          if (Number.isFinite(v) && v > 0) {
+            budget[k] = Math.min(v, SUB_AGENT_BUDGET_CAPS[k]);
+          }
+        } else if (budget[k] !== undefined) {
+          budget[k] = Math.min(Number(budget[k]) || SUB_AGENT_BUDGET_CAPS[k], SUB_AGENT_BUDGET_CAPS[k]);
+        }
+      }
+      const session = await db.createSubAgentSession({
+        userId: req.user.id, definitionId, prompt: prompt.trim(), budget,
+      });
+      return res.json(session);
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Internal server error' });
+    }
+  });
+
+  router.get('/api/sub-agents/sessions/:id', authenticateToken, async (req, res) => {
+    try {
+      const session = await db.getSubAgentSession(req.params.id, req.user.id);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+      return res.json(session);
+    } catch (err) {
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.get('/api/sub-agents/sessions/:id/steps', authenticateToken, async (req, res) => {
+    try {
+      // Verify ownership before exposing step trace.
+      const session = await db.getSubAgentSession(req.params.id, req.user.id);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+      const steps = await db.listSubAgentSteps(req.params.id);
+      return res.json(steps);
+    } catch (err) {
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.get('/api/sub-agents/sessions/:id/findings', authenticateToken, async (req, res) => {
+    try {
+      const session = await db.getSubAgentSession(req.params.id, req.user.id);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+      const findings = await db.listSubAgentFindings(req.params.id);
+      return res.json(findings);
+    } catch (err) {
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.post('/api/sub-agents/sessions/:id/kill', authenticateToken, async (req, res) => {
+    try {
+      const updated = await db.requestSubAgentKill(req.params.id, req.user.id);
+      if (!updated) return res.status(404).json({ error: 'Session not found, not owned, or already terminal' });
+      return res.json(updated);
+    } catch (err) {
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   return router;
 };

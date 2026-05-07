@@ -173,6 +173,16 @@ async function start() {
     if (migrated > 0) console.log(`[migration] Encrypted ${migrated} legacy Slack webhook(s)`);
   } catch (err) { console.error('[migration] slack-webhook-encrypt:', err.message); }
   server = app.listen(PORT, '0.0.0.0', () => console.log(`\n✓ Dizon.ai server running at http://localhost:${PORT}\n`));
+
+  // Sub-agent worker (M3.8) — drains queued sub_agent_sessions. Boots
+  // after a short startup delay so the DB pool + schema migrations
+  // settle first. Idempotent — repeated calls no-op when already running.
+  try {
+    const { startSubAgentWorker } = require('./server/lib/subAgents/worker.cjs');
+    startSubAgentWorker();
+  } catch (err) {
+    console.error('[startup] subAgents.worker:', err.message);
+  }
 }
 
 start().catch((err) => { console.error('[startup] Fatal:', err.message); process.exit(1); });

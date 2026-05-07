@@ -4283,6 +4283,256 @@ async function applySkillTrustFeedback(userId, skillId, delta, counter = null) {
   return rows[0] || null;
 }
 
+// ── sub-agents (agents-foundation v1, M3) ──────────────────────────────
+//
+// State-machine-driven async sub-agents (research-agent + V2 templates).
+// Spec: docs/agents-foundation-v1.md §5B + §6.
+
+const SUB_AGENT_SESSION_COLUMNS = `
+  id, user_id AS "userId", definition_id AS "definitionId",
+  prompt, status, current_phase AS "currentPhase",
+  budget, budget_used AS "budgetUsed",
+  result, error,
+  worker_id AS "workerId", claimed_at AS "claimedAt",
+  started_at AS "startedAt", completed_at AS "completedAt"
+`;
+
+async function getSubAgentDefinition(definitionId) {
+  if (!definitionId) return null;
+  const { rows } = await pool.query(
+    `SELECT id, name, description,
+            default_budget AS "defaultBudget",
+            phases, is_active AS "isActive"
+       FROM sub_agent_definitions
+      WHERE id = $1`,
+    [definitionId],
+  );
+  return rows[0] || null;
+}
+
+async function listSubAgentDefinitions({ activeOnly = true } = {}) {
+  const where = activeOnly ? `WHERE is_active = TRUE` : '';
+  const { rows } = await pool.query(
+    `SELECT id, name, description,
+            default_budget AS "defaultBudget", phases,
+            is_active AS "isActive", created_at AS "createdAt"
+       FROM sub_agent_definitions ${where}
+      ORDER BY name ASC`,
+  );
+  return rows;
+}
+
+/**
+ * Count active (queued + running) sessions for a user. Used at session-
+ * create time to enforce the V1 concurrency cap of 2 per user (Q6).
+ */
+async function countActiveSubAgentSessions(userId) {
+  if (!userId) return 0;
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM sub_agent_sessions
+      WHERE user_id = $1 AND status IN ('queued','running')`,
+    [userId],
+  );
+  return rows[0]?.n || 0;
+}
+
+async function createSubAgentSession({ userId, definitionId, prompt, budget, parentDecisionId = null }) {
+  if (!userId || !definitionId || !prompt) {
+    throw new Error('createSubAgentSession: userId, definitionId, prompt are required');
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO sub_agent_sessions (user_id, definition_id, prompt, status, budget, parent_decision_id)
+     VALUES ($1, $2, $3, 'queued', $4, $5)
+     RETURNING ${SUB_AGENT_SESSION_COLUMNS}`,
+    [userId, definitionId, prompt, budget || {}, parentDecisionId],
+  );
+  return rows[0] || null;
+}
+
+async function getSubAgentSession(sessionId, userId = null) {
+  if (!sessionId) return null;
+  const params = [sessionId];
+  const userWhere = userId ? `AND user_id = $2` : '';
+  if (userId) params.push(userId);
+  const { rows } = await pool.query(
+    `SELECT ${SUB_AGENT_SESSION_COLUMNS}
+       FROM sub_agent_sessions
+      WHERE id = $1 ${userWhere}`,
+    params,
+  );
+  return rows[0] || null;
+}
+
+async function listSubAgentSessions(userId, { status = null, limit = 50 } = {}) {
+  if (!userId) return [];
+  const params = [userId];
+  let where = `WHERE user_id = $1`;
+  if (status) {
+    where += ` AND status = $2`;
+    params.push(status);
+  }
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+  const { rows } = await pool.query(
+    `SELECT ${SUB_AGENT_SESSION_COLUMNS}
+       FROM sub_agent_sessions
+       ${where}
+      ORDER BY started_at DESC
+      LIMIT ${lim}`,
+    params,
+  );
+  return rows;
+}
+
+/**
+ * Worker claim — atomically pick one queued session for this worker.
+ * SELECT FOR UPDATE SKIP LOCKED so multiple workers (when we have them)
+ * never grab the same row. Single-process V1 still uses the same shape
+ * for clean upgrade to multi-worker later.
+ */
+async function claimNextSubAgentSession(workerId) {
+  if (!workerId) return null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT id FROM sub_agent_sessions
+        WHERE status = 'queued'
+        ORDER BY started_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1`,
+    );
+    if (!rows.length) {
+      await client.query('COMMIT');
+      return null;
+    }
+    const sid = rows[0].id;
+    const { rows: claimed } = await client.query(
+      `UPDATE sub_agent_sessions
+          SET status = 'running',
+              worker_id = $2,
+              claimed_at = NOW()
+        WHERE id = $1
+        RETURNING ${SUB_AGENT_SESSION_COLUMNS}`,
+      [sid, workerId],
+    );
+    await client.query('COMMIT');
+    return claimed[0] || null;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateSubAgentSession(sessionId, fields = {}) {
+  if (!sessionId) return null;
+  const allowed = {
+    status: 'status',
+    currentPhase: 'current_phase',
+    budgetUsed: 'budget_used',
+    result: 'result',
+    error: 'error',
+  };
+  const sets = [];
+  const values = [sessionId];
+  let i = 2;
+  for (const [k, col] of Object.entries(allowed)) {
+    if (fields[k] === undefined) continue;
+    sets.push(`${col} = $${i}`);
+    values.push(fields[k]);
+    i += 1;
+  }
+  if (!sets.length) return getSubAgentSession(sessionId);
+  // Stamp completed_at on terminal status transitions.
+  const TERMINAL = new Set(['completed','budget_exhausted','stagnated','failed','killed']);
+  if (fields.status && TERMINAL.has(fields.status)) {
+    sets.push(`completed_at = NOW()`);
+  }
+  const { rows } = await pool.query(
+    `UPDATE sub_agent_sessions
+        SET ${sets.join(', ')}
+      WHERE id = $1
+      RETURNING ${SUB_AGENT_SESSION_COLUMNS}`,
+    values,
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Request a kill — flips status to 'killed' if the session is currently
+ * queued OR signals the worker to stop at next phase boundary if it's
+ * running. The orchestrator polls status before each phase and exits
+ * when it sees 'killed'.
+ *
+ * V1 kill-latency contract (Q10): up to ~30s on running sessions
+ * because the check is at phase boundaries, not mid-synthesis.
+ */
+async function requestSubAgentKill(sessionId, userId) {
+  if (!sessionId || !userId) return null;
+  const { rows } = await pool.query(
+    `UPDATE sub_agent_sessions
+        SET status = CASE
+                       WHEN status = 'queued' THEN 'killed'::text
+                       WHEN status = 'running' THEN 'killed'::text
+                       ELSE status
+                     END,
+            completed_at = CASE
+                             WHEN status IN ('queued','running') THEN NOW()
+                             ELSE completed_at
+                           END
+      WHERE id = $1 AND user_id = $2 AND status IN ('queued','running')
+      RETURNING ${SUB_AGENT_SESSION_COLUMNS}`,
+    [sessionId, userId],
+  );
+  return rows[0] || null;
+}
+
+async function logSubAgentStep({ sessionId, phase, stepKind, payload = null, durationMs = null }) {
+  if (!sessionId || !phase || !stepKind) return;
+  await pool.query(
+    `INSERT INTO sub_agent_steps (session_id, phase, step_kind, payload, duration_ms)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [sessionId, phase, stepKind, payload, durationMs],
+  ).catch(() => {});
+}
+
+async function listSubAgentSteps(sessionId, { limit = 500 } = {}) {
+  if (!sessionId) return [];
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 500, 1), 2000);
+  const { rows } = await pool.query(
+    `SELECT id, session_id AS "sessionId", phase,
+            step_kind AS "stepKind", payload,
+            duration_ms AS "durationMs", created_at AS "createdAt"
+       FROM sub_agent_steps
+      WHERE session_id = $1
+      ORDER BY created_at ASC
+      LIMIT ${lim}`,
+    [sessionId],
+  );
+  return rows;
+}
+
+async function logSubAgentFinding({ sessionId, phase, finding }) {
+  if (!sessionId || !phase || !finding) return;
+  await pool.query(
+    `INSERT INTO sub_agent_findings (session_id, phase, finding) VALUES ($1, $2, $3)`,
+    [sessionId, phase, finding],
+  ).catch(() => {});
+}
+
+async function listSubAgentFindings(sessionId) {
+  if (!sessionId) return [];
+  const { rows } = await pool.query(
+    `SELECT id, session_id AS "sessionId", phase, finding, created_at AS "createdAt"
+       FROM sub_agent_findings
+      WHERE session_id = $1
+      ORDER BY created_at ASC`,
+    [sessionId],
+  );
+  return rows;
+}
+
 /**
  * Lookup a skill by name for the current user. Case-insensitive,
  * exact-match. Used by the skill-feedback regex path to resolve
@@ -7107,6 +7357,104 @@ async function runMigrations() {
   await pool.query(`CREATE INDEX IF NOT EXISTS skill_invocations_user_created_idx ON skill_invocations(user_id, created_at DESC)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS skill_invocations_skill_idx ON skill_invocations(skill_id, created_at DESC)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS skill_invocations_turn_idx ON skill_invocations(turn_id) WHERE turn_id IS NOT NULL`).catch(() => {});
+
+  // ── Agents foundation V1 — Sub-agents (M3.1) ────────────────────────────
+  // Bounded sub-agents that run async in a worker process. State machine,
+  // not LLM agent loop (Q2). Phase config lives in
+  // server/lib/subAgents/<name>.cjs; the DB row is a registry pointer
+  // surfaced to the UI templates list (V1: research_agent only).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sub_agent_definitions (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      description     TEXT NOT NULL,
+      default_budget  JSONB NOT NULL,
+      phases          JSONB NOT NULL,
+      is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'sub_agent_definitions table', error: err.message }));
+
+  // Seed research_agent definition (M3.2). Idempotent — UPSERT keeps the
+  // schema row aligned with the code-side phase config so UI list view
+  // stays accurate.
+  await pool.query(`
+    INSERT INTO sub_agent_definitions (id, name, description, default_budget, phases, is_active)
+    VALUES (
+      'research_agent',
+      'Research agent',
+      'Bounded multi-step investigation. Read-only by default — searches inbox + calendar + contacts + web, returns a structured summary with findings + sources + action items.',
+      '{"tool_calls": 30, "wall_clock_ms": 300000, "tokens": 30000, "spend_usd": 2.0}'::jsonb,
+      '[
+        {"name": "plan",       "tool_call_budget": 0,  "wall_clock_ms": 30000,  "synthesis": true},
+        {"name": "gather",     "tool_call_budget": 24, "wall_clock_ms": 180000, "synthesis": false},
+        {"name": "synthesize", "tool_call_budget": 0,  "wall_clock_ms": 60000,  "synthesis": true},
+        {"name": "package",    "tool_call_budget": 0,  "wall_clock_ms": 30000,  "synthesis": true}
+      ]'::jsonb,
+      TRUE
+    )
+    ON CONFLICT (id) DO UPDATE
+       SET name = EXCLUDED.name,
+           description = EXCLUDED.description,
+           default_budget = EXCLUDED.default_budget,
+           phases = EXCLUDED.phases,
+           is_active = EXCLUDED.is_active
+  `).catch((err) => logger.warn('migration.warn', { label: 'sub_agent_definitions seed', error: err.message }));
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sub_agent_sessions (
+      id                TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      definition_id     TEXT NOT NULL REFERENCES sub_agent_definitions(id),
+      prompt            TEXT NOT NULL,
+      status            TEXT NOT NULL CHECK (status IN ('queued','running','completed','budget_exhausted','stagnated','failed','killed')),
+      current_phase     TEXT,
+      budget            JSONB NOT NULL,
+      budget_used       JSONB NOT NULL DEFAULT '{}'::jsonb,
+      result            JSONB,
+      error             TEXT,
+      parent_decision_id INT REFERENCES decision_log(id) ON DELETE SET NULL,
+      worker_id         TEXT,
+      claimed_at        TIMESTAMPTZ,
+      started_at        TIMESTAMPTZ DEFAULT NOW(),
+      completed_at      TIMESTAMPTZ
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'sub_agent_sessions table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS sub_agent_sessions_user_started_idx ON sub_agent_sessions(user_id, started_at DESC)`).catch(() => {});
+  // Partial index on the active states accelerates the worker's claim
+  // query (SELECT FOR UPDATE SKIP LOCKED on rows that are queued or
+  // running) and the concurrency-cap COUNT.
+  await pool.query(`CREATE INDEX IF NOT EXISTS sub_agent_sessions_active_idx ON sub_agent_sessions(user_id, status) WHERE status IN ('queued','running')`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sub_agent_steps (
+      id              BIGSERIAL PRIMARY KEY,
+      session_id      TEXT NOT NULL REFERENCES sub_agent_sessions(id) ON DELETE CASCADE,
+      phase           TEXT NOT NULL,
+      step_kind       TEXT NOT NULL CHECK (step_kind IN ('phase_enter','tool_call','synthesis','phase_exit','error','killed')),
+      payload         JSONB,
+      duration_ms     INTEGER,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'sub_agent_steps table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS sub_agent_steps_session_idx ON sub_agent_steps(session_id, created_at)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sub_agent_findings (
+      id              BIGSERIAL PRIMARY KEY,
+      session_id      TEXT NOT NULL REFERENCES sub_agent_sessions(id) ON DELETE CASCADE,
+      phase           TEXT NOT NULL,
+      finding         JSONB NOT NULL,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'sub_agent_findings table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS sub_agent_findings_session_idx ON sub_agent_findings(session_id)`).catch(() => {});
+
+  // Link agent_actions back to their parent sub-agent session for full
+  // provenance — every tool call inside a research run JOINs back to
+  // the run's metadata.
+  await pool.query(`ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS sub_agent_session_id TEXT REFERENCES sub_agent_sessions(id) ON DELETE SET NULL`)
+    .catch((err) => logger.warn('migration.warn', { label: 'agent_actions.sub_agent_session_id', error: err.message }));
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -10006,6 +10354,20 @@ module.exports = {
   applySkillTrustFeedback,
   getSkillByName,
   userHasTopicTouchingSkill,
+  // Sub-agents (agents-foundation v1, M3)
+  getSubAgentDefinition,
+  listSubAgentDefinitions,
+  countActiveSubAgentSessions,
+  createSubAgentSession,
+  getSubAgentSession,
+  listSubAgentSessions,
+  claimNextSubAgentSession,
+  updateSubAgentSession,
+  requestSubAgentKill,
+  logSubAgentStep,
+  listSubAgentSteps,
+  logSubAgentFinding,
+  listSubAgentFindings,
   logDecision,
   getDecisionHistory,
   getAdminDecisions,
