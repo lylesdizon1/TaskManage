@@ -1420,6 +1420,30 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 if (tools.some(t => ['create_note', 'update_note', 'delete_note'].includes(t))) {
                   onReloadNotes?.();
                 }
+                // M4.6 — when Aria dispatches a sub-agent, attach the
+                // session_id to the assistant message so the bubble
+                // renders an inline tile that polls for completion.
+                const summaries = Array.isArray(parsed.summaries) ? parsed.summaries : [];
+                const subAgentDispatches = summaries
+                  .filter((s) => s.tool === 'start_sub_agent' && s.success && s.result?.session_id)
+                  .map((s) => ({
+                    session_id: s.result.session_id,
+                    definition_id: s.result.definition_id || 'research_agent',
+                  }));
+                if (subAgentDispatches.length) {
+                  setCcMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last && last.role === 'assistant') {
+                      const existing = Array.isArray(last.subAgentSessions) ? last.subAgentSessions : [];
+                      updated[updated.length - 1] = {
+                        ...last,
+                        subAgentSessions: [...existing, ...subAgentDispatches],
+                      };
+                    }
+                    return updated;
+                  });
+                }
               } else if (currentEvent === 'skills_loaded') {
                 // M2.6 — attach loaded-skill metadata to the assistant
                 // message so it can render the inline indicator.
@@ -2648,6 +2672,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                         ))}
                       </div>
                     )}
+                    {!isUser && Array.isArray(msg.subAgentSessions) && msg.subAgentSessions.length > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {msg.subAgentSessions.map((s) => (
+                          <SubAgentTile key={s.session_id} sessionId={s.session_id} apiFetch={apiFetch} />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2990,6 +3021,98 @@ const ROW_BTN_STYLE = {
   cursor: 'pointer',
   transition: 'background 120ms',
 };
+
+// M4.6 — inline tile rendered under an Aria response when she dispatched
+// a sub-agent. Polls the session every 4s while active; on completion
+// shows the summary and a click-through to the run detail page.
+function SubAgentTile({ sessionId, apiFetch }) {
+  const [session, setSession] = useState(null);
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    let cancelled = false;
+    const fetchOnce = async () => {
+      try {
+        const r = await apiFetch(`/api/sub-agents/sessions/${sessionId}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!cancelled) setSession(data);
+      } catch {}
+    };
+    fetchOnce();
+    const id = setInterval(() => {
+      // Stop polling once we've seen a terminal status.
+      const cur = session;
+      if (cur && !['queued', 'running'].includes(cur.status)) return;
+      fetchOnce();
+    }, 4000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [sessionId, apiFetch, session]);
+
+  const goToDetail = () => {
+    window.dispatchEvent(new CustomEvent('navigate-app', { detail: { view: 'agents' } }));
+  };
+
+  if (!session) {
+    return (
+      <div style={{
+        fontSize: 12, color: '#6b7280', padding: '8px 12px',
+        background: '#f5f2fa', borderRadius: 8, border: '1px solid #e5e7eb',
+        fontFamily: 'Manrope, sans-serif', maxWidth: 480,
+      }}>
+        🔬 Research dispatched…
+      </div>
+    );
+  }
+
+  const isActive = session.status === 'queued' || session.status === 'running';
+  const used = session.budgetUsed || {};
+  const budget = session.budget || {};
+
+  const statusStyles = {
+    queued:            { bg: '#f5f2fa', text: '#6b7280', label: 'queued' },
+    running:           { bg: '#dbeafe', text: '#1e40af', label: 'running' },
+    completed:         { bg: '#dcfce7', text: '#166534', label: 'done' },
+    failed:            { bg: '#fee2e2', text: '#991b1b', label: 'failed' },
+    budget_exhausted:  { bg: '#fef3c7', text: '#92400e', label: 'budget reached' },
+    killed:            { bg: '#f3f4f6', text: '#374151', label: 'cancelled' },
+    stagnated:         { bg: '#f3f4f6', text: '#374151', label: 'stagnated' },
+  };
+  const s = statusStyles[session.status] || statusStyles.completed;
+
+  const summary = session.result?.summary;
+  const findingCount = Array.isArray(session.result?.key_findings) ? session.result.key_findings.length : 0;
+
+  return (
+    <button
+      onClick={goToDetail}
+      style={{
+        textAlign: 'left', padding: '10px 12px', background: s.bg,
+        borderRadius: 8, border: '1px solid #e5e7eb',
+        fontFamily: 'Manrope, sans-serif', cursor: 'pointer', maxWidth: 540,
+        display: 'block', width: '100%',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 14 }}>🔬</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: s.text, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          {s.label}
+        </span>
+        {isActive && session.currentPhase && (
+          <span style={{ fontSize: 11, color: '#6b7280' }}>· {session.currentPhase}</span>
+        )}
+        {!isActive && findingCount > 0 && (
+          <span style={{ fontSize: 11, color: '#6b7280' }}>· {findingCount} finding{findingCount === 1 ? '' : 's'}</span>
+        )}
+      </div>
+      <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.4 }}>
+        {summary || (isActive
+          ? `Tool calls ${used.tool_calls || 0}/${budget.tool_calls || 30} · click to view trace`
+          : `Click to view ${session.status === 'completed' ? 'result' : 'details'}`)}
+      </div>
+    </button>
+  );
+}
 
 function RowButton({ children, onClick }) {
   return (

@@ -22,11 +22,15 @@ const TEXT_SECONDARY = '#6b7280';
 const PERSONAS = ['CFO', 'COO', 'Best-Friend', 'Operator', 'Personal', 'Brand'];
 
 export default function AgentsPanel({ apiFetch, addToast }) {
-  const [view, setView] = useState({ kind: 'list' }); // { kind: 'list' } | { kind: 'edit', id: null|string }
+  // view.kind: 'list' | 'edit-skill' | 'run-detail'
+  const [view, setView] = useState({ kind: 'list' });
   const [skills, setSkills] = useState([]);
-  const [loaded, setLoaded] = useState(false);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
 
-  const reload = useCallback(async () => {
+  const reloadSkills = useCallback(async () => {
     try {
       const r = await apiFetch('/api/skills?include_inactive=true');
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -35,19 +39,62 @@ export default function AgentsPanel({ apiFetch, addToast }) {
     } catch (err) {
       console.error('[agents] failed to load skills', err);
       addToast?.({ message: 'Could not load skills', type: 'error' });
-    } finally { setLoaded(true); }
+    } finally { setSkillsLoaded(true); }
   }, [apiFetch, addToast]);
 
-  useEffect(() => { reload(); }, [reload]);
+  const reloadSessions = useCallback(async () => {
+    try {
+      const r = await apiFetch('/api/sub-agents/sessions');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setSessions(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('[agents] failed to load sessions', err);
+    } finally { setSessionsLoaded(true); }
+  }, [apiFetch]);
 
-  const onEdit = (id) => setView({ kind: 'edit', id });
-  const onCreateNew = () => setView({ kind: 'edit', id: null });
-  const onBackToList = () => { setView({ kind: 'list' }); reload(); };
+  useEffect(() => {
+    reloadSkills();
+    reloadSessions();
+  }, [reloadSkills, reloadSessions]);
 
-  if (view.kind === 'edit') {
+  // Poll sessions every 5s while at least one is queued/running, so the
+  // landing tiles update without manual refresh. Stops polling when all
+  // sessions are terminal.
+  const hasActive = useMemo(
+    () => sessions.some((s) => s.status === 'queued' || s.status === 'running'),
+    [sessions],
+  );
+  useEffect(() => {
+    if (view.kind !== 'list') return undefined;
+    if (!hasActive) return undefined;
+    const id = setInterval(reloadSessions, 5000);
+    return () => clearInterval(id);
+  }, [view.kind, hasActive, reloadSessions]);
+
+  const onEditSkill = (id) => setView({ kind: 'edit-skill', id });
+  const onCreateNewSkill = () => setView({ kind: 'edit-skill', id: null });
+  const onOpenRun = (sessionId) => setView({ kind: 'run-detail', id: sessionId });
+  const onBackToList = () => {
+    setView({ kind: 'list' });
+    reloadSkills();
+    reloadSessions();
+  };
+
+  if (view.kind === 'edit-skill') {
     return (
       <SkillEditView
         skillId={view.id}
+        apiFetch={apiFetch}
+        addToast={addToast}
+        onClose={onBackToList}
+      />
+    );
+  }
+  if (view.kind === 'run-detail') {
+    return (
+      <RunDetailView
+        sessionId={view.id}
         apiFetch={apiFetch}
         addToast={addToast}
         onClose={onBackToList}
@@ -69,15 +116,37 @@ export default function AgentsPanel({ apiFetch, addToast }) {
 
         <SkillsSection
           skills={skills}
-          loaded={loaded}
-          onEdit={onEdit}
-          onCreateNew={onCreateNew}
+          loaded={skillsLoaded}
+          onEdit={onEditSkill}
+          onCreateNew={onCreateNewSkill}
           apiFetch={apiFetch}
           addToast={addToast}
-          onChanged={reload}
+          onChanged={reloadSkills}
         />
 
-        <SubAgentsSectionPlaceholder />
+        <SubAgentsSection
+          sessions={sessions}
+          loaded={sessionsLoaded}
+          onOpenRun={onOpenRun}
+          onStartRun={() => setDispatchOpen(true)}
+          apiFetch={apiFetch}
+          addToast={addToast}
+          onChanged={reloadSessions}
+        />
+
+        {dispatchOpen && (
+          <DispatchModal
+            apiFetch={apiFetch}
+            addToast={addToast}
+            existingActiveCount={sessions.filter((s) => s.status === 'queued' || s.status === 'running').length}
+            onClose={() => setDispatchOpen(false)}
+            onDispatched={(session) => {
+              setDispatchOpen(false);
+              reloadSessions();
+              if (session?.id) onOpenRun(session.id);
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -334,28 +403,637 @@ function fmtRelative(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
-// ── Sub-agents section (V1 placeholder) ────────────────────────────────
+// ── Sub-agents section (M4.1) ──────────────────────────────────────────
 
-function SubAgentsSectionPlaceholder() {
+function SubAgentsSection({ sessions, loaded, onOpenRun, onStartRun, apiFetch, addToast, onChanged }) {
+  const activeCount = sessions.filter((s) => s.status === 'queued' || s.status === 'running').length;
+
+  // Active runs first (status = queued + running), then completed/failed
+  // by started_at desc.
+  const sorted = useMemo(() => {
+    return [...sessions].sort((a, b) => {
+      const aActive = a.status === 'queued' || a.status === 'running';
+      const bActive = b.status === 'queued' || b.status === 'running';
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      const ta = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+      const tb = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+      return tb - ta;
+    });
+  }, [sessions]);
+
   return (
     <section>
       <SectionHeader
         title="Sub-agents"
-        subtitle="Long-running work Aria does in the background · max 2 concurrent"
+        subtitle={`Long-running work Aria does in the background · ${activeCount} active · max 2 concurrent`}
+        ctaLabel="+ Start run"
+        onCta={onStartRun}
       />
-      <div style={{
-        padding: 32, textAlign: 'center', background: 'white',
-        border: `1px dashed ${BORDER}`, borderRadius: 12,
-      }}>
-        <div style={{ fontSize: 14, color: TEXT_PRIMARY, fontWeight: 600, marginBottom: 8 }}>
-          Coming soon
+
+      {loaded && sorted.length === 0 && (
+        <div style={{
+          padding: 32, textAlign: 'center', background: 'white',
+          border: `1px dashed ${BORDER}`, borderRadius: 12,
+        }}>
+          <div style={{ fontSize: 14, color: TEXT_PRIMARY, fontWeight: 600, marginBottom: 8 }}>
+            No runs yet
+          </div>
+          <div style={{ fontSize: 12, color: TEXT_SECONDARY, maxWidth: 480, margin: '0 auto 16px' }}>
+            Sub-agents handle multi-step investigations in the background. Try "prep me for tomorrow's call with Bob" or "catch me up on Carevestment from the last 2 weeks."
+          </div>
+          <button
+            onClick={onStartRun}
+            style={{
+              fontSize: 13, fontWeight: 600, color: 'white', background: PRIMARY,
+              border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+            }}
+          >
+            Start your first run
+          </button>
         </div>
-        <div style={{ fontSize: 12, color: TEXT_SECONDARY, maxWidth: 480, margin: '0 auto' }}>
-          Bounded sub-agents (research, monitoring, comparison) ship in M3+M4. The first instance — research-agent — will dispatch async investigations and report back when done.
+      )}
+
+      {sorted.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {sorted.map((s) => (
+            <RunTile
+              key={s.id}
+              session={s}
+              onOpen={() => onOpenRun(s.id)}
+              apiFetch={apiFetch}
+              addToast={addToast}
+              onChanged={onChanged}
+            />
+          ))}
         </div>
-      </div>
+      )}
     </section>
   );
+}
+
+function RunTile({ session, onOpen, apiFetch, addToast, onChanged }) {
+  const isActive = session.status === 'queued' || session.status === 'running';
+  const used = session.budgetUsed || {};
+  const budget = session.budget || {};
+
+  const handleCancel = async (e) => {
+    e.stopPropagation();
+    if (!window.confirm('Cancel this run? In-flight work will be lost.')) return;
+    try {
+      const r = await apiFetch(`/api/sub-agents/sessions/${session.id}/kill`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      addToast?.({ message: 'Cancel requested — worker will exit at next phase boundary', type: 'info' });
+      onChanged?.();
+    } catch (err) {
+      addToast?.({ message: 'Cancel failed', type: 'error' });
+    }
+  };
+
+  const statusKind = (() => {
+    if (session.status === 'running' || session.status === 'queued') return 'running';
+    if (session.status === 'completed') return 'completed';
+    if (session.status === 'failed') return 'failed';
+    if (session.status === 'budget_exhausted') return 'budget';
+    if (session.status === 'killed') return 'killed';
+    if (session.status === 'stagnated') return 'stagnated';
+    return 'completed';
+  })();
+
+  return (
+    <div
+      onClick={onOpen}
+      style={{
+        padding: '16px 18px', background: 'white', borderRadius: 12,
+        border: `1px solid ${BORDER}`, cursor: 'pointer',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+          <RunStatusPill kind={statusKind} />
+          <span style={{ fontSize: 12, color: TEXT_SECONDARY }}>
+            {session.definitionId}
+            {isActive && session.currentPhase && ` · ${session.currentPhase}`}
+            {!isActive && session.result?.key_findings && ` · ${session.result.key_findings.length} finding${session.result.key_findings.length === 1 ? '' : 's'}`}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {isActive && (
+            <button
+              onClick={handleCancel}
+              style={{
+                fontSize: 12, fontWeight: 600, color: '#dc2626', background: 'white',
+                border: `1px solid ${BORDER}`, padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
+              }}
+            >Cancel</button>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpen(); }}
+            style={{
+              fontSize: 12, fontWeight: 600, color: TEXT_PRIMARY, background: 'white',
+              border: `1px solid ${BORDER}`, padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
+            }}
+          >View</button>
+        </div>
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 500, color: TEXT_PRIMARY, marginBottom: 10, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+        {session.prompt}
+      </div>
+      {isActive && (
+        <ProgressBar
+          used={used.tool_calls || 0}
+          total={budget.tool_calls || 30}
+          color={PRIMARY}
+        />
+      )}
+      <div style={{
+        marginTop: 10, paddingTop: 10, borderTop: `0.5px solid ${BORDER}`,
+        display: 'flex', gap: 16, fontSize: 11, color: TEXT_SECONDARY, flexWrap: 'wrap',
+      }}>
+        {isActive ? (
+          <>
+            <span>Started {fmtRelative(session.startedAt)}</span>
+            <span>Tool calls {used.tool_calls || 0}/{budget.tool_calls || 30}</span>
+            <span>Spend ${(used.spend_usd || 0).toFixed(3)}/${(budget.spend_usd || 2).toFixed(2)}</span>
+          </>
+        ) : (
+          <>
+            <span>{fmtRelative(session.startedAt)}</span>
+            <span>Duration {fmtDuration(session.startedAt, session.completedAt)}</span>
+            <span>Spent ${(used.spend_usd || 0).toFixed(3)}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RunStatusPill({ kind }) {
+  const styles = {
+    running:   { bg: '#dbeafe', color: '#1e40af', label: 'RUNNING' },
+    completed: { bg: '#dcfce7', color: '#166534', label: 'COMPLETED' },
+    failed:    { bg: '#fee2e2', color: '#991b1b', label: 'FAILED' },
+    budget:    { bg: '#fef3c7', color: '#92400e', label: 'BUDGET' },
+    killed:    { bg: '#f3f4f6', color: '#374151', label: 'KILLED' },
+    stagnated: { bg: '#f3f4f6', color: '#374151', label: 'STAGNATED' },
+  };
+  const s = styles[kind] || styles.completed;
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, color: s.color, background: s.bg,
+      padding: '2px 8px', borderRadius: 999,
+    }}>
+      {kind === 'running' && (
+        <span style={{
+          display: 'inline-block', width: 6, height: 6, borderRadius: 999,
+          background: s.color, marginRight: 5, verticalAlign: 'middle',
+          animation: 'pulse 1.5s ease-in-out infinite',
+        }} />
+      )}
+      {s.label}
+    </span>
+  );
+}
+
+function ProgressBar({ used, total, color = PRIMARY }) {
+  const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
+  return (
+    <div style={{ width: '100%', height: 5, background: '#f3f4f6', borderRadius: 999, overflow: 'hidden' }}>
+      <div style={{ width: `${pct}%`, height: '100%', background: color, transition: 'width 300ms ease' }} />
+    </div>
+  );
+}
+
+function fmtDuration(startIso, endIso) {
+  if (!startIso) return '—';
+  const start = new Date(startIso).getTime();
+  const end = endIso ? new Date(endIso).getTime() : Date.now();
+  const ms = end - start;
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ${sec % 60}s`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ${min % 60}m`;
+}
+
+// ── Dispatch modal (M4.4) ──────────────────────────────────────────────
+
+function DispatchModal({ apiFetch, addToast, existingActiveCount, onClose, onDispatched }) {
+  const [prompt, setPrompt] = useState('');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [maxToolCalls, setMaxToolCalls] = useState(30);
+  const [maxMinutes, setMaxMinutes] = useState(5);
+  const [maxSpend, setMaxSpend] = useState(2.0);
+  const [dispatching, setDispatching] = useState(false);
+
+  const atCap = existingActiveCount >= 2;
+
+  const handleDispatch = async () => {
+    if (!prompt.trim()) {
+      addToast?.({ message: 'Prompt is required', type: 'error' });
+      return;
+    }
+    if (atCap) {
+      addToast?.({ message: 'max 2 concurrent runs reached — cancel one or wait', type: 'error' });
+      return;
+    }
+    setDispatching(true);
+    try {
+      const r = await apiFetch('/api/sub-agents/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: prompt.trim(),
+          definition_id: 'research_agent',
+          budget_overrides: {
+            tool_calls: Math.max(1, Math.min(50, maxToolCalls)),
+            wall_clock_ms: Math.max(60_000, Math.min(600_000, maxMinutes * 60_000)),
+            spend_usd: Math.max(0.1, Math.min(5.0, maxSpend)),
+          },
+        }),
+      });
+      if (r.status === 409) {
+        const data = await r.json().catch(() => ({}));
+        addToast?.({ message: data.error || 'Concurrency cap reached', type: 'error' });
+        setDispatching(false);
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const session = await r.json();
+      addToast?.({ message: 'Research dispatched — Aria will ping you when done', type: 'success' });
+      onDispatched?.(session);
+    } catch (err) {
+      addToast?.({ message: 'Dispatch failed', type: 'error' });
+      setDispatching(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.4)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 100, padding: 16,
+    }} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'white', borderRadius: 16, maxWidth: 560, width: '100%',
+          padding: 24, fontFamily: 'Manrope, sans-serif',
+          boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
+        }}
+      >
+        <h2 style={{
+          fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 18, fontWeight: 700,
+          color: TEXT_PRIMARY, margin: 0, marginBottom: 6,
+        }}>Start research run</h2>
+        <p style={{ fontSize: 12, color: TEXT_SECONDARY, marginTop: 0, marginBottom: 16 }}>
+          Aria runs in the background and pings via WhatsApp when done.
+          {atCap && <span style={{ color: '#dc2626', fontWeight: 600 }}> Max 2 active reached.</span>}
+        </p>
+
+        <FieldLabel>What should I investigate?</FieldLabel>
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="e.g. Prep me for tomorrow's call with Bob — recent emails, calendar history, open items"
+          autoFocus
+          style={{
+            width: '100%', minHeight: 100, fontSize: 14, padding: '10px 12px',
+            border: `1px solid ${BORDER}`, borderRadius: 8, outline: 'none',
+            fontFamily: 'Manrope, sans-serif', resize: 'vertical', marginBottom: 16,
+          }}
+        />
+
+        <details
+          open={advancedOpen}
+          onToggle={(e) => setAdvancedOpen(e.target.open)}
+          style={{ marginBottom: 16 }}
+        >
+          <summary style={{ fontSize: 12, fontWeight: 600, color: TEXT_PRIMARY, cursor: 'pointer', userSelect: 'none' }}>
+            Advanced
+          </summary>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 12 }}>
+            <div>
+              <FieldLabel>Max tool calls</FieldLabel>
+              <input type="number" min={1} max={50} value={maxToolCalls}
+                onChange={(e) => setMaxToolCalls(parseInt(e.target.value, 10) || 30)}
+                style={{ width: '100%', fontSize: 13, padding: '6px 8px', border: `1px solid ${BORDER}`, borderRadius: 6, outline: 'none' }}
+              />
+            </div>
+            <div>
+              <FieldLabel>Max minutes</FieldLabel>
+              <input type="number" min={1} max={10} value={maxMinutes}
+                onChange={(e) => setMaxMinutes(parseInt(e.target.value, 10) || 5)}
+                style={{ width: '100%', fontSize: 13, padding: '6px 8px', border: `1px solid ${BORDER}`, borderRadius: 6, outline: 'none' }}
+              />
+            </div>
+            <div>
+              <FieldLabel>Max spend ($)</FieldLabel>
+              <input type="number" min={0.1} max={5} step={0.5} value={maxSpend}
+                onChange={(e) => setMaxSpend(parseFloat(e.target.value) || 2.0)}
+                style={{ width: '100%', fontSize: 13, padding: '6px 8px', border: `1px solid ${BORDER}`, borderRadius: 6, outline: 'none' }}
+              />
+            </div>
+          </div>
+        </details>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            onClick={onClose}
+            disabled={dispatching}
+            style={{
+              fontSize: 13, fontWeight: 600, color: TEXT_PRIMARY, background: 'white',
+              border: `1px solid ${BORDER}`, padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+            }}
+          >Cancel</button>
+          <button
+            onClick={handleDispatch}
+            disabled={dispatching || atCap || !prompt.trim()}
+            style={{
+              fontSize: 13, fontWeight: 600, color: 'white', background: PRIMARY,
+              border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+              opacity: (dispatching || atCap || !prompt.trim()) ? 0.6 : 1,
+            }}
+          >{dispatching ? 'Dispatching…' : 'Start'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Run detail view (M4.3) ─────────────────────────────────────────────
+
+function RunDetailView({ sessionId, apiFetch, addToast, onClose }) {
+  const [session, setSession] = useState(null);
+  const [steps, setSteps] = useState([]);
+  const [findings, setFindings] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [killing, setKilling] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const [sR, stR, fR] = await Promise.all([
+        apiFetch(`/api/sub-agents/sessions/${sessionId}`),
+        apiFetch(`/api/sub-agents/sessions/${sessionId}/steps`),
+        apiFetch(`/api/sub-agents/sessions/${sessionId}/findings`),
+      ]);
+      if (sR.ok) setSession(await sR.json());
+      if (stR.ok) setSteps(await stR.json());
+      if (fR.ok) setFindings(await fR.json());
+    } catch (err) {
+      console.error('[run-detail] reload failed', err);
+    } finally { setLoaded(true); }
+  }, [apiFetch, sessionId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // Poll while active.
+  const isActive = session && (session.status === 'queued' || session.status === 'running');
+  useEffect(() => {
+    if (!isActive) return undefined;
+    const id = setInterval(reload, 3000);
+    return () => clearInterval(id);
+  }, [isActive, reload]);
+
+  const handleKill = async () => {
+    if (!window.confirm('Cancel this run? Worker exits at next phase boundary (~30s).')) return;
+    setKilling(true);
+    try {
+      const r = await apiFetch(`/api/sub-agents/sessions/${sessionId}/kill`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      addToast?.({ message: 'Cancel requested', type: 'info' });
+      reload();
+    } catch (err) {
+      addToast?.({ message: 'Cancel failed', type: 'error' });
+    } finally { setKilling(false); }
+  };
+
+  if (!loaded) {
+    return <div className="flex-1 flex items-center justify-center" style={{ background: PANEL_BG, color: TEXT_SECONDARY, fontSize: 13 }}>Loading…</div>;
+  }
+  if (!session) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-4" style={{ background: PANEL_BG, color: TEXT_SECONDARY }}>
+        <div>Run not found.</div>
+        <button onClick={onClose} style={{
+          fontSize: 13, fontWeight: 600, color: PRIMARY, background: 'transparent',
+          border: 'none', cursor: 'pointer',
+        }}>← Back to Agents</button>
+      </div>
+    );
+  }
+
+  const used = session.budgetUsed || {};
+  const budget = session.budget || {};
+  const isTerminal = !isActive;
+  const result = session.result;
+
+  return (
+    <div className="flex-1 overflow-y-auto w-full" style={{ background: PANEL_BG, fontFamily: 'Manrope, sans-serif' }}>
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 10, background: PANEL_BG,
+        borderBottom: `1px solid ${BORDER}`, padding: '14px 32px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      }}>
+        <button
+          onClick={onClose}
+          style={{
+            fontSize: 13, fontWeight: 500, color: TEXT_SECONDARY, background: 'transparent',
+            border: 'none', cursor: 'pointer', padding: 0,
+          }}
+        >← Agents · Sub-agents</button>
+        {isActive && (
+          <button
+            onClick={handleKill}
+            disabled={killing}
+            style={{
+              fontSize: 13, fontWeight: 600, color: '#dc2626', background: 'white',
+              border: `1px solid ${BORDER}`, padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+            }}
+          >{killing ? 'Cancelling…' : 'Cancel run'}</button>
+        )}
+      </div>
+
+      <div style={{ padding: '24px 32px 80px', maxWidth: 880, margin: '0 auto' }}>
+        {/* Status header */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <RunStatusPill kind={mapStatusKind(session.status)} />
+            <span style={{ fontSize: 13, color: TEXT_SECONDARY }}>
+              {session.definitionId}
+              {isActive && session.currentPhase && ` · ${session.currentPhase}`}
+            </span>
+          </div>
+          <h1 style={{
+            fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 22, fontWeight: 600,
+            color: TEXT_PRIMARY, margin: 0, lineHeight: 1.4,
+          }}>{session.prompt}</h1>
+          <div style={{
+            marginTop: 12, display: 'flex', gap: 16, fontSize: 12, color: TEXT_SECONDARY, flexWrap: 'wrap',
+          }}>
+            <span>Started {fmtRelative(session.startedAt)}</span>
+            {session.completedAt && <span>Completed {fmtRelative(session.completedAt)}</span>}
+            <span>Duration {fmtDuration(session.startedAt, session.completedAt)}</span>
+            <span>Tool calls {used.tool_calls || 0}/{budget.tool_calls || 30}</span>
+            <span>Spend ${(used.spend_usd || 0).toFixed(3)}/${(budget.spend_usd || 2).toFixed(2)}</span>
+          </div>
+        </div>
+
+        {/* Final result block (terminal-completed only) */}
+        {isTerminal && session.status === 'completed' && result && (
+          <FormCard>
+            <SectionTitle title="Result" subtitle={`Confidence ${Number(result.confidence ?? 0).toFixed(2)}`} />
+            <div style={{ fontSize: 14, color: TEXT_PRIMARY, lineHeight: 1.6, marginBottom: 16 }}>
+              {result.summary}
+            </div>
+            {Array.isArray(result.key_findings) && result.key_findings.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <FieldLabel>Findings</FieldLabel>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {result.key_findings.map((f, i) => (
+                    <div key={i} style={{
+                      padding: 10, background: '#fafafa', borderRadius: 6,
+                      borderLeft: `3px solid ${PRIMARY}`,
+                    }}>
+                      <div style={{ fontSize: 13, color: TEXT_PRIMARY, marginBottom: 4 }}>{f.point}</div>
+                      <div style={{ fontSize: 11, color: TEXT_SECONDARY, fontFamily: 'Menlo, monospace' }}>{f.source}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {Array.isArray(result.action_items) && result.action_items.length > 0 && (
+              <div>
+                <FieldLabel>Action items</FieldLabel>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: TEXT_PRIMARY }}>
+                  {result.action_items.map((a, i) => <li key={i} style={{ marginBottom: 4 }}>{a}</li>)}
+                </ul>
+              </div>
+            )}
+          </FormCard>
+        )}
+
+        {/* Failed / killed / budget error block */}
+        {isTerminal && session.status !== 'completed' && (
+          <FormCard>
+            <SectionTitle title={`Run ${session.status}`} subtitle={session.error || 'No error message'} />
+            {result?.summary && (
+              <div style={{ fontSize: 14, color: TEXT_PRIMARY, lineHeight: 1.6, marginBottom: 12 }}>
+                {result.summary}
+              </div>
+            )}
+            {Array.isArray(result?.schema_errors) && result.schema_errors.length > 0 && (
+              <div style={{ fontSize: 12, color: TEXT_SECONDARY }}>
+                Schema errors: <code>{result.schema_errors.join('; ')}</code>
+              </div>
+            )}
+          </FormCard>
+        )}
+
+        {/* Findings — always show when present, even mid-run */}
+        {findings.length > 0 && session.status !== 'completed' && (
+          <FormCard>
+            <SectionTitle title={`Findings · ${findings.length}`} subtitle="Accumulating as the run progresses" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {findings.map((f) => (
+                <div key={f.id} style={{
+                  padding: 10, background: '#fafafa', borderRadius: 6,
+                  borderLeft: `3px solid ${PRIMARY}`,
+                }}>
+                  <div style={{ fontSize: 13, color: TEXT_PRIMARY, marginBottom: 4 }}>{f.finding?.point || ''}</div>
+                  <div style={{ fontSize: 11, color: TEXT_SECONDARY, fontFamily: 'Menlo, monospace' }}>{f.finding?.source || ''}</div>
+                </div>
+              ))}
+            </div>
+          </FormCard>
+        )}
+
+        {/* Step trace — provenance of every tool call + synthesis */}
+        <FormCard>
+          <SectionTitle title={`Trace · ${steps.length} step${steps.length === 1 ? '' : 's'}`} subtitle="Every phase transition + tool call + synthesis event" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {steps.map((step) => <StepRow key={step.id} step={step} />)}
+            {steps.length === 0 && (
+              <div style={{ fontSize: 12, color: TEXT_SECONDARY, fontStyle: 'italic' }}>(No steps yet)</div>
+            )}
+          </div>
+        </FormCard>
+      </div>
+    </div>
+  );
+}
+
+function StepRow({ step }) {
+  const [open, setOpen] = useState(false);
+  const hasPayload = step.payload && Object.keys(step.payload).length > 0;
+  const kindColor = {
+    phase_enter: '#1e40af',
+    phase_exit:  '#166534',
+    tool_call:   TEXT_PRIMARY,
+    synthesis:   PRIMARY,
+    error:       '#dc2626',
+    killed:      '#374151',
+  }[step.stepKind] || TEXT_PRIMARY;
+
+  const summary = step.stepKind === 'tool_call' && step.payload?.tool
+    ? `${step.payload.tool}${step.payload.success === false ? ' (failed)' : ''}`
+    : step.stepKind === 'synthesis' && step.payload?.tokens
+      ? `${step.payload.tokens} tokens`
+      : step.payload?.error || step.payload?.note || '';
+
+  return (
+    <div
+      onClick={() => hasPayload && setOpen(!open)}
+      style={{
+        padding: '6px 0', borderBottom: `0.5px solid ${BORDER}`,
+        cursor: hasPayload ? 'pointer' : 'default', fontSize: 12,
+      }}
+    >
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <span style={{ color: TEXT_SECONDARY, minWidth: 60, fontFamily: 'Menlo, monospace', fontSize: 10 }}>
+          {fmtTime(step.createdAt)}
+        </span>
+        <span style={{ color: kindColor, fontWeight: 600, minWidth: 90 }}>{step.stepKind}</span>
+        <span style={{ color: TEXT_SECONDARY, minWidth: 70 }}>{step.phase}</span>
+        <span style={{ color: TEXT_PRIMARY, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {summary}
+        </span>
+        {step.durationMs != null && (
+          <span style={{ color: TEXT_SECONDARY, fontFamily: 'Menlo, monospace', fontSize: 10 }}>
+            {step.durationMs}ms
+          </span>
+        )}
+      </div>
+      {open && hasPayload && (
+        <pre style={{
+          margin: '6px 0 0 72px', fontSize: 11, color: TEXT_SECONDARY,
+          fontFamily: 'Menlo, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          background: '#fafafa', padding: 8, borderRadius: 6, maxHeight: 300, overflow: 'auto',
+        }}>
+          {JSON.stringify(step.payload, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toTimeString().slice(0, 8);
+  } catch { return ''; }
+}
+
+function mapStatusKind(status) {
+  if (status === 'queued' || status === 'running') return 'running';
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (status === 'budget_exhausted') return 'budget';
+  if (status === 'killed') return 'killed';
+  if (status === 'stagnated') return 'stagnated';
+  return 'completed';
 }
 
 // ── Skill edit view (D2) ───────────────────────────────────────────────
