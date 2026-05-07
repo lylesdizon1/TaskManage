@@ -163,7 +163,14 @@ function _applyOp(op, actual, value) {
     case 'neq': return actual !== value;
     case 'in':  return Array.isArray(value) && value.includes(actual);
     case 'not_in': return Array.isArray(value) && !value.includes(actual);
-    case 'contains': return typeof actual === 'string' && typeof value === 'string' && actual.includes(value);
+    // contains has two modes — string substring and array membership. The
+    // array mode unblocks the skills chip-input translation (spec Q4):
+    //   { field: 'topics', op: 'contains', value: 'wheelworks' }
+    // resolves topics → ['wheelworks', 'cfo'] (array) and asks does it
+    // include 'wheelworks'. Backward-compatible — string mode unchanged.
+    case 'contains':
+      if (Array.isArray(actual)) return actual.includes(value);
+      return typeof actual === 'string' && typeof value === 'string' && actual.includes(value);
     case 'exists': return actual !== undefined && actual !== null;
     case 'not_exists': return actual === undefined || actual === null;
     default: throw new Error(`Unknown predicate operator: ${op}`);
