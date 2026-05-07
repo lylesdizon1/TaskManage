@@ -21,7 +21,7 @@ const TEXT_SECONDARY = '#6b7280';
 
 const PERSONAS = ['CFO', 'COO', 'Best-Friend', 'Operator', 'Personal', 'Brand'];
 
-export default function AgentsPanel({ apiFetch, addToast }) {
+export default function AgentsPanel({ apiFetch, addToast, authToken }) {
   // view.kind: 'list' | 'edit-skill' | 'run-detail'
   const [view, setView] = useState({ kind: 'list' });
   const [skills, setSkills] = useState([]);
@@ -30,28 +30,72 @@ export default function AgentsPanel({ apiFetch, addToast }) {
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [dispatchOpen, setDispatchOpen] = useState(false);
 
+  // ── Production-fire fix (2026-05-07) ─────────────────────────────────
+  // Two bugs landed together in M2:
+  //
+  //   1. apiFetch calls in this panel were missing the Authorization
+  //      header → every initial request 401'd. apiFetch self-heals on
+  //      401 by refreshing + retrying, so the panel "worked" most of
+  //      the time, but every request became 2 requests.
+  //
+  //   2. App.jsx::addToast is recreated every parent render. The
+  //      reloadSkills useCallback depended on it → reloadSkills was
+  //      a fresh function on every parent render → useEffect with
+  //      [reloadSkills] in its deps fired on every parent render →
+  //      tight retry loop that saturated the 100-req/min apiLimiter,
+  //      cascaded "Could not load skills" toasts, eventually 429'd
+  //      /api/auth/refresh which fired session-expired and logged
+  //      the user out 4-5s after opening the tab.
+  //
+  // Fix shape: capture mutable parent props in refs and wrap them in
+  // stable helpers (authFetch + toast). authFetch attaches the current
+  // authToken on every call (closes bug #1). toast forwards through
+  // the addToast ref without depending on its identity (closes bug #2).
+  // reloadSkills/reloadSessions now have stable deps, so the mount
+  // useEffect fires once and never spuriously re-fires.
+  const apiFetchRef  = useRef(apiFetch);
+  const addToastRef  = useRef(addToast);
+  const authTokenRef = useRef(authToken);
+  apiFetchRef.current  = apiFetch;
+  addToastRef.current  = addToast;
+  authTokenRef.current = authToken;
+
+  const authFetch = useCallback((url, options = {}) => {
+    return apiFetchRef.current(url, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${authTokenRef.current || ''}`,
+      },
+    });
+  }, []);
+
+  const toast = useCallback((payload) => {
+    addToastRef.current?.(payload);
+  }, []);
+
   const reloadSkills = useCallback(async () => {
     try {
-      const r = await apiFetch('/api/skills?include_inactive=true');
+      const r = await authFetch('/api/skills?include_inactive=true');
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setSkills(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('[agents] failed to load skills', err);
-      addToast?.({ message: 'Could not load skills', type: 'error' });
+      toast({ message: 'Could not load skills', type: 'error' });
     } finally { setSkillsLoaded(true); }
-  }, [apiFetch, addToast]);
+  }, [authFetch, toast]);
 
   const reloadSessions = useCallback(async () => {
     try {
-      const r = await apiFetch('/api/sub-agents/sessions');
+      const r = await authFetch('/api/sub-agents/sessions');
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setSessions(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('[agents] failed to load sessions', err);
     } finally { setSessionsLoaded(true); }
-  }, [apiFetch]);
+  }, [authFetch]);
 
   useEffect(() => {
     reloadSkills();
@@ -85,8 +129,8 @@ export default function AgentsPanel({ apiFetch, addToast }) {
     return (
       <SkillEditView
         skillId={view.id}
-        apiFetch={apiFetch}
-        addToast={addToast}
+        apiFetch={authFetch}
+        addToast={toast}
         onClose={onBackToList}
       />
     );
@@ -95,8 +139,8 @@ export default function AgentsPanel({ apiFetch, addToast }) {
     return (
       <RunDetailView
         sessionId={view.id}
-        apiFetch={apiFetch}
-        addToast={addToast}
+        apiFetch={authFetch}
+        addToast={toast}
         onClose={onBackToList}
       />
     );
@@ -119,8 +163,8 @@ export default function AgentsPanel({ apiFetch, addToast }) {
           loaded={skillsLoaded}
           onEdit={onEditSkill}
           onCreateNew={onCreateNewSkill}
-          apiFetch={apiFetch}
-          addToast={addToast}
+          apiFetch={authFetch}
+          addToast={toast}
           onChanged={reloadSkills}
         />
 
@@ -129,15 +173,15 @@ export default function AgentsPanel({ apiFetch, addToast }) {
           loaded={sessionsLoaded}
           onOpenRun={onOpenRun}
           onStartRun={() => setDispatchOpen(true)}
-          apiFetch={apiFetch}
-          addToast={addToast}
+          apiFetch={authFetch}
+          addToast={toast}
           onChanged={reloadSessions}
         />
 
         {dispatchOpen && (
           <DispatchModal
-            apiFetch={apiFetch}
-            addToast={addToast}
+            apiFetch={authFetch}
+            addToast={toast}
             existingActiveCount={sessions.filter((s) => s.status === 'queued' || s.status === 'running').length}
             onClose={() => setDispatchOpen(false)}
             onDispatched={(session) => {

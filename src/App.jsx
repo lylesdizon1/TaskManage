@@ -1220,7 +1220,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ) : activeView === 'activity' ? (
             <ActivityPanel authToken={authToken} currentUser={currentUser} apiFetch={apiFetch} />
           ) : activeView === 'agents' ? (
-            <AgentsPanel apiFetch={apiFetch} addToast={addToast} />
+            <AgentsPanel apiFetch={apiFetch} addToast={addToast} authToken={authToken} />
           ) : activeView === 'inbox' ? (
             <InboxPanel authToken={authToken} apiFetch={apiFetch} onNavigate={setActiveView} onUnreadCountChange={setInboxUnread} />
           ) : activeView === 'projects' ? (
