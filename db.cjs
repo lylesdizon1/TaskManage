@@ -4028,6 +4028,242 @@ async function countPendingRuleProposals(userId) {
   return rows[0]?.n || 0;
 }
 
+// ── skills (agents-foundation v1, M1.2) ────────────────────────────────
+//
+// User-curated knowledge bodies that auto-load into Aria's system prompt
+// when trigger_predicate matches. Spec: docs/agents-foundation-v1.md.
+// All helpers are user-scoped — every UPDATE/DELETE/SELECT carries
+// user_id in the WHERE clause. A stolen skill_id from another user
+// silently no-ops (rowCount=0) rather than leaking existence.
+
+const SKILL_SELECT_COLUMNS = `
+  id, user_id AS "userId", name, description, content,
+  trigger_predicate AS "triggerPredicate",
+  persona, token_cap AS "tokenCap", priority,
+  is_active AS "isActive", source, examples,
+  last_used_at AS "lastUsedAt",
+  invoked_count AS "invokedCount",
+  created_at AS "createdAt", updated_at AS "updatedAt"
+`;
+
+/**
+ * Active skills for a user, sorted by priority DESC then last_used_at DESC.
+ * The skill loader (server/lib/skillLoader.cjs) calls this once per turn
+ * and evaluates each skill's trigger_predicate against the chatContext
+ * envelope.
+ */
+async function listActiveSkills(userId) {
+  if (!userId) return [];
+  const { rows } = await pool.query(
+    `SELECT ${SKILL_SELECT_COLUMNS}
+       FROM skills
+      WHERE user_id = $1 AND is_active = TRUE
+      ORDER BY priority DESC, last_used_at DESC NULLS LAST, created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * All skills for a user including drafts + paused. UI list view + the
+ * list_skills chat tool both consume this. Sorted last_used_at DESC,
+ * never-used drop to bottom.
+ */
+async function listSkillsForUser(userId, { includeInactive = true } = {}) {
+  if (!userId) return [];
+  const where = includeInactive ? `WHERE user_id = $1` : `WHERE user_id = $1 AND is_active = TRUE`;
+  const { rows } = await pool.query(
+    `SELECT ${SKILL_SELECT_COLUMNS}
+       FROM skills
+       ${where}
+      ORDER BY last_used_at DESC NULLS LAST, created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+async function getSkillById(skillId, userId) {
+  if (!skillId || !userId) return null;
+  const { rows } = await pool.query(
+    `SELECT ${SKILL_SELECT_COLUMNS}
+       FROM skills
+      WHERE id = $1 AND user_id = $2`,
+    [skillId, userId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Create a skill. Aria-driven creates ship is_active=false +
+ * source='aria_proposed' (Q9 V2-readiness contract); user-driven creates
+ * default to is_active=true + source='user'. Caller controls both.
+ */
+async function createSkill(userId, payload = {}) {
+  if (!userId) return null;
+  const {
+    name,
+    description = '',
+    content = '',
+    triggerPredicate = null,
+    persona = null,
+    tokenCap = 10000,
+    priority = 5,
+    isActive = true,
+    source = 'user',
+    examples = [],
+  } = payload;
+  if (!name || typeof name !== 'string') {
+    throw new Error('createSkill: name is required');
+  }
+  if (source !== 'user' && source !== 'aria_proposed') {
+    throw new Error(`createSkill: invalid source '${source}'`);
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO skills
+       (user_id, name, description, content, trigger_predicate,
+        persona, token_cap, priority, is_active, source, examples)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING ${SKILL_SELECT_COLUMNS}`,
+    [
+      userId, name, description, content, triggerPredicate,
+      persona, tokenCap, priority, isActive, source,
+      JSON.stringify(examples || []),
+    ],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Partial update — only listed fields are touched. Returns the updated
+ * row or null if the skill_id doesn't belong to userId. Used by both
+ * the UI Save button and the update_skill chat tool (Q9).
+ */
+async function updateSkill(skillId, userId, fields = {}) {
+  if (!skillId || !userId) return null;
+  const allowed = {
+    name: 'name',
+    description: 'description',
+    content: 'content',
+    triggerPredicate: 'trigger_predicate',
+    persona: 'persona',
+    tokenCap: 'token_cap',
+    priority: 'priority',
+    isActive: 'is_active',
+    examples: 'examples',
+  };
+  const sets = [];
+  const values = [skillId, userId];
+  let i = 3;
+  for (const [key, col] of Object.entries(allowed)) {
+    if (fields[key] === undefined) continue;
+    let v = fields[key];
+    if (key === 'triggerPredicate' && v !== null && typeof v === 'object') {
+      // pg pg-types serializes objects to jsonb; pass directly
+    }
+    if (key === 'examples' && Array.isArray(v)) {
+      v = JSON.stringify(v);
+    }
+    sets.push(`${col} = $${i}`);
+    values.push(v);
+    i += 1;
+  }
+  if (!sets.length) return getSkillById(skillId, userId);
+  sets.push(`updated_at = NOW()`);
+  const { rows } = await pool.query(
+    `UPDATE skills
+        SET ${sets.join(', ')}
+      WHERE id = $1 AND user_id = $2
+      RETURNING ${SKILL_SELECT_COLUMNS}`,
+    values,
+  );
+  return rows[0] || null;
+}
+
+async function activateSkill(skillId, userId) {
+  return updateSkill(skillId, userId, { isActive: true });
+}
+
+async function pauseSkill(skillId, userId) {
+  return updateSkill(skillId, userId, { isActive: false });
+}
+
+/**
+ * Hard delete. Skill ID belongs to user enforced by WHERE clause.
+ * skill_invocations rows cascade via FK ON DELETE CASCADE.
+ */
+async function deleteSkill(skillId, userId) {
+  if (!skillId || !userId) return false;
+  const { rowCount } = await pool.query(
+    `DELETE FROM skills WHERE id = $1 AND user_id = $2`,
+    [skillId, userId],
+  );
+  return rowCount > 0;
+}
+
+/**
+ * Audit row per skill load + bumps the skill's last_used_at + invoked_count
+ * counters in a single round-trip. Called by skillLoader after each load.
+ */
+async function logSkillInvocation(userId, skillId, opts = {}) {
+  if (!userId || !skillId) return;
+  const {
+    turnId = null,
+    triggerReason = null,
+    tokensUsed = null,
+    wasTruncated = false,
+  } = opts;
+  await pool.query(
+    `INSERT INTO skill_invocations
+       (skill_id, user_id, turn_id, trigger_reason, tokens_used, was_truncated)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [skillId, userId, turnId, triggerReason, tokensUsed, wasTruncated],
+  ).catch(() => {});
+  await pool.query(
+    `UPDATE skills
+        SET last_used_at = NOW(),
+            invoked_count = invoked_count + 1,
+            updated_at = NOW()
+      WHERE id = $1 AND user_id = $2`,
+    [skillId, userId],
+  ).catch(() => {});
+}
+
+/**
+ * Skill trust score. Wraps getTrustScore with the action_type pattern
+ * 'skill_load:<skill_id>' (Q8 — shared trust_scores table).
+ */
+async function getSkillTrust(userId, skillId) {
+  if (!userId || !skillId) return null;
+  return getTrustScore(userId, `skill_load:${skillId}`);
+}
+
+/**
+ * Detects whether any of the user's active skills has a trigger_predicate
+ * that touches a topic-derived field. Used by the chatContext builder
+ * (server/lib/chatContext.cjs) to decide whether to invoke Haiku for
+ * topic extraction (Q3 lazy-Haiku optimization). Returns true if any
+ * predicate references topics / topic_confidence / conversation_intent
+ * anywhere in its tree.
+ */
+async function userHasTopicTouchingSkill(userId) {
+  if (!userId) return false;
+  const { rows } = await pool.query(
+    `SELECT 1
+       FROM skills
+      WHERE user_id = $1
+        AND is_active = TRUE
+        AND trigger_predicate IS NOT NULL
+        AND (
+          trigger_predicate::text ILIKE '%"topics"%'
+          OR trigger_predicate::text ILIKE '%"topic_confidence"%'
+          OR trigger_predicate::text ILIKE '%"conversation_intent"%'
+        )
+      LIMIT 1`,
+    [userId],
+  );
+  return rows.length > 0;
+}
+
 async function getContactEmails(userId) {
   if (!userId) return new Set();
   try {
@@ -6756,6 +6992,58 @@ async function runMigrations() {
     UNIQUE(user_id, pattern_type, pattern_value, suppress_dimension)
   )`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_icr_user_active ON inferred_classification_rules(user_id, is_active) WHERE is_active = TRUE`).catch(() => {});
+
+  // ── Agents foundation V1 (M1.1) ──────────────────────────────────────────
+  // Skills: user-curated knowledge bodies that auto-load into Aria's system
+  // prompt when trigger_predicate matches the per-turn chatContext envelope.
+  // Spec: docs/agents-foundation-v1.md §6. Predicate language reuses engine
+  // ext 2 grammar evaluated by decisionEngine.evaluatePredicate.
+  //
+  // source: 'user' | 'aria_proposed' — the V2-readiness contract (Q9). When
+  // V2 lands, Aria invokes create_skill with source='aria_proposed' and
+  // is_active=false; the schema accepts both today without migration.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id                TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name              TEXT NOT NULL,
+      description       TEXT NOT NULL DEFAULT '',
+      content           TEXT NOT NULL DEFAULT '',
+      trigger_predicate JSONB,
+      persona           TEXT,
+      token_cap         INTEGER NOT NULL DEFAULT 10000,
+      priority          INTEGER NOT NULL DEFAULT 5 CHECK (priority BETWEEN 0 AND 10),
+      is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+      source            TEXT NOT NULL DEFAULT 'user' CHECK (source IN ('user','aria_proposed')),
+      examples          JSONB NOT NULL DEFAULT '[]'::jsonb,
+      last_used_at      TIMESTAMPTZ,
+      invoked_count     INTEGER NOT NULL DEFAULT 0,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'skills table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS skills_user_active_idx ON skills(user_id, is_active)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS skills_user_last_used_idx ON skills(user_id, last_used_at DESC NULLS LAST)`).catch(() => {});
+
+  // skill_invocations — audit row per skill load, also drives the trust
+  // signal feed (action_type = 'skill_load:<skill_id>' through the
+  // existing applyTrustFeedback path). turn_id is the chat-turn correlator
+  // so post-turn outcome (thumbs/correction) can flow back to the load.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS skill_invocations (
+      id                BIGSERIAL PRIMARY KEY,
+      skill_id          TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      turn_id           TEXT,
+      trigger_reason    TEXT,
+      tokens_used       INTEGER,
+      was_truncated     BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'skill_invocations table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS skill_invocations_user_created_idx ON skill_invocations(user_id, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS skill_invocations_skill_idx ON skill_invocations(skill_id, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS skill_invocations_turn_idx ON skill_invocations(turn_id) WHERE turn_id IS NOT NULL`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -9641,6 +9929,18 @@ module.exports = {
   countPendingRuleProposals,
   getRecentRejectionInputs,
   RULE_PROPOSAL_EXPIRY_DAYS,
+  // Skills (agents-foundation v1, M1.2)
+  listActiveSkills,
+  listSkillsForUser,
+  getSkillById,
+  createSkill,
+  updateSkill,
+  activateSkill,
+  pauseSkill,
+  deleteSkill,
+  logSkillInvocation,
+  getSkillTrust,
+  userHasTopicTouchingSkill,
   logDecision,
   getDecisionHistory,
   getAdminDecisions,
