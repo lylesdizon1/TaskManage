@@ -237,7 +237,77 @@ function _toolCategory(actionType) {
 // Backward-compat alias — closeDecisionWithFeedback still calls this name.
 const maybeGenerateCorrectionRule = maybeProposeCorrectionRule;
 
+// ── Skill feedback (agents-foundation v1, M1.7) ──────────────────────
+//
+// Explicit-signal regexes for the "user told me what to do with this
+// skill" path. Implicit positive (turn-completes-without-correction)
+// is V2 — V1 only moves trust on explicit phrasing because that's the
+// signal we can detect deterministically without instrumenting every
+// turn-end path.
+
+// Connector words greedily consumed BEFORE the captured name so "stop
+// loading the wheelworks skill" captures "wheelworks", not "loading the
+// wheelworks". Captured name = 1-5 hyphenated word tokens.
+const _NAME = String.raw`([a-zA-Z][\w-]+(?:\s+[a-zA-Z][\w-]+){0,4})`;
+const _CONNECTORS_NEG = String.raw`(?:(?:loading|using|load|use|auto[- ]?loading|the|my)\s+)*`;
+const _CONNECTORS_POS = String.raw`(?:(?:loading|using|load|use|the|my)\s+)*`;
+
+const SKILL_NEGATIVE_RE = new RegExp(
+  String.raw`\b(?:stop|don['']?t|do\s+not|disable|turn\s+off)\s+${_CONNECTORS_NEG}${_NAME}\s+skill\b`,
+  'i',
+);
+const SKILL_POSITIVE_RE = new RegExp(
+  String.raw`\b(?:i\s+(?:like|love)|keep|always)\s+${_CONNECTORS_POS}${_NAME}\s+skill\b`,
+  'i',
+);
+
+const SKILL_NEG_DELTA = -0.10;
+const SKILL_POS_DELTA = +0.05;
+
+/**
+ * Detect explicit skill-feedback phrasing in the user's message and
+ * apply trust signals. Returns a list of { skillId, signal, delta } for
+ * any skills that received feedback. Hard contract — never throws.
+ *
+ * Called fire-and-forget from the chat turn handlers; result is logged
+ * by the caller for telemetry but doesn't block.
+ */
+async function processSkillFeedback({ userId, userMessage, db }) {
+  if (!userId || !db?.getSkillByName || !userMessage) return [];
+  const text = String(userMessage);
+  const applied = [];
+
+  const tryApply = async (re, signal, delta, counterCol) => {
+    const m = text.match(re);
+    if (!m) return;
+    const name = m[1].trim();
+    if (!name) return;
+    try {
+      const skill = await db.getSkillByName(userId, name);
+      if (!skill) return;
+      const row = await db.applySkillTrustFeedback(userId, skill.id, delta, counterCol);
+      applied.push({
+        skillId: skill.id,
+        skillName: skill.name,
+        signal,
+        delta,
+        trustScore: row?.trustScore ?? null,
+      });
+    } catch { /* fail-soft — never sink the turn */ }
+  };
+
+  await tryApply(SKILL_NEGATIVE_RE, 'negative', SKILL_NEG_DELTA, 'times_rejected');
+  await tryApply(SKILL_POSITIVE_RE, 'positive', SKILL_POS_DELTA, 'times_confirmed');
+  return applied;
+}
+
 module.exports = {
   closeDecisionWithFeedback,
+  processSkillFeedback,
   CORRECTION_THRESHOLD,
+  SKILL_NEG_DELTA,
+  SKILL_POS_DELTA,
+  // Exported for tests:
+  _SKILL_NEGATIVE_RE: SKILL_NEGATIVE_RE,
+  _SKILL_POSITIVE_RE: SKILL_POSITIVE_RE,
 };

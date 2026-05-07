@@ -4238,6 +4238,69 @@ async function getSkillTrust(userId, skillId) {
 }
 
 /**
+ * Apply a trust delta to a skill (M1.7). Skills don't ride on
+ * decision_log rows — skill_invocations is the audit trail. So we
+ * UPSERT trust_scores directly with action_type='skill_load:<id>'
+ * rather than going through applyTrustFeedback (which expects a
+ * decision_id and updates decision_log.outcome).
+ *
+ * delta is clamped to [-1, +1]; resulting trust_score clamped to [0, 1].
+ * counter parameter selects which times_* column increments (one of
+ * 'times_confirmed' | 'times_rejected' | 'times_corrected'); pass null
+ * to skip counter increment. Returns the resulting row.
+ */
+async function applySkillTrustFeedback(userId, skillId, delta, counter = null) {
+  if (!userId || !skillId) return null;
+  const d = Math.max(-1, Math.min(1, Number(delta) || 0));
+  const COUNTER_COLS = { times_confirmed: true, times_rejected: true, times_corrected: true };
+  const counterCol = COUNTER_COLS[counter] ? counter : null;
+  const initConfirmed = counterCol === 'times_confirmed' ? 1 : 0;
+  const initRejected  = counterCol === 'times_rejected'  ? 1 : 0;
+  const initCorrected = counterCol === 'times_corrected' ? 1 : 0;
+  const counterUpdate = counterCol
+    ? `${counterCol} = trust_scores.${counterCol} + 1,`
+    : '';
+  const { rows } = await pool.query(
+    `INSERT INTO trust_scores (
+       user_id, action_type, trust_score, disposition, is_reversible, impact_level,
+       times_confirmed, times_rejected, times_corrected, updated_at
+     )
+     VALUES ($1, $2,
+             LEAST(1.0, GREATEST(0.0, 0.5 + $3)),
+             'auto_allowed', TRUE, 'low',
+             $4, $5, $6, NOW())
+     ON CONFLICT (user_id, action_type) DO UPDATE
+       SET ${counterUpdate}
+           trust_score = LEAST(1.0, GREATEST(0.0, trust_scores.trust_score + $3)),
+           updated_at  = NOW()
+     RETURNING id, action_type AS "actionType",
+               trust_score AS "trustScore", disposition,
+               times_confirmed AS "timesConfirmed",
+               times_rejected AS "timesRejected",
+               times_corrected AS "timesCorrected"`,
+    [userId, `skill_load:${skillId}`, d, initConfirmed, initRejected, initCorrected],
+  ).catch(() => ({ rows: [] }));
+  return rows[0] || null;
+}
+
+/**
+ * Lookup a skill by name for the current user. Case-insensitive,
+ * exact-match. Used by the skill-feedback regex path to resolve
+ * "stop loading <name> skill" / "load my <name> skill" to a skill_id.
+ */
+async function getSkillByName(userId, name) {
+  if (!userId || !name) return null;
+  const { rows } = await pool.query(
+    `SELECT ${SKILL_SELECT_COLUMNS}
+       FROM skills
+      WHERE user_id = $1 AND LOWER(name) = LOWER($2)
+      LIMIT 1`,
+    [userId, name],
+  );
+  return rows[0] || null;
+}
+
+/**
  * Detects whether any of the user's active skills has a trigger_predicate
  * that touches a topic-derived field. Used by the chatContext builder
  * (server/lib/chatContext.cjs) to decide whether to invoke Haiku for
@@ -9940,6 +10003,8 @@ module.exports = {
   deleteSkill,
   logSkillInvocation,
   getSkillTrust,
+  applySkillTrustFeedback,
+  getSkillByName,
   userHasTopicTouchingSkill,
   logDecision,
   getDecisionHistory,

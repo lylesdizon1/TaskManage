@@ -6,3 +6,4 @@ dist/
 settings.json
 tasks.json
 gcal-tokens.json
+.DS_Store

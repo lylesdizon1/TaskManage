@@ -15,6 +15,8 @@ const { rediGet, rediSet } = require('./redis.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 const { buildPreferencesBlock } = require('./buildPreferencesBlock.cjs');
 const { getCachedRules } = require('./ruleCache.cjs');
+const { buildChatContext } = require('./chatContext.cjs');
+const { loadSkillsForTurn } = require('./skillLoader.cjs');
 
 const DECISION_INSTRUCTIONS = `\n\n## Decision contract\nBefore calling any tool, output a decision block wrapped in <decision> tags:\n<decision>\n{\n  "intent": "short label — e.g. create_task, schedule_meeting, send_email",\n  "confidence": 0.0,\n  "risk": "low" | "medium" | "high",\n  "requires_confirmation": false\n}\n</decision>\n\nServer enforces: send_email, reply_email, delete_task, delete_event always require confirmation regardless of what you output.\n\nIMPORTANT: Before calling send_email, verify the 'to' field contains a complete, valid email address with @ and a domain (e.g. name@domain.com). If the user provides only a name, nickname, or partial address, ask for the full email address in one short question before proceeding. Never call send_email with an incomplete address.\n\nYou have full access to the user's projects, tasks, checklist items, and notes within their entities. This data is provided to you in the ACTIVE PROJECTS context block above. When asked about projects, summarize from that context. Never say you don't have access to projects.
 
@@ -252,7 +254,7 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
  * @returns {Promise<{ user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, tz, todayStr, todayDate, currentTime, weekMapStr, profileContext, contextBlock, decisionInstructions, systemPrompt }>}
  */
 async function buildAgenticContext(opts) {
-  const { userId, db, contextHint, logger } = opts;
+  const { userId, db, contextHint, logger, userMessage = '', activePersona = null, turnId = null } = opts;
   const tz = opts.tz || DEFAULT_TIMEZONE;
 
   // Inbox mode pulls a wider net so Aria can answer open-ended
@@ -475,7 +477,32 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // content, not instructions; see buildJournalBlock header).
   const journalBlock = buildJournalBlock(todayJournal, todayDateKey, yesterdayJournal);
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + proposalsBlock + journalBlock + contextBlock;
+  // Skills (agents-foundation v1, M1.5) — fenced block of user-curated
+  // knowledge bodies that auto-load when trigger_predicate matches the
+  // chatContext envelope. Inert when no active skills exist (block='').
+  // chatContext is computed lazily inside chatContext.cjs (Q3 — Haiku
+  // only fires when at least one active skill has a topic-touching
+  // predicate). Per Q7 the budget is a CEILING, not a fill-target —
+  // one matching 3k skill consumes 3k, never pads.
+  let skillsBlock = '';
+  let chatContextEnvelope = null;
+  try {
+    chatContextEnvelope = await buildChatContext({
+      userId, db, userMessage, activePersona,
+    });
+    const result = await loadSkillsForTurn({
+      userId, db, chatContext: chatContextEnvelope, turnId,
+    });
+    skillsBlock = result.block ? `\n\n${result.block}\n\n` : '';
+  } catch (err) {
+    // Hard contract — never throw from the skill load path. A bad turn
+    // here must not hold up the entire system prompt build.
+    if (logger?.warn) {
+      logger.warn('skillLoader.failed', { error: err?.message });
+    }
+  }
+
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + skillsBlock + proposalsBlock + journalBlock + contextBlock;
   console.log('[buildAgenticContext] prompt chars:', systemPrompt.length);
 
   return {
@@ -485,7 +512,8 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     emailLabels,
     tz, todayStr, todayDate, todayDateKey, yesterdayDateKey, currentTime, weekMapStr,
     profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
-    peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, proposalsBlock, journalBlock,
+    peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, proposalsBlock, journalBlock, skillsBlock,
+    chatContext: chatContextEnvelope,
     userPreferences, inferredRules, pendingRuleProposals,
     decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,

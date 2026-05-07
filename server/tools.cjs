@@ -731,6 +731,106 @@ const ARIA_TOOLS = [
       required: ['proposal_id'],
     },
   },
+  // ── Skills (agents-foundation v1, M1.6) ──────────────────────────────
+  {
+    name: 'list_skills',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "List the user's skills (active + draft + paused) — knowledge bodies that auto-load into your context when triggers match. Use when the user asks 'what skills do I have', 'show me my skills', or when you want to reference a specific skill they've defined. Skills are user-curated context (not instructions). Each row includes: name, description, status, persona scope, last loaded, invocation count.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        include_inactive: { type: 'boolean', description: "Default true — drafts + paused are included so the user can see the full library. Set false to filter to active only." },
+      },
+    },
+  },
+  {
+    name: 'create_skill',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Create a NEW skill (a knowledge body the user wants you to load when relevant context comes up). When the user says 'save this as a skill', 'remember this for next time you talk about X', 'turn this into a skill called Y', or similar — extract a clean knowledge body from the conversation and call this. ALWAYS ships as is_active=false (draft) — the user reviews + activates from the Agents tab. Don't auto-activate. Provide either keywords (chip-input shape — auto-translates to topics-contains predicate) OR trigger_predicate (advanced JSON, engine-ext-2 grammar). source defaults to 'aria_proposed' — this is the V2-readiness path; user-authored skills go through the UI, not Aria.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:        { type: 'string', description: 'Short, distinctive name. Used to identify the skill in lists and in "use my <name> skill" requests.' },
+        description: { type: 'string', description: 'One-line summary of what the skill knows.' },
+        content:     { type: 'string', description: 'The knowledge body (markdown). What you should know when this skill loads.' },
+        keywords:    { type: 'array', items: { type: 'string' }, description: 'Chip-input shape. Auto-translates to: { input: { or: [{ field: "topics", op: "contains", value: <kw> }, ...] } }. Lowercased + deduped. 80% of skills use this; only specify trigger_predicate for complex cases.' },
+        trigger_predicate: { type: 'object', description: 'Advanced shape — full engine-ext-2 predicate JSON. Overrides keywords if both given. Use when you need people_mentioned / calendar_context / AND/OR composition.' },
+        persona:     { type: 'string', description: "Optional persona scope — 'CFO' / 'COO' / 'Best-Friend' / etc. When set, the skill only loads when active_persona matches. Omit for unscoped (loads regardless of persona)." },
+        token_cap:   { type: 'number', description: 'Per-skill content cap (tokens). Default 10000. Hard ceiling 30000.' },
+        priority:    { type: 'number', description: 'Load priority 0..10. Default 5. Higher loads first when 15k turn budget is tight.' },
+      },
+      required: ['name', 'description', 'content'],
+    },
+  },
+  {
+    name: 'update_skill',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: true,
+    description: "Edit an existing skill. Use when the user asks 'update my <name> skill — add X', 'change the trigger for <name>', or similar. Pass only the fields you're changing — others retain their values. Same field semantics as create_skill (keywords ↔ trigger_predicate translation). Confirmation required because Aria editing user-authored content can surprise — let the user OK the change.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        skill_id:    { type: 'string', description: 'id from list_skills.' },
+        name:        { type: 'string' },
+        description: { type: 'string' },
+        content:     { type: 'string' },
+        keywords:    { type: 'array', items: { type: 'string' }, description: 'Replaces existing keywords + regenerates the topics-contains predicate. Pass empty array to clear keywords (predicate becomes null = explicit-only).' },
+        trigger_predicate: { type: 'object', description: 'Advanced — overrides keywords. Pass null to clear.' },
+        persona:     { type: 'string' },
+        token_cap:   { type: 'number' },
+        priority:    { type: 'number' },
+        is_active:   { type: 'boolean', description: "Activate / pause via this field rather than the dedicated tools when you're already updating other fields in the same call." },
+      },
+      required: ['skill_id'],
+    },
+  },
+  {
+    name: 'activate_skill',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: true,
+    description: "Flip a draft / paused skill to active so it auto-loads when triggers match. Use when the user explicitly says 'activate the X skill' or 'turn on my X skill'. Confirmation required since this changes what context loads on every future turn.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        skill_id: { type: 'string', description: 'id from list_skills.' },
+      },
+      required: ['skill_id'],
+    },
+  },
+  {
+    name: 'pause_skill',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Pause a skill (sets is_active=false). It stays in the user's library but stops auto-loading. Use when the user says 'pause the X skill', 'don't load X anymore', 'turn off X'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        skill_id: { type: 'string', description: 'id from list_skills.' },
+      },
+      required: ['skill_id'],
+    },
+  },
+  {
+    name: 'delete_skill',
+    group: 'intelligence',
+    risk: 'medium',
+    requires_confirmation: true,
+    description: "Permanently delete a skill. Irreversible — the user's content is gone. Always require confirmation. Prefer pause_skill for 'turn off' intent. Use only when the user says 'delete the X skill', 'remove X for good'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        skill_id: { type: 'string', description: 'id from list_skills.' },
+      },
+      required: ['skill_id'],
+    },
+  },
   {
     name: 'move_email',
     group: 'communication',
@@ -755,6 +855,45 @@ const ALWAYS_CONFIRM = new Set(['send_email', 'reply_email', 'delete_task', 'del
 
 function getToolByName(name) {
   return ARIA_TOOLS.find(t => t.name === name) || null;
+}
+
+// ── Skills tool helpers (agents-foundation v1, M1.6) ──────────────────
+//
+// Translate the chip-input keyword shape into the engine-ext-2 predicate
+// JSON. Spec §5d D2 "Round-trip semantics":
+//   { input: { or: [{ field: 'topics', op: 'contains', value: <kw> }, ...] } }
+// Empty / null keywords + null trigger_predicate → null predicate
+// (skill becomes explicit-only, never auto-loads).
+function _composeSkillPredicate({ keywords, trigger_predicate }) {
+  if (trigger_predicate !== undefined) {
+    return trigger_predicate; // explicit override (incl. null to clear)
+  }
+  if (Array.isArray(keywords)) {
+    const cleaned = Array.from(new Set(
+      keywords
+        .map((k) => (typeof k === 'string' ? k.trim().toLowerCase() : ''))
+        .filter((k) => k.length > 0),
+    ));
+    if (cleaned.length === 0) return null;
+    return {
+      input: {
+        or: cleaned.map((k) => ({ field: 'topics', op: 'contains', value: k })),
+      },
+    };
+  }
+  return undefined; // means "don't change" for update_skill
+}
+
+function _clampTokenCap(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 10000;
+  return Math.max(1, Math.min(30000, Math.round(v)));
+}
+
+function _clampPriority(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 5;
+  return Math.max(0, Math.min(10, Math.round(v)));
 }
 
 /**
@@ -1999,6 +2138,135 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         }
       }
 
+      // ── Skills (agents-foundation v1, M1.6) ─────────────────────────────
+      case 'list_skills': {
+        const includeInactive = toolInput?.include_inactive !== false;
+        try {
+          const skills = await db.listSkillsForUser(userId, { includeInactive });
+          const slim = skills.map((s) => ({
+            skill_id: s.id,
+            name: s.name,
+            description: s.description,
+            status: s.isActive ? 'active' : 'paused',
+            persona: s.persona,
+            priority: s.priority,
+            token_cap: s.tokenCap,
+            invoked_count: s.invokedCount,
+            last_used_at: s.lastUsedAt,
+            source: s.source,
+            keyword_count: Array.isArray(s.triggerPredicate?.input?.or)
+              ? s.triggerPredicate.input.or.length
+              : (s.triggerPredicate ? null : 0),
+          }));
+          return { success: true, count: slim.length, skills: slim };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'create_skill': {
+        const { name, description, content, keywords, trigger_predicate,
+                persona, token_cap, priority } = toolInput || {};
+        if (!name || !description || typeof content !== 'string') {
+          return { success: false, error: 'name, description, and content are required' };
+        }
+        const predicate = _composeSkillPredicate({ keywords, trigger_predicate });
+        try {
+          const created = await db.createSkill(userId, {
+            name: String(name).slice(0, 200),
+            description: String(description).slice(0, 1000),
+            content,
+            triggerPredicate: predicate,
+            persona: persona || null,
+            tokenCap: _clampTokenCap(token_cap),
+            priority: _clampPriority(priority),
+            isActive: false, // Aria-creation flow: ship as draft (Q9)
+            source: 'aria_proposed',
+          });
+          try {
+            await db.logMemory({
+              userId, tool: 'create_skill',
+              content: `Created draft skill: "${created.name}" (review + activate from Agents tab)`,
+              metadata: { skill_id: created.id, source: 'aria_proposed' },
+            });
+          } catch {}
+          return {
+            success: true,
+            skill_id: created.id,
+            name: created.name,
+            status: 'draft',
+            note: 'Skill saved as DRAFT. User must review and activate from the Agents tab before it auto-loads.',
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'update_skill': {
+        const { skill_id, name, description, content, keywords, trigger_predicate,
+                persona, token_cap, priority, is_active } = toolInput || {};
+        if (!skill_id) return { success: false, error: 'skill_id is required' };
+        const fields = {};
+        if (name !== undefined)        fields.name        = String(name).slice(0, 200);
+        if (description !== undefined) fields.description = String(description).slice(0, 1000);
+        if (content !== undefined)     fields.content     = content;
+        if (persona !== undefined)     fields.persona     = persona || null;
+        if (token_cap !== undefined)   fields.tokenCap    = _clampTokenCap(token_cap);
+        if (priority !== undefined)    fields.priority    = _clampPriority(priority);
+        if (is_active !== undefined)   fields.isActive    = !!is_active;
+        if (keywords !== undefined || trigger_predicate !== undefined) {
+          fields.triggerPredicate = _composeSkillPredicate({ keywords, trigger_predicate });
+        }
+        try {
+          const updated = await db.updateSkill(skill_id, userId, fields);
+          if (!updated) return { success: false, error: 'skill not found or not owned by user' };
+          return {
+            success: true,
+            skill_id: updated.id,
+            name: updated.name,
+            status: updated.isActive ? 'active' : 'paused',
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'activate_skill': {
+        const { skill_id } = toolInput || {};
+        if (!skill_id) return { success: false, error: 'skill_id is required' };
+        try {
+          const updated = await db.activateSkill(skill_id, userId);
+          if (!updated) return { success: false, error: 'skill not found or not owned by user' };
+          return { success: true, skill_id: updated.id, name: updated.name, status: 'active' };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'pause_skill': {
+        const { skill_id } = toolInput || {};
+        if (!skill_id) return { success: false, error: 'skill_id is required' };
+        try {
+          const updated = await db.pauseSkill(skill_id, userId);
+          if (!updated) return { success: false, error: 'skill not found or not owned by user' };
+          return { success: true, skill_id: updated.id, name: updated.name, status: 'paused' };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'delete_skill': {
+        const { skill_id } = toolInput || {};
+        if (!skill_id) return { success: false, error: 'skill_id is required' };
+        try {
+          const ok = await db.deleteSkill(skill_id, userId);
+          if (!ok) return { success: false, error: 'skill not found or not owned by user' };
+          return { success: true, skill_id, deleted: true };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
       case 'move_email': {
         const { message_id, account_email, target_label_id, target_label_name, scope } = toolInput || {};
         if (!message_id || !account_email || !target_label_id || !scope) {
@@ -2401,4 +2669,8 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
   }
 }
 
-module.exports = { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation, ALWAYS_CONFIRM };
+module.exports = {
+  ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation, ALWAYS_CONFIRM,
+  // Exported for tests (skills foundation v1, M1.6):
+  _composeSkillPredicate, _clampTokenCap, _clampPriority,
+};

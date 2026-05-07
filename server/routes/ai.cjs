@@ -56,7 +56,7 @@ const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
-const { closeDecisionWithFeedback } = require('../lib/trustFeedback.cjs');
+const { closeDecisionWithFeedback, processSkillFeedback } = require('../lib/trustFeedback.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
@@ -327,17 +327,50 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
 
     try {
       const userTz = timeZone || req.user.timezone || DEFAULT_TIMEZONE;
+      // Latest user-authored message text powers the chatContext envelope
+      // for skills loading. Walk back from the tail since the client may
+      // append the assistant placeholder before the request fires.
+      let latestUserMessage = '';
+      if (Array.isArray(messages)) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          if (m && m.role === 'user') {
+            latestUserMessage = typeof m.content === 'string'
+              ? m.content
+              : Array.isArray(m.content)
+                ? m.content.map(c => c?.text || '').join(' ')
+                : '';
+            break;
+          }
+        }
+      }
       const ctx = await buildAgenticContext({
         userId, entityIds, db, tz: userTz, contextHint: context_hint,
+        userMessage: latestUserMessage,
         loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens,
         makeOAuth2Client, google, logger, requestId: req.requestId,
       });
       const tz = ctx.tz;
-      // Always forward learnings + email + projects + outcomes + facts to
-      // the model, even when the client supplies its own base system prompt.
-      // Missing projectsBlock here was the bug where Aria claimed no project
-      // access despite getProjectContextForUser returning rows.
-      const serverBlocks = (ctx.learningsBlock || '') + (ctx.emailBlock || '') + (ctx.outcomesBlock || '') + (ctx.factsBlock || '') + (ctx.projectsBlock || '');
+
+      // Skill trust feedback (M1.7) — fire-and-forget. Detects explicit
+      // user phrasing like "stop loading the X skill" / "always load my Y
+      // skill" and applies trust deltas. Implicit positive (turn-without-
+      // correction) is V2.
+      if (latestUserMessage) {
+        processSkillFeedback({ userId, userMessage: latestUserMessage, db })
+          .then((applied) => {
+            if (applied.length && logger?.info) {
+              logger.info('skill.feedback.applied', { userId, applied });
+            }
+          })
+          .catch(() => {});
+      }
+      // Always forward learnings + email + projects + outcomes + facts +
+      // skills to the model, even when the client supplies its own base
+      // system prompt. Missing projectsBlock here was the bug where Aria
+      // claimed no project access despite getProjectContextForUser
+      // returning rows; same shape applies to skills (M1.5).
+      const serverBlocks = (ctx.learningsBlock || '') + (ctx.emailBlock || '') + (ctx.outcomesBlock || '') + (ctx.factsBlock || '') + (ctx.projectsBlock || '') + (ctx.skillsBlock || '');
       const fullSystem = clientPrompt
         ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + serverBlocks + ctx.contextBlock
         : ctx.systemPrompt;

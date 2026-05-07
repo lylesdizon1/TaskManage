@@ -46,7 +46,7 @@
 const express   = require('express');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
-const { closeDecisionWithFeedback } = require('../lib/trustFeedback.cjs');
+const { closeDecisionWithFeedback, processSkillFeedback } = require('../lib/trustFeedback.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
@@ -336,11 +336,25 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       }
 
       // ── Load full context via shared builder ──────────────────────────
+      // msgBody powers the chatContext envelope for skills loading (M1.5).
       const ctx = await buildAgenticContext({
         userId, entityIds, db, tz: tzForUser,
+        userMessage: msgBody || '',
         loadGcalTokens, makeOAuth2Client, google,
         logger, requestId: req.requestId,
       });
+
+      // Skill trust feedback (M1.7) — fire-and-forget. Same regex
+      // detection as the web chat path.
+      if (msgBody) {
+        processSkillFeedback({ userId, userMessage: msgBody, db })
+          .then((applied) => {
+            if (applied.length && logger?.info) {
+              logger.info('skill.feedback.applied', { userId, applied });
+            }
+          })
+          .catch(() => {});
+      }
       const tz = ctx.tz;
 
       const entityContext = matchedEntity
