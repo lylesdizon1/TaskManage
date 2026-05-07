@@ -42,19 +42,36 @@ function client() {
   } catch { return null; }
 }
 
-// Allowlist of tools the planner may call. Subset of the read-only
-// surface (executeTool will reject anything outside this anyway via
-// the orchestrator's hard-disallow).
+// Allowlist of tools the planner may call. ONLY entries that have a
+// matching `case` handler in tools.cjs::executeTool — no phantoms.
+// Drift caught by tests/subAgents.test.cjs (planner-allowlist sanity
+// check). Web search is intentionally absent — it's an Anthropic
+// server-hosted tool that resolves at the LLM layer; the synthesize
+// phase wires it in via the synthesis Sonnet call (see SYNTHESIZE_TOOLS
+// below) rather than as a deterministic dispatch in gather.
 const ALLOWED_PLAN_TOOLS = [
   'search_inbox', 'get_email_content', 'search_email_content',
-  'list_email_labels', 'get_threads',
-  'list_tasks', 'search_tasks',
-  'list_events', 'list_calendar_events',
-  'list_notes', 'search_notes',
-  'list_contacts', 'get_contact', 'search_contacts',
-  'get_journal_today',
-  'web_search',
+  'list_email_labels',
+  'search_tasks',
+  'search_notes',
+  'list_contacts', 'get_contact',
+  'list_journal_entries', 'get_today_close_loop_context',
 ];
+
+// Anthropic's server-hosted web search. Mirror of the constant in
+// tools.cjs (kept inline to avoid a require cycle through the agentic
+// loop). Attached to synthesis-phase Sonnet calls so the LLM can
+// search inline and incorporate cited results into findings. Future
+// sub-agent templates that need web search should attach this to
+// their own synthesis-phase calls — NOT try to dispatch it through
+// executeTool (which has no handler — server-hosted tools resolve at
+// the API layer).
+const WEB_SEARCH_TOOL = {
+  type: 'web_search_20250305',
+  name: 'web_search',
+  max_uses: 5,
+};
+const SYNTHESIZE_TOOLS = [WEB_SEARCH_TOOL];
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
@@ -72,6 +89,21 @@ function safeParseJson(text) {
   try { return JSON.parse(m[0]); } catch { return null; }
 }
 
+// Anthropic responses with server-hosted tools (e.g. web_search) have
+// content arrays mixing server_tool_use + web_search_tool_result + text
+// blocks. Grab the LAST text block — that's the model's final output
+// after any tool results have been incorporated. Tolerates the
+// pre-tools shape (single text block at index 0) by virtue of "last".
+function _extractFinalText(resp) {
+  const blocks = Array.isArray(resp?.content) ? resp.content : [];
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i]?.type === 'text' && typeof blocks[i].text === 'string') {
+      return blocks[i].text;
+    }
+  }
+  return '';
+}
+
 // ── Plan phase ──────────────────────────────────────────────────────
 
 const PLAN_SYSTEM = `You are a research planner. Given a user's investigation prompt, produce a JSON plan: a list of tool calls to gather evidence.
@@ -87,10 +119,11 @@ Output STRICT JSON of this shape (no preamble, no markdown):
 
 Rules:
 - Each call must be from this allowlist: ${ALLOWED_PLAN_TOOLS.join(', ')}.
-- 5-15 calls total. Fewer is better when fewer suffice.
-- Prefer search/list tools first; specific gets only when you have an id.
+- 0-15 calls total. Fewer is better when fewer suffice. ZERO is correct when the prompt requires only external/web evidence — the synthesize phase has its own web_search and doesn't need a gather plan.
+- Prefer search tools first; specific gets only when you have an id.
 - Don't include duplicates or near-duplicates of the same query.
 - Don't plan write or send tools — they will be refused.
+- Don't plan web_search — it's not in the allowlist for gather. The synthesize phase invokes it directly when needed; planning it here just wastes a call.
 - Don't plan calls that will obviously return empty (e.g. searching for the user's own name in their inbox).`;
 
 async function planPhase(ctx) {
@@ -181,20 +214,22 @@ async function gatherPhase(ctx) {
 
 // ── Synthesize phase ────────────────────────────────────────────────
 
-const SYNTHESIZE_SYSTEM = `You synthesize structured findings from raw tool results.
+const SYNTHESIZE_SYSTEM = `You synthesize structured findings for a research investigation.
+
+You have access to web_search (server-hosted, max 5 uses per call). USE IT when local raw results are thin or empty AND the prompt benefits from external evidence, when the prompt explicitly asks you to search the web, or when specific facts (specs, prices, news, reviews) need authoritative external sources. Do not use it when the local evidence is sufficient.
 
 Output STRICT JSON of this shape (no preamble, no markdown):
 {
   "findings": [
-    { "point": "concrete finding sentence", "source": "tool: locator (e.g. search_inbox: thread 19df...)" },
+    { "point": "concrete finding sentence", "source": "tool: locator (e.g. search_inbox: thread 19df...) OR full URL for web-derived findings" },
     ...
   ]
 }
 
 Rules:
-- Each finding MUST cite a source string referencing a specific tool result.
+- Each finding MUST cite a source string. For local-data findings: tool name + locator. For web-derived findings: the full URL you got the fact from (https://…). Citations are mandatory — no source = the finding gets dropped.
 - 3-10 findings. Be selective — only include findings the evidence supports.
-- Don't speculate. If the evidence is thin, return fewer findings.
+- Don't speculate. If neither local nor web evidence supports a claim, don't include it.
 - Findings should be useful to a busy operator: action-relevant facts, names, dates, amounts, status.`;
 
 async function synthesizePhase(ctx) {
@@ -226,11 +261,12 @@ async function synthesizePhase(ctx) {
       withRetry(
         () => c.messages.create({
           model: SYNTHESIS_MODEL,
-          max_tokens: 2000,
+          max_tokens: 4000,
           system: SYNTHESIZE_SYSTEM,
+          tools: SYNTHESIZE_TOOLS,
           messages: [{
             role: 'user',
-            content: `Investigation prompt:\n\n${ctx.prompt}\n\nRaw evidence (${ctx.accumulator.rawResults.length} tool results):\n\n${rawSummary}\n\nProduce the JSON findings.`,
+            content: `Investigation prompt:\n\n${ctx.prompt}\n\nLocal raw evidence (${ctx.accumulator.rawResults.length} tool results):\n\n${rawSummary || '(none — local gather returned no usable results)'}\n\nProduce the JSON findings. Use web_search if local evidence is thin or the prompt asks for web research.`,
           }],
         }),
         'subagent-synthesize',
@@ -247,10 +283,17 @@ async function synthesizePhase(ctx) {
   const usage = resp?.usage || {};
   const tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
   // Sonnet: ~$3/Mtok input, ~$15/Mtok output. Blended approximation.
+  // web_search adds server-side token usage; Anthropic counts it in
+  // input_tokens so the addTokens call below captures it correctly.
   const cost = (tokens / 1_000_000) * 9.0;
   ctx.budget.addTokens(tokens, cost);
 
-  const text = resp?.content?.[0]?.text || '';
+  // Multi-block response handling — when web_search runs, content is a
+  // mix of server_tool_use + web_search_tool_result + text blocks.
+  // Grab the LAST text block (the model's JSON output after the search
+  // results landed). content[0] used to work pre-tools but breaks now.
+  const text = _extractFinalText(resp);
+  const webSearchHits = (resp?.content || []).filter((b) => b?.type === 'web_search_tool_result').length;
   const parsed = safeParseJson(text);
   const findings = Array.isArray(parsed?.findings) ? parsed.findings : [];
 
@@ -262,7 +305,7 @@ async function synthesizePhase(ctx) {
 
   ctx.accumulator.synthesizedFindings = cleaned;
   for (const f of cleaned) await ctx.addFinding(f);
-  await ctx.logSynthesis({ count: cleaned.length, tokens });
+  await ctx.logSynthesis({ count: cleaned.length, tokens, web_search_hits: webSearchHits });
 }
 
 // ── Package phase ───────────────────────────────────────────────────
@@ -354,7 +397,10 @@ async function packagePhase(ctx) {
   const cost = (tokens / 1_000_000) * 9.0;
   ctx.budget.addTokens(tokens, cost);
 
-  const text = resp?.content?.[0]?.text || '';
+  // Same multi-block-tolerant text extraction — package is single-block
+  // today (no tools attached), but using the helper means a future
+  // attach of WEB_SEARCH_TOOL here doesn't silently break parsing.
+  const text = _extractFinalText(resp);
   const parsed = safeParseJson(text);
 
   // Build final result with budget_used always added authoritatively
@@ -391,8 +437,12 @@ module.exports = {
   PHASES,
   // Exported for tests:
   ALLOWED_PLAN_TOOLS,
+  WEB_SEARCH_TOOL,
+  SYNTHESIZE_TOOLS,
   _planPhase: planPhase,
   _gatherPhase: gatherPhase,
   _synthesizePhase: synthesizePhase,
   _packagePhase: packagePhase,
+  _extractFinalText,
+  _safeParseJson: safeParseJson,
 };
