@@ -36,6 +36,13 @@ const MD_LINK_RE = /\[[^\]]+\]\(https?:\/\/[^)]+\)/;
 const LONG_URL_RE = /https?:\/\/\S{60,}/;
 // Separator lines of 3+ consecutive '=' characters on their own line.
 const HEAVY_SEPARATOR_RE = /^\s*={3,}\s*$/m;
+// Outlook's plaintext alternate uses [cid:image001.png@<id>] markers in
+// place of inline image references. Without this signal, the noisy-plain
+// detector misses Outlook-with-images emails (Kat Egli "Rose's 70th
+// Birthday" 2026-05-06) — heuristic returns plaintext with literal cid
+// markers visible to the user instead of the HTML alternate that
+// renders cleanly. Phase 2 finding: docs/* — option 2 narrow fix.
+const CID_REF_RE = /\[cid:[^\]]+\]/i;
 
 function _extractBody(payload) {
   if (!payload) return '';
@@ -58,19 +65,22 @@ function _extractBody(payload) {
   // Prefer plain ONLY when it looks like real plain text. Marketing /
   // system emails (Zillow, Amazon Music, …) often ship plain-text
   // alternates that are really link dumps or separator-line noise —
-  // fall back to HTML whenever any of these show up.
+  // fall back to HTML whenever any of these show up. Outlook-origin
+  // emails with inline images add a fourth detector (CID_REF_RE).
   if (plainB64) {
     const plain = decode(plainB64);
     const looksNoisy =
          MD_LINK_RE.test(plain)
       || LONG_URL_RE.test(plain)
-      || HEAVY_SEPARATOR_RE.test(plain);
+      || HEAVY_SEPARATOR_RE.test(plain)
+      || CID_REF_RE.test(plain);
     if (!looksNoisy || !htmlB64) return plain;
   }
   if (htmlB64) return decode(htmlB64);
   if (payload.body?.data) return decode(payload.body.data);
   return '';
 }
+
 
 async function listThreads({ db, userId, accountEmail, maxResults, pageToken, query }) {
   const gmail = await _gmailClient(db, userId, accountEmail);
@@ -230,4 +240,8 @@ async function syncLabels({ db, userId, accountEmail }) {
   }
 }
 
-module.exports = { listThreads, getThread, markRead, archiveMessage, starMessage, moveMessage, syncLabels };
+module.exports = {
+  listThreads, getThread, markRead, archiveMessage, starMessage, moveMessage, syncLabels,
+  // Exported for unit tests only — not used by production callers.
+  _extractBody, _cidRefRe: CID_REF_RE,
+};
