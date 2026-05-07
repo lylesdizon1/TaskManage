@@ -1,5 +1,14 @@
 # Research Agents — V1 Spec
-*V1 spec — drafted 2026-05-06 from CC session. Implementation pending owner pickup; this doc is the contract.*
+*V1 spec — drafted 2026-05-06 from CC session.*
+
+> **⚠ SUPERSEDED 2026-05-06 evening.**
+> The spec was absorbed into **`docs/agents-foundation-v1.md`** under the new unified
+> Skills + Sub-agents architecture. The implementation that shipped uses a
+> **deterministic state-machine** model (NOT the agentic-loop wrapper described
+> below) and runs **async in a background worker** (NOT sync streaming).
+> See agents-foundation-v1.md §5B + the M3 commit for the live design.
+> This doc retained for historical context — original framing of research-agent
+> as a single-purpose feature before the broader sub-agent ecosystem was scoped.
 
 ## Context
 

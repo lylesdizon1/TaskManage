@@ -714,5 +714,113 @@ module.exports = function createAdminRouter({ authenticateToken, requireSuperAdm
     }
   });
 
+  // ── /api/admin/agents-health ─ skills + sub-agents canaries ─────────
+  // M5.1 — operational visibility into the agents-foundation surface.
+  // Counts active rows + recent activity + in-process error counters.
+  router.get('/api/admin/agents-health', async (req, res) => {
+    try {
+      const out = {
+        timestamp: new Date().toISOString(),
+        skills: {},
+        sub_agents: {},
+        canaries: {},
+      };
+
+      // Skills counts.
+      try {
+        const r = await db.pool.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE is_active = TRUE)::int                           AS active_total,
+            COUNT(*) FILTER (WHERE is_active = FALSE)::int                          AS paused_total,
+            COUNT(*) FILTER (WHERE source = 'aria_proposed')::int                   AS aria_proposed_total,
+            COUNT(*) FILTER (WHERE last_used_at IS NOT NULL)::int                   AS ever_used_total,
+            COUNT(*)::int                                                           AS total
+          FROM skills
+        `);
+        out.skills.totals = r.rows[0];
+      } catch (err) { out.skills.error = err.message; }
+
+      // Skill invocations — last 24h.
+      try {
+        const r = await db.pool.query(`
+          SELECT COUNT(*)::int AS n
+            FROM skill_invocations
+           WHERE created_at > NOW() - INTERVAL '24 hours'
+        `);
+        out.skills.invocations_last_24h = r.rows[0]?.n || 0;
+      } catch (err) { out.skills.invocations_error = err.message; }
+
+      // Top-fired skills — last 7d.
+      try {
+        const r = await db.pool.query(`
+          SELECT s.name, s.id, COUNT(si.id)::int AS invocations
+            FROM skills s
+            JOIN skill_invocations si ON si.skill_id = s.id
+           WHERE si.created_at > NOW() - INTERVAL '7 days'
+           GROUP BY s.id, s.name
+           ORDER BY invocations DESC
+           LIMIT 10
+        `);
+        out.skills.top_fired_7d = r.rows;
+      } catch (err) { out.skills.top_fired_error = err.message; }
+
+      // Sub-agent counts by status.
+      try {
+        const r = await db.pool.query(`
+          SELECT status, COUNT(*)::int AS n
+            FROM sub_agent_sessions
+           GROUP BY status
+        `);
+        out.sub_agents.status_counts = Object.fromEntries(r.rows.map((row) => [row.status, row.n]));
+      } catch (err) { out.sub_agents.status_error = err.message; }
+
+      // Sub-agent runs — last 7d aggregate.
+      try {
+        const r = await db.pool.query(`
+          SELECT
+            COUNT(*)::int                                                            AS runs,
+            COUNT(*) FILTER (WHERE status = 'completed')::int                        AS completed,
+            COUNT(*) FILTER (WHERE status = 'failed')::int                           AS failed,
+            COUNT(*) FILTER (WHERE status = 'budget_exhausted')::int                 AS budget_exhausted,
+            COUNT(*) FILTER (WHERE status = 'killed')::int                           AS killed,
+            COALESCE(AVG((budget_used->>'tool_calls')::numeric), 0)::numeric(10,2)   AS avg_tool_calls,
+            COALESCE(AVG((budget_used->>'spend_usd')::numeric), 0)::numeric(10,4)    AS avg_spend_usd
+            FROM sub_agent_sessions
+           WHERE started_at > NOW() - INTERVAL '7 days'
+        `);
+        out.sub_agents.last_7d = r.rows[0];
+      } catch (err) { out.sub_agents.last_7d_error = err.message; }
+
+      // Stuck sessions — running but claimed > 15 min ago. The worker's
+      // recoverOrphaned reaps these on boot; this surfaces them so we
+      // can spot worker outages without waiting for restart.
+      try {
+        const r = await db.pool.query(`
+          SELECT id, user_id AS "userId", definition_id AS "definitionId",
+                 current_phase AS "currentPhase", claimed_at AS "claimedAt"
+            FROM sub_agent_sessions
+           WHERE status = 'running' AND claimed_at < NOW() - INTERVAL '15 minutes'
+           ORDER BY claimed_at ASC
+        `);
+        out.sub_agents.stuck = r.rows;
+      } catch (err) { out.sub_agents.stuck_error = err.message; }
+
+      // In-process error counters from skillLoader (resets on restart).
+      try {
+        const { getSkillEvaluationErrors } = require('../lib/skillLoader.cjs');
+        out.canaries.skill_evaluation_errors = getSkillEvaluationErrors();
+      } catch { /* skillLoader may not be loaded yet */ }
+      try {
+        const { getRuleEvaluationErrors } = require('../lib/decisionEngine.cjs');
+        out.canaries.rule_evaluation_errors = getRuleEvaluationErrors();
+      } catch {}
+
+      res.json(out);
+    } catch (err) {
+      logger.error('admin.agentsHealth.failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 };
