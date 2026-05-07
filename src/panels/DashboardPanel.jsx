@@ -1420,6 +1420,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 if (tools.some(t => ['create_note', 'update_note', 'delete_note'].includes(t))) {
                   onReloadNotes?.();
                 }
+              } else if (currentEvent === 'skills_loaded') {
+                // M2.6 — attach loaded-skill metadata to the assistant
+                // message so it can render the inline indicator.
+                const skills = Array.isArray(parsed.skills) ? parsed.skills : [];
+                if (skills.length) {
+                  setCcMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last && last.role === 'assistant') {
+                      updated[updated.length - 1] = { ...last, loadedSkills: skills };
+                    }
+                    return updated;
+                  });
+                }
               } else if (currentEvent === 'email_draft') {
                 // Full draft preview — rendered in the active zone now.
                 const draftTs = Date.now();
@@ -2602,7 +2616,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 }
                 const isUser = msg.role === 'user';
                 return (
-                  <div key={msg.ts || i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                  <div key={msg.ts || i} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                     <div
                       className={`max-w-[85%] ${isUser ? 'text-white' : ''}`}
                       style={isUser
@@ -2616,6 +2630,24 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                             : <ReactMarkdown components={MD_COMPONENTS}>{msg.content}</ReactMarkdown>)
                         : <span className="animate-pulse" style={{ color: '#6b7280' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>}
                     </div>
+                    {!isUser && Array.isArray(msg.loadedSkills) && msg.loadedSkills.length > 0 && (
+                      <div style={{ marginTop: 4, marginLeft: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {msg.loadedSkills.map((s) => (
+                          <button
+                            key={s.id}
+                            onClick={() => { window.dispatchEvent(new CustomEvent('navigate-app', { detail: { view: 'agents' } })); }}
+                            title={s.reason ? `Loaded because: ${s.reason}` : 'Loaded skill'}
+                            style={{
+                              fontSize: 11, color: '#6b7280', background: 'transparent',
+                              border: 'none', padding: '0 4px', cursor: 'pointer',
+                              fontFamily: 'Manrope, sans-serif',
+                            }}
+                          >
+                            📚 {s.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}

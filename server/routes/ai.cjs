@@ -390,6 +390,15 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         if (streamFinalized) return;
         try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
       };
+
+      // Emit a skills_loaded event up-front so the CC can render an
+      // inline indicator next to the assistant turn (M2.6). Only fires
+      // when at least one skill matched + loaded — silent otherwise.
+      if (Array.isArray(ctx.loadedSkills) && ctx.loadedSkills.length) {
+        send('skills_loaded', {
+          skills: ctx.loadedSkills.map((s) => ({ id: s.id, name: s.name, reason: s.reason })),
+        });
+      }
       finalizeStream = (payload = {}) => {
         if (streamFinalized) return;
         streamFinalized = true;

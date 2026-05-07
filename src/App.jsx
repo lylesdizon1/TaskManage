@@ -108,6 +108,7 @@ const AddTaskForm = lazy(() => import('./components/tasks/AddTaskForm.jsx'));
 const DashboardPanel = lazy(() => import('./panels/DashboardPanel.jsx'));
 const AdminPanel = lazy(() => import('./panels/AdminPanel.jsx'));
 const ActivityPanel = lazy(() => import('./panels/ActivityPanel.jsx'));
+const AgentsPanel = lazy(() => import('./panels/AgentsPanel.jsx'));
 import { CreateEventModal, QuickCaptureModal, QuickCaptureFAB } from './components/modals/QuickCaptureModal.jsx';
 
 // Render grouped entity <option> elements for <select> dropdowns
@@ -395,8 +396,16 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       const view = e.state?.view || 'dashboard';
       setActiveView(view);
     };
+    const handleNavigate = (e) => {
+      const view = e.detail?.view;
+      if (view) setActiveView(view);
+    };
     window.addEventListener('popstate', handlePop);
-    return () => window.removeEventListener('popstate', handlePop);
+    window.addEventListener('navigate-app', handleNavigate);
+    return () => {
+      window.removeEventListener('popstate', handlePop);
+      window.removeEventListener('navigate-app', handleNavigate);
+    };
   }, []);
 
   // Mobile bottom-nav peek-a-boo — hide on scroll down, reveal on scroll
@@ -1074,6 +1083,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             { key: 'people', label: 'People', icon: 'group' },
             { key: 'sharing', label: 'Sharing', icon: 'share' },
             { key: 'chat', label: 'Aria', icon: 'chat' },
+            { key: 'agents', label: 'Agents', icon: 'auto_awesome' },
             { key: 'activity', label: 'Activity', icon: 'history' },
             ...(currentUser?.role === 'superadmin' ? [{ key: 'admin', label: 'Admin', icon: 'admin_panel_settings' }] : []),
           ].map(({ key, label, icon }) => (
@@ -1209,6 +1219,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <AdminPanel authToken={authToken} />
           ) : activeView === 'activity' ? (
             <ActivityPanel authToken={authToken} currentUser={currentUser} apiFetch={apiFetch} />
+          ) : activeView === 'agents' ? (
+            <AgentsPanel apiFetch={apiFetch} addToast={addToast} />
           ) : activeView === 'inbox' ? (
             <InboxPanel authToken={authToken} apiFetch={apiFetch} onNavigate={setActiveView} onUnreadCountChange={setInboxUnread} />
           ) : activeView === 'projects' ? (
@@ -1764,6 +1776,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                     { view: 'people',   label: 'People',   icon: 'group' },
                     { view: 'sharing',  label: 'Sharing',  icon: 'share' },
                     { view: 'chat',     label: 'Aria',     icon: 'chat' },
+                    { view: 'agents',   label: 'Agents',   icon: 'auto_awesome' },
                     { view: 'activity', label: 'Activity', icon: 'history' },
                     ...(currentUser?.role === 'superadmin' ? [{ view: 'admin', label: 'Admin', icon: 'admin_panel_settings' }] : []),
                   ].map(({ view, label, icon }) => (

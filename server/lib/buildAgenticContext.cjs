@@ -486,6 +486,7 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // one matching 3k skill consumes 3k, never pads.
   let skillsBlock = '';
   let chatContextEnvelope = null;
+  let loadedSkills = [];
   try {
     chatContextEnvelope = await buildChatContext({
       userId, db, userMessage, activePersona,
@@ -494,6 +495,13 @@ To page through results: use the oldest result's date as date_to in a follow-up 
       userId, db, chatContext: chatContextEnvelope, turnId,
     });
     skillsBlock = result.block ? `\n\n${result.block}\n\n` : '';
+    loadedSkills = (result.loaded || []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      reason: s.reason,
+      tokens: s.tokens,
+      truncated: !!s.truncated,
+    }));
   } catch (err) {
     // Hard contract — never throw from the skill load path. A bad turn
     // here must not hold up the entire system prompt build.
@@ -514,6 +522,7 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
     peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, proposalsBlock, journalBlock, skillsBlock,
     chatContext: chatContextEnvelope,
+    loadedSkills,
     userPreferences, inferredRules, pendingRuleProposals,
     decisionInstructions: DECISION_INSTRUCTIONS,
     systemPrompt,
