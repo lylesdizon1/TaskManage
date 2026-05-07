@@ -509,19 +509,36 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
     }
   }
 
-  // Batch-lookup classifications once the thread list lands, then poll a
-  // couple of times to catch classifications produced by the server's
-  // fire-and-forget trigger after the threads response.
-  // Also includes flagged source_ids — flagged inbox_items can live
-  // outside the recent thread window, but their synthesized stubs in
-  // the flagged view still need a classification snapshot to bucket
-  // correctly and to recover accountEmail for thread opens.
-  useEffect(() => {
+  // Batch-lookup classifications. Triggered when the message_id LIST
+  // changes — not on every threads-array reference change. Without this
+  // memoization the effect re-fired on every setThreads(prev.map(...))
+  // (e.g. optimistic isRead toggle on every thread click), each cycle
+  // burning 3 batch-lookup calls (immediate + 2.5s + 6s polls). Net
+  // result: 8+ redundant batch-lookups per click session, ~37KB each.
+  //
+  // The polling pattern (immediate + 2.5s + 6s) was originally there to
+  // catch classifications written by the server's fire-and-forget
+  // trigger AFTER the threads response. We preserve the catch-up
+  // behavior but make it CONDITIONAL: only schedule a follow-up poll
+  // when the response shows missing classifications. Capped at 2 retries.
+  const messageIds = useMemo(() => {
     const fromThreads = threads.map(t => t.latestMessageId).filter(Boolean);
     const fromFlagged = flaggedItems.map(i => i.source_id).filter(Boolean);
-    const messageIds = Array.from(new Set([...fromThreads, ...fromFlagged])).slice(0, 100);
+    return Array.from(new Set([...fromThreads, ...fromFlagged])).slice(0, 100);
+  }, [threads, flaggedItems]);
+  // Stable string key so the useEffect below depends on CONTENT not on
+  // array identity. The Set/slice above produces a fresh array on every
+  // threads/flaggedItems change even when content is unchanged.
+  const messageIdsKey = messageIds.join(',');
+
+  useEffect(() => {
     if (!messageIds.length) { setClassifications({}); return; }
     let cancelled = false;
+    let timeoutId = null;
+    let attempts = 0;
+    const MAX_FOLLOW_UPS = 2;            // immediate + at most 2 follow-ups
+    const FOLLOW_UP_DELAYS_MS = [2500, 6000];
+
     const fetchOnce = async () => {
       try {
         const r = await apiFetch('/api/classification/batch-lookup', {
@@ -531,14 +548,24 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         });
         if (!r.ok) return;
         const data = await r.json();
-        if (!cancelled) setClassifications(data?.classifications || {});
-      } catch {}
+        if (cancelled) return;
+        const fresh = data?.classifications || {};
+        setClassifications(fresh);
+        // Only re-poll if the server hasn't classified everything yet.
+        // Catches the in-flight fire-and-forget classification path
+        // without burning fetches when the data is already complete.
+        const missing = messageIds.filter((id) => !fresh[id]).length;
+        if (missing > 0 && attempts < MAX_FOLLOW_UPS) {
+          const delay = FOLLOW_UP_DELAYS_MS[attempts];
+          attempts++;
+          timeoutId = setTimeout(fetchOnce, delay);
+        }
+      } catch { /* silent — stale classifications are acceptable */ }
     };
     fetchOnce();
-    const t1 = setTimeout(fetchOnce, 2500);
-    const t2 = setTimeout(fetchOnce, 6000);
-    return () => { cancelled = true; clearTimeout(t1); clearTimeout(t2); };
-  }, [threads, flaggedItems, apiFetch, authToken]);
+    return () => { cancelled = true; if (timeoutId) clearTimeout(timeoutId); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageIdsKey, apiFetch, authToken]);
 
   // Zone placement: derived purely from current classifications.
   // Needs Attention is "unread urgency" — once read, an item has been
