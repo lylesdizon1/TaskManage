@@ -796,6 +796,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           timeZone: userTZ,
         }),
       });
+      if (!streamRes.ok) {
+        console.warn('[CC.poll] narration request failed', { status: streamRes.status });
+        return;
+      }
 
       const reader = streamRes.body.getReader();
       const decoder = new TextDecoder();
@@ -1412,6 +1416,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         }),
         signal: controller.signal,
       });
+      if (!res.ok) {
+        toast.error('Chat request failed. Please try again.');
+        setCcMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last && last.role === 'assistant' && !last.content) updated.pop();
+          return updated;
+        });
+        return;
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
