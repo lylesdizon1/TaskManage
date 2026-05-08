@@ -504,18 +504,43 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   // ── Connected — render native calendar ────────────────────────
   const accounts = gcalStatus.accounts || [];
 
+  // 2026-05-08 follow-up to commit 6a77ab1 — header count was lying.
+  // Pre-fix: "Connected Accounts (4)" + green pill, even when 3 of 4
+  // had auth_status='needs_reauth' with red badges visible directly
+  // below. Now: per-state count + amber pill when any are broken.
+  const totalAccounts = accounts.length + outlookAccounts.length;
+  const brokenAccounts = accounts.filter((a) => a.needsReconnect).length
+    + outlookAccounts.filter((a) => a.auth_status === 'needs_reauth').length;
+  const healthyAccounts = totalAccounts - brokenAccounts;
+  const anyBroken = brokenAccounts > 0;
+  const allBroken = totalAccounts > 0 && healthyAccounts === 0;
+  // Pill palette flips: green (healthy) → amber (some broken) →
+  // red (all broken). Keeps the eye drawn even when the row is
+  // collapsed, mirroring the per-row badge severity.
+  const pillBg = allBroken ? 'bg-red-50 border-red-200'
+    : anyBroken ? 'bg-amber-50 border-amber-200'
+    : 'bg-green-50 border-green-100';
+  const headerText = allBroken ? 'text-red-800 hover:text-red-900'
+    : anyBroken ? 'text-amber-800 hover:text-amber-900'
+    : 'text-green-700 hover:text-green-800';
+  const subText = allBroken ? 'text-red-700' : 'text-amber-800';
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: '#fbf8fe' }}>
       {/* Accounts bar. Collapsed by default to reclaim vertical space
           on mobile; header row shows count + chevron, tap to expand. */}
-      <div className="px-4 py-2 bg-green-50 border-b border-green-100 flex-shrink-0">
+      <div className={`px-4 py-2 border-b flex-shrink-0 ${pillBg}`}>
         <div className="flex items-center justify-between mb-1 relative">
           <button
             onClick={() => setAccountsExpanded((v) => !v)}
-            className="flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-800"
+            className={`flex items-center gap-2 text-xs font-medium ${headerText}`}
             aria-expanded={accountsExpanded}
           >
-            <span>Connected Accounts ({accounts.length + outlookAccounts.length})</span>
+            <span>
+              {anyBroken
+                ? <>Connected Accounts ({healthyAccounts} of {totalAccounts}) · <span className={`font-semibold ${subText}`}>{brokenAccounts} need{brokenAccounts === 1 ? 's' : ''} reconnection</span></>
+                : <>Connected Accounts ({totalAccounts})</>}
+            </span>
             <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
               {accountsExpanded ? 'expand_more' : 'chevron_right'}
             </span>
