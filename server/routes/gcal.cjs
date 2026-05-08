@@ -103,6 +103,20 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
 
     const validAccounts = [];
     for (const acct of allAccounts) {
+      // 2026-05-08 fix: short-circuit on stored needs_reauth state.
+      // Don't burn a Google API call probing a token we already know
+      // is dead. The cron path persists this flag on invalid_grant.
+      if (acct.authStatus === 'needs_reauth') {
+        validAccounts.push({
+          email: acct.googleEmail,
+          isPrimary: acct.isPrimary,
+          needsReconnect: true,
+          error: acct.lastSyncError || 'invalid_grant',
+          authStatusUpdatedAt: acct.authStatusUpdatedAt,
+        });
+        continue;
+      }
+
       const oauth2 = makeOAuth2Client();
       oauth2.setCredentials(acct.tokens);
       oauth2.on('tokens', async (newTokens) => {
@@ -122,19 +136,31 @@ module.exports = function createGcalRouter({ authenticateToken, db, makeOAuth2Cl
           ).catch(() => {});
           acct.googleEmail = realEmail;
         }
+        // Successful probe → clear any stale needs_reauth flag.
+        await db.clearGcalAuthStatus(userId, acct.googleEmail).catch(() => {});
         validAccounts.push({ email: realEmail || acct.googleEmail, isPrimary: acct.isPrimary, needsReconnect: false });
       } catch (err) {
-        // Do NOT hard-delete the token row on a transient Graph API error.
-        // A refresh hiccup, rate limit, or network blip would otherwise
-        // permanently remove a connected account until the user manually
-        // reconnects. Flag it needsReconnect so the UI can prompt, and
-        // only the explicit disconnect routes delete rows.
-        logger.warn('gcal.status.probe.failed', { requestId: req.requestId, userId, googleEmail: acct.googleEmail, error: err.message });
+        // Do NOT hard-delete the token row on a transient API error.
+        // Persist invalid_grant to DB so the cron + future probes can
+        // short-circuit (saves API budget + stops retry storms). Other
+        // errors stay needsReconnect=true for this response only — DB
+        // flag is reserved for definite auth revocation.
+        const msg = err.message || '';
+        const isAuthRevoked = msg.includes('invalid_grant')
+          || msg.includes('Token has been expired or revoked')
+          || err.response?.status === 401;
+        if (isAuthRevoked) {
+          await db.markGcalNeedsReauth(userId, acct.googleEmail, msg).catch(() => {});
+        }
+        logger.warn('gcal.status.probe.failed', {
+          requestId: req.requestId, userId,
+          googleEmail: acct.googleEmail, error: msg, persisted: isAuthRevoked,
+        });
         validAccounts.push({
           email: acct.googleEmail,
           isPrimary: acct.isPrimary,
           needsReconnect: true,
-          error: err.message,
+          error: msg,
         });
       }
     }

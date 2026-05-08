@@ -91,6 +91,10 @@ module.exports = function createOutlookRouter({ authenticateToken, db }) {
         account_email: r.accountEmail || '',
         provider: r.provider || 'microsoft',
         created_at: r.createdAt,
+        // 2026-05-08 — surface auth health for the UI reconnect prompt.
+        auth_status: r.authStatus || 'ok',
+        auth_status_updated_at: r.authStatusUpdatedAt || null,
+        last_sync_error: r.lastSyncError || null,
       })));
     } catch (err) {
       logger.error('outlook.accounts.list.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

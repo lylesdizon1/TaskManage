@@ -125,6 +125,11 @@ async function listOutlookAccounts(userId, db) {
     accountEmail: r.accountEmail || '',
     tokens: unwrapTokens(r.config?.tokens),
     createdAt: r.createdAt,
+    // 2026-05-08 — surface auth-status so the cron + UI can skip /
+    // flag dead-token accounts. Default 'ok' for legacy rows.
+    authStatus: r.authStatus || 'ok',
+    authStatusUpdatedAt: r.authStatusUpdatedAt || null,
+    lastSyncError: r.lastSyncError || null,
   }));
 }
 

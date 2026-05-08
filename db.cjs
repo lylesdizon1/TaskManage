@@ -892,6 +892,9 @@ async function getUserIntegrationsByType(userId, type) {
     `SELECT id, user_id AS "userId", integration_type AS "type",
             account_email AS "accountEmail", provider,
             config_json AS "config", is_enabled AS "isEnabled",
+            auth_status AS "authStatus",
+            auth_status_updated_at AS "authStatusUpdatedAt",
+            last_sync_error AS "lastSyncError",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM user_integrations WHERE user_id = $1 AND integration_type = $2
      ORDER BY created_at ASC`,
@@ -954,6 +957,11 @@ async function upsertUserIntegration(userId, type, config, isEnabled = true, acc
        provider = EXCLUDED.provider,
        config_json = user_integrations.config_json || EXCLUDED.config_json,
        is_enabled = EXCLUDED.is_enabled,
+       -- 2026-05-08: re-upsert (e.g. OAuth callback writing fresh tokens)
+       -- clears needs_reauth so the cron picks the row back up.
+       auth_status = 'ok',
+       auth_status_updated_at = NOW(),
+       last_sync_error = NULL,
        updated_at = NOW()
      RETURNING id, user_id AS "userId", integration_type AS "type",
                account_email AS "accountEmail", provider,
@@ -970,6 +978,98 @@ async function deleteUserIntegrationById(id, userId) {
     [id, userId],
   );
   return result.rowCount > 0;
+}
+
+// ── Auth-status helpers (2026-05-08 multi-account-fire fix) ─────────
+//
+// Pre-fix, invalid_grant from gmail/gcal/outlook either:
+//   - destroyed the integration row (gmail-refresh cron + gmail.cjs:215)
+//   - was silent-logged with no DB change (gcal cron)
+//
+// Post-fix: mark `auth_status='needs_reauth'`, persist last error,
+// stop hammering the dead token. UI surfaces the flag, user clicks
+// reconnect, OAuth flow flips back to 'ok'.
+
+async function markIntegrationNeedsReauth(userId, integrationId, lastError = null) {
+  if (!userId || !integrationId) return false;
+  const { rowCount } = await pool.query(
+    `UPDATE user_integrations
+        SET auth_status = 'needs_reauth',
+            auth_status_updated_at = NOW(),
+            last_sync_error = $3,
+            updated_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND auth_status != 'needs_reauth'`,
+    [integrationId, userId, lastError ? String(lastError).slice(0, 500) : null],
+  ).catch(() => ({ rowCount: 0 }));
+  return rowCount > 0;
+}
+
+async function clearIntegrationAuthStatus(userId, integrationId) {
+  if (!userId || !integrationId) return false;
+  const { rowCount } = await pool.query(
+    `UPDATE user_integrations
+        SET auth_status = 'ok',
+            auth_status_updated_at = NOW(),
+            last_sync_error = NULL,
+            updated_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND auth_status != 'ok'`,
+    [integrationId, userId],
+  ).catch(() => ({ rowCount: 0 }));
+  return rowCount > 0;
+}
+
+async function markGcalNeedsReauth(userId, googleEmail, lastError = null) {
+  if (!userId || !googleEmail) return false;
+  const { rowCount } = await pool.query(
+    `UPDATE gcal_tokens
+        SET auth_status = 'needs_reauth',
+            auth_status_updated_at = NOW(),
+            last_sync_error = $3,
+            updated_at = NOW()
+      WHERE user_id = $1 AND google_email = $2 AND auth_status != 'needs_reauth'`,
+    [userId, googleEmail, lastError ? String(lastError).slice(0, 500) : null],
+  ).catch(() => ({ rowCount: 0 }));
+  return rowCount > 0;
+}
+
+async function clearGcalAuthStatus(userId, googleEmail) {
+  if (!userId || !googleEmail) return false;
+  const { rowCount } = await pool.query(
+    `UPDATE gcal_tokens
+        SET auth_status = 'ok',
+            auth_status_updated_at = NOW(),
+            last_sync_error = NULL,
+            updated_at = NOW()
+      WHERE user_id = $1 AND google_email = $2 AND auth_status != 'ok'`,
+    [userId, googleEmail],
+  ).catch(() => ({ rowCount: 0 }));
+  return rowCount > 0;
+}
+
+/**
+ * Returns active integration rows for a user, optionally filtered to
+ * those that are healthy (auth_status='ok'). Used by sync crons to
+ * skip needs_reauth rows and stop hammering dead tokens.
+ */
+async function listIntegrationsByType(userId, type, { onlyHealthy = false } = {}) {
+  if (!userId) return [];
+  const where = onlyHealthy
+    ? `WHERE user_id = $1 AND integration_type = $2 AND is_enabled = TRUE AND auth_status = 'ok'`
+    : `WHERE user_id = $1 AND integration_type = $2 AND is_enabled = TRUE`;
+  const { rows } = await pool.query(
+    `SELECT id, integration_type AS "integrationType",
+            account_email AS "accountEmail",
+            provider, config_json AS "config",
+            is_enabled AS "isEnabled",
+            auth_status AS "authStatus",
+            auth_status_updated_at AS "authStatusUpdatedAt",
+            last_sync_error AS "lastSyncError",
+            created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM user_integrations ${where}
+      ORDER BY id ASC`,
+    [userId, type],
+  );
+  return rows;
 }
 
 /** Delete a user's integration row by type (singleton default). */
@@ -2993,6 +3093,9 @@ async function getGcalTokensForUser(userId) {
 async function getAllGcalAccountsForUser(userId) {
   const { rows } = await pool.query(
     `SELECT google_email AS "googleEmail", is_primary AS "isPrimary", tokens,
+            auth_status AS "authStatus",
+            auth_status_updated_at AS "authStatusUpdatedAt",
+            last_sync_error AS "lastSyncError",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM gcal_tokens WHERE user_id = $1
      ORDER BY is_primary DESC, created_at ASC`,
@@ -3038,7 +3141,14 @@ async function setGcalTokensForUser(userId, tokens, googleEmail) {
   await pool.query(
     `INSERT INTO gcal_tokens (user_id, google_email, tokens, is_primary, updated_at)
      VALUES ($1, $2, $3, $4, NOW())
-     ON CONFLICT (user_id, google_email) DO UPDATE SET tokens = $3, updated_at = NOW()`,
+     ON CONFLICT (user_id, google_email) DO UPDATE SET
+       tokens = $3,
+       -- 2026-05-08: fresh tokens (e.g. OAuth callback) clear stale
+       -- needs_reauth so the cron picks the account back up next tick.
+       auth_status = 'ok',
+       auth_status_updated_at = NOW(),
+       last_sync_error = NULL,
+       updated_at = NOW()`,
     [userId, email, JSON.stringify(tokens), isPrimary],
   );
 }
@@ -7455,6 +7565,39 @@ async function runMigrations() {
   // the run's metadata.
   await pool.query(`ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS sub_agent_session_id TEXT REFERENCES sub_agent_sessions(id) ON DELETE SET NULL`)
     .catch((err) => logger.warn('migration.warn', { label: 'agent_actions.sub_agent_session_id', error: err.message }));
+
+  // ── Sync auth status (multi-account-fire fix, 2026-05-08) ──────────
+  //
+  // Before this column existed, the gmail-refresh cron + the gmail
+  // status route silently DELETED user_integrations rows on
+  // invalid_grant (proxy-server.cjs:770, gmail.cjs:215). For 2-user
+  // prod, max(user_integrations.id) was 8387 with only 9 live rows —
+  // ~8378 historical destroy/recreate cycles. The user's
+  // lylesdizon@gmail.com Gmail integration was in one of those buried
+  // ids. UI showed "connected" because the row existed; user had no
+  // way to tell when it was destroyed.
+  //
+  // gcal_tokens had the opposite bug — invalid_grant was silent-logged
+  // forever, no DB state changed, sync hammered the dead token every
+  // 15 min for ~14 days for two of three accounts.
+  //
+  // Fix: surface auth state on both tables. 'ok' = healthy. 'needs_reauth'
+  // = invalid_grant detected, sync skipped, UI shows reconnect prompt.
+  // Crons clear back to 'ok' on successful refresh.
+  await pool.query(`ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS auth_status TEXT NOT NULL DEFAULT 'ok' CHECK (auth_status IN ('ok','needs_reauth'))`)
+    .catch((err) => logger.warn('migration.warn', { label: 'user_integrations.auth_status', error: err.message }));
+  await pool.query(`ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS auth_status_updated_at TIMESTAMPTZ`)
+    .catch((err) => logger.warn('migration.warn', { label: 'user_integrations.auth_status_updated_at', error: err.message }));
+  await pool.query(`ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS last_sync_error TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'user_integrations.last_sync_error', error: err.message }));
+  await pool.query(`ALTER TABLE gcal_tokens ADD COLUMN IF NOT EXISTS auth_status TEXT NOT NULL DEFAULT 'ok' CHECK (auth_status IN ('ok','needs_reauth'))`)
+    .catch((err) => logger.warn('migration.warn', { label: 'gcal_tokens.auth_status', error: err.message }));
+  await pool.query(`ALTER TABLE gcal_tokens ADD COLUMN IF NOT EXISTS auth_status_updated_at TIMESTAMPTZ`)
+    .catch((err) => logger.warn('migration.warn', { label: 'gcal_tokens.auth_status_updated_at', error: err.message }));
+  await pool.query(`ALTER TABLE gcal_tokens ADD COLUMN IF NOT EXISTS last_sync_error TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'gcal_tokens.last_sync_error', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS user_integrations_auth_status_idx ON user_integrations(user_id, auth_status) WHERE auth_status = 'needs_reauth'`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS gcal_tokens_auth_status_idx ON gcal_tokens(user_id, auth_status) WHERE auth_status = 'needs_reauth'`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -10447,6 +10590,11 @@ module.exports = {
   upsertUserIntegration,
   deleteUserIntegration,
   deleteUserIntegrationById,
+  markIntegrationNeedsReauth,
+  clearIntegrationAuthStatus,
+  markGcalNeedsReauth,
+  clearGcalAuthStatus,
+  listIntegrationsByType,
   upsertQbConnection,
   getQbConnectionsByUser,
   getQbConnectionById,

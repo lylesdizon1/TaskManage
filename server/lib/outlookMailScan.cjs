@@ -36,6 +36,14 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
   try { tokens = await withFreshAccessToken(account, db, userId); }
   catch (e) {
     logger.warn('outlookScan.tokenRefresh.failed', { requestId, userId, accountEmail: account.accountEmail, error: e.message });
+    // 2026-05-08: persist auth failure so the UI can surface the
+    // "Reconnect needed" badge and the cron skips this account next
+    // tick. Pre-fix, outlook auth failures were logged + ignored;
+    // outlookScan.complete total=0 made it look like everything was
+    // healthy when the token had been dead for weeks.
+    if (account?.id && db?.markIntegrationNeedsReauth) {
+      await db.markIntegrationNeedsReauth(userId, account.id, e.message).catch(() => {});
+    }
     return { newItems: 0, error: 'invalid_grant' };
   }
 
@@ -194,6 +202,13 @@ async function scanOutlookMailForUser({ userId, db, requestId }) {
   let total = 0;
   const perAccount = [];
   for (const acct of accounts) {
+    // 2026-05-08: skip needs_reauth accounts — same shape as gmail/gcal
+    // crons. Resumes when user reconnects (callback writes fresh tokens
+    // via upsertUserIntegration which clears auth_status='ok').
+    if (acct.authStatus === 'needs_reauth') {
+      perAccount.push({ accountEmail: acct.accountEmail || '', skipped: 'needs_reauth', newItems: 0 });
+      continue;
+    }
     const r = await scanOneOutlookAccount({ userId, account: acct, config, db, requestId });
     perAccount.push({ accountEmail: acct.accountEmail || '', ...r });
     total += r.newItems || 0;

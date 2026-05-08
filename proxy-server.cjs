@@ -537,6 +537,11 @@ async function syncGcalForUser(userId, tz) {
   try {
     const accounts = await loadAllGcalAccounts(userId);
     for (const account of accounts) {
+      // 2026-05-08 fix — skip accounts already flagged needs_reauth so
+      // we stop the per-tick invalid_grant log spam (was 3 errors × 96
+      // ticks/day = ~288 silent failures per day for one user). User
+      // clicks reconnect, OAuth callback flips back to 'ok', sync resumes.
+      if (account.authStatus === 'needs_reauth') continue;
       try {
         const { googleEmail, tokens } = account;
         const oauth2Client = makeOAuth2Client();
@@ -596,8 +601,23 @@ async function syncGcalForUser(userId, tz) {
             _rediDel(`gcal:${userId}:${tz}:${d}`)
           ));
         } catch { /* silent — cache purge is best-effort */ }
+        // Successful pull → clear any stale needs_reauth flag on this
+        // gcal_tokens row (also flips the row back after reconnect).
+        await db.clearGcalAuthStatus(userId, googleEmail).catch(() => {});
       } catch (e) {
-        cronLogger.error('gcal-sync.account-failed', { userId, error: e.message });
+        // 2026-05-08 fix: persist invalid_grant to DB. Pre-fix this was
+        // logged-only — the user's 3 dead Google calendars produced ~288
+        // log entries/day forever with NO DB state change and NO UI
+        // signal. Mark needs_reauth so the cron skips the row next tick
+        // and the UI can surface the reconnect prompt.
+        const msg = e.message || '';
+        if (msg.includes('invalid_grant') || msg.includes('Token has been expired or revoked')) {
+          const flipped = await db.markGcalNeedsReauth(userId, account.googleEmail, msg).catch(() => false);
+          if (flipped) {
+            cronLogger.warn('gcal-sync.needsReauth', { userId, googleEmail: account.googleEmail });
+          }
+        }
+        cronLogger.error('gcal-sync.account-failed', { userId, googleEmail: account.googleEmail, error: msg });
       }
     }
     // Drop rows whose end_time is older than 30 days so the table stays bounded.
@@ -747,6 +767,12 @@ cron.schedule('*/30 * * * *', async () => {
         if (!rows.length) continue;
 
         for (const row of rows) {
+          // 2026-05-08 fix: skip rows already flagged needs_reauth so we
+          // stop hammering dead tokens (was 96 ticks/day × 3 accounts =
+          // 288 invalid_grant log entries/day for one user). User clicks
+          // reconnect, OAuth callback flips back to 'ok', cron resumes.
+          if (row.authStatus === 'needs_reauth') continue;
+
           try {
             let tokens = row.config?.tokens;
             if (!tokens) continue;
@@ -762,13 +788,27 @@ cron.schedule('*/30 * * * *', async () => {
             const merged = { ...tokens, ...credentials };
             const wrapped = ENCRYPTION_KEY ? { _enc: _encTokens(merged) } : merged;
             await db.upsertUserIntegration(userId, 'gmail', { tokens: wrapped }, true, row.accountEmail || '');
+            // Clear any stale needs_reauth flag on successful refresh —
+            // this is also the path that flips the row back after a
+            // user reconnects via OAuth (callback writes fresh tokens
+            // → next cron tick succeeds → flag clears).
+            await db.clearIntegrationAuthStatus(userId, row.id).catch(() => {});
             cronLogger.info('gmail-refresh.ok', { userId, account: row.accountEmail });
           } catch (acctErr) {
             cronLogger.error('gmail-refresh.account-failed', { userId, account: row.accountEmail, error: acctErr.message });
 
+            // 2026-05-08 fix: STOP hard-deleting integration rows on
+            // invalid_grant. Pre-fix this destroyed Lyle's
+            // lylesdizon@gmail.com integration along with thousands of
+            // other rows over time (max id 8387 with only 9 live rows
+            // in 2-user prod = ~8378 destroy/recreate cycles). Mark
+            // needs_reauth instead — UI surfaces the flag, user clicks
+            // reconnect, OAuth callback rehydrates the same row.
             if (acctErr.message?.includes('invalid_grant')) {
-              await db.deleteUserIntegrationById(row.id, userId).catch(() => {});
-              cronLogger.warn('gmail-refresh.tokensCleared', { userId, account: row.accountEmail });
+              const flipped = await db.markIntegrationNeedsReauth(userId, row.id, acctErr.message).catch(() => false);
+              if (flipped) {
+                cronLogger.warn('gmail-refresh.needsReauth', { userId, account: row.accountEmail });
+              }
             }
           }
         }

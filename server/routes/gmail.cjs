@@ -44,6 +44,11 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       accountEmail: r.accountEmail || '',
       tokens: unwrapTokens(r.config?.tokens),
       createdAt: r.createdAt,
+      // 2026-05-08 fix — surface auth health so the cron + UI can
+      // distinguish dead-token accounts from healthy ones.
+      authStatus: r.authStatus || 'ok',
+      authStatusUpdatedAt: r.authStatusUpdatedAt || null,
+      lastSyncError: r.lastSyncError || null,
     }));
   }
 
@@ -144,6 +149,11 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
         account_email: r.accountEmail || '',
         provider: r.provider || 'google',
         created_at: r.createdAt,
+        // 2026-05-08 — surface auth health so UI can render the
+        // "Reconnect" badge per account. Pre-fix, no signal existed.
+        auth_status: r.authStatus || 'ok',
+        auth_status_updated_at: r.authStatusUpdatedAt || null,
+        last_sync_error: r.lastSyncError || null,
       }));
       res.json(accounts);
     } catch (err) {
@@ -205,15 +215,20 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       } catch (err) {
         logger.error('gmail.status.upgradeFailed', { requestId: req.requestId, userId, error: err.message });
 
-        // Only delete tokens on confirmed auth revocation — not transient errors
         const isAuthRevoked = err.message?.includes('invalid_grant')
           || err.response?.data?.error === 'invalid_grant'
           || err.code === 401
           || err.response?.status === 401;
 
+        // 2026-05-08 fix: STOP hard-deleting on auth revocation. Pre-fix
+        // this destroyed the placeholder integration row silently, so
+        // /api/gmail/status next call returned `connected:false` with
+        // no signal as to why. Mark needs_reauth instead — the row
+        // survives, the UI surfaces the reconnect prompt with the
+        // last-known account_email.
         if (isAuthRevoked) {
-          await db.deleteUserIntegrationById(placeholder.id, userId).catch(() => {});
-          logger.warn('gmail.status.tokensCleared', { requestId: req.requestId, userId, reason: err.message });
+          await db.markIntegrationNeedsReauth(userId, placeholder.id, err.message).catch(() => {});
+          logger.warn('gmail.status.needsReauth', { requestId: req.requestId, userId, reason: err.message });
         }
 
         return res.json({ connected: false, error: isAuthRevoked ? 'expired' : 'transient' });

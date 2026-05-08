@@ -545,56 +545,99 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             )}
           </div>
         </div>
+        {/* 2026-05-08 fix: surface auth-revocation state per account.
+            needsReconnect flips the dot to red, swaps the Disconnect-only
+            cluster for Reconnect+Disconnect, and (when present) shows the
+            timestamp the auth flag was set. Pre-fix, the green dot lied
+            for ~14 days while the cron silently failed every 15 min. */}
         {accountsExpanded && <div className="flex flex-col gap-1">
-          {accounts.map((acct) => (
-            <div key={`g:${acct.email}`} className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2 text-green-700">
-                <span className="w-2 h-2 bg-green-500 rounded-full" />
-                <span>{acct.email}</span>
-                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Google</span>
-                {/* Primary badge is driven by gcal_tokens.is_primary on the
-                    server. Never inferred from array position here. */}
-                {acct.isPrimary === true && (
-                  <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded text-[10px] font-medium">
-                    Primary
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {!acct.isPrimary && accounts.length > 1 && (
+          {accounts.map((acct) => {
+            const broken = !!acct.needsReconnect;
+            return (
+              <div key={`g:${acct.email}`} className="flex items-center justify-between text-xs">
+                <div className={`flex items-center gap-2 ${broken ? 'text-red-700' : 'text-green-700'}`}>
+                  <span className={`w-2 h-2 rounded-full ${broken ? 'bg-red-500' : 'bg-green-500'}`} />
+                  <span>{acct.email}</span>
+                  <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Google</span>
+                  {/* Primary badge is driven by gcal_tokens.is_primary on the
+                      server. Never inferred from array position here. */}
+                  {acct.isPrimary === true && (
+                    <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded text-[10px] font-medium">
+                      Primary
+                    </span>
+                  )}
+                  {broken && (
+                    <span
+                      className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium"
+                      title={acct.error || 'invalid_grant'}
+                    >
+                      Reconnect needed
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {broken && (
+                    <button
+                      onClick={() => handleConnect()}
+                      className="text-red-600 hover:text-red-800 transition-colors font-semibold"
+                    >
+                      Reconnect
+                    </button>
+                  )}
+                  {!broken && !acct.isPrimary && accounts.length > 1 && (
+                    <button
+                      onClick={() => handleSetPrimary(acct.email)}
+                      className="text-gray-400 hover:text-indigo-600 transition-colors font-medium"
+                    >
+                      Set Primary
+                    </button>
+                  )}
                   <button
-                    onClick={() => handleSetPrimary(acct.email)}
-                    className="text-gray-400 hover:text-indigo-600 transition-colors font-medium"
+                    onClick={() => handleDisconnect(acct.email)}
+                    className="text-gray-400 hover:text-red-500 transition-colors font-medium"
                   >
-                    Set Primary
+                    Disconnect
                   </button>
-                )}
-                <button
-                  onClick={() => handleDisconnect(acct.email)}
-                  className="text-gray-400 hover:text-red-500 transition-colors font-medium"
-                >
-                  Disconnect
-                </button>
+                </div>
               </div>
-            </div>
-          ))}
-          {outlookAccounts.map((acct) => (
-            <div key={`o:${acct.id}`} className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2 text-green-700">
-                <span className="w-2 h-2 bg-green-500 rounded-full" />
-                <span>{acct.account_email || '(unknown — reconnect)'}</span>
-                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Outlook</span>
+            );
+          })}
+          {outlookAccounts.map((acct) => {
+            const broken = acct.auth_status === 'needs_reauth';
+            return (
+              <div key={`o:${acct.id}`} className="flex items-center justify-between text-xs">
+                <div className={`flex items-center gap-2 ${broken ? 'text-red-700' : 'text-green-700'}`}>
+                  <span className={`w-2 h-2 rounded-full ${broken ? 'bg-red-500' : 'bg-green-500'}`} />
+                  <span>{acct.account_email || '(unknown — reconnect)'}</span>
+                  <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Outlook</span>
+                  {broken && (
+                    <span
+                      className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium"
+                      title={acct.last_sync_error || 'invalid_grant'}
+                    >
+                      Reconnect needed
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {broken && (
+                    <button
+                      onClick={handleConnectOutlook}
+                      className="text-red-600 hover:text-red-800 transition-colors font-semibold"
+                    >
+                      Reconnect
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDisconnectOutlook(acct.id, acct.account_email)}
+                    className="text-gray-400 hover:text-red-500 transition-colors font-medium"
+                  >
+                    Disconnect
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleDisconnectOutlook(acct.id, acct.account_email)}
-                  className="text-gray-400 hover:text-red-500 transition-colors font-medium"
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>}
       </div>
 

@@ -2286,19 +2286,45 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                   {gmailAccounts.length === 0 && (
                     <div className="text-xs text-gray-400 italic px-3 py-2">No accounts connected yet.</div>
                   )}
-                  {gmailAccounts.map((a) => (
-                    <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-                        <span className="text-sm text-gray-700 truncate">{a.account_email || '(unknown email — reconnect to refresh)'}</span>
+                  {/* 2026-05-08: surface auth-revocation per account.
+                      red dot + "Reconnect needed" badge + Reconnect
+                      button. The pre-fix UI showed a green dot for the
+                      ~14 days a token was actually dead. */}
+                  {gmailAccounts.map((a) => {
+                    const broken = a.auth_status === 'needs_reauth';
+                    return (
+                      <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${broken ? 'bg-red-500' : 'bg-green-500'}`} />
+                          <span className={`text-sm truncate ${broken ? 'text-red-700' : 'text-gray-700'}`}>
+                            {a.account_email || '(unknown email — reconnect to refresh)'}
+                          </span>
+                          {broken && (
+                            <span
+                              className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium flex-shrink-0"
+                              title={a.last_sync_error || 'invalid_grant'}
+                            >
+                              Reconnect needed
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {broken && (
+                            <button
+                              onClick={handleGmailConnect}
+                              disabled={gmailLoading}
+                              className="px-3 py-1.5 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+                            >Reconnect</button>
+                          )}
+                          <button
+                            onClick={() => handleDisconnectAccount(a.id)}
+                            disabled={gmailLoading}
+                            className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                          >Disconnect</button>
+                        </div>
                       </div>
-                      <button
-                        onClick={() => handleDisconnectAccount(a.id)}
-                        disabled={gmailLoading}
-                        className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
-                      >Disconnect</button>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <button
                     onClick={handleGmailConnect}
                     disabled={gmailLoading}
@@ -2317,19 +2343,41 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                   {outlookAccounts.length === 0 && (
                     <div className="text-xs text-gray-400 italic px-3 py-2">No accounts connected yet.</div>
                   )}
-                  {outlookAccounts.map((a) => (
-                    <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-                        <span className="text-sm text-gray-700 truncate">{a.account_email || '(unknown email — reconnect to refresh)'}</span>
+                  {outlookAccounts.map((a) => {
+                    const broken = a.auth_status === 'needs_reauth';
+                    return (
+                      <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${broken ? 'bg-red-500' : 'bg-green-500'}`} />
+                          <span className={`text-sm truncate ${broken ? 'text-red-700' : 'text-gray-700'}`}>
+                            {a.account_email || '(unknown email — reconnect to refresh)'}
+                          </span>
+                          {broken && (
+                            <span
+                              className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium flex-shrink-0"
+                              title={a.last_sync_error || 'invalid_grant'}
+                            >
+                              Reconnect needed
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {broken && (
+                            <button
+                              onClick={handleOutlookConnect}
+                              disabled={outlookLoading}
+                              className="px-3 py-1.5 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+                            >Reconnect</button>
+                          )}
+                          <button
+                            onClick={() => handleOutlookDisconnect(a.id)}
+                            disabled={outlookLoading}
+                            className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                          >Disconnect</button>
+                        </div>
                       </div>
-                      <button
-                        onClick={() => handleOutlookDisconnect(a.id)}
-                        disabled={outlookLoading}
-                        className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
-                      >Disconnect</button>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <button
                     onClick={handleOutlookConnect}
                     disabled={outlookLoading}

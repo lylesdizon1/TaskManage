@@ -20,8 +20,22 @@ async function syncOutlookForUser(userId, tz, db) {
     const accounts = await listOutlookAccounts(userId, db);
     console.log('[outlookCalSync] accounts:', accounts.length, accounts.map((a) => a.accountEmail));
     for (const account of accounts) {
+      // 2026-05-08: skip accounts already flagged needs_reauth — stops
+      // retry-storm log noise on dead tokens. Resumes on user reconnect.
+      if (account.authStatus === 'needs_reauth') continue;
       try {
-        const tokens = await withFreshAccessToken(account, db, userId);
+        let tokens;
+        try {
+          tokens = await withFreshAccessToken(account, db, userId);
+        } catch (refreshErr) {
+          // Persist auth-revocation so the UI surfaces "Reconnect needed"
+          // and the cron skips this account next tick.
+          if (account?.id && db?.markIntegrationNeedsReauth) {
+            await db.markIntegrationNeedsReauth(userId, account.id, refreshErr.message).catch(() => {});
+          }
+          logger.warn('outlook-sync.tokenRefresh.failed', { userId, accountEmail: account.accountEmail, error: refreshErr.message });
+          continue;
+        }
         const timeMin = localMidnightUtc(tz, 0);
         const timeMax = localMidnightUtc(tz, 14);
         const qs = new URLSearchParams({
