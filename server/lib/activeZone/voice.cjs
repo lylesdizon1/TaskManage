@@ -15,6 +15,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../../guardrails/logger.cjs');
 const { rediGet, rediSet } = require('../redis.cjs');
+const { withRetry } = require('../anthropicRetry.cjs');
 
 const VOICE_TIMEOUT_MS = 3000;
 const VOICE_CACHE_TTL_SEC = 30 * 60;
@@ -83,12 +84,16 @@ Output ONLY the message text — no quotes, no JSON, no preamble, no sign-off.
 Time: ${localTime}
 ${completionsLine}
 ${meetingsLine}`;
+      // withRetry inside the timeout — see tileComposer.cjs for shape.
       const resp = await Promise.race([
-        client.messages.create({
-          model: VOICE_MODEL,
-          max_tokens: 120,
-          messages: [{ role: 'user', content: prompt }],
-        }),
+        withRetry(
+          () => client.messages.create({
+            model: VOICE_MODEL,
+            max_tokens: 120,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          'activeZone.voice',
+        ),
         new Promise((_, rej) => setTimeout(() => rej(new Error('voice-timeout')), VOICE_TIMEOUT_MS)),
       ]);
       const text = (resp?.content?.[0]?.text || '').trim().replace(/^["']|["']$/g, '');

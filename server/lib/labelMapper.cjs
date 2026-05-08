@@ -22,6 +22,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../../db.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
+const { withRetry } = require('./anthropicRetry.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 const DEBOUNCE_TTL_SEC = 24 * 60 * 60;
@@ -73,12 +74,15 @@ async function mapLabelsToCategories(userId) {
     const labelNames = labels.map((l) => l.labelName);
     let response;
     try {
-      response = await c.messages.create({
-        model: MODEL,
-        max_tokens: 2000,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: JSON.stringify(labelNames) }],
-      });
+      response = await withRetry(
+        () => c.messages.create({
+          model: MODEL,
+          max_tokens: 2000,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: JSON.stringify(labelNames) }],
+        }),
+        'labelMapper',
+      );
     } catch (err) {
       logger.error('labelMapper.haiku.failed', { userId, error: err.message });
       return;

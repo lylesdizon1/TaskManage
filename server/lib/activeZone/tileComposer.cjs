@@ -36,6 +36,7 @@ const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../../guardrails/logger.cjs');
 const { rediGet, rediSet } = require('../redis.cjs');
+const { withRetry } = require('../anthropicRetry.cjs');
 
 const LLM_TIMEOUT_MS = 3000;
 const CACHE_TTL_SEC = 300;
@@ -272,12 +273,19 @@ async function composeTile(candidate, { firstName = 'there', localTime = '', use
   if (client?.messages?.create) {
     try {
       const prompt = _promptFor(candidate, { firstName, localTime });
+      // withRetry runs INSIDE the timeout race — fast-failing 529s
+      // typically fit one retry attempt within the 3s budget. If
+      // retries blow the budget, compose-timeout wins and the
+      // deterministic fallback path runs (same shape as before).
       const resp = await Promise.race([
-        client.messages.create({
-          model: COMPOSER_MODEL,
-          max_tokens: 180,
-          messages: [{ role: 'user', content: prompt }],
-        }),
+        withRetry(
+          () => client.messages.create({
+            model: COMPOSER_MODEL,
+            max_tokens: 180,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          'activeZone.tileComposer',
+        ),
         new Promise((_, rej) => setTimeout(() => rej(new Error('compose-timeout')), LLM_TIMEOUT_MS)),
       ]);
       const text = resp?.content?.[0]?.text || '';

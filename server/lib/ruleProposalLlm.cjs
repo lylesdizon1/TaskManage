@@ -23,6 +23,7 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const { withRetry } = require('./anthropicRetry.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 let _anthropic = null;
@@ -161,11 +162,14 @@ Respond with JSON only. No prose, no markdown fence.`;
 
   try {
     const resp = await Promise.race([
-      llm.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 250,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+      withRetry(
+        () => llm.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 250,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        'ruleProposalLlm',
+      ),
       new Promise((_, rej) => setTimeout(() => rej(new Error('proposeRichPredicate-timeout')), PROPOSAL_TIMEOUT_MS)),
     ]);
     const text = resp?.content?.[0]?.text || '';

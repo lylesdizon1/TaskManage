@@ -9,6 +9,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../../guardrails/logger.cjs');
 const { classifyEmail, VALID_CATEGORIES, VALID_IMPORTANCE } = require('../lib/classificationEngine.cjs');
 const googleProvider = require('../lib/providers/googleEmailProvider.cjs');
+const { withRetry } = require('../lib/anthropicRetry.cjs');
 
 let _anthropic = null;
 function _client() {
@@ -163,11 +164,14 @@ Respond ONLY with a JSON array:
 }]`;
 
       const resp = await Promise.race([
-        client.messages.create({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1500,
-          messages: [{ role: 'user', content: prompt }],
-        }),
+        withRetry(
+          () => client.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          'classificationSuggest',
+        ),
         new Promise((_, rej) => setTimeout(() => rej(new Error('suggest-timeout')), 15000)),
       ]);
       const text = resp?.content?.[0]?.text || '';

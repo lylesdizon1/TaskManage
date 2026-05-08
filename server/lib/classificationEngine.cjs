@@ -13,6 +13,7 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const { withRetry } = require('./anthropicRetry.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 const VALID_CATEGORIES = new Set([
@@ -112,11 +113,14 @@ Body (first 400 chars): ${String(body || '').slice(0, 400)}`;
 
   try {
     const resp = await Promise.race([
-      client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 150,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+      withRetry(
+        () => client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 150,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        'classifyFinancialExtract',
+      ),
       new Promise((_, rej) => setTimeout(() => rej(new Error('extract-timeout')), 8000)),
     ]);
     const text = resp?.content?.[0]?.text || '';
@@ -166,11 +170,14 @@ Body (first 300 chars): ${String(body || '').slice(0, 300)}`;
 
   try {
     const resp = await Promise.race([
-      client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+      withRetry(
+        () => client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 200,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        'classifyEmailWithAI',
+      ),
       new Promise((_, rej) => setTimeout(() => rej(new Error('classify-timeout')), 10000)),
     ]);
     const text = resp?.content?.[0]?.text || '';

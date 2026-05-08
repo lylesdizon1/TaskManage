@@ -7,6 +7,8 @@
  * Returns null on any failure (network, parse, schema). Never throws.
  */
 
+const { withRetry } = require('./anthropicRetry.cjs');
+
 const VALID_TYPES  = new Set(['style', 'confirmation', 'timing', 'routing', 'preference', 'boundary']);
 const VALID_SCOPES = new Set(['global', 'entity', 'person', 'channel', 'tool']);
 
@@ -63,12 +65,15 @@ Examples:
 → {"rule_text":"Always confirm before emailing Leo","rule_type":"confirmation","scope":"person","scope_value":"Leo"}`;
 
     const resp = await Promise.race([
-      anthropicClient.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
+      withRetry(
+        () => anthropicClient.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 200,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userPrompt }],
+        }),
+        'ruleExtractor',
+      ),
       new Promise((_, rej) => setTimeout(() => rej(new Error('rule-extract-timeout')), 15_000)),
     ]);
 

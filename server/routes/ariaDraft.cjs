@@ -17,6 +17,7 @@
 
 const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
+const { withRetry } = require('../lib/anthropicRetry.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
@@ -158,14 +159,17 @@ User message: ${message}`;
     const timeout = setTimeout(() => controller.abort(), 8000);
     let resp;
     try {
-      resp = await client.messages.create(
-        {
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 200,
-          system,
-          messages: [{ role: 'user', content: prompt }],
-        },
-        { signal: controller.signal },
+      resp = await withRetry(
+        () => client.messages.create(
+          {
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 200,
+            system,
+            messages: [{ role: 'user', content: prompt }],
+          },
+          { signal: controller.signal },
+        ),
+        'ariaDraft',
       );
     } catch (e) {
       clearTimeout(timeout);
