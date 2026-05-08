@@ -9888,6 +9888,136 @@ async function resolveCloseLoopItem(userId, sourceType, sourceId) {
   return r.rowCount > 0;
 }
 
+// ── Bulk close + outcome capture (2026-05-08 outcome-leak fix) ──────
+//
+// Pre-fix: bulk close fired POST /api/close-loop/resolve per item →
+// just stamped pending_close_loop.resolved_at. Capture rate for
+// user-lyle was 1 outcome_records row paired with 23 resolved
+// close-loops — 4.3% signal flow into the rich outcome layer that
+// outcomeEnrichment + RECENT OUTCOMES context block + memory_facts
+// all depend on.
+//
+// resolveCloseLoopBatch lets the new BulkCloseRow UI commit a mix of
+// rich (chip + optional note) and binary (just resolved) items in one
+// transaction. Per-item idempotent on (user_id, source_type, source_id)
+// for outcome_records — we DO NOT overwrite a prior OutcomePrompt
+// capture. Existing per-task OutcomePrompt path is unchanged.
+//
+// Each item shape:
+//   { sourceType, sourceId, outcomeStatus?, rawNote?, titleSnapshot? }
+//
+// Returns:
+//   { resolved: number,        // how many pending_close_loop rows
+//                              //   we flipped (matches inputs minus
+//                              //   already-resolved-or-missing)
+//     withOutcome: number,     // how many outcome_records we wrote
+//                              //   (subset of resolved — only items
+//                              //    with outcomeStatus set AND no
+//                              //    pre-existing outcome row)
+//     newOutcomes: array }     // the outcome_records rows we inserted,
+//                              //   for fire-and-forget enrichment
+async function resolveCloseLoopBatch(userId, items) {
+  if (!userId || !Array.isArray(items) || items.length === 0) {
+    return { resolved: 0, withOutcome: 0, newOutcomes: [] };
+  }
+  const client = await pool.connect();
+  let resolved = 0;
+  let withOutcome = 0;
+  const newOutcomes = [];
+  try {
+    await client.query('BEGIN');
+    for (const it of items) {
+      if (!it || !it.sourceType || !it.sourceId) continue;
+      const sourceType = String(it.sourceType);
+      const sourceId = String(it.sourceId);
+
+      // 1. Always: flip pending_close_loop.resolved_at if still pending.
+      const r = await client.query(
+        `UPDATE pending_close_loop
+            SET resolved_at = NOW()
+          WHERE user_id = $1 AND source_type = $2 AND source_id = $3
+            AND resolved_at IS NULL`,
+        [userId, sourceType, sourceId],
+      );
+      if (r.rowCount > 0) resolved += 1;
+
+      // 2. Optional: if caller supplied outcome_status (chip selected),
+      // write the rich outcome — but skip if a row already exists for
+      // this (user, source). Preserves backward compat with
+      // OutcomePrompt's per-task flow that fires earlier.
+      if (it.outcomeStatus) {
+        const existing = await client.query(
+          `SELECT id FROM outcome_records
+            WHERE user_id = $1 AND source_type = $2 AND source_id = $3
+            LIMIT 1`,
+          [userId, sourceType, sourceId],
+        );
+        if (existing.rowCount === 0) {
+          const ins = await client.query(
+            `INSERT INTO outcome_records (
+               user_id, source_type, source_id, completed_at,
+               title_snapshot, raw_note, outcome_status,
+               follow_up_needed, follow_up_by, entered_by
+             ) VALUES ($1, $2, $3, NOW(), $4, $5, $6, FALSE, NULL, 'user')
+             RETURNING *`,
+            [
+              userId, sourceType, sourceId,
+              it.titleSnapshot || null,
+              it.rawNote ? String(it.rawNote).slice(0, 2000) : null,
+              it.outcomeStatus,
+            ],
+          );
+          if (ins.rowCount > 0) {
+            withOutcome += 1;
+            newOutcomes.push(ins.rows[0]);
+          }
+        }
+      }
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  return { resolved, withOutcome, newOutcomes };
+}
+
+/**
+ * Outcome capture rate over the last `days` days — observability metric
+ * for the bulk-close redesign. Reports the % of resolved
+ * pending_close_loop rows that have a paired outcome_records row.
+ *
+ * Used by the upcoming /api/admin/sync-health (when that endpoint
+ * lands) and the temporary inline query Lyle can run to verify the
+ * V1 capture-rate lift over the next 7 days.
+ *
+ * Pre-fix baseline (user-lyle): ~4% paired. Target post-V1: 60-80%.
+ */
+async function getOutcomeCaptureRate(userId, days = 7) {
+  if (!userId) return { resolved: 0, withOutcome: 0, rate: null };
+  const { rows } = await pool.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE pcl.resolved_at IS NOT NULL)::int AS resolved,
+       COUNT(o.id)::int AS with_outcome
+       FROM pending_close_loop pcl
+       LEFT JOIN outcome_records o
+         ON o.user_id = pcl.user_id
+        AND o.source_type = pcl.source_type
+        AND o.source_id = pcl.source_id
+      WHERE pcl.user_id = $1
+        AND pcl.resolved_at > NOW() - ($2 || ' days')::interval`,
+    [userId, String(days)],
+  );
+  const r = rows[0] || { resolved: 0, with_outcome: 0 };
+  return {
+    resolved: r.resolved,
+    withOutcome: r.with_outcome,
+    rate: r.resolved > 0 ? Number((r.with_outcome / r.resolved).toFixed(3)) : null,
+  };
+}
+
 // ── Wrap-time preference ──────────────────────────────────────────────────
 
 async function getWrapTimeForUser(userId) {
@@ -10347,6 +10477,8 @@ module.exports = {
   getOpenCloseLoopItems,
   dismissCloseLoopItem,
   resolveCloseLoopItem,
+  resolveCloseLoopBatch,
+  getOutcomeCaptureRate,
   getWrapTimeForUser,
   setWrapTimeForUser,
   // Entity workspace projects

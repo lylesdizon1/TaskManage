@@ -8,7 +8,7 @@
     "preview": "vite preview",
     "proxy": "node proxy-server.cjs",
     "start": "node proxy-server.cjs",
-    "test": "node tests/predicateEvaluator.test.cjs && node tests/emailBodyExtractor.test.cjs && node tests/skillLoader.test.cjs && node tests/skillsExtras.test.cjs && node tests/subAgents.test.cjs && node tests/anthropicRetry.test.cjs && node tests/isolation.test.cjs"
+    "test": "node tests/predicateEvaluator.test.cjs && node tests/emailBodyExtractor.test.cjs && node tests/skillLoader.test.cjs && node tests/skillsExtras.test.cjs && node tests/subAgents.test.cjs && node tests/anthropicRetry.test.cjs && node tests/closeLoopBatch.test.cjs && node tests/isolation.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
