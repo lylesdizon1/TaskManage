@@ -68,12 +68,13 @@ async function authenticateToken(req, res, next) {
   if (_db) {
     try {
       const ctx = await _db.getUserAuthContext(payload.id);
-      if (ctx) {
-        req.user.timezone = ctx.timezone || DEFAULT_TIMEZONE;
-        req.user.role = ctx.role || req.user.role;
-        req.user.entityIds = ctx.entityIds || [];
-        req.user.orgId = ctx.orgId || null;
+      if (!ctx) {
+        return res.status(401).json({ error: 'User no longer exists or session invalid' });
       }
+      req.user.timezone = ctx.timezone || DEFAULT_TIMEZONE;
+      req.user.role = ctx.role || req.user.role;
+      req.user.entityIds = ctx.entityIds || [];
+      req.user.orgId = ctx.orgId || null;
     } catch (err) {
       console.error('auth.context.enrichment.failed', { userId: payload.id, error: err.message });
       return res.status(503).json({ error: 'Authentication context unavailable' });
