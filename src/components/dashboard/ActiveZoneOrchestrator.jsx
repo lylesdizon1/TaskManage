@@ -17,11 +17,61 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * poll every 5 minutes as a fallback. AZ7 wires up the upstream
  * triggers.
  */
+// Outcome status chips — full granularity per Q1 directive (no enum
+// reduction even on mobile; mobile gets vertical stacking instead).
+// Mirrors OUTCOME_STATUS_CONFIG in DashboardPanel.jsx::OutcomePrompt
+// (kept locally to avoid a circular import). 5 statuses — 'no_show' is
+// available on the server enum but kept off the chip strip for V1
+// since it's a niche signal that confuses the binary user.
+const CHIPS = [
+  { key: 'success',   label: '✓', tooltip: 'Success',    fg: '#3b6d11', bg: '#eaf3de' },
+  { key: 'mixed',     label: '~', tooltip: 'Mixed',      fg: '#534ab7', bg: '#eeedfe' },
+  { key: 'neutral',   label: '—', tooltip: 'Neutral',    fg: '#534ab7', bg: '#eeedfe' },
+  { key: 'failed',    label: '✗', tooltip: 'Failed',     fg: '#a32d2d', bg: '#fcebeb' },
+  { key: 'cancelled', label: '⊘', tooltip: 'Cancelled',  fg: '#5f5e5a', bg: '#f1efe8' },
+];
+
+// Smart defaults per Q3 directive. Returns { status?, expandNote? }
+// based on what metadata is currently surfaced on the close-loop
+// item. Today the items_preview shape carries source_type, source_id,
+// title, triggered_at — not yet task.completed_at, event.attendees,
+// event.was_cancelled, etc. Implements what's available now; richer
+// defaults follow when candidateDetector enriches the preview.
+function smartDefaultForCloseLoop(item, now = Date.now()) {
+  const triggered = item.triggered_at || item.triggeredAt;
+  const ageMs = triggered ? Math.max(0, now - new Date(triggered).getTime()) : 0;
+  const ageDays = ageMs / 86_400_000;
+  const sourceType = item.source_type || item.sourceType;
+
+  // > 30 days old, never interacted → probable abandonment.
+  if (ageDays > 30) return { status: 'cancelled', expandNote: false };
+
+  // Tasks > 14 days old that surfaced as a close-loop → success-by-
+  // absence-of-contradiction. User can override with a chip click.
+  if (sourceType === 'task' && ageDays > 14) return { status: 'success', expandNote: false };
+
+  // Calendar events default to blank chip + pre-expanded note. Per Q3:
+  // "1:1 meetings → leave blank but pre-expand '+ note' affordance."
+  // Items_preview doesn't yet expose attendee count, so apply to all
+  // events for V1 — refine when detector surfaces attendee metadata.
+  if (sourceType === 'event') return { status: null, expandNote: true };
+
+  // Otherwise: blank, no opinion (per Q2 — chip is optional).
+  return { status: null, expandNote: false };
+}
+
 export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey, onAction, onEmptyChange }) {
   const [tiles, setTiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expandedTileId, setExpandedTileId] = useState(null);
   const [appearedIds, setAppearedIds] = useState(() => new Set()); // tiles that have already played their slide-in
+  // 2026-05-08 outcome capture redesign — per-row outcome state for
+  // close_the_loops_batch tiles. Map: `${ckey}:${itemId}` → { status, note }.
+  // status is one of the 5 CHIPS keys or null (no chip = binary resolve).
+  // Smart defaults pre-populate this map when a tile first expands;
+  // user clicks override.
+  const [closeLoopOutcomes, setCloseLoopOutcomes] = useState(() => new Map());
+  const [expandedNoteIds, setExpandedNoteIds] = useState(() => new Set()); // which rows have the textarea expanded
   const initialLoadDoneRef = useRef(false);
   const refreshTimerRef = useRef(null);
   const inFlightRef = useRef(null);
@@ -136,6 +186,8 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
     if (EXPAND_ACTIONS.has(a.action)) {
       if (!isExpanded(tile.id)) {
         setExpandedTileId(tile.id);
+        // Apply smart defaults for close_the_loops_batch on first expand.
+        ensureSmartDefaults(tile);
         return;
       }
       // Expanded — batch-complete every item not already checked off.
@@ -149,6 +201,11 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
 
   // Per-candidate-type item completion. Each fires the appropriate
   // existing API. Returns a promise so the caller can chain.
+  //
+  // close_the_loops_batch: single-item check goes through the legacy
+  // single-resolve endpoint (binary, no chip set). Bulk completion
+  // (handleBatchComplete) routes to /api/close-loop/resolve-batch
+  // which ALSO writes outcome_records when chips are set.
   async function completeItem(tile, item) {
     const ctype = tile.candidateType || tile.candidate_type;
     try {
@@ -159,11 +216,33 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
           body: JSON.stringify({ completed: true, completedAt: new Date().toISOString() }),
         });
       } else if (ctype === 'close_the_loops_batch') {
-        await apiFetch('/api/close-loop/resolve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ source_type: item.source_type, source_id: item.source_id }),
-        });
+        // Single-item check (no chip) → legacy resolve. The rich path
+        // is the batch endpoint fired from handleBatchComplete.
+        const ckey = tile.candidate_key || tile.candidateKey || tile.id;
+        const outcome = closeLoopOutcomes.get(`${ckey}:${item.id}`);
+        if (outcome?.status) {
+          // User clicked a chip then the per-row checkbox — fire batch
+          // with this single item so the outcome lands.
+          await apiFetch('/api/close-loop/resolve-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({
+              items: [{
+                source_type: item.source_type,
+                source_id: item.source_id,
+                outcome_status: outcome.status,
+                raw_note: outcome.note || null,
+                title_snapshot: item.title || null,
+              }],
+            }),
+          });
+        } else {
+          await apiFetch('/api/close-loop/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ source_type: item.source_type, source_id: item.source_id }),
+          });
+        }
       } else if (ctype === 'critical_email_unacked') {
         await apiFetch(`/api/inbox/items/${encodeURIComponent(item.id)}/ack`, {
           method: 'PATCH',
@@ -171,6 +250,80 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
         });
       }
     } catch { /* non-fatal — refetch reconciles */ }
+  }
+
+  // Per-row dismiss for close_the_loops_batch. Different semantics from
+  // ⊘ Cancelled chip (Q5 directive):
+  //   dismiss = "this shouldn't have been surfaced" → no enrichment
+  //   ⊘ chip  = "real loop, didn't happen"          → fires enrichment
+  // Routes to the existing /api/close-loop/dismiss endpoint.
+  async function dismissCloseLoopItem(tile, item) {
+    const ckey = tile.candidate_key || tile.candidateKey || tile.id;
+    const key = `${ckey}:${item.id}`;
+    setCompletedItemIds((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    try {
+      await apiFetch('/api/close-loop/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ source_type: item.source_type, source_id: item.source_id }),
+      });
+    } catch { /* fire-and-forget — refetch reconciles */ }
+  }
+
+  // Outcome state mutators — surfaced into BulkCloseRow via props.
+  function setRowOutcome(ckey, itemId, patch) {
+    setCloseLoopOutcomes((prev) => {
+      const next = new Map(prev);
+      const k = `${ckey}:${itemId}`;
+      next.set(k, { ...(next.get(k) || {}), ...patch });
+      return next;
+    });
+  }
+  function getRowOutcome(ckey, itemId) {
+    return closeLoopOutcomes.get(`${ckey}:${itemId}`) || {};
+  }
+  function toggleNoteExpanded(ckey, itemId) {
+    const k = `${ckey}:${itemId}`;
+    setExpandedNoteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  }
+  // Apply smart defaults the first time a close-loops tile expands.
+  function ensureSmartDefaults(tile) {
+    if ((tile.candidateType || tile.candidate_type) !== 'close_the_loops_batch') return;
+    const ckey = tile.candidate_key || tile.candidateKey || tile.id;
+    const items = tile.itemsPreview || tile.items_preview || [];
+    const now = Date.now();
+    setCloseLoopOutcomes((prevOutcomes) => {
+      let mutated = false;
+      const next = new Map(prevOutcomes);
+      for (const item of items) {
+        const k = `${ckey}:${item.id}`;
+        if (next.has(k)) continue; // already initialized — user may have clicked
+        const def = smartDefaultForCloseLoop(item, now);
+        next.set(k, { status: def.status || null, note: '', smartDefault: !!def.status });
+        mutated = true;
+      }
+      return mutated ? next : prevOutcomes;
+    });
+    setExpandedNoteIds((prevSet) => {
+      let mutated = false;
+      const next = new Set(prevSet);
+      for (const item of items) {
+        const def = smartDefaultForCloseLoop(item, now);
+        if (def.expandNote) {
+          const k = `${ckey}:${item.id}`;
+          if (!next.has(k)) { next.add(k); mutated = true; }
+        }
+      }
+      return mutated ? next : prevSet;
+    });
   }
 
   function markItemDone(tile, item) {
@@ -186,22 +339,46 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
   async function handleBatchComplete(tile) {
     const items = tile.itemsPreview || tile.items_preview || [];
     const ctype = tile.candidateType || tile.candidate_type;
-    const remaining = items.filter((it) => {
-      const key = `${tile.candidate_key || tile.candidateKey || tile.id}:${it.id}`;
-      return !completedItemIds.has(key);
-    });
+    const ckey = tile.candidate_key || tile.candidateKey || tile.id;
+    const remaining = items.filter((it) => !completedItemIds.has(`${ckey}:${it.id}`));
     if (!remaining.length) {
       // Everything already checked — just resolve the tile.
       postTileStatus(tile.id, 'resolve');
       return;
     }
-    // Optimistically mark all as done, fire APIs in parallel.
+    // Optimistically mark all as done.
     setCompletedItemIds((prev) => {
       const next = new Set(prev);
-      for (const it of remaining) next.add(`${tile.candidate_key || tile.candidateKey || tile.id}:${it.id}`);
+      for (const it of remaining) next.add(`${ckey}:${it.id}`);
       return next;
     });
-    await Promise.all(remaining.map((it) => completeItem(tile, it)));
+
+    // 2026-05-08 outcome capture redesign — close_the_loops_batch
+    // collapses to a single transactional batch endpoint that writes
+    // outcome_records for any chip-set rows in addition to flipping
+    // pending_close_loop.resolved_at. Other batch types unchanged.
+    if (ctype === 'close_the_loops_batch') {
+      const payload = remaining.map((it) => {
+        const o = closeLoopOutcomes.get(`${ckey}:${it.id}`) || {};
+        return {
+          source_type: it.source_type,
+          source_id: it.source_id,
+          outcome_status: o.status || null,
+          raw_note: o.note?.trim() ? o.note.trim() : null,
+          title_snapshot: it.title || null,
+        };
+      });
+      try {
+        await apiFetch('/api/close-loop/resolve-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ items: payload }),
+        });
+      } catch { /* non-fatal — refetch reconciles */ }
+    } else {
+      // Legacy parallel completion — overdue_tasks_batch, critical_email_unacked.
+      await Promise.all(remaining.map((it) => completeItem(tile, it)));
+    }
     postTileStatus(tile.id, 'resolve');
     // Notify parent so task list / inbox / etc. re-render.
     if (onAction) onAction({ action: `batch_done:${ctype}` }, tile);
@@ -211,11 +388,25 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
   function handleDismiss(tile) { postTileStatus(tile.id, 'dismiss'); }
 
   // Per-batch-type primary label when expanded.
-  function expandedPrimaryLabel(ctype, remainingCount) {
+  function expandedPrimaryLabel(ctype, remainingCount, tile) {
     if (remainingCount === 0) return 'Done';
     switch (ctype) {
       case 'overdue_tasks_batch':    return remainingCount === 1 ? 'Mark done' : `Mark all ${remainingCount} done`;
-      case 'close_the_loops_batch':  return remainingCount === 1 ? 'Resolve'   : `Resolve all ${remainingCount}`;
+      case 'close_the_loops_batch': {
+        // Surface the rich vs binary split — "Resolve all 7 (3 with notes)".
+        // The (X with notes) substring updates live as the user toggles
+        // chips so they see what they're committing.
+        if (!tile) return remainingCount === 1 ? 'Resolve' : `Resolve all ${remainingCount}`;
+        const items = tile.itemsPreview || tile.items_preview || [];
+        const ckey = tile.candidate_key || tile.candidateKey || tile.id;
+        const richCount = items.reduce((acc, it) => {
+          if (completedItemIds.has(`${ckey}:${it.id}`)) return acc;
+          const o = closeLoopOutcomes.get(`${ckey}:${it.id}`);
+          return o?.status ? acc + 1 : acc;
+        }, 0);
+        const base = remainingCount === 1 ? 'Resolve' : `Resolve all ${remainingCount}`;
+        return richCount > 0 ? `${base} (${richCount} with outcomes)` : base;
+      }
       case 'critical_email_unacked': return remainingCount === 1 ? 'Acknowledge' : `Acknowledge all ${remainingCount}`;
       default:                        return 'Mark all done';
     }
@@ -243,6 +434,11 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
             onShowLess={() => setExpandedTileId(null)}
             onDefer={() => handleDefer(t)}
             onDismiss={() => handleDismiss(t)}
+            getRowOutcome={(itemId) => getRowOutcome(ckey, itemId)}
+            setRowOutcome={(itemId, patch) => setRowOutcome(ckey, itemId, patch)}
+            isNoteExpanded={(itemId) => expandedNoteIds.has(`${ckey}:${itemId}`)}
+            toggleNoteExpanded={(itemId) => toggleNoteExpanded(ckey, itemId)}
+            onItemDismiss={(item) => dismissCloseLoopItem(t, item)}
           />
         );
       })}
@@ -250,7 +446,7 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
   );
 }
 
-function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrimaryLabel, onPrimary, onItemCheck, onShowLess, onDefer, onDismiss }) {
+function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrimaryLabel, onPrimary, onItemCheck, onShowLess, onDefer, onDismiss, getRowOutcome, setRowOutcome, isNoteExpanded, toggleNoteExpanded, onItemDismiss }) {
   const primary = tile.primaryAction || tile.primary_action || {};
   const secondary = tile.secondaryAction || tile.secondary_action || {};
   const itemsPreview = tile.itemsPreview || tile.items_preview || [];
@@ -266,7 +462,7 @@ function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrim
     ? itemsPreview.filter((it) => !isItemCompleted(it.id)).length
     : 0;
   const primaryLabel = (isExpandable && expanded)
-    ? expandedPrimaryLabel(ctype, remainingCount)
+    ? expandedPrimaryLabel(ctype, remainingCount, tile)
     : (primary.label || 'Open');
 
   return (
@@ -294,16 +490,36 @@ function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrim
       </div>
 
       {expanded && itemsPreview.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-surface-container-low space-y-1.5">
-          {itemsPreview.map((item, i) => (
-            <ItemPreviewRow
-              key={item.id || i}
-              item={item}
-              candidateType={ctype}
-              completed={!!isItemCompleted(item.id)}
-              onCheck={() => onItemCheck(item)}
-            />
-          ))}
+        <div className={`mt-3 pt-3 border-t border-surface-container-low ${ctype === 'close_the_loops_batch' ? 'space-y-2.5' : 'space-y-1.5'}`}>
+          {itemsPreview.map((item, i) => {
+            // 2026-05-08 — close_the_loops_batch gets the rich row.
+            // Other batch types keep the legacy ItemPreviewRow.
+            if (ctype === 'close_the_loops_batch') {
+              return (
+                <BulkCloseRow
+                  key={item.id || i}
+                  item={item}
+                  completed={!!isItemCompleted(item.id)}
+                  outcome={getRowOutcome ? getRowOutcome(item.id) : {}}
+                  onCheck={() => onItemCheck(item)}
+                  onChipClick={(status) => setRowOutcome?.(item.id, { status })}
+                  onNoteChange={(note) => setRowOutcome?.(item.id, { note })}
+                  noteExpanded={!!(isNoteExpanded && isNoteExpanded(item.id))}
+                  onToggleNote={() => toggleNoteExpanded?.(item.id)}
+                  onDismiss={() => onItemDismiss?.(item)}
+                />
+              );
+            }
+            return (
+              <ItemPreviewRow
+                key={item.id || i}
+                item={item}
+                candidateType={ctype}
+                completed={!!isItemCompleted(item.id)}
+                onCheck={() => onItemCheck(item)}
+              />
+            );
+          })}
           <button
             onClick={onShowLess}
             className="text-[11px] text-on-surface-variant/60 hover:text-on-surface-variant mt-2 transition-colors"
@@ -382,6 +598,100 @@ function ItemPreviewRow({ item, candidateType, completed, onCheck }) {
     );
   }
   return null;
+}
+
+// 2026-05-08 outcome capture redesign — rich row for close_the_loops_batch.
+// Layout (desktop):
+//   [☐] [✓ ~ — ✗ ⊘]  Title text                  [+ note]  [✕]
+//        ──── chip strip ───                   add note    dismiss
+// On mobile: chips wrap below title (Q6 directive — vertical stack).
+//
+// Optional state per Q2:
+//   - No chip selected → batch resolves binary (legacy behavior)
+//   - Chip selected     → batch resolves AND writes outcome_records
+//   - Note expanded     → optional 2-line textarea, persisted to raw_note
+//   - Dismiss (✕)       → removes from list without enrichment
+function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteChange, noteExpanded, onToggleNote, onDismiss }) {
+  const baseRowClass = `flex flex-col gap-1.5 text-xs ${completed ? 'opacity-50' : ''}`;
+  const titleClass = `text-on-background flex-1 ${completed ? 'line-through' : ''}`;
+  const iconKey = (item.source_type === 'event') ? 'event' : 'task_alt';
+  const fallbackLabel = item.source_type && item.source_id
+    ? `${item.source_type} ${item.source_id}`
+    : 'Loop';
+  const selectedStatus = outcome?.status || null;
+  const note = outcome?.note ?? '';
+
+  return (
+    <div className={baseRowClass}>
+      <div className="flex items-center gap-2">
+        <CheckBox checked={completed} onChange={onCheck} />
+        <span className="material-symbols-outlined text-primary/60 flex-shrink-0" style={{ fontSize: '12px' }}>
+          {iconKey}
+        </span>
+        <span className={titleClass} style={{ minWidth: 0 }}>
+          <span className="truncate block">{_safeText(item.title, fallbackLabel)}</span>
+        </span>
+        <button
+          onClick={onToggleNote}
+          aria-label={noteExpanded ? 'Hide note' : 'Add note'}
+          title={noteExpanded ? 'Hide note' : 'Add note'}
+          className={`flex-shrink-0 text-[10px] font-medium ${noteExpanded ? 'text-primary' : 'text-on-surface-variant/60 hover:text-primary'}`}
+        >
+          {noteExpanded ? '− note' : '+ note'}
+        </button>
+        <button
+          onClick={onDismiss}
+          aria-label="Dismiss this item (not a real loop)"
+          title="Dismiss — shouldn't have been surfaced"
+          className="flex-shrink-0 text-on-surface-variant/40 hover:text-error transition-colors"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
+        </button>
+      </div>
+
+      {/* Chip strip — sits below the title row. On mobile it wraps
+          gracefully via flex-wrap; desktop stays single-line. */}
+      <div className="flex items-center gap-1 flex-wrap pl-6">
+        {CHIPS.map((c) => {
+          const active = selectedStatus === c.key;
+          const style = active
+            ? { background: c.bg, color: c.fg, borderColor: c.bg }
+            : {};
+          return (
+            <button
+              key={c.key}
+              onClick={() => onChipClick(active ? null : c.key)}
+              title={c.tooltip}
+              aria-pressed={active}
+              aria-label={c.tooltip}
+              className="text-[11px] font-semibold px-2 py-0.5 rounded border border-on-surface-variant/30 hover:border-primary/60 transition-colors"
+              style={style}
+            >
+              {c.label}
+            </button>
+          );
+        })}
+        {selectedStatus && (
+          <span className="text-[10px] text-on-surface-variant/60 ml-1">
+            {CHIPS.find((c) => c.key === selectedStatus)?.tooltip}
+          </span>
+        )}
+      </div>
+
+      {noteExpanded && (
+        <div className="pl-6">
+          <textarea
+            value={note}
+            onChange={(e) => onNoteChange(e.target.value)}
+            placeholder="Quick note — outcomes, decisions, follow-ups…"
+            maxLength={2000}
+            className="w-full text-[12px] p-2 border border-on-surface-variant/20 rounded resize-y outline-none focus:border-primary"
+            style={{ minHeight: 50, fontFamily: 'Manrope, sans-serif' }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function CheckBox({ checked, onChange }) {

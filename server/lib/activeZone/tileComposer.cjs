@@ -220,11 +220,15 @@ function _itemsPreview(candidate) {
       // caller that bypasses the alias path. Same defensive shape as
       // critical_email_unacked (FU1, 1537e88) — should be the universal
       // pattern for items_preview going forward.
+      // 2026-05-08 outcome-capture redesign — also surface triggered_at
+      // so the BulkCloseRow UI can apply smart defaults based on age
+      // (>30d → ⊘ Cancelled, task >14d → ✓ Success, etc).
       return items.slice(0, 10).map((l) => ({
         id: l.id,
-        source_type: l.sourceType || l.source_type,
-        source_id:   l.sourceId   || l.source_id,
-        title:       l.titleSnapshot || l.title_snapshot,
+        source_type:  l.sourceType    || l.source_type,
+        source_id:    l.sourceId      || l.source_id,
+        title:        l.titleSnapshot || l.title_snapshot,
+        triggered_at: l.triggeredAt   || l.triggered_at || null,
       }));
     case 'upcoming_meeting_with_prep':
       return [{ event: { id: context.event?.id, title: context.event?.title, startTime: context.event?.startTime || context.event?.start_time } },
