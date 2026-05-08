@@ -206,6 +206,13 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         // be reported as a successful tool call with a ghost placeholder
         // rendering for nonexistent state. Mirrors the alreadyExecuted
         // branch above (line 190: `payload.success !== false`).
+        //
+        // 2026-05-08 P0.2 follow-up: also flip the OUTER `success` var so
+        // is_error: true propagates to the LLM tool_result message at
+        // line 232. Without this, clean-failure returns reached the LLM
+        // without an error flag and Aria narrated success despite the
+        // tool refusing work (Leo's create_event/invalid_grant case).
+        if (result?.success === false) success = false;
         toolSummaries.push({ tool: toolUse.name, success: result?.success !== false, result });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result });
         await _safeLogAction(logAction, { eventType: 'tool_executed', toolName: toolUse.name, input: effectiveInput, output: result, status: result?.success === false ? 'failure' : 'success' });

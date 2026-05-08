@@ -1687,7 +1687,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
 
       case 'flag_email_as_crucial': {
         const { thread_id, account_email, subject, sender, reason } = input;
-        if (!thread_id) return { error: 'thread_id required' };
+        if (!thread_id) return { success: false, error: 'thread_id required' };
 
         // Ensure inbox_item exists
         const flagExists = await db.inboxItemExistsBySourceId(userId, thread_id);
