@@ -131,7 +131,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       return res.json(notes);
     } catch (err) {
       logger.error('notes.read.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
-      return res.json([]);
+      return res.status(500).json({ error: 'Failed to load notes' });
     }
   });
 
