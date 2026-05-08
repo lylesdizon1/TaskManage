@@ -55,6 +55,38 @@ function to24hTo12h(t) {
 const SUPPRESSION_RECENCY_WINDOW_MS = 10 * 60 * 1000;
 
 /**
+ * Strip every CC-internal synthetic role from chat history before
+ * sending to the backend. Anthropic only accepts `user` and `assistant`
+ * (Anthropic returns 400 invalid_request_error on anything else).
+ *
+ * UI-only roles in this panel that MUST be filtered:
+ *   - 'confirm'      — inline confirmation card for tool gates
+ *   - 'task_draft'   — inline task creation tile
+ *   - 'event_draft'  — inline event creation tile
+ *   - 'email_draft'  — inline email composer
+ *   - 'close_loop'   — inline outcome-prompt tile
+ *   - 'daily_wrap'   — inline daily-wrap tile
+ *   - 'system'       — Anthropic uses system as a separate parameter,
+ *                      never inside messages[]; even legitimate system
+ *                      content gets stripped here
+ *
+ * Also drops messages with empty/non-string content (Anthropic rejects
+ * empty user/assistant turns).
+ *
+ * Fix: prod incident 2026-05-08 — back-to-back tool calls left a
+ * `role: 'confirm'` synthetic in the slice-9 history window; next user
+ * turn shipped it to /api/chat/execute → 400 → SSE error event → silent
+ * ghost on the client. This filter closes the leak at the source.
+ */
+function chatHistoryForLLM(msgs) {
+  if (!Array.isArray(msgs)) return [];
+  return msgs
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+    .map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' }))
+    .filter((m) => m.content.length > 0);
+}
+
+/**
  * Returns { overlap, matchedTokens, recentMsgTs } indicating whether a
  * planned narration repeats topics the user just discussed with Aria.
  * Heuristic: 6+ char alphabetic tokens, ≥2 distinct hits within the
@@ -748,10 +780,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       // Last 10 turns as conversation history so the LLM sees what was
       // just discussed even when the token-overlap heuristic missed it
       // (paraphrasing, pronouns). Belt-and-suspenders with the gate above.
-      const recentMsgs = (ccMessagesRef.current || [])
-        .slice(-10)
-        .map((m) => ({ role: m.role, content: String(m.content || '') }))
-        .filter((m) => m.role && m.content);
+      // chatHistoryForLLM strips UI-only synthetic roles before send.
+      const recentMsgs = chatHistoryForLLM((ccMessagesRef.current || []).slice(-10));
 
       const ariaPrompt = `The following new events just occurred in the background. Narrate them to the user naturally and concisely in your voice as Aria — do not just repeat the raw text. Be brief, warm, and actionable:\n\n${updateSummary}`;
 
@@ -1328,7 +1358,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
     // Build context: last 10 messages + full Aria system prompt with live data.
     // Read from ref so we always see the latest committed state.
-    const recentMsgs = [...ccMessagesRef.current.slice(-9), userMsg].map((m) => ({ role: m.role, content: m.content }));
+    // chatHistoryForLLM strips UI-only synthetic roles ('confirm',
+    // 'task_draft', etc) before send — Anthropic only accepts
+    // user/assistant. See chatHistoryForLLM header for the full bug
+    // history.
+    const recentMsgs = chatHistoryForLLM([...ccMessagesRef.current.slice(-9), userMsg]);
 
     // Email-intent: inject the list of connected Gmail accounts inline so
     // Aria doesn't ask "which account?". Best-effort — silent fall-through
@@ -1500,11 +1534,34 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   });
                 }
               } else if (currentEvent === 'error') {
+                // Convert the empty placeholder into a user-visible error
+                // bubble. Pre-fix, we only console.error'd and dropped the
+                // placeholder → the user saw their question with no
+                // response (the silent ghost from the 2026-05-08 incident).
+                // Now: friendly headline + collapsible raw error for
+                // founder debugging. See ErrorBubble below.
                 console.error('[SSE] error:', parsed.message);
                 setCcMessages((prev) => {
                   const updated = [...prev];
                   const last = updated[updated.length - 1];
-                  if (last && last.role === 'assistant' && !last.content) updated.pop();
+                  if (last && last.role === 'assistant' && !last.content) {
+                    updated[updated.length - 1] = {
+                      ...last,
+                      role: 'assistant',
+                      content: '',
+                      error: true,
+                      errorDetails: typeof parsed.message === 'string' ? parsed.message : JSON.stringify(parsed),
+                    };
+                  } else {
+                    updated.push({
+                      role: 'assistant',
+                      content: '',
+                      error: true,
+                      errorDetails: typeof parsed.message === 'string' ? parsed.message : JSON.stringify(parsed),
+                      createdAt: new Date().toISOString(),
+                      ts: Date.now(),
+                    });
+                  }
                   return updated;
                 });
               }
@@ -2639,6 +2696,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   );
                 }
                 const isUser = msg.role === 'user';
+                // Error bubble — assistant turn that surfaced an SSE
+                // 'error' event. Friendly headline + expandable raw
+                // detail for founder debugging. Replaces the pre-fix
+                // silent placeholder-drop (the ghost behavior).
+                if (!isUser && msg.error) {
+                  return <ErrorBubble key={msg.ts || i} details={msg.errorDetails} />;
+                }
                 return (
                   <div key={msg.ts || i} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                     <div
@@ -3021,6 +3085,72 @@ const ROW_BTN_STYLE = {
   cursor: 'pointer',
   transition: 'background 120ms',
 };
+
+// Inline error bubble for chat turns where the backend SSE 'error'
+// event fired (e.g. Anthropic 400, network blip). Replaces the
+// pre-2026-05-08 silent placeholder-drop that caused the ghost-mode
+// reproduction in production. Friendly headline + collapsible details
+// for founder debugging.
+function ErrorBubble({ details }) {
+  const [showDetails, setShowDetails] = useState(false);
+  return (
+    <div className="flex flex-col items-start">
+      <div
+        className="max-w-[85%]"
+        style={{
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          color: '#991b1b',
+          fontFamily: 'Manrope, sans-serif',
+          fontSize: '14px',
+          lineHeight: '1.5',
+          borderRadius: '12px',
+          padding: '12px 16px',
+        }}
+      >
+        <div>I had trouble responding to that. Try again, or rephrase if this keeps happening.</div>
+        {details && (
+          <button
+            onClick={() => setShowDetails((v) => !v)}
+            style={{
+              marginTop: 6,
+              fontSize: '12px',
+              fontWeight: 600,
+              color: '#7f1d1d',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              textDecoration: 'underline',
+            }}
+          >
+            {showDetails ? 'Hide details' : 'Show details'}
+          </button>
+        )}
+        {showDetails && details && (
+          <pre
+            style={{
+              marginTop: 6,
+              padding: '8px 10px',
+              background: '#fff5f5',
+              border: '1px solid #fecaca',
+              borderRadius: 6,
+              fontSize: '11px',
+              fontFamily: 'Menlo, Monaco, Consolas, monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              color: '#7f1d1d',
+              maxHeight: 200,
+              overflow: 'auto',
+            }}
+          >
+            Backend error: {details}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // M4.6 — inline tile rendered under an Aria response when she dispatched
 // a sub-agent. Polls the session every 4s while active; on completion

@@ -54,6 +54,7 @@
 const express   = require('express');
 const axios     = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const Sentry    = require('@sentry/node');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
 const { closeDecisionWithFeedback, processSkillFeedback } = require('../lib/trustFeedback.cjs');
@@ -317,8 +318,51 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
     const apiKey = process.env.CLAUDE_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
 
-    const { messages, systemPrompt: clientPrompt, model: reqModel, timeZone, context_hint } = req.body;
+    const { messages: rawMessages, systemPrompt: clientPrompt, model: reqModel, timeZone, context_hint } = req.body;
     const model = reqModel || 'claude-sonnet-4-20250514';
+
+    // ── Server-side defense: strip non-Anthropic message roles ───────
+    // Anthropic only accepts role: 'user' | 'assistant'. The client
+    // (DashboardPanel.jsx) injects UI-only synthetic roles into chat
+    // history for inline tiles ('confirm' for tool gates, 'task_draft',
+    // 'event_draft', 'email_draft', 'close_loop', 'daily_wrap'). The
+    // client's chatHistoryForLLM() helper strips them — this is the
+    // belt-and-suspenders pass in case a future client surface
+    // regresses.
+    //
+    // Origin: prod incident 2026-05-08 — back-to-back tool calls left
+    // a 'confirm' synthetic in the slice-9 history window; next user
+    // turn shipped it → Anthropic 400 → SSE error → silent client ghost.
+    // This filter ensures the bug can't recur server-side regardless
+    // of client behavior.
+    const droppedRoles = [];
+    const messages = Array.isArray(rawMessages)
+      ? rawMessages
+          .filter((m) => {
+            if (!m) return false;
+            const ok = (m.role === 'user' || m.role === 'assistant');
+            if (!ok && m.role) droppedRoles.push(m.role);
+            return ok;
+          })
+          .filter((m) => typeof m.content === 'string'
+            ? m.content.length > 0
+            : Array.isArray(m.content) && m.content.length > 0)
+      : [];
+    if (droppedRoles.length) {
+      try {
+        Sentry.addBreadcrumb({
+          category: 'chat.execute.role-filter',
+          message: `Stripped ${droppedRoles.length} non-LLM messages from request body`,
+          level: 'warning',
+          data: { droppedRoles, userId, requestId: req.requestId },
+        });
+      } catch { /* breadcrumb best-effort */ }
+      logger.warn('chat.execute.dropped-roles', {
+        requestId: req.requestId, userId,
+        roles: droppedRoles,
+        count: droppedRoles.length,
+      });
+    }
 
     // Hoist finalizeStream so the sibling catch block can reference it even
     // when an error occurs before the try-body assignment runs. The no-op
