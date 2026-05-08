@@ -5808,11 +5808,17 @@ async function seedNoteCategoriesIfEmpty(userId) {
   };
   const pillarLabels = { hustle: 'Hustle', home: 'Home', move: 'Move', grow: 'Grow' };
 
+  // User-scope the IDs. note_categories.id is a global TEXT PRIMARY KEY,
+  // so non-user-scoped IDs like `ncat-hustle` collide across users — the
+  // first user to seed wins, and every subsequent user's seed throws
+  // duplicate-key, which the /api/notes route catches and silently
+  // returns []. 4 of 5 non-superadmin users had zero categories from
+  // this; their notes were invisible to the client despite living in DB.
   for (const [pillar, children] of Object.entries(tree)) {
-    const parentId = `ncat-${pillar}`;
+    const parentId = `ncat-${userId}-${pillar}`;
     await createNoteCategory({ id: parentId, userId, name: pillarLabels[pillar], parentId: null, pillar, color: '' });
     for (const child of children) {
-      const childId = `ncat-${pillar}-${child.toLowerCase().replace(/\s+/g, '-')}`;
+      const childId = `ncat-${userId}-${pillar}-${child.toLowerCase().replace(/\s+/g, '-')}`;
       await createNoteCategory({ id: childId, userId, name: child, parentId, pillar, color: '' });
     }
   }
