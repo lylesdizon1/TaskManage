@@ -1298,8 +1298,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           return;
         }
         let ack;
-        if (draft.type === 'task') ack = draft.confidence === 'high' ? "Got it — here's the task" : "Here's a task draft";
-        else if (draft.type === 'event') ack = draft.confidence === 'high' ? "Got it — here's the event" : "Here's the event draft";
+        // Tiles are DRAFTS, not completed actions. Earlier copy ("Got it — here's the event")
+        // read as success and users walked away without clicking Confirm, never creating
+        // the event. Both ack variants now make the next step explicit.
+        if (draft.type === 'task') ack = "Drafted a task — confirm below to add it.";
+        else if (draft.type === 'event') ack = "Drafted an event — confirm below to add it to your calendar.";
         else if (draft.type === 'project_task') ack = `I drafted a task for ${draft.project_name}: ${draft.title}. Confirm to create it.`;
         else if (draft.type === 'checklist') ack = draft.items?.length
           ? `Here are ${draft.items.length} item${draft.items.length === 1 ? '' : 's'} for ${draft.task_title}. Confirm to add.`

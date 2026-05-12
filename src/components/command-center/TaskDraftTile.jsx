@@ -129,23 +129,28 @@ export function TileFooter({ status, error, disabled, onConfirm, onCancel, onRet
       </div>
     );
   }
-  // draft
+  // draft — bumped Confirm prominence and added a "not yet created" hint so the
+  // tile reads as an action-required draft, not a completed result. Users had
+  // been walking away from drafts thinking the event/task was already created.
   return (
-    <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-gray-100">
-      <button
-        onClick={onCancel}
-        className="px-2.5 py-1 text-[11px] font-semibold text-gray-600 hover:bg-gray-50 rounded-lg"
-      >
-        Cancel
-      </button>
-      <button
-        onClick={onConfirm}
-        disabled={disabled}
-        className="px-2.5 py-1 text-[11px] font-semibold rounded-lg disabled:opacity-40"
-        style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
-      >
-        Confirm
-      </button>
+    <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
+      <span className="text-[11px] text-gray-500 italic">Not yet created</span>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onCancel}
+          className="px-2.5 py-1 text-[11px] font-semibold text-gray-600 hover:bg-gray-50 rounded-lg"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onConfirm}
+          disabled={disabled}
+          className="px-3 py-1.5 text-[12px] font-bold rounded-lg disabled:opacity-40 shadow-sm"
+          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+        >
+          Confirm & Create
+        </button>
+      </div>
     </div>
   );
 }
