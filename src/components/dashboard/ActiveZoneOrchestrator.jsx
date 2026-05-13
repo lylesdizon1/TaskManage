@@ -31,6 +31,41 @@ const CHIPS = [
   { key: 'cancelled', label: '⊘', tooltip: 'Cancelled',  fg: '#5f5e5a', bg: '#f1efe8' },
 ];
 
+// 2026-05-13 close-loop enrichment — universal date formatter for the
+// three render blocks in BulkCloseRow. Pure (no Date.now() outside the
+// injected `now`), null-safe, locale-light. Format ladder:
+//   < 7 days  → relative ("Today" | "Yesterday" | weekday)
+//   ≥ 7 days  → absolute ("May 8")
+//   includeTime appends " H:MM AM/PM" with a comma after absolute dates.
+//   prefix prepends a verb ("Created" | "Queued" | "Closed") with a space.
+// Null/undefined input returns null so the renderer can skip the block.
+function formatCloseLoopDate(dateInput, opts = {}) {
+  if (dateInput === null || dateInput === undefined || dateInput === '') return null;
+  const t = new Date(dateInput).getTime();
+  if (!Number.isFinite(t)) return null;
+  const { prefix = '', includeTime = false, now = Date.now() } = opts;
+  const d = new Date(t);
+  const nowD = new Date(now);
+  // Local-midnight diff in days, not ms diff — "Yesterday at 11pm" should
+  // read "Yesterday" even if absolute delta < 24h.
+  const startOfLocal = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOfLocal(nowD) - startOfLocal(d)) / 86_400_000);
+  const time = includeTime
+    ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : '';
+  let datePart;
+  if (dayDiff === 0)       datePart = 'Today';
+  else if (dayDiff === 1)  datePart = 'Yesterday';
+  else if (dayDiff > 1 && dayDiff < 7) datePart = d.toLocaleDateString(undefined, { weekday: 'short' });
+  else                     datePart = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // Absolute dates use a comma separator before time; relative uses a space.
+  const isAbsolute = dayDiff >= 7 || dayDiff < 0;
+  const dateAndTime = time
+    ? (isAbsolute ? `${datePart}, ${time}` : `${datePart} ${time}`)
+    : datePart;
+  return prefix ? `${prefix} ${dateAndTime}` : dateAndTime;
+}
+
 // Smart defaults per Q3 directive. Returns { status?, expandNote? }
 // based on what metadata is currently surfaced on the close-loop
 // item. Today the items_preview shape carries source_type, source_id,
@@ -279,7 +314,15 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
     setCloseLoopOutcomes((prev) => {
       const next = new Map(prev);
       const k = `${ckey}:${itemId}`;
-      next.set(k, { ...(next.get(k) || {}), ...patch });
+      const merged = { ...(next.get(k) || {}), ...patch };
+      // Auto-stamp closed_at on first non-null status; clear when status
+      // cleared. Drives the in-session "Closed today HH:MM" caption under
+      // a row after the user picks a chip (Phase 1 enrichment).
+      if ('status' in patch) {
+        if (patch.status && !merged.closed_at) merged.closed_at = Date.now();
+        else if (!patch.status) merged.closed_at = null;
+      }
+      next.set(k, merged);
       return next;
     });
   }
@@ -621,9 +664,41 @@ function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteCh
   const selectedStatus = outcome?.status || null;
   const note = outcome?.note ?? '';
 
+  // Block A — primary date. Events lean on the event start (includeTime
+  // because hour-of-day is the meaningful signal for a meeting). Tasks
+  // and project_tasks prefer the source row's created_at; when the JOIN
+  // returns NULL (e.g. detector queued a loop for a source row that has
+  // since been deleted), fall back to pcl.triggered_at with a "Queued"
+  // prefix so the row never renders dateless.
+  let primaryDate = null;
+  if (item.source_type === 'event') {
+    primaryDate = formatCloseLoopDate(item.sourceStartTime, { includeTime: true });
+  } else {
+    primaryDate = formatCloseLoopDate(item.sourceCreatedAt, { prefix: 'Created' });
+    if (!primaryDate) {
+      primaryDate = formatCloseLoopDate(item.triggered_at || item.triggeredAt, { prefix: 'Queued' });
+    }
+  }
+
+  // Block B — inline description for tasks only. project_task descriptions
+  // are intentionally deferred (zero current impact per Phase 1 resolution).
+  // Truncate at 120 chars with a literal ellipsis — block doesn't render
+  // when description is missing or empty.
+  const rawDesc = item.source_type === 'task' ? item.sourceDescription : null;
+  const inlineDesc = (typeof rawDesc === 'string' && rawDesc.trim())
+    ? (rawDesc.length > 120 ? `${rawDesc.slice(0, 120)}…` : rawDesc)
+    : null;
+
+  // Block C — closed timestamp. Only the in-session stamp set by the
+  // setRowOutcome auto-stamp (chip click). Historical closed_at for
+  // already-resolved rows is Phase 1.5.
+  const closedCaption = outcome?.closed_at
+    ? formatCloseLoopDate(outcome.closed_at, { prefix: 'Closed', includeTime: true })
+    : null;
+
   return (
     <div className={baseRowClass}>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <CheckBox checked={completed} onChange={onCheck} />
         <span className="material-symbols-outlined text-primary/60 flex-shrink-0" style={{ fontSize: '12px' }}>
           {iconKey}
@@ -631,6 +706,11 @@ function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteCh
         <span className={titleClass} style={{ minWidth: 0 }}>
           <span className="truncate block">{_safeText(item.title, fallbackLabel)}</span>
         </span>
+        {primaryDate && (
+          <span className="flex-shrink-0 text-[11px] text-on-surface-variant/70">
+            {primaryDate}
+          </span>
+        )}
         <button
           onClick={onToggleNote}
           aria-label={noteExpanded ? 'Hide note' : 'Add note'}
@@ -648,6 +728,12 @@ function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteCh
           <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
         </button>
       </div>
+
+      {inlineDesc && (
+        <p className="pl-6 text-[11px] text-on-surface-variant/80 leading-snug whitespace-pre-wrap break-words">
+          {inlineDesc}
+        </p>
+      )}
 
       {/* Chip strip — sits below the title row. On mobile it wraps
           gracefully via flex-wrap; desktop stays single-line. */}
@@ -689,6 +775,12 @@ function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteCh
             style={{ minHeight: 50, fontFamily: 'Manrope, sans-serif' }}
           />
         </div>
+      )}
+
+      {closedCaption && (
+        <p className="pl-6 text-[10px] text-on-surface-variant/50">
+          {closedCaption}
+        </p>
       )}
     </div>
   );

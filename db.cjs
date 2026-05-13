@@ -9868,14 +9868,36 @@ async function emitCloseLoopItem(userId, sourceType, sourceId, titleSnapshot) {
  * (i.e. dismiss-for-today-only, per spec decision 2).
  */
 async function getOpenCloseLoopItems(userId, localMidnightUtc, limit = 5) {
+  // 2026-05-13 enrichment — LEFT JOIN source tables so the close-loop UI
+  // can show a primary date (event start, task/project_task created) and
+  // inline task notes without a second roundtrip per row. JOINs are
+  // non-breaking — existing callers ignore the extra fields.
+  //
+  // calendar_events.id is text and not globally unique (same Google id can
+  // exist across users), so the events JOIN must include user_id match.
+  // tasks.description defaults to '' — render-site guards on truthy string
+  // so empty descriptions don't surface a stray italic block.
   const { rows } = await pool.query(
-    `SELECT ${CLOSE_LOOP_FIELDS}
-     FROM pending_close_loop
-     WHERE user_id = $1
-       AND resolved_at IS NULL
-       AND (dismissed_at IS NULL OR dismissed_at < $2)
-     ORDER BY triggered_at DESC
-     LIMIT $3`,
+    `SELECT pcl.id,
+            pcl.user_id          AS "userId",
+            pcl.source_type      AS "sourceType",
+            pcl.source_id        AS "sourceId",
+            pcl.title_snapshot   AS "titleSnapshot",
+            pcl.triggered_at     AS "triggeredAt",
+            pcl.dismissed_at     AS "dismissedAt",
+            pcl.resolved_at      AS "resolvedAt",
+            COALESCE(t.created_at, pt.created_at) AS "sourceCreatedAt",
+            ce.start_time                         AS "sourceStartTime",
+            t.description                         AS "sourceDescription"
+       FROM pending_close_loop pcl
+       LEFT JOIN tasks           t  ON pcl.source_type = 'task'         AND t.id  = pcl.source_id
+       LEFT JOIN calendar_events ce ON pcl.source_type = 'event'        AND ce.id = pcl.source_id AND ce.user_id = pcl.user_id
+       LEFT JOIN project_tasks   pt ON pcl.source_type = 'project_task' AND pt.id = pcl.source_id
+      WHERE pcl.user_id = $1
+        AND pcl.resolved_at IS NULL
+        AND (pcl.dismissed_at IS NULL OR pcl.dismissed_at < $2)
+      ORDER BY pcl.triggered_at DESC
+      LIMIT $3`,
     [userId, localMidnightUtc, limit],
   );
   return rows;
