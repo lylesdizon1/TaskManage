@@ -10475,13 +10475,16 @@ async function searchContactsByName(userId, query, limit = 5) {
  * the card renders an empty-state with reconnect CTA.
  */
 async function getHealthyGmailAccounts(userId) {
+  // user_integrations doesn't carry primary-account semantics (that lives
+  // on gcal_tokens, separate concern). Use created_at ASC so the
+  // oldest-connected account is the default — typical "main account" proxy.
   const { rows } = await pool.query(
-    `SELECT account_email AS "accountEmail", is_primary AS "isPrimary", auth_status AS "authStatus"
+    `SELECT account_email AS "accountEmail", auth_status AS "authStatus"
        FROM user_integrations
       WHERE user_id = $1
         AND integration_type = 'gmail'
         AND auth_status = 'ok'
-      ORDER BY is_primary DESC, account_email ASC`,
+      ORDER BY created_at ASC, account_email ASC`,
     [userId],
   );
   return rows;
