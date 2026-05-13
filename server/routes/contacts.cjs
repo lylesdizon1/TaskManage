@@ -33,6 +33,22 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
     }
   });
 
+  // Typeahead used by EmailDraftCard's ContactPickerInput. Returns top
+  // matches by confidence (display_name prefix/contains, then email
+  // substring). Per-user scoping is enforced by searchContactsByName itself.
+  router.get('/api/contacts/search', authenticateToken, async (req, res) => {
+    try {
+      const q = String(req.query.q || '').trim();
+      const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 5, 20));
+      if (!q) return res.json([]);
+      const rows = await db.searchContactsByName(req.user.id, q, limit);
+      res.json(rows);
+    } catch (err) {
+      logger.error('contacts.search.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   router.post('/api/contacts', authenticateToken, async (req, res) => {
     try {
       const {

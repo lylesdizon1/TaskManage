@@ -6054,7 +6054,7 @@ async function deleteConversation(id, userId) {
  */
 async function getConversationMessages(conversationId, userId) {
   const { rows } = await pool.query(
-    `SELECT id, role, content, model, created_at AS "createdAt"
+    `SELECT id, role, content, model, card_id AS "cardId", created_at AS "createdAt"
      FROM chat_messages WHERE conversation_id = $1 AND user_id = $2
      ORDER BY created_at ASC`,
     [conversationId, userId],
@@ -7604,6 +7604,15 @@ async function runMigrations() {
     .catch((err) => logger.warn('migration.warn', { label: 'gcal_tokens.last_sync_error', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS user_integrations_auth_status_idx ON user_integrations(user_id, auth_status) WHERE auth_status = 'needs_reauth'`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS gcal_tokens_auth_status_idx ON gcal_tokens(user_id, auth_status) WHERE auth_status = 'needs_reauth'`).catch(() => {});
+
+  // ── Action cards (Commit 1: email-draft architecture, 2026-05-13) ──
+  // Cards are persisted as chat_messages rows with role='action_card'.
+  // The card_id column lets status updates target the row directly
+  // (UPDATE … WHERE card_id = $1) instead of grovelling JSON in content.
+  // Status + payload live in content as JSON.stringify(state).
+  await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS card_id TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'chat_messages.card_id', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS chat_messages_card_id_idx ON chat_messages(card_id) WHERE card_id IS NOT NULL`).catch(() => {});
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -10419,6 +10428,117 @@ async function getActiveZoneMetrics({ sinceHours = 24 } = {}) {
   return rows;
 }
 
+// ── Action-card draft architecture (Commit 1, 2026-05-13) ────────────────
+//
+// Action cards are persisted in chat_messages with role='action_card' and
+// card_id set. content holds JSON.stringify(state). The DB is the source of
+// truth — navigation away + back reloads cards intact from the session
+// loader (getConversationMessages already returns all roles).
+
+/**
+ * Search contacts by partial display_name or email. Returns top matches
+ * with a confidence score for the email-draft card's `to` field resolution.
+ *
+ * Confidence model: 1.0 = exact email/name match; 0.95 = name starts-with;
+ * 0.85 = name contains; 0.7 = email substring. Threshold for auto-resolve
+ * is 0.9 (per Phase 3 spec Q3). Below 0.9 → render picker, require explicit
+ * user confirmation.
+ */
+async function searchContactsByName(userId, query, limit = 5) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return [];
+  const { rows } = await pool.query(
+    `SELECT id, display_name AS "displayName", primary_email AS "primaryEmail",
+            CASE
+              WHEN LOWER(primary_email) = $2 THEN 1.0
+              WHEN LOWER(display_name) = $2 THEN 1.0
+              WHEN LOWER(display_name) LIKE $2 || '%' THEN 0.95
+              WHEN LOWER(display_name) LIKE '%' || $2 || '%' THEN 0.85
+              WHEN LOWER(primary_email) LIKE '%' || $2 || '%' THEN 0.7
+              ELSE 0.5
+            END AS confidence
+       FROM contacts
+      WHERE user_id = $1
+        AND primary_email IS NOT NULL
+        AND (LOWER(display_name) LIKE '%' || $2 || '%' OR LOWER(primary_email) LIKE '%' || $2 || '%')
+      ORDER BY confidence DESC, display_name ASC
+      LIMIT $3`,
+    [userId, q, limit],
+  );
+  return rows;
+}
+
+/**
+ * Gmail accounts the user can send from RIGHT NOW. Filters by
+ * auth_status='ok'. Returned in is_primary-first order so the first
+ * element is a sensible default. Empty array = no healthy accounts;
+ * the card renders an empty-state with reconnect CTA.
+ */
+async function getHealthyGmailAccounts(userId) {
+  const { rows } = await pool.query(
+    `SELECT account_email AS "accountEmail", is_primary AS "isPrimary", auth_status AS "authStatus"
+       FROM user_integrations
+      WHERE user_id = $1
+        AND integration_type = 'gmail'
+        AND auth_status = 'ok'
+      ORDER BY is_primary DESC, account_email ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * Create the persisted chat_messages row for a new action card. Returns the
+ * created row. The card_id is the caller-supplied stable id used by the
+ * frontend and by subsequent status updates.
+ */
+async function createActionCardMessage({ conversationId, userId, cardId, payload }) {
+  const content = JSON.stringify(payload);
+  const { rows } = await pool.query(
+    `INSERT INTO chat_messages (conversation_id, user_id, role, content, model, card_id)
+     VALUES ($1, $2, 'action_card', $3, 'claude', $4)
+     RETURNING id, conversation_id AS "conversationId", role, content, card_id AS "cardId", created_at AS "createdAt"`,
+    [conversationId, userId, content, cardId],
+  );
+  await pool.query('UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1', [conversationId]);
+  return rows[0];
+}
+
+/**
+ * Atomically update a card's payload (used on status transitions). Lookup
+ * by card_id + user_id so cross-tenant access is impossible even if a
+ * frontend bug sends the wrong id.
+ */
+async function updateActionCardPayload({ cardId, userId, payload }) {
+  const content = JSON.stringify(payload);
+  const { rows } = await pool.query(
+    `UPDATE chat_messages
+        SET content = $1
+      WHERE card_id = $2 AND user_id = $3 AND role = 'action_card'
+      RETURNING id, card_id AS "cardId", content, created_at AS "createdAt"`,
+    [content, cardId, userId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Read a single card's current state. Returns null if not found OR if it
+ * belongs to a different user (cross-tenant safe).
+ */
+async function getActionCardByIdForUser(cardId, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, conversation_id AS "conversationId", card_id AS "cardId",
+            content, created_at AS "createdAt"
+       FROM chat_messages
+      WHERE card_id = $1 AND user_id = $2 AND role = 'action_card'
+      LIMIT 1`,
+    [cardId, userId],
+  );
+  if (!rows[0]) return null;
+  try { return { ...rows[0], payload: JSON.parse(rows[0].content) }; }
+  catch { return { ...rows[0], payload: null }; }
+}
+
 module.exports = {
   pool,
   initTables,
@@ -10553,6 +10673,11 @@ module.exports = {
   getConversationMessages,
   addConversationMessage,
   getOrCreateCommandCenterConversation,
+  searchContactsByName,
+  getHealthyGmailAccounts,
+  createActionCardMessage,
+  updateActionCardPayload,
+  getActionCardByIdForUser,
   updateTask,
   getUserAuthContext,
   getUserById,

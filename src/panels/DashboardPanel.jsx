@@ -12,6 +12,9 @@ import ProjectDraftTile from '../components/command-center/ProjectDraftTile.jsx'
 import ProjectTaskDraftTile from '../components/command-center/ProjectTaskDraftTile.jsx';
 import ChecklistDraftTile from '../components/command-center/ChecklistDraftTile.jsx';
 import DailyWrapTile from '../components/command-center/DailyWrapTile.jsx';
+import EmailDraftCard from '../components/command-center/EmailDraftCard.jsx';
+import { DRAFT_NEW } from '../lib/featureFlags.js';
+import { summarizeRecentCards } from '../utils/cardSerializer.js';
 
 // Inline-styled markdown components so assistant bubbles keep the
 // current typography (Manrope 15px / 1.6 line-height) and don't
@@ -80,10 +83,24 @@ const SUPPRESSION_RECENCY_WINDOW_MS = 10 * 60 * 1000;
  */
 function chatHistoryForLLM(msgs) {
   if (!Array.isArray(msgs)) return [];
-  return msgs
+  // 2026-05-13 — append action_card summaries (last 5) to the trailing
+  // user message so Aria can answer "did you send that?" correctly on
+  // follow-up turns. Without this, the synthetic role strip hid card
+  // state and Aria hallucinated capability denial (Leo May 13 incident).
+  const cardTail = summarizeRecentCards(msgs);
+  const base = msgs
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
     .map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' }))
     .filter((m) => m.content.length > 0);
+  if (!cardTail) return base;
+  // Find last user message in base and append the card summary block.
+  for (let i = base.length - 1; i >= 0; i--) {
+    if (base[i].role === 'user') {
+      base[i] = { ...base[i], content: `${base[i].content}\n\n${cardTail}` };
+      break;
+    }
+  }
+  return base;
 }
 
 /**
@@ -938,7 +955,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
       // Step 2: if messages exist, load and done
       if (messages && messages.length > 0) {
-        setCcMessages(messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt, ts: m.createdAt ? new Date(m.createdAt).getTime() : Date.now() })));
+        setCcMessages(messages.map((m) => {
+          const base = { role: m.role, content: m.content, createdAt: m.createdAt, ts: m.createdAt ? new Date(m.createdAt).getTime() : Date.now() };
+          // action_card rows are persisted with content as JSON. Parse on
+          // load so EmailDraftCard receives `payload` immediately rather
+          // than triggering a second fetch.
+          if (m.role === 'action_card') {
+            try {
+              const payload = JSON.parse(m.content);
+              return { ...base, cardId: m.cardId || payload.card_id, payload };
+            } catch { return base; }
+          }
+          return base;
+        }));
         setCcLoading(false);
         ccPollIntervalRef.current = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
         return;
@@ -1222,6 +1251,41 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // Skip the intercept entirely when the user is mid-wrap — Aria
     // is conversing about reflection and short replies like "good
     // day" shouldn't get re-classified as a task.
+    // ── Email-draft intercept (Commit 1, flag-gated) ──
+    // Runs BEFORE parseActionDraft. When VITE_DRAFT_NEW=true, email-shaped
+    // intents return an action_card row created server-side; we render it
+    // inline and stop. Non-email returns {type:'default_chat'} → control
+    // falls through to parseActionDraft for task/event/project intents.
+    if (DRAFT_NEW && activeZoneStateRef.current !== 'daily_wrap') {
+      try {
+        const res = await apiFetch('/api/chat/draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ message: text, conversation_id: ccConvId }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.type === 'email' && data.card_id) {
+            setCcMessages((prev) => [
+              ...prev,
+              {
+                role: 'action_card',
+                cardId: data.card_id,
+                content: JSON.stringify(data),
+                payload: data,
+                createdAt: data.created_at || new Date().toISOString(),
+                ts: Date.now(),
+              },
+            ]);
+            ccAbortRef.current = null;
+            setCcSending(false);
+            return;
+          }
+          // Non-email: fall through.
+        }
+      } catch { /* network/server blip → fall through to legacy path */ }
+    }
+
     if (activeZoneStateRef.current === 'daily_wrap') {
       // fall through to normal chat streaming below
     } else try {
@@ -1683,6 +1747,96 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   const dismissTile = useCallback((tileId) => {
     setCcMessages((prev) => prev.filter((m) => m.id !== tileId));
+  }, []);
+
+  // ── Email action-card handlers (Commit 1) ──────────────────────────
+  // updateCardPayload patches a card's local payload immutably. Used by
+  // SSE card_status_update events from /api/chat/execute-draft.
+  const updateCardPayload = useCallback((cardId, patch) => {
+    setCcMessages((prev) => prev.map((m) => {
+      if (m.cardId !== cardId) return m;
+      const next = { ...(m.payload || {}), ...patch };
+      return { ...m, payload: next, content: JSON.stringify(next) };
+    }));
+  }, []);
+
+  const executeEmailCard = useCallback(async (cardId, resolved) => {
+    // Optimistically flip to executing for fast UI feedback. The server
+    // will confirm via SSE; if the request fails entirely, we revert.
+    updateCardPayload(cardId, { status: 'executing' });
+    try {
+      const res = await apiFetch('/api/chat/execute-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ card_id: cardId, resolved }),
+      });
+      if (!res.ok || !res.body) {
+        updateCardPayload(cardId, { status: 'failed', error_reason: 'network', error_message: `HTTP ${res.status}` });
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const rawLine of lines) {
+          const eventMatch = rawLine.match(/^event: (.+)/);
+          const dataMatch  = rawLine.match(/^data: (.+)/);
+          if (eventMatch) currentEvent = eventMatch[1].trim();
+          if (dataMatch && currentEvent === 'card_status_update') {
+            try {
+              const parsed = JSON.parse(dataMatch[1]);
+              const patch = { status: parsed.status };
+              if (parsed.error_reason) patch.error_reason = parsed.error_reason;
+              if (parsed.error_message) patch.error_message = parsed.error_message;
+              if (parsed.retry_available_with) patch.retry_available_with = parsed.retry_available_with;
+              if (parsed.message_id || parsed.sent_at) {
+                patch.result_metadata = {
+                  ...(parsed.message_id ? { message_id: parsed.message_id } : {}),
+                  ...(parsed.sent_at ? { sent_at: parsed.sent_at } : {}),
+                };
+              }
+              updateCardPayload(cardId, patch);
+            } catch {}
+            currentEvent = null;
+          }
+        }
+      }
+    } catch (err) {
+      updateCardPayload(cardId, { status: 'failed', error_reason: 'network', error_message: err.message || 'network error' });
+    }
+  }, [apiFetch, authToken, updateCardPayload]);
+
+  const cancelEmailCard = useCallback((cardId) => {
+    updateCardPayload(cardId, { status: 'cancelled' });
+  }, [updateCardPayload]);
+
+  const dismissEmailCard = useCallback((cardId) => {
+    setCcMessages((prev) => prev.filter((m) => m.cardId !== cardId));
+  }, []);
+
+  const retryEmailCardWithAccount = useCallback((cardId, account) => {
+    // Reset to drafted with the new from account; user clicks Send again.
+    setCcMessages((prev) => prev.map((m) => {
+      if (m.cardId !== cardId) return m;
+      const nextPayload = {
+        ...(m.payload || {}),
+        status: 'drafted',
+        error_reason: null,
+        error_message: null,
+        retry_available_with: null,
+        resolved: {
+          ...(m.payload?.resolved || {}),
+          from: { account_email: account, auth_status: 'ok' },
+        },
+      };
+      return { ...m, payload: nextPayload, content: JSON.stringify(nextPayload) };
+    }));
   }, []);
 
   // Track auto-dismiss timers so we can cancel them on unmount.
@@ -2482,6 +2636,24 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           ) : (
             <>
               {ccMessages.map((msg, i) => {
+                // ── Action card (Commit 1: email draft architecture) ──
+                if (msg.role === 'action_card' && msg.payload?.type === 'email') {
+                  return (
+                    <div key={msg.cardId || msg.ts || i} className="flex justify-start">
+                      <div className="max-w-[92%] w-full">
+                        <EmailDraftCard
+                          payload={msg.payload}
+                          apiFetch={apiFetch}
+                          authToken={authToken}
+                          onConfirm={(resolved) => executeEmailCard(msg.cardId, resolved)}
+                          onCancel={() => cancelEmailCard(msg.cardId)}
+                          onDismiss={() => dismissEmailCard(msg.cardId)}
+                          onRetryWith={(account) => retryEmailCardWithAccount(msg.cardId, account)}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
                 if (msg.role === 'task_draft' || msg.role === 'event_draft') {
                   const Tile = msg.role === 'task_draft' ? TaskDraftTile : EventDraftTile;
                   return (

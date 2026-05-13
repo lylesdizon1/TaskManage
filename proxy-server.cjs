@@ -104,6 +104,7 @@ app.use('/', require('./server/routes/learnings.cjs')({ authenticateToken, db })
 app.use('/', require('./server/routes/classification.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/emailClean.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/ariaDraft.cjs')({ authenticateToken }));
+app.use('/', require('./server/routes/chatDraft.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/tileExecute.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/outcomes.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/projects.cjs')({ authenticateToken, db }));
