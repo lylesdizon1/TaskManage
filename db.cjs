@@ -8528,14 +8528,31 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
     if (cadenceOffset.minutes_before !== undefined) {
       fireAt = new Date(dueDt.getTime() - cadenceOffset.minutes_before * 60000);
     } else if (cadenceOffset.day_of_week !== undefined && cadenceOffset.hour !== undefined) {
-      // Next occurrence of day_of_week at given hour
-      const target = new Date(now);
-      const currentDay = target.getDay();
-      let daysAhead = cadenceOffset.day_of_week - currentDay;
+      // Next occurrence of day_of_week at the configured hour, in the
+      // USER'S timezone. The earlier implementation used target.getDay()
+      // and target.setHours() which both operate in the server's local
+      // timezone — on Railway (UTC) that meant "Mon 9am" digests would
+      // fire at 9 UTC = 2am Pacific. Now we resolve today's weekday +
+      // calendar date in user TZ, advance the local date, and build the
+      // absolute moment by appending the user's UTC offset string.
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(now);
+      const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+      const todayWeekday = WEEKDAY_INDEX[parts.find(p => p.type === 'weekday')?.value];
+      const Y = Number(parts.find(p => p.type === 'year')?.value);
+      const M = Number(parts.find(p => p.type === 'month')?.value);
+      const D = Number(parts.find(p => p.type === 'day')?.value);
+      if (todayWeekday === undefined || !Y || !M || !D) continue;
+      let daysAhead = cadenceOffset.day_of_week - todayWeekday;
       if (daysAhead <= 0) daysAhead += 7;
-      target.setDate(target.getDate() + daysAhead);
-      target.setHours(cadenceOffset.hour, 0, 0, 0);
-      fireAt = target;
+      const tgtUtc = new Date(Date.UTC(Y, M - 1, D + daysAhead));
+      const tY = tgtUtc.getUTCFullYear();
+      const tM = String(tgtUtc.getUTCMonth() + 1).padStart(2, '0');
+      const tD = String(tgtUtc.getUTCDate()).padStart(2, '0');
+      const tH = String(cadenceOffset.hour).padStart(2, '0');
+      fireAt = new Date(`${tY}-${tM}-${tD}T${tH}:00:00${tzOffset}`);
+      if (isNaN(fireAt.getTime())) continue;
     } else {
       continue;
     }

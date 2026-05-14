@@ -10,7 +10,7 @@
  * <decision> contract + live-data context block.
  */
 
-const { getTodayLocal } = require('../utils/date.cjs');
+const { getTodayLocal, formatLocalDateTime } = require('../utils/date.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 const { buildPreferencesBlock } = require('./buildPreferencesBlock.cjs');
@@ -412,12 +412,12 @@ async function buildAgenticContext(opts) {
     ).join('; ') || 'none'
   }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
   }\nRecent notes: ${(notes || []).slice(0, 10).map(n => n.title).join(', ') || 'none'
-  }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? new Date(cn.eventStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
-  }\nCalendar next 7 days${calendarWarning}: ${calendarEvents.map(ev => `${ev.start} — ${ev.title}`).join('; ') || 'none'
+  }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? formatLocalDateTime(cn.eventStart, tz, { includeTime: false }) || '?' : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
+  }\nCalendar next 7 days${calendarWarning}: ${calendarEvents.map(ev => `${formatLocalDateTime(ev.start, tz) || ev.start} — ${ev.title}`).join('; ') || 'none'
   }\nRecent Aria actions (last 10): ${
     recentMemories.length
       ? recentMemories.slice(0, 10).map(m =>
-          `[${new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}] ${m.content}`
+          `[${formatLocalDateTime(m.createdAt, tz, { includeTime: false }) || '?'}] ${m.content}`
         ).join('; ')
       : 'none yet'
   }`;

@@ -123,4 +123,32 @@ function compareLocalIso(a, b) {
   return a < b ? -1 : 1;
 }
 
-module.exports = { getTodayLocal, toLocalIsoNoTz, addHoursLocalIso, compareLocalIso };
+/**
+ * Format an instant (Date, ISO string, or ms epoch) as user-local
+ * wall-clock text for inclusion in LLM prompts or rendered surfaces.
+ *
+ * Centralizes the "render an instant in the user's timezone" pattern
+ * that was being open-coded inconsistently. Critical for LLM context:
+ * Aria parrots whatever digits she sees in the prompt, so any path
+ * that leaks UTC strings (e.g. new Date(x).toISOString()) into her
+ * context causes her to misreport event times.
+ *
+ * @param {string|number|Date} input - The instant to render.
+ * @param {string} tz - IANA timezone (required, no fallback by design).
+ * @param {Object} [opts]
+ * @param {boolean} [opts.includeDate=true] - Include "Mon DD" date part.
+ * @param {boolean} [opts.includeTime=true] - Include "h:MM AM" time part.
+ * @returns {string} Human-readable local string, or '' if input is unparseable.
+ */
+function formatLocalDateTime(input, tz, opts = {}) {
+  if (!input || !tz) return '';
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return '';
+  const { includeDate = true, includeTime = true } = opts;
+  const fmtOpts = { timeZone: tz };
+  if (includeDate) { fmtOpts.month = 'short'; fmtOpts.day = 'numeric'; }
+  if (includeTime) { fmtOpts.hour = 'numeric'; fmtOpts.minute = '2-digit'; fmtOpts.hour12 = true; }
+  return new Intl.DateTimeFormat('en-US', fmtOpts).format(d);
+}
+
+module.exports = { getTodayLocal, toLocalIsoNoTz, addHoursLocalIso, compareLocalIso, formatLocalDateTime };

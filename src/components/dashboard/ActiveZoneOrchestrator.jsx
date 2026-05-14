@@ -39,25 +39,38 @@ const CHIPS = [
 //   includeTime appends " H:MM AM/PM" with a comma after absolute dates.
 //   prefix prepends a verb ("Created" | "Queued" | "Closed") with a space.
 // Null/undefined input returns null so the renderer can skip the block.
-function formatCloseLoopDate(dateInput, opts = {}) {
+//
+// `tz` is required — without it we'd fall back to the browser's
+// resolved timezone which can drift from user.timezone (travel laptops
+// stuck on the wrong zone, etc). Pass the authoritative user TZ so the
+// "Today/Yesterday" boundary and the time string both line up with what
+// the user sees elsewhere in the app.
+function formatCloseLoopDate(dateInput, tz, opts = {}) {
   if (dateInput === null || dateInput === undefined || dateInput === '') return null;
+  if (!tz) return null;
   const t = new Date(dateInput).getTime();
   if (!Number.isFinite(t)) return null;
   const { prefix = '', includeTime = false, now = Date.now() } = opts;
   const d = new Date(t);
   const nowD = new Date(now);
-  // Local-midnight diff in days, not ms diff — "Yesterday at 11pm" should
-  // read "Yesterday" even if absolute delta < 24h.
-  const startOfLocal = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const dayDiff = Math.round((startOfLocal(nowD) - startOfLocal(d)) / 86_400_000);
+  // Local-midnight diff resolved in the user's tz, not the browser's.
+  // Intl.formatToParts gives Y/M/D for an instant *in* the target zone.
+  const ymdInTz = (x) => {
+    const p = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(x);
+    const get = (type) => Number(p.find((q) => q.type === type)?.value);
+    return Date.UTC(get('year'), get('month') - 1, get('day'));
+  };
+  const dayDiff = Math.round((ymdInTz(nowD) - ymdInTz(d)) / 86_400_000);
   const time = includeTime
-    ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz })
     : '';
   let datePart;
   if (dayDiff === 0)       datePart = 'Today';
   else if (dayDiff === 1)  datePart = 'Yesterday';
-  else if (dayDiff > 1 && dayDiff < 7) datePart = d.toLocaleDateString(undefined, { weekday: 'short' });
-  else                     datePart = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  else if (dayDiff > 1 && dayDiff < 7) datePart = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: tz });
+  else                     datePart = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: tz });
   // Absolute dates use a comma separator before time; relative uses a space.
   const isAbsolute = dayDiff >= 7 || dayDiff < 0;
   const dateAndTime = time
@@ -95,7 +108,7 @@ function smartDefaultForCloseLoop(item, now = Date.now()) {
   return { status: null, expandNote: false };
 }
 
-export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey, onAction, onEmptyChange }) {
+export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey, onAction, onEmptyChange, userTZ }) {
   const [tiles, setTiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expandedTileId, setExpandedTileId] = useState(null);
@@ -482,6 +495,7 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
             isNoteExpanded={(itemId) => expandedNoteIds.has(`${ckey}:${itemId}`)}
             toggleNoteExpanded={(itemId) => toggleNoteExpanded(ckey, itemId)}
             onItemDismiss={(item) => dismissCloseLoopItem(t, item)}
+            userTZ={userTZ}
           />
         );
       })}
@@ -489,7 +503,7 @@ export default function ActiveZoneOrchestrator({ apiFetch, authToken, refreshKey
   );
 }
 
-function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrimaryLabel, onPrimary, onItemCheck, onShowLess, onDefer, onDismiss, getRowOutcome, setRowOutcome, isNoteExpanded, toggleNoteExpanded, onItemDismiss }) {
+function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrimaryLabel, onPrimary, onItemCheck, onShowLess, onDefer, onDismiss, getRowOutcome, setRowOutcome, isNoteExpanded, toggleNoteExpanded, onItemDismiss, userTZ }) {
   const primary = tile.primaryAction || tile.primary_action || {};
   const secondary = tile.secondaryAction || tile.secondary_action || {};
   const itemsPreview = tile.itemsPreview || tile.items_preview || [];
@@ -550,6 +564,7 @@ function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrim
                   noteExpanded={!!(isNoteExpanded && isNoteExpanded(item.id))}
                   onToggleNote={() => toggleNoteExpanded?.(item.id)}
                   onDismiss={() => onItemDismiss?.(item)}
+                  userTZ={userTZ}
                 />
               );
             }
@@ -654,7 +669,7 @@ function ItemPreviewRow({ item, candidateType, completed, onCheck }) {
 //   - Chip selected     → batch resolves AND writes outcome_records
 //   - Note expanded     → optional 2-line textarea, persisted to raw_note
 //   - Dismiss (✕)       → removes from list without enrichment
-function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteChange, noteExpanded, onToggleNote, onDismiss }) {
+function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteChange, noteExpanded, onToggleNote, onDismiss, userTZ }) {
   const baseRowClass = `flex flex-col gap-1.5 text-xs ${completed ? 'opacity-50' : ''}`;
   const titleClass = `text-on-background flex-1 ${completed ? 'line-through' : ''}`;
   const iconKey = (item.source_type === 'event') ? 'event' : 'task_alt';
@@ -672,11 +687,11 @@ function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteCh
   // prefix so the row never renders dateless.
   let primaryDate = null;
   if (item.source_type === 'event') {
-    primaryDate = formatCloseLoopDate(item.sourceStartTime, { includeTime: true });
+    primaryDate = formatCloseLoopDate(item.sourceStartTime, userTZ, { includeTime: true });
   } else {
-    primaryDate = formatCloseLoopDate(item.sourceCreatedAt, { prefix: 'Created' });
+    primaryDate = formatCloseLoopDate(item.sourceCreatedAt, userTZ, { prefix: 'Created' });
     if (!primaryDate) {
-      primaryDate = formatCloseLoopDate(item.triggered_at || item.triggeredAt, { prefix: 'Queued' });
+      primaryDate = formatCloseLoopDate(item.triggered_at || item.triggeredAt, userTZ, { prefix: 'Queued' });
     }
   }
 
@@ -693,7 +708,7 @@ function BulkCloseRow({ item, completed, outcome, onCheck, onChipClick, onNoteCh
   // setRowOutcome auto-stamp (chip click). Historical closed_at for
   // already-resolved rows is Phase 1.5.
   const closedCaption = outcome?.closed_at
-    ? formatCloseLoopDate(outcome.closed_at, { prefix: 'Closed', includeTime: true })
+    ? formatCloseLoopDate(outcome.closed_at, userTZ, { prefix: 'Closed', includeTime: true })
     : null;
 
   return (

@@ -2439,6 +2439,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           apiFetch={apiFetch}
           authToken={authToken}
           refreshKey={azRefreshKey}
+          userTZ={userTZ}
           onEmptyChange={setAzIsEmpty}
           onAction={(action, tile) => {
             // Route the tile's primary action into the existing
