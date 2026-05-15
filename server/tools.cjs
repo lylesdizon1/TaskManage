@@ -1113,15 +1113,21 @@ function requiresConfirmation(toolName, llmDecision, toolInput) {
     const expected = Number.parseInt(toolInput?.expected_count, 10);
     if (!Number.isFinite(expected) || expected > BULK_ARCHIVE_AUTONOMY_THRESHOLD) return true;
   }
-  // Capture pipeline (Commit A) — any tool call that includes a source
-  // image_blob_id requires confirmation. Photos are easy to send by
-  // accident and OCR extraction can mis-classify; always ask before
-  // saving. Forward-compatible with create_contact (Commit B) and
-  // log_food (Commit C) — they pick this up automatically once they
-  // accept image_blob_id in their schemas.
-  if (toolInput?.image_blob_id) return true;
+  // Capture pipeline (Commit A) — gate SAVE tools called with a source
+  // image_blob_id. Photos are easy to send by accident and OCR extraction
+  // can mis-classify; always ask before saving. capture_from_image is
+  // the classification step, NOT a save — it gets image_blob_id in its
+  // schema by design (Aria needs to echo the id back) and must NOT be
+  // gated. Bug fix 2026-05-15: the prior "any tool with image_blob_id"
+  // rule was over-broad and caught capture_from_image itself, breaking
+  // every image-bearing turn after the first.
+  if (toolInput?.image_blob_id && IMAGE_SAVE_TOOLS.has(toolName)) return true;
   return false;
 }
+
+// Save tools that should always gate when called with image_blob_id.
+// Forward-compatible: create_contact lands in Commit B, log_food in C.
+const IMAGE_SAVE_TOOLS = new Set(['create_note', 'create_contact', 'log_food']);
 
 // ── Tool error sanitisation ────────────────────────────────────────────────
 // Shaped reasons we expose to the LLM (and via SSE to the user). Anything

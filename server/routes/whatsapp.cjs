@@ -87,7 +87,10 @@ function renderConfirmationBody(tool, params) {
       ? `Save as note${fromPhoto}: "${title}"\n\n${excerpt}`
       : `Save as note${fromPhoto}: "${title}"`;
   }
-  return `${tool}`;
+  // Defensive — any future gated tool without a dedicated render lands
+  // here. Better than the bare tool name (which is what the user would
+  // have seen on the capture_from_image misfire before Bug 1 was fixed).
+  return `Confirm action: ${tool}`;
 }
 
 // Per-tool action verb. Both the YES side ("save"/"send"/"delete") and
@@ -449,7 +452,13 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const imageInstructions = imageData
         ? `\n\n## IMAGE RECEIVED\nAn image arrived with this message. image_blob_id = "${imageBlobId || ''}".\n\nCall capture_from_image EXACTLY ONCE with image_blob_id="${imageBlobId || ''}" to classify and extract structured content. Then act:\n  - classification=document, confidence >= 0.5: call create_note with title + content from the extracted document data and pass image_blob_id="${imageBlobId || ''}" (this routes through the YES/NO confirmation gate).\n  - classification=business_card: surface the extracted fields and tell the user contact saving lands in the next commit. Don't call create_note here — it would land in notes instead of contacts.\n  - classification=food: surface the extracted items and tell the user food logging lands in an upcoming commit. Don't save.\n  - classification=unclear OR confidence < 0.5: describe what you see briefly and ask the user what to do — don't save.\n\nIf the user sent a message ALONG with the image, treat that message as additional intent context. If only an image, classify and act per the rules above.`
         : '';
-      const whatsappSuffix = `\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${imageInstructions}${entityContext}`;
+      // Backstop for the schema filter above — even though capture_from_image
+      // is removed from the schema when no image is attached, the prompt
+      // guard makes the contract explicit. The image_blob_id values that
+      // appear in conversation history refer to PAST images, not the
+      // current message.
+      const captureGuard = `\nDo NOT call capture_from_image unless a new image is attached to the user's current message. image_blob_id values appearing in prior conversation turns refer to past images and are NOT signals to call this tool again.`;
+      const whatsappSuffix = `\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${captureGuard}${imageInstructions}${entityContext}`;
       const systemPrompt = ctx.systemPrompt + whatsappSuffix;
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
@@ -586,10 +595,22 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         userMessageContent = msgBody;
       }
 
+      // 2026-05-15 hotfix — capture_from_image must only appear in the
+      // tool schema when an image is actually attached to this turn.
+      // Without this, the model pattern-matches against prior tool calls
+      // in conversation history and re-fires capture_from_image on
+      // non-image messages, breaking calendar / chat queries entirely.
+      // Filtering at the schema level is structural; the prompt guard
+      // below is defense-in-depth for the rare case the model
+      // hallucinates a tool name outside the schema.
+      const toolSchemas = imageData
+        ? getToolSchemasForApi()
+        : getToolSchemasForApi().filter((t) => t.name !== 'capture_from_image');
+
       const { text, toolSummaries } = await runAgenticLoop({
         messages: [...priorMessages, { role: 'user', content: userMessageContent }],
         system: systemPrompt,
-        tools: getToolSchemasForApi(),
+        tools: toolSchemas,
         userId,
         executeTool: boundExecuteTool,
         gateToolExecution,
