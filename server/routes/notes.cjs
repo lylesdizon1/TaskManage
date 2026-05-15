@@ -91,7 +91,7 @@ module.exports = function createNotesRouter({ authenticateToken, requireOwnershi
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',
         {
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 512,
           system: 'You are a concise personal productivity assistant. Write a brief daily digest (3-5 short paragraphs) summarizing priorities, flagging overdue items, and offering one actionable tip. Use markdown formatting. Be warm but direct.',
           messages: [{
@@ -228,7 +228,7 @@ Respond in JSON only:
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',
         {
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 256,
           messages: [{ role: 'user', content: prompt }],
         },

@@ -34,7 +34,7 @@ export default function useStream() {
     const systemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
     const body = {
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       messages,
     };
     if (systemPrompt) body.systemPrompt = systemPrompt;

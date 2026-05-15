@@ -326,7 +326,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         () => axios.post(
           'https://api.anthropic.com/v1/messages',
           {
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-6',
             max_tokens: 300,
             system: systemPrompt,
             messages: [{ role: 'user', content: `Write the ${timeState} update for ${userName}.\n\n${dataStr}` }],
@@ -584,7 +584,7 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       const response = await axios.post(
         'https://api.anthropic.com/v1/messages',
         {
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 60,
           system: 'Write ONE sentence summarizing this person\'s day. Be specific and actionable. Max 15 words. No quotes.',
           messages: [{

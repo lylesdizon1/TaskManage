@@ -72,7 +72,7 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
 
     const response = await Promise.race([
       client.messages.create({
-        model: model || 'claude-sonnet-4-20250514',
+        model: model || 'claude-sonnet-4-6',
         max_tokens: 8192,
         system,
         tools: tools ?? [],

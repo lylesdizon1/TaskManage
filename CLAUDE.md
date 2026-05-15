@@ -19,7 +19,7 @@ surfaces. The app is the configuration and debug layer.
 - Backend: Express (proxy-server.cjs → slim entry, routes in server/routes/)
 - Database: PostgreSQL on Railway (db.cjs)
 - Auth: JWT (30d expiry, JWT_SECRET env var)
-- AI: Anthropic API (claude-sonnet-4-20250514 default)
+- AI: Anthropic API (claude-sonnet-4-6 default)
 - Alerts: Server-side scheduler (sole alert path), DND enforced in SQL. Channels: UltraMsg (WhatsApp), Resend (email), Slack webhook
 - Deploy: Railway (auto-deploy on push to dizon/v2-phase0)
 

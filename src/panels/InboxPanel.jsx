@@ -437,7 +437,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           messages: apiBase,
           context_hint: 'inbox',
           // NO systemPrompt — let server build full Aria prompt + inbox context.
@@ -2766,7 +2766,7 @@ When you have enough info, write the final draft and end your message with:
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           systemPrompt,
           messages: apiMessages,
           context_hint: 'inbox',

@@ -28,7 +28,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { withRetry } = require('../anthropicRetry.cjs');
 
 const PLAN_MODEL = 'claude-haiku-4-5-20251001';      // cheaper for the planner
-const SYNTHESIS_MODEL = 'claude-sonnet-4-20250514';   // richer for synthesis + final
+const SYNTHESIS_MODEL = 'claude-sonnet-4-6';   // richer for synthesis + final
 const PLAN_TIMEOUT_MS = 30000;
 const SYNTHESIS_TIMEOUT_MS = 60000;
 

@@ -95,7 +95,6 @@ const chatExecuteLimit = userRateLimit({ key: 'chat-execute', limit: 50, windowS
 // for an unbounded max_tokens, or (c) attach `tools` definitions that
 // bypass the agentic-gating + confirmation flow on /api/chat/execute.
 const PROXY_ALLOWED_MODELS = new Set([
-  'claude-sonnet-4-20250514',
   'claude-opus-4-7',
   'claude-sonnet-4-6',
   'claude-haiku-4-5-20251001',
@@ -319,7 +318,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
     if (!apiKey) return res.status(500).json({ error: 'CLAUDE_API_KEY not configured' });
 
     const { messages: rawMessages, systemPrompt: clientPrompt, model: reqModel, timeZone, context_hint } = req.body;
-    const model = reqModel || 'claude-sonnet-4-20250514';
+    const model = reqModel || 'claude-sonnet-4-6';
 
     // ── Server-side defense: strip non-Anthropic message roles ───────
     // Anthropic only accepts role: 'user' | 'assistant'. The client

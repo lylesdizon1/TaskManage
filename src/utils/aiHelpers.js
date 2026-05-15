@@ -12,7 +12,7 @@ export async function fetchSuggestedTags(title, description, entityNames, authTo
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 100,
         messages: [{ role: 'user', content: prompt }],
       }),
