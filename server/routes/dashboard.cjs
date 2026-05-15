@@ -49,6 +49,7 @@ const express = require('express');
 const axios = require('axios');
 const logger = require('../../guardrails/logger.cjs');
 const { fetchCalendarWindow, localMidnightUtc } = require('../lib/buildAgenticContext.cjs');
+const { bucketCalendarEvents, renderCalendarBuckets, renderRecentNotes } = require('../lib/contextRendering.cjs');
 const { withRetry } = require('../lib/anthropicRetry.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
@@ -241,9 +242,16 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
       const notes = await db.getPrivateNotesForAI(userId);
 
       // Fetch calendar events: DB cache first, live GCal fallback.
+      // 2026-05-15 — adopt the shared bucketing helpers so the brief
+      // renders calendar events with explicit past/upcoming labels
+      // (COMPLETED TODAY / IN PROGRESS NOW / UPCOMING TODAY). Prior
+      // flat "<title> at <time>" rendering let the model hallucinate
+      // past-tense for upcoming events when the brief fired early in
+      // the day. Window stays 1-day; TOMORROW / LATER buckets drop
+      // silently when empty per the helper's contract.
+      const userTz = req.user.timezone || DEFAULT_TIMEZONE;
       let calendarEventStr = data?.events || 'None';
       try {
-        const userTz = req.user.timezone || DEFAULT_TIMEZONE;
         let allEvents = [];
         if (db.getCalendarEventsForUser) {
           try {
@@ -254,6 +262,8 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
               allEvents = cached.map((e) => ({
                 title: (e.title || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
                 start: e.startTime ? new Date(e.startTime).toISOString() : '',
+                end:   e.endTime   ? new Date(e.endTime).toISOString()   : '',
+                allDay: !!e.allDay,
               }));
             }
           } catch { /* silent — fall through to live */ }
@@ -267,14 +277,10 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
           allEvents = fetchResult.events || [];
         }
         if (allEvents.length > 0) {
-          calendarEventStr = allEvents.map((e) => {
-            if (!e.start || !e.start.includes('T')) return e.title;
-            const t = new Date(e.start);
-            const time = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: userTz });
-            return `${e.title} at ${time}`;
-          }).join('; ');
+          const buckets = bucketCalendarEvents(allEvents, userTz);
+          calendarEventStr = renderCalendarBuckets(buckets, userTz);
         }
-        logger.info('ariaBrief.calendarEvents', { requestId: req.requestId, userId, eventCount: allEvents.length, titles: allEvents.map(e => e.title), calendarEventStr });
+        logger.info('ariaBrief.calendarEvents', { requestId: req.requestId, userId, eventCount: allEvents.length, titles: allEvents.map(e => e.title) });
       } catch (calErr) {
         logger.error('ariaBrief.calendarFetch.failed', { requestId: req.requestId, userId, error: calErr.message, stack: calErr.stack?.split('\n').slice(0, 3).join(' | ') });
       }
@@ -291,8 +297,8 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
 
       // Time-aware prose — tone + framing shifts across the day. User tz drives
       // state so the morning-brief cron (which hits this endpoint at 8am local)
-      // naturally gets the 'morning' treatment.
-      const userTz = req.user.timezone || DEFAULT_TIMEZONE;
+      // naturally gets the 'morning' treatment. (userTz already declared above
+      // for the calendar fetch — reusing.)
       const { state: timeState } = getTimeState(userTz);
       const timePrompts = {
         morning:   "It's morning. Set the day. Lead with the most important thing ahead. Be direct — 2-3 sentences max.",
@@ -313,12 +319,12 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
 
       const systemPrompt = `You are ${name}, ${userName}'s ${persona === 'best_friend' ? 'best friend' : persona === 'executive_assistant' ? 'executive assistant' : persona === 'coo' ? 'COO' : persona === 'life_coach' ? 'life coach' : 'CFO'}. Tone: ${tone}. ${timePrompts[timeState] || timePrompts.morning} ${commonRules} Only reference tasks, events, and notes explicitly listed below — never infer from memory or profile. Sign off with just your name: — ${name}`;
 
-      // Build actionable notes string — only include notes with actionable/time-sensitive content
-      const actionableNotes = notes
-        .filter(n => n.title || n.content)
-        .map(n => (n.title || '').slice(0, 80))
-        .slice(0, 5)
-        .join(', ') || 'None';
+      // 2026-05-15 — notes now render with body excerpt + date scaffolding
+      // via the shared helper (same shape as buildAgenticContext). The prior
+      // titles-only rendering at this site dropped the body content Aria
+      // needs to link a query like "what's the office thing tomorrow" to
+      // a note titled "San Ramon Office — Moving In". Same Gap 2 pattern.
+      const actionableNotes = renderRecentNotes(notes, userTz, 5);
 
       const dataStr = `Overdue tasks: ${overdue}\nHigh priority tasks: ${highPriority}\nTasks due today: ${todayTasks}\nToday's calendar events: ${calendarEventStr}\nRecent notes (only mention if actionable): ${actionableNotes}\nBusinesses: ${data?.entities || 'None'}`;
 
