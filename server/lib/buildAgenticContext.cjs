@@ -411,7 +411,13 @@ async function buildAgenticContext(opts) {
       `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
     ).join('; ') || 'none'
   }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
-  }\nRecent notes: ${(notes || []).slice(0, 10).map(n => n.title).join(', ') || 'none'
+  }\nRecent notes: ${(notes || []).slice(0, 10).map(n => {
+      const dateStr = formatLocalDateTime(n.createdAt, tz, { includeTime: false }) || '?';
+      const body = (n.content || '').replace(/\s+/g, ' ').trim();
+      const excerpt = body.length > 150 ? `${body.slice(0, 150).trim()}…` : body;
+      const prefix = `[${dateStr}] "${n.title || '(untitled)'}"`;
+      return excerpt ? `${prefix} — ${excerpt}` : prefix;
+    }).join('; ') || 'none'
   }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? formatLocalDateTime(cn.eventStart, tz, { includeTime: false }) || '?' : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
   }\nCalendar next 7 days${calendarWarning}: ${calendarEvents.map(ev => `${formatLocalDateTime(ev.start, tz) || ev.start} — ${ev.title}`).join('; ') || 'none'
   }\nRecent Aria actions (last 10): ${

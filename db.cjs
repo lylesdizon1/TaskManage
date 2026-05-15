@@ -5619,8 +5619,14 @@ async function getNoteById(id, userId) {
  * @throws {Error} If the database query fails.
  */
 async function getPrivateNotesForAI(userId) {
+  // 2026-05-15 — added created_at + entity_id so buildAgenticContext can
+  // render notes as title + body excerpt + date instead of title-only.
+  // Dogfood Gap 2: a note "San Ramon Office — Moving In" created via web
+  // didn't surface on a WhatsApp "what's tomorrow" query because the
+  // context block dropped all body/date scaffolding.
   const { rows } = await pool.query(
-    `SELECT id, title, content, visibility, pillar, category
+    `SELECT id, title, content, visibility, pillar, category,
+            entity_id AS "entityId", created_at AS "createdAt"
      FROM notes WHERE user_id = $1 AND archived = FALSE
      ORDER BY created_at DESC LIMIT 50`,
     [userId],

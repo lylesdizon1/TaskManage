@@ -550,14 +550,19 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         });
       };
 
-      // ── Load conversation history (last 3 exchanges = 6 messages) ────
+      // ── Load conversation history (last 10 exchanges = 20 messages) ──
+      // 2026-05-15 — bumped from 6 to 20. Dogfood Gap 4: at 6 messages
+      // (3 exchanges) WhatsApp lost conversational context too fast,
+      // putting all cross-session memory burden on memory_facts (which
+      // doesn't fire on casual chat today — Gap 1, Phase 2 work). At
+      // dogfood scale (Lyle/Liz/Leo) the extra token cost is moot.
       // If the most recent message is older than SESSION_TIMEOUT_MS, start
       // a fresh session so stale context (e.g. yesterday's topic) doesn't
       // bleed into today's turn.
       const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
       let priorMessages = [];
       try {
-        const history = await db.getWhatsAppHistory(userId, normalizedPhone, 6);
+        const history = await db.getWhatsAppHistory(userId, normalizedPhone, 20);
         // history is oldest-first, so most-recent is the last element.
         const mostRecent = history.length ? history[history.length - 1] : null;
         const age = mostRecent?.createdAt ? Date.now() - new Date(mostRecent.createdAt).getTime() : null;
