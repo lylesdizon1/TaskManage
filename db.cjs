@@ -697,6 +697,35 @@ async function initTables() {
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE pending_confirmations ADD COLUMN IF NOT EXISTS resolution_json JSONB`).catch(() => {});
 
+  // ── image_blobs (Commit A — OCR capture pipeline) ──
+  // Persisted image bytes for photos captured via WhatsApp (and later
+  // other capture surfaces). Bytes live here so downstream features —
+  // business cards, document scans, food logs — can re-render the source
+  // image when needed. Food log entries DON'T persist images (per spec
+  // decision); other surfaces do.
+  //
+  // `expires_at` is set by the inserter and swept by a cron in Phase 1.5.
+  // For Commit A there is no sweep; rows accumulate. Acceptable at
+  // dogfood scale (Lyle/Liz/Leo internal).
+  //
+  // Storage choice: Postgres BYTEA. Reviewed alternatives in the OCR
+  // Phase 2 spec — chosen because dogfood volume (~3-5 photos/day each ×
+  // 90d × ~500KB) is <200MB total. Migration to S3/R2 in Phase 2 is a
+  // single-column backfill script.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS image_blobs (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      mime_type   TEXT NOT NULL,
+      bytes       BYTEA NOT NULL,
+      source      TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      expires_at  TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_image_blobs_user ON image_blobs(user_id, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_image_blobs_expires ON image_blobs(expires_at) WHERE expires_at IS NOT NULL`).catch(() => {});
+
   // ── active_zone_tiles — Aria's orchestration surface ──────────────────
   // One row per (user, candidate_key). candidate_key is a stable hash of
   // (candidate_type, sorted item ids) so detector re-runs UPSERT onto
@@ -1481,16 +1510,54 @@ async function logAgentAction({ userId, eventType, toolName, input, output, stat
   }
 }
 
-async function createPendingConfirmation({ userId, toolName, params, channel, decisionLogId }) {
+async function createPendingConfirmation({ userId, toolName, params, channel, decisionLogId, expiresAtMinutes }) {
+  // 2026-05-15 — codes dropped from WhatsApp gate (internal-only channel,
+  // risk-accepted per project_whatsapp_twilio_migration). Without the code
+  // as a disambiguator the 2-min default window was too tight in practice
+  // (user might not see the WhatsApp until minutes later). Callers can
+  // override via expiresAtMinutes; the gate in whatsapp.cjs passes 10.
+  const expiresClause = expiresAtMinutes
+    ? `NOW() + ($6 || ' minutes')::interval`
+    : `DEFAULT`;
+  const params2 = expiresAtMinutes
+    ? [userId, toolName, JSON.stringify(params || {}), channel || 'web', decisionLogId || null, String(expiresAtMinutes)]
+    : [userId, toolName, JSON.stringify(params || {}), channel || 'web', decisionLogId || null];
   const { rows } = await pool.query(
-    `INSERT INTO pending_confirmations (user_id, tool_name, params_json, channel, decision_log_id)
-     VALUES ($1, $2, $3::jsonb, $4, $5)
+    `INSERT INTO pending_confirmations (user_id, tool_name, params_json, channel, decision_log_id, expires_at)
+     VALUES ($1, $2, $3::jsonb, $4, $5, ${expiresClause})
      RETURNING id, user_id AS "userId", tool_name AS "toolName", params_json AS "params",
                channel, status, expires_at AS "expiresAt", created_at AS "createdAt",
                decision_log_id AS "decisionLogId"`,
-    [userId, toolName, JSON.stringify(params || {}), channel || 'web', decisionLogId || null],
+    params2,
   );
   return rows[0];
+}
+
+// ── image_blobs helpers (Commit A) ────────────────────────────────────
+// `source` is freeform — values: 'whatsapp_inbound', 'web_upload' (future),
+// 'chrome_extension' (future). Helps audit which capture surface produced
+// a blob without joining downstream tables.
+async function insertImageBlob({ userId, mimeType, bytes, source, expiresAt }) {
+  const { rows } = await pool.query(
+    `INSERT INTO image_blobs (user_id, mime_type, bytes, source, expires_at)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [userId, mimeType, bytes, source || null, expiresAt || null],
+  );
+  return rows[0].id;
+}
+
+// Owner-scoped fetch — returns null if the row doesn't exist OR belongs to
+// another user. Treats both cases identically to avoid existence-leak.
+async function getImageBlobForOwner(id, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", mime_type AS "mimeType", bytes, source,
+            created_at AS "createdAt", expires_at AS "expiresAt"
+     FROM image_blobs
+     WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return rows[0] || null;
 }
 
 /**
@@ -10920,6 +10987,8 @@ module.exports = {
   logAgentAction,
   createPendingConfirmation,
   deletePendingConfirmation,
+  insertImageBlob,
+  getImageBlobForOwner,
   getPendingConfirmation,
   updatePendingConfirmationStatus,
   findLatestPendingConfirmation,

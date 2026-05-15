@@ -173,13 +173,15 @@ const ARIA_TOOLS = [
     group: 'notes',
     risk: 'low',
     requires_confirmation: false,
-    description: 'Create a new note.',
+    description: 'Create a new note. Pass image_blob_id when creating from a captured photo so the source image attaches to the note (and the call gets gated for user confirmation).',
     input_schema: {
       type: 'object',
       properties: {
-        title:   { type: 'string' },
-        content: { type: 'string' },
-        pillar:  { type: 'string', enum: ['hustle', 'home', 'grow', 'move'] },
+        title:         { type: 'string' },
+        content:       { type: 'string' },
+        pillar:        { type: 'string', enum: ['hustle', 'home', 'grow', 'move'] },
+        image_blob_id: { type: 'string', description: 'Optional: id of an image_blob that this note was captured from. Presence triggers user confirmation gate.' },
+        source:        { type: 'string', description: 'Optional provenance string, e.g. "photo_whatsapp".' },
       },
       required: ['title', 'content'],
     },
@@ -917,6 +919,78 @@ const ARIA_TOOLS = [
       required: ['message_id', 'account_email', 'target_label_id', 'target_label_name', 'scope'],
     },
   },
+
+  // ── CAPTURE / VISION (Commit A — OCR via WhatsApp) ─────────────────────
+  // Called once per image-bearing turn. Aria reads the photo, picks the
+  // best classification, extracts structured fields, and reports back.
+  // The executor does no user-data writes — it persists the classification
+  // result and returns the structured payload so Aria can reason about
+  // next steps (call create_note for documents, surface extracted contact
+  // fields for business cards until create_contact lands in Commit B,
+  // etc).
+  //
+  // Confidence is the LOWER of (classification confidence, extraction
+  // confidence) — a sharp class call with blurry fields should report low.
+  // Below 0.5 (or class='unclear'), Aria falls back to describe-and-suggest
+  // without saving.
+  {
+    name: 'capture_from_image',
+    group: 'capture',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Classify a user-submitted photo and extract structured content. Call exactly once per image, before deciding what to save. For documents you may then call create_note with the extracted title + body. For business_card and food, surface the extracted fields to the user — the dedicated save tools (create_contact, log_food) will land in upcoming commits.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        image_blob_id:   { type: 'string', description: 'The id from the system prompt for the just-arrived image.' },
+        classification: { type: 'string', enum: ['business_card', 'food', 'document', 'unclear'] },
+        confidence:     { type: 'number', minimum: 0, maximum: 1 },
+        raw_text:       { type: 'string', maxLength: 8000, description: 'Verbatim OCR\'d text from the image. Required regardless of class — used for downstream search.' },
+        summary:        { type: 'string', maxLength: 200, description: 'One-line human-readable description of the image.' },
+        business_card:  {
+          type: 'object',
+          description: 'Populate when classification = business_card.',
+          properties: {
+            full_name: { type: 'string' },
+            company:   { type: 'string' },
+            role:      { type: 'string' },
+            email:     { type: 'string' },
+            phone:     { type: 'string' },
+            website:   { type: 'string' },
+            address:   { type: 'string' },
+          },
+        },
+        food: {
+          type: 'object',
+          description: 'Populate when classification = food.',
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name:                { type: 'string' },
+                  quantity:            { type: 'string' },
+                  estimated_calories:  { type: 'integer' },
+                },
+              },
+            },
+            total_estimated_calories: { type: 'integer' },
+            meal_type: { type: 'string', enum: ['breakfast', 'lunch', 'dinner', 'snack', 'unknown'] },
+          },
+        },
+        document: {
+          type: 'object',
+          description: 'Populate when classification = document.',
+          properties: {
+            title: { type: 'string', description: 'Inferred title from content; empty if no clear title.' },
+            tags:  { type: 'array', items: { type: 'string' }, description: 'Inferred or #hash-extracted tags.' },
+          },
+        },
+      },
+      required: ['image_blob_id', 'classification', 'confidence', 'raw_text'],
+    },
+  },
 ];
 
 const ALWAYS_CONFIRM = new Set(['send_email', 'reply_email', 'delete_task', 'delete_event']);
@@ -1039,6 +1113,13 @@ function requiresConfirmation(toolName, llmDecision, toolInput) {
     const expected = Number.parseInt(toolInput?.expected_count, 10);
     if (!Number.isFinite(expected) || expected > BULK_ARCHIVE_AUTONOMY_THRESHOLD) return true;
   }
+  // Capture pipeline (Commit A) — any tool call that includes a source
+  // image_blob_id requires confirmation. Photos are easy to send by
+  // accident and OCR extraction can mis-classify; always ask before
+  // saving. Forward-compatible with create_contact (Commit B) and
+  // log_food (Commit C) — they pick this up automatically once they
+  // accept image_blob_id in their schemas.
+  if (toolInput?.image_blob_id) return true;
   return false;
 }
 
@@ -1568,15 +1649,69 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       // ── NOTES ──────────────────────────────────────────────────────────
       case 'create_note': {
         const id = `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        // Image-attached notes append a footer line so the source-photo
+        // provenance is visible inline in the note body. The image_blob_id
+        // itself isn't stored on notes today — Commits B/D land the
+        // notes.image_blob_id column + image rendering on the detail view.
+        // For Commit A the body footer is the audit trail.
+        let content = toolInput.content || '';
+        if (toolInput.image_blob_id) {
+          content = `${content.trim()}\n\n_Captured from photo._`;
+        }
         await db.createNote({
           id, userId,
-          title: toolInput.title, content: toolInput.content,
+          title: toolInput.title, content,
           visibility: 'private', type: 'quick',
           pillar: toolInput.pillar || null,
           category: '', subcategory: '', tags: [], entityId: null,
         });
-        try { await db.logMemory({ userId, tool: 'create_note', content: `Created note: "${toolInput.title}"`, metadata: { note_id: id } }); } catch {}
+        try {
+          await db.logMemory({
+            userId,
+            tool: 'create_note',
+            content: `Created note: "${toolInput.title}"`,
+            metadata: { note_id: id, image_blob_id: toolInput.image_blob_id || null, source: toolInput.source || null },
+          });
+        } catch {}
         return { success: true, note_id: id, title: toolInput.title };
+      }
+
+      // ── CAPTURE (Commit A — OCR pipeline) ────────────────────────────
+      // capture_from_image does no user-data writes itself. It records
+      // the classification result against the image_blob (for audit +
+      // future re-render) and echoes the structured payload back to
+      // Aria. The model then chooses next steps:
+      //   - document → call create_note with title + body (gated)
+      //   - business_card → describe extracted fields; create_contact
+      //     lands in Commit B
+      //   - food → describe extracted items; log_food lands in Commit C
+      //   - unclear → describe and suggest fallback
+      case 'capture_from_image': {
+        const ix = toolInput || {};
+        try {
+          await db.logMemory({
+            userId,
+            tool: 'capture_from_image',
+            content: `Classified image as ${ix.classification} (confidence ${ix.confidence})${ix.summary ? `: ${ix.summary}` : ''}`,
+            metadata: {
+              image_blob_id: ix.image_blob_id,
+              classification: ix.classification,
+              confidence: ix.confidence,
+              has_business_card: !!ix.business_card,
+              has_food: !!ix.food,
+              has_document: !!ix.document,
+            },
+          });
+        } catch (e) { console.error('[memory] capture log failed:', e.message); }
+        return {
+          success: true,
+          image_blob_id: ix.image_blob_id,
+          classification: ix.classification,
+          confidence: ix.confidence,
+          summary: ix.summary || null,
+          raw_text: ix.raw_text || '',
+          extracted: ix.business_card || ix.food || ix.document || null,
+        };
       }
 
       case 'search_notes': {

@@ -44,6 +44,7 @@
  */
 
 const express   = require('express');
+const sharp     = require('sharp');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
 const { closeDecisionWithFeedback, processSkillFeedback } = require('../lib/trustFeedback.cjs');
@@ -55,16 +56,48 @@ const { sendWhatsApp } = require('../utils/integrations.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
-/** Derive a short user-facing code from a confirmation ID. */
-function codeFromConfirmId(id) {
-  return String(id).replace(/-/g, '').slice(0, 4).toUpperCase();
-}
-function summarizeParams(tool, params) {
-  if (tool === 'send_email')   return `email to ${params.to} — "${params.subject || ''}"`;
-  if (tool === 'reply_email')  return `reply on thread ${params.thread_id}`;
-  if (tool === 'delete_task')  return `delete task ${params.task_id}`;
-  if (tool === 'delete_event') return `delete event ${params.event_id}`;
+// 2026-05-15 — codes dropped from WhatsApp confirmation gate. Channel is
+// internal-only (Lyle/Liz/Leo) per project_whatsapp_twilio_migration; the
+// risk acceptance is on record. Disambiguation switched to strict YES/NO
+// + 10-minute window + LIFO match on pending_confirmations.
+
+// Strict YES/NO matchers — must be the entire message (trimmed), so a
+// reply like "yes here's my note" doesn't accidentally resolve a pending
+// confirmation. Optional trailing period accepted for natural typing.
+const STRICT_YES = /^(YES|Y)\.?$/i;
+const STRICT_NO  = /^(NO|N)\.?$/i;
+
+// Per-tool render for the confirmation prompt body. Returns the
+// human-readable preview (NO code, NO YES/NO line — those are appended
+// uniformly at the call site). Image-attached create_note gets a richer
+// shape showing the inferred title and body excerpt so the user can
+// verify the OCR extraction before saving.
+function renderConfirmationBody(tool, params) {
+  const p = params || {};
+  if (tool === 'send_email')   return `Send email to ${p.to}\nSubject: ${p.subject || '(no subject)'}`;
+  if (tool === 'reply_email')  return `Send reply on thread ${p.thread_id}`;
+  if (tool === 'delete_task')  return `Delete task ${p.task_id}`;
+  if (tool === 'delete_event') return `Delete event ${p.event_id}`;
+  if (tool === 'create_note') {
+    const title = p.title || '(untitled)';
+    const body  = (p.content || '').trim();
+    const excerpt = body.length > 200 ? `${body.slice(0, 200).trim()}…` : body;
+    const fromPhoto = p.image_blob_id ? ' (from photo)' : '';
+    return excerpt
+      ? `Save as note${fromPhoto}: "${title}"\n\n${excerpt}`
+      : `Save as note${fromPhoto}: "${title}"`;
+  }
   return `${tool}`;
+}
+
+// Per-tool action verb. Both the YES side ("save"/"send"/"delete") and
+// the NO side end in "cancel" — uniform refusal verb keeps the prompt
+// readable across tools.
+function actionVerbFor(tool) {
+  if (tool === 'send_email' || tool === 'reply_email') return 'send';
+  if (tool === 'delete_task' || tool === 'delete_event') return 'delete';
+  if (tool === 'create_note' || tool === 'create_event' || tool === 'create_task') return 'save';
+  return 'confirm';
 }
 
 /**
@@ -151,13 +184,19 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const tzForUser = user.timezone || DEFAULT_TIMEZONE;
 
       // ── Check for YES/NO confirmation reply to a prior high-risk prompt ──
-      const confirmMatch = (msgBody || '').trim().match(/^(YES|NO)\s+([A-Z0-9]{4})\s*$/i);
-      if (confirmMatch) {
-        const approved = confirmMatch[1].toUpperCase() === 'YES';
-        const code = confirmMatch[2].toUpperCase();
+      // 2026-05-15 — codes dropped. Strict YES/NO + 10-minute window
+      // (enforced by pending_confirmations.expires_at, set to 10m for
+      // WhatsApp at insert time) + LIFO match on the latest pending row
+      // for this user/channel. A "yes" with no fresh pending row falls
+      // through to normal chat below.
+      const trimmedBody = (msgBody || '').trim();
+      const isYes = STRICT_YES.test(trimmedBody);
+      const isNo  = STRICT_NO.test(trimmedBody);
+      if (isYes || isNo) {
+        const approved = isYes;
         try {
           const pending = await db.findLatestPendingConfirmation(userId, 'whatsapp');
-          if (pending && codeFromConfirmId(pending.id) === code) {
+          if (pending) {
             // On deny, persist resolution + notify.
             if (!approved) {
               const denyResolution = {
@@ -244,21 +283,60 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       }
 
       // ── Image download (if media present) ─────────────────────────────
+      // 2026-05-15 (Commit A — OCR pipeline):
+      //   - HEIC accepted at ingress, converted to JPEG via sharp before
+      //     persistence/Anthropic. iPhone users send HEIC by default.
+      //   - Persisted bytes land in image_blobs for downstream re-render.
+      //   - blob_id is threaded into the agentic system prompt so Aria
+      //     can pass it as image_blob_id when calling capture_from_image
+      //     and the downstream save tool.
       let imageData = null; // { mimeType, data (base64) }
+      let imageBlobId = null;
       if (mediaUrl) {
         try {
           const imgRes = await fetch(mediaUrl);
           if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
-          const contentType = imgRes.headers.get('content-type') || '';
-          const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-          const mimeType = supportedTypes.find(t => contentType.includes(t));
-          if (!mimeType) {
-            await sendWhatsApp(db, user.id, 'I can only read photos and documents — try sending a JPG or PNG.', fromRaw).catch(() => {});
+          const contentType = (imgRes.headers.get('content-type') || '').toLowerCase();
+          const SUPPORTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          const HEIC = ['image/heic', 'image/heif'];
+          const isHeic = HEIC.some(t => contentType.includes(t));
+          let mimeType = SUPPORTED.find(t => contentType.includes(t)) || null;
+          if (!mimeType && !isHeic) {
+            await sendWhatsApp(db, user.id, 'I can only read photos and documents — try sending a JPG, PNG, or HEIC.', fromRaw).catch(() => {});
             return res.json({ ok: true, skipped: 'unsupported media type' });
           }
-          const arrayBuf = await imgRes.arrayBuffer();
-          imageData = { mimeType, data: Buffer.from(arrayBuf).toString('base64') };
-          logger.info('whatsapp.image.downloaded', { requestId: req.requestId, mimeType, sizeKB: Math.round(arrayBuf.byteLength / 1024) });
+          let bytes = Buffer.from(await imgRes.arrayBuffer());
+          if (isHeic) {
+            // HEIC has no native Anthropic support — transcode to JPEG.
+            // Sharp's HEIC support is built-in when libvips is compiled
+            // with HEIF; Railway's Node image ships it. Quality 85 is the
+            // visual-vs-size sweet spot.
+            try {
+              bytes = await sharp(bytes).jpeg({ quality: 85 }).toBuffer();
+              mimeType = 'image/jpeg';
+              logger.info('whatsapp.image.heicConverted', { requestId: req.requestId, sizeKB: Math.round(bytes.length / 1024) });
+            } catch (convErr) {
+              logger.error('whatsapp.image.heicConvertFailed', { requestId: req.requestId, error: convErr.message });
+              await sendWhatsApp(db, user.id, "I couldn't read that HEIC photo — try sending as JPG.", fromRaw).catch(() => {});
+              return res.json({ ok: true, skipped: 'heic conversion failed' });
+            }
+          }
+          imageData = { mimeType, data: bytes.toString('base64') };
+          // Persist to image_blobs so capture_from_image + downstream save
+          // tools can reference the source image. 90-day expiry by default;
+          // sweep cron lands in Phase 1.5.
+          try {
+            const expiresAt = new Date(Date.now() + 90 * 24 * 3600 * 1000);
+            imageBlobId = await db.insertImageBlob({
+              userId, mimeType, bytes, source: 'whatsapp_inbound', expiresAt,
+            });
+          } catch (blobErr) {
+            // Persistence failure shouldn't block the vision call — Aria
+            // can still describe the image, just without blob_id for
+            // downstream save tools.
+            logger.warn('whatsapp.image.persistFailed', { requestId: req.requestId, error: blobErr.message });
+          }
+          logger.info('whatsapp.image.downloaded', { requestId: req.requestId, mimeType, sizeKB: Math.round(bytes.length / 1024), imageBlobId });
         } catch (imgErr) {
           logger.error('whatsapp.image.downloadFailed', { requestId: req.requestId, error: imgErr.message });
           await sendWhatsApp(db, user.id, "I couldn't load that image — can you try sending it again?", fromRaw).catch(() => {});
@@ -360,8 +438,16 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       const entityContext = matchedEntity
         ? `\nThe user's message references entity: "${matchedEntity.name}" (id: ${matchedEntity.id}). Apply this entity to any task created in this conversation by passing entity_name="${matchedEntity.name}" to create_task.`
         : '';
+      // 2026-05-15 (Commit A) — image-bearing turns: Aria must call
+      // capture_from_image exactly once with image_blob_id=${imageBlobId}.
+      // The tool returns the classification + extracted payload; Aria
+      // then decides next steps based on class. For documents, call
+      // create_note with image_blob_id so the save goes through the
+      // confirmation gate. business_card and food don't have dedicated
+      // save tools yet (Commits B and C) — describe the extracted
+      // fields and say the dedicated save will land soon.
       const imageInstructions = imageData
-        ? `\nIf the user sends an image with no message, describe what you see clearly and concisely, then recommend one specific action (create a task, log an expense, save a note). If the user sends an image with a message, use the message as context to interpret the image and act on it. If intent is unclear, ask one clarifying question only.`
+        ? `\n\n## IMAGE RECEIVED\nAn image arrived with this message. image_blob_id = "${imageBlobId || ''}".\n\nCall capture_from_image EXACTLY ONCE with image_blob_id="${imageBlobId || ''}" to classify and extract structured content. Then act:\n  - classification=document, confidence >= 0.5: call create_note with title + content from the extracted document data and pass image_blob_id="${imageBlobId || ''}" (this routes through the YES/NO confirmation gate).\n  - classification=business_card: surface the extracted fields and tell the user contact saving lands in the next commit. Don't call create_note here — it would land in notes instead of contacts.\n  - classification=food: surface the extracted items and tell the user food logging lands in an upcoming commit. Don't save.\n  - classification=unclear OR confidence < 0.5: describe what you see briefly and ask the user what to do — don't save.\n\nIf the user sent a message ALONG with the image, treat that message as additional intent context. If only an image, classify and act per the rules above.`
         : '';
       const whatsappSuffix = `\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${imageInstructions}${entityContext}`;
       const systemPrompt = ctx.systemPrompt + whatsappSuffix;
@@ -422,13 +508,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           const pending = await db.createPendingConfirmation({
             userId, toolName: tool, params: input, channel: 'whatsapp',
             decisionLogId: engineDecisionId, // Phase 5 — let YES/NO webhook close the decision
+            expiresAtMinutes: 10, // 2026-05-15: codes dropped, window extended so users have time to reply
           });
-          const code = codeFromConfirmId(pending.id);
-          const preview = summarizeParams(tool, input);
+          const body = renderConfirmationBody(tool, input);
+          const verb = actionVerbFor(tool);
           // If the engine raised confirmation, prepend its reason so the
           // user knows why we're asking (vs. baseline tool caution).
           const prefix = engineWantsConfirm && engineReason ? `${engineReason}\n\n` : '';
-          const prompt = `${prefix}Confirm: ${preview}.\nReply YES ${code} or NO ${code} within 2 minutes.`;
+          const prompt = `${prefix}${body}\n\nReply YES to ${verb}, NO to cancel.`;
           // Check the send result — if WhatsApp delivery fails, the user
           // never sees the prompt. Without this, the agent reported
           // "Awaiting confirmation" while the row sat unfulfilled until
@@ -441,7 +528,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
           }
           waSentConfirmation = true;
           await db.logAgentAction({ userId, eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id });
-          return { action: 'deny', reason: 'awaiting_whatsapp_confirmation', message: `Awaiting user confirmation via WhatsApp (code ${code}).` };
+          return { action: 'deny', reason: 'awaiting_whatsapp_confirmation', message: 'Awaiting user confirmation via WhatsApp.' };
         } catch (err) {
           logger.error('whatsapp.gate.failed', { userId, tool, error: err.message });
           return { action: 'deny', reason: 'gate_error', message: `Could not request confirmation.` };
