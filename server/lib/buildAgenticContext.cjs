@@ -160,6 +160,96 @@ function withTimeout(promise, timeoutMs, name) {
  * Uses the noon-UTC trick (same approach as the fetchCalendarWindow
  * window math) to stay DST-safe.
  */
+// 2026-05-15 hotfix — bucket calendar events by temporal relation to NOW
+// in the user's tz. Before this, the agentic prompt rendered events as
+// a flat list with date+time strings; the model had to figure out where
+// "now" sat in that timeline and got it wrong when called early in the
+// day (e.g. 12 AM querying a noon event surfaced as past-tense).
+//
+// Buckets:
+//   completedToday — event ended before now (end_time < now), today
+//   inProgressNow  — start <= now <= end (or start <= now with no end), today
+//   upcomingToday  — start > now, today
+//   tomorrow       — date matches tomorrow's local date key
+//   laterThisWeek  — date > tomorrow (cap at 7-day window via existing fetch)
+// Past events from prior days are dropped.
+function bucketCalendarEvents(events, tz, now = new Date()) {
+  const nowMs = now.getTime();
+  const dateKeyOf = (d) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+  const todayKey = dateKeyOf(now);
+  const tomorrowKey = dateKeyOf(new Date(nowMs + 86400000));
+  const buckets = { completedToday: [], inProgressNow: [], upcomingToday: [], tomorrow: [], laterThisWeek: [] };
+  for (const ev of (events || [])) {
+    if (!ev?.start) continue;
+    const startMs = new Date(ev.start).getTime();
+    if (!Number.isFinite(startMs)) continue;
+    const endMs = ev.end ? new Date(ev.end).getTime() : null;
+    const evKey = dateKeyOf(new Date(startMs));
+    if (evKey === todayKey) {
+      if (endMs && endMs <= nowMs) buckets.completedToday.push(ev);
+      else if (startMs <= nowMs && (!endMs || endMs > nowMs)) buckets.inProgressNow.push(ev);
+      else buckets.upcomingToday.push(ev);
+    } else if (evKey === tomorrowKey) {
+      buckets.tomorrow.push(ev);
+    } else if (evKey > todayKey) {
+      buckets.laterThisWeek.push(ev);
+    }
+  }
+  return buckets;
+}
+
+function renderCalendarBuckets(buckets, tz) {
+  const { formatLocalDateTime } = require('../utils/date.cjs');
+  const tFmt = (ev) => {
+    if (ev.allDay) return `(all-day) ${ev.title}`;
+    const t = formatLocalDateTime(ev.start, tz, { includeDate: false });
+    return `${t} — ${ev.title}`;
+  };
+  const dtFmt = (ev) => {
+    const when = formatLocalDateTime(ev.start, tz) || ev.start;
+    if (ev.allDay) return `${when.split(',')[0]} (all-day) — ${ev.title}`;
+    return `${when} — ${ev.title}`;
+  };
+  const lines = [];
+  if (buckets.completedToday.length) lines.push(`  COMPLETED TODAY: ${buckets.completedToday.map(tFmt).join('; ')}`);
+  if (buckets.inProgressNow.length)  lines.push(`  IN PROGRESS NOW: ${buckets.inProgressNow.map(tFmt).join('; ')}`);
+  if (buckets.upcomingToday.length)  lines.push(`  UPCOMING TODAY: ${buckets.upcomingToday.map(tFmt).join('; ')}`);
+  if (!buckets.completedToday.length && !buckets.inProgressNow.length && !buckets.upcomingToday.length) {
+    lines.push(`  TODAY: none`);
+  }
+  if (buckets.tomorrow.length) lines.push(`  TOMORROW: ${buckets.tomorrow.map(tFmt).join('; ')}`);
+  if (buckets.laterThisWeek.length) lines.push(`  LATER THIS WEEK: ${buckets.laterThisWeek.slice(0, 10).map(dtFmt).join('; ')}`);
+  return lines.length ? `\n${lines.join('\n')}` : ' none';
+}
+
+// Tasks already have a `completed` boolean so past/future hallucination
+// is less of a risk than calendar — but rendering by status bucket lets
+// the model find "what's due today" without scanning the whole list.
+// Distinct from `recentCompleted` which renders elsewhere with completion
+// notes attached.
+function bucketActiveTasks(activeTasks, todayDateKey) {
+  const buckets = { dueToday: [], overdue: [], upcoming: [], noDate: [] };
+  for (const t of (activeTasks || [])) {
+    if (!t.dueDate) { buckets.noDate.push(t); continue; }
+    if (t.dueDate === todayDateKey) { buckets.dueToday.push(t); continue; }
+    if (t.dueDate < todayDateKey) { buckets.overdue.push(t); continue; }
+    buckets.upcoming.push(t);
+  }
+  return buckets;
+}
+
+function renderTaskBuckets(buckets) {
+  const fmt = (t) => `[${t.id}] ${t.title} (${t.priority || 'medium'}${t.dueDate ? `, due ${t.dueDate}` : ''})`;
+  const lines = [];
+  if (buckets.dueToday.length) lines.push(`  DUE TODAY (${buckets.dueToday.length}): ${buckets.dueToday.slice(0, 20).map(fmt).join('; ')}`);
+  if (buckets.overdue.length)  lines.push(`  OVERDUE (${buckets.overdue.length}): ${buckets.overdue.slice(0, 20).map(fmt).join('; ')}`);
+  if (buckets.upcoming.length) lines.push(`  UPCOMING (${buckets.upcoming.length}): ${buckets.upcoming.slice(0, 15).map(fmt).join('; ')}`);
+  if (buckets.noDate.length)   lines.push(`  NO DUE DATE (${buckets.noDate.length}): ${buckets.noDate.slice(0, 10).map(fmt).join('; ')}`);
+  return lines.length ? `\n${lines.join('\n')}` : ' none';
+}
+
 function localMidnightUtc(tz, offsetDays = 0) {
   const userTz = tz || DEFAULT_TIMEZONE;
   const todayLocal = new Intl.DateTimeFormat('en-CA', {
@@ -228,6 +318,8 @@ async function fetchCalendarWindow({ userId, tz, days, loadAllGcalAccounts, load
         title: (ev.summary || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
         start: ev.start?.dateTime || ev.start?.date || '',
         end:   ev.end?.dateTime   || ev.end?.date   || '',
+        // GCal API: start.dateTime present → timed; start.date present → all-day
+        allDay: !ev.start?.dateTime,
       }));
     }));
 
@@ -305,6 +397,8 @@ async function buildAgenticContext(opts) {
             .map((ev) => ({
               title: (ev.title || '(No title)').replace(/^\[TaskManage\]\s*/i, ''),
               start: ev.startTime ? new Date(ev.startTime).toISOString() : '',
+              end:   ev.endTime   ? new Date(ev.endTime).toISOString()   : '',
+              allDay: !!ev.allDay,
             }))
             .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
           return { events, failedAccounts: [] };
@@ -406,10 +500,15 @@ async function buildAgenticContext(opts) {
     ? ` (WARNING: ${calendarFailedAccounts.length} calendar account(s) failed to sync — view may be incomplete)`
     : '';
 
-  const contextBlock = `\n\nCurrent time: ${currentTime} (${tz}). When setting due times, use the user's local timezone — NOT UTC.\n\n## Live Data\nActive tasks (${activeTasks.length}): ${
-    activeTasks.slice(0, 30).map(t =>
-      `[${t.id}] ${t.title} (${t.priority}${t.dueDate ? ', due ' + t.dueDate : ''}${t.dueDate && t.dueDate < todayDate ? ', OVERDUE' : ''})`
-    ).join('; ') || 'none'
+  // 2026-05-15 — bucket tasks + calendar events by temporal status so
+  // Aria stops conflating past with upcoming. Dogfood Bug 2: a noon
+  // meeting later today was reported past-tense in a 12:08 AM brief.
+  const taskBuckets = bucketActiveTasks(activeTasks, todayDate);
+  const taskBlock = renderTaskBuckets(taskBuckets);
+  const calBuckets = bucketCalendarEvents(calendarEvents, tz);
+  const calBlock = renderCalendarBuckets(calBuckets, tz);
+
+  const contextBlock = `\n\nCurrent time: ${currentTime} (${tz}). When setting due times, use the user's local timezone — NOT UTC.\n\n## Live Data\nActive tasks (${activeTasks.length}) — by status:${taskBlock
   }${recentCompleted.length ? `\nRecently completed with notes: ${recentCompleted.slice(0, 10).map(t => `${t.title} — completed.${t.description ? ` Note at creation: ${t.description}.` : ''} Outcome note: ${t.completionNote}`).join('; ')}` : ''
   }\nRecent notes: ${(notes || []).slice(0, 10).map(n => {
       const dateStr = formatLocalDateTime(n.createdAt, tz, { includeTime: false }) || '?';
@@ -419,7 +518,7 @@ async function buildAgenticContext(opts) {
       return excerpt ? `${prefix} — ${excerpt}` : prefix;
     }).join('; ') || 'none'
   }${calendarNotes.length ? `\nCalendar meeting notes (recent): ${calendarNotes.slice(0, 15).map(cn => `"${cn.eventTitle}" (${cn.eventStart ? formatLocalDateTime(cn.eventStart, tz, { includeTime: false }) || '?' : '?'})${cn.preNote ? ' Agenda: ' + cn.preNote.slice(0, 100) : ''}${cn.postNote ? ' Outcomes: ' + cn.postNote.slice(0, 100) : ''}`).join('; ')}` : ''
-  }\nCalendar next 7 days${calendarWarning}: ${calendarEvents.map(ev => `${formatLocalDateTime(ev.start, tz) || ev.start} — ${ev.title}`).join('; ') || 'none'
+  }\nCalendar next 7 days${calendarWarning}:${calBlock
   }\nRecent Aria actions (last 10): ${
     recentMemories.length
       ? recentMemories.slice(0, 10).map(m =>
