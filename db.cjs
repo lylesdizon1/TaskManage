@@ -7234,6 +7234,28 @@ async function runMigrations() {
     WHERE primary_email IS NOT NULL
   `).catch((err) => logger.warn('migration.warn', { label: 'contacts unique email', error: err.message }));
 
+  // Commit B (2026-05-26) — People CRM extensions for OCR business cards.
+  // first_name/last_name are nullable additions; display_name stays
+  // canonical (existing rows + manual entry continue to work). OCR
+  // populates both halves when extractable. source_image_blob_id pins a
+  // contact to its source photo (capture surface viewable later);
+  // raw_ocr_text preserves the OCR verbatim for downstream search /
+  // dedup debugging. archived_at flips this table from hard-delete to
+  // soft-delete — every list query now filters archived_at IS NULL.
+  await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS first_name TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_name TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source_image_blob_id TEXT REFERENCES image_blobs(id) ON DELETE SET NULL`).catch((err) => logger.warn('migration.warn', { label: 'contacts.source_image_blob_id', error: err.message }));
+  await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS raw_ocr_text TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`).catch(() => {});
+  // Partial index on the hot read path: list/search active contacts per
+  // user, sorted by recency. The prior `contacts_user_id_idx` stays for
+  // joins / admin paths; this one accelerates the common UI fetch.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS contacts_user_active_idx
+    ON contacts (user_id, created_at DESC)
+    WHERE archived_at IS NULL
+  `).catch(() => {});
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS contact_identities (
       id          SERIAL PRIMARY KEY,
@@ -9433,26 +9455,39 @@ async function getOpenProjectTasksForUser(userId, limit = 5) {
 const CONTACT_FIELDS = `
   id, user_id AS "userId",
   display_name AS "displayName",
+  first_name AS "firstName",
+  last_name AS "lastName",
   primary_email AS "primaryEmail",
   primary_phone AS "primaryPhone",
   company, role, notes,
   linked_user_id AS "linkedUserId",
   source,
+  source_image_blob_id AS "sourceImageBlobId",
+  raw_ocr_text AS "rawOcrText",
   created_at AS "createdAt",
-  updated_at AS "updatedAt"
+  updated_at AS "updatedAt",
+  archived_at AS "archivedAt"
 `;
 
-async function getContactsForUser(userId) {
+async function getContactsForUser(userId, { includeArchived = false } = {}) {
+  // 2026-05-26 — list path filters archived_at by default. Sort key
+  // prefers last_name (sortable directories) when present, falls back to
+  // display_name. Both halves stay nullable so manual entries that only
+  // populate display_name still sort cleanly.
+  const archivedClause = includeArchived ? '' : 'AND archived_at IS NULL';
   const { rows } = await pool.query(
     `SELECT ${CONTACT_FIELDS}
-     FROM contacts WHERE user_id = $1
-     ORDER BY display_name ASC`,
+     FROM contacts
+     WHERE user_id = $1 ${archivedClause}
+     ORDER BY COALESCE(NULLIF(last_name, ''), display_name) ASC, display_name ASC`,
     [userId],
   );
   return rows;
 }
 
 async function getContactById(contactId, userId) {
+  // Detail/edit path includes archived rows so the user can restore them
+  // from the detail view if they archived in error.
   const { rows } = await pool.query(
     `SELECT ${CONTACT_FIELDS}
      FROM contacts WHERE id = $1 AND user_id = $2`,
@@ -9462,18 +9497,31 @@ async function getContactById(contactId, userId) {
 }
 
 async function createContact(userId, data) {
-  const { displayName, primaryEmail, primaryPhone, company, role, notes, linkedUserId, source } = data || {};
+  const {
+    displayName, firstName, lastName,
+    primaryEmail, primaryPhone, company, role, notes,
+    linkedUserId, source,
+    sourceImageBlobId, rawOcrText,
+  } = data || {};
+  // displayName remains the only hard-required field. OCR commonly
+  // extracts firstName+lastName but not always cleanly; manual entry
+  // commonly has only a display name. Tool-layer derives display_name
+  // from first+last when caller omits it (see tools.cjs::create_contact).
   if (!displayName) throw new Error('displayName required');
   const { rows } = await pool.query(
     `INSERT INTO contacts
-       (user_id, display_name, primary_email, primary_phone, company, role, notes, linked_user_id, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (user_id, display_name, first_name, last_name,
+        primary_email, primary_phone, company, role, notes,
+        linked_user_id, source, source_image_blob_id, raw_ocr_text)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING ${CONTACT_FIELDS}`,
     [
       userId, displayName,
+      firstName || null, lastName || null,
       primaryEmail ? String(primaryEmail).toLowerCase() : null,
       primaryPhone || null, company || null, role || null, notes || null,
       linkedUserId || null, source || null,
+      sourceImageBlobId || null, rawOcrText || null,
     ],
   );
   return rows[0];
@@ -9485,6 +9533,8 @@ async function updateContact(contactId, userId, patch) {
   let i = 3;
   const map = {
     displayName: 'display_name',
+    firstName: 'first_name',
+    lastName: 'last_name',
     primaryEmail: 'primary_email',
     primaryPhone: 'primary_phone',
     company: 'company',
@@ -9492,6 +9542,8 @@ async function updateContact(contactId, userId, patch) {
     notes: 'notes',
     linkedUserId: 'linked_user_id',
     source: 'source',
+    sourceImageBlobId: 'source_image_blob_id',
+    rawOcrText: 'raw_ocr_text',
   };
   for (const [k, col] of Object.entries(map)) {
     if (patch[k] === undefined) continue;
@@ -9511,9 +9563,24 @@ async function updateContact(contactId, userId, patch) {
   return rows[0] || null;
 }
 
+// 2026-05-26 — deleteContact is now soft delete (archive). The hard
+// delete path is gone from the route layer; if a hard delete is ever
+// needed for compliance, expose a separate helper rather than
+// repurposing this one. Returns true when a row flipped (not already
+// archived); idempotent re-archives return false.
 async function deleteContact(contactId, userId) {
   const r = await pool.query(
-    `DELETE FROM contacts WHERE id = $1 AND user_id = $2`,
+    `UPDATE contacts SET archived_at = NOW(), updated_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND archived_at IS NULL`,
+    [contactId, userId],
+  );
+  return r.rowCount > 0;
+}
+
+async function restoreContact(contactId, userId) {
+  const r = await pool.query(
+    `UPDATE contacts SET archived_at = NULL, updated_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND archived_at IS NOT NULL`,
     [contactId, userId],
   );
   return r.rowCount > 0;
@@ -10691,6 +10758,7 @@ module.exports = {
   createContact,
   updateContact,
   deleteContact,
+  restoreContact,
   resolveContactByEmail,
   resolveContactByName,
   addContactIdentity,

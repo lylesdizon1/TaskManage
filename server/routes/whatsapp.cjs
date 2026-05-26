@@ -87,6 +87,24 @@ function renderConfirmationBody(tool, params) {
       ? `Save as note${fromPhoto}: "${title}"\n\n${excerpt}`
       : `Save as note${fromPhoto}: "${title}"`;
   }
+  if (tool === 'create_contact') {
+    // OCR'd business cards confirm via WhatsApp text. Render the
+    // extracted fields in a compact card-like layout so the user can
+    // verify before saving. display_name fallback follows the same
+    // derivation rule as the executor (first+last → company →
+    // 'New contact').
+    const first = p.first_name ? String(p.first_name).trim() : '';
+    const last  = p.last_name  ? String(p.last_name).trim()  : '';
+    const joinedName = [first, last].filter(Boolean).join(' ');
+    const name = p.display_name || joinedName || p.company || 'New contact';
+    const roleLine = [p.role, p.company].filter(Boolean).join(' · ');
+    const contactLine = [p.primary_email, p.primary_phone].filter(Boolean).join(' · ');
+    const fromPhoto = p.image_blob_id ? ' (from photo)' : '';
+    const lines = [`Save as contact${fromPhoto}:`, `  ${name}`];
+    if (roleLine)    lines.push(`  ${roleLine}`);
+    if (contactLine) lines.push(`  ${contactLine}`);
+    return lines.join('\n');
+  }
   // Defensive — any future gated tool without a dedicated render lands
   // here. Better than the bare tool name (which is what the user would
   // have seen on the capture_from_image misfire before Bug 1 was fixed).
@@ -450,7 +468,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // save tools yet (Commits B and C) — describe the extracted
       // fields and say the dedicated save will land soon.
       const imageInstructions = imageData
-        ? `\n\n## IMAGE RECEIVED\nAn image arrived with this message. image_blob_id = "${imageBlobId || ''}".\n\nCall capture_from_image EXACTLY ONCE with image_blob_id="${imageBlobId || ''}" to classify and extract structured content. Then act:\n  - classification=document, confidence >= 0.5: call create_note with title + content from the extracted document data and pass image_blob_id="${imageBlobId || ''}" (this routes through the YES/NO confirmation gate).\n  - classification=business_card: surface the extracted fields and tell the user contact saving lands in the next commit. Don't call create_note here — it would land in notes instead of contacts.\n  - classification=food: surface the extracted items and tell the user food logging lands in an upcoming commit. Don't save.\n  - classification=unclear OR confidence < 0.5: describe what you see briefly and ask the user what to do — don't save.\n\nIf the user sent a message ALONG with the image, treat that message as additional intent context. If only an image, classify and act per the rules above.`
+        ? `\n\n## IMAGE RECEIVED\nAn image arrived with this message. image_blob_id = "${imageBlobId || ''}".\n\nCall capture_from_image EXACTLY ONCE with image_blob_id="${imageBlobId || ''}" to classify and extract structured content. Then act:\n  - classification=document, confidence >= 0.5: call create_note with title + content from the extracted document data and pass image_blob_id="${imageBlobId || ''}" (this routes through the YES/NO confirmation gate).\n  - classification=business_card, confidence >= 0.5: call create_contact with the extracted fields (first_name, last_name, primary_email, primary_phone, company, role) AND pass image_blob_id="${imageBlobId || ''}", source="business_card_ocr", raw_ocr_text=<the OCR text>. If extraction returned a duplicate=true error, follow up with update_contact instead — the existing contact's id will be available via list_contacts. Routes through the YES/NO confirmation gate.\n  - classification=food: surface the extracted items and tell the user food logging lands in an upcoming commit. Don't save.\n  - classification=unclear OR confidence < 0.5: describe what you see briefly and ask the user what to do — don't save.\n\nIf the user sent a message ALONG with the image, treat that message as additional intent context. If only an image, classify and act per the rules above.`
         : '';
       // Backstop for the schema filter above — even though capture_from_image
       // is removed from the schema when no image is attached, the prompt

@@ -79,25 +79,41 @@ export default function PeoplePanel({ apiFetch, authToken }) {
 }
 
 function NewContactForm({ apiFetch, authToken, onCancel, onCreated }) {
+  // 2026-05-26 — added first/last name fields. display_name remains
+  // canonical (UI list rendering, sort key fallback); first/last are
+  // optional structured fields populated by OCR or by the user when
+  // they want directory sorting by last name. Server derives a final
+  // display_name from first+last when display_name is empty.
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [company, setCompany] = useState('');
   const [role, setRole] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
   const save = async () => {
-    const name = displayName.trim();
-    if (!name) { setError('Name is required'); return; }
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    const dn = displayName.trim();
+    const co = company.trim();
+    // Server enforces the same rule. UI catches early so the user
+    // doesn't have to round-trip an error for an empty form.
+    if (!dn && !fn && !ln && !co) { setError('Need a name or company'); return; }
     setSaving(true); setError(null);
     try {
       const r = await apiFetch('/api/contacts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
-          display_name: name,
+          display_name: dn || null,
+          first_name: fn || null,
+          last_name: ln || null,
           primary_email: email.trim() || null,
-          company: company.trim() || null,
+          primary_phone: phone.trim() || null,
+          company: co || null,
           role: role.trim() || null,
         }),
       });
@@ -111,9 +127,15 @@ function NewContactForm({ apiFetch, authToken, onCancel, onCreated }) {
   return (
     <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, marginBottom: 12 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <input autoFocus value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (required)"
+        <input autoFocus value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name"
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
+        <input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name"
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
+        <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (auto if blank)"
           style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Primary email"
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone"
           style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
         <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company"
           style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
@@ -129,6 +151,31 @@ function NewContactForm({ apiFetch, authToken, onCancel, onCreated }) {
       </div>
     </div>
   );
+}
+
+// Auth'd image fetcher — image_blobs requires bearer token, and <img>
+// tags can't send Authorization headers, so we fetch the blob, wrap it
+// as an object URL, and feed that to <img>. Returns null while loading
+// or on failure (parent renders nothing).
+function useAuthBlobUrl(apiFetch, authToken, blobId) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!blobId) { setUrl(null); return; }
+    let cancelled = false;
+    let objectUrl = null;
+    (async () => {
+      try {
+        const r = await apiFetch(`/api/image-blobs/${encodeURIComponent(blobId)}`, { headers: { Authorization: `Bearer ${authToken}` } });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const blob = await r.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      } catch { /* silent — parent renders nothing on failure */ }
+    })();
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [apiFetch, authToken, blobId]);
+  return url;
 }
 
 function ContactRow({ contact, apiFetch, authToken, onChange }) {
@@ -177,14 +224,19 @@ function ContactRow({ contact, apiFetch, authToken, onChange }) {
     } catch {} finally { setNoteSaving(false); }
   };
 
-  const remove = async () => {
-    if (!window.confirm(`Delete contact "${contact.displayName}"?`)) return;
+  // Server now soft-deletes (sets archived_at). UI verb is "Archive"
+  // for accuracy. Restore path lives in the detail view of archived
+  // contacts — Phase 1 doesn't show archived rows in the list, so
+  // restore surfaces via a /people?archived=1 view in Phase 1.5.
+  const archive = async () => {
+    if (!window.confirm(`Archive contact "${contact.displayName}"? You can restore them later.`)) return;
     try {
-      await apiFetch(`/api/contacts/${contact.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+      await apiFetch(`/api/contacts/${contact.id}/archive`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } });
       onChange?.();
     } catch {}
   };
 
+  const sourceImageUrl = useAuthBlobUrl(apiFetch, authToken, detail?.contact?.sourceImageBlobId);
   const companyRole = [contact.company, contact.role].filter(Boolean).join(' · ');
 
   return (
@@ -218,6 +270,16 @@ function ContactRow({ contact, apiFetch, authToken, onChange }) {
             />
           ) : (
             <>
+              {/* Source photo — only when this contact was captured via OCR */}
+              {detail.contact.sourceImageBlobId && sourceImageUrl && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Source photo</div>
+                  <a href={sourceImageUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', border: '1px solid #e5e7eb', borderRadius: 6, overflow: 'hidden', maxWidth: 160 }} title="View full size">
+                    <img src={sourceImageUrl} alt="Business card source" style={{ display: 'block', maxWidth: '100%', maxHeight: 120 }} />
+                  </a>
+                </div>
+              )}
+
               {/* Facts */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Facts</div>
@@ -270,7 +332,7 @@ function ContactRow({ contact, apiFetch, authToken, onChange }) {
               {/* Actions */}
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid #f3f4f6', paddingTop: 8 }}>
                 <button onClick={() => setEditing(true)} style={{ fontSize: 11, color: '#4f4dcf', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Edit</button>
-                <button onClick={remove} style={{ fontSize: 11, color: '#dc2626', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Delete</button>
+                <button onClick={archive} style={{ fontSize: 11, color: '#dc2626', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Archive</button>
               </div>
             </>
           )}
@@ -281,8 +343,11 @@ function ContactRow({ contact, apiFetch, authToken, onChange }) {
 }
 
 function EditContactForm({ contact, apiFetch, authToken, onCancel, onSaved }) {
+  const [firstName, setFirstName] = useState(contact.firstName || '');
+  const [lastName, setLastName] = useState(contact.lastName || '');
   const [displayName, setDisplayName] = useState(contact.displayName || '');
   const [email, setEmail] = useState(contact.primaryEmail || '');
+  const [phone, setPhone] = useState(contact.primaryPhone || '');
   const [company, setCompany] = useState(contact.company || '');
   const [role, setRole] = useState(contact.role || '');
   const [notes, setNotes] = useState(contact.notes || '');
@@ -290,15 +355,19 @@ function EditContactForm({ contact, apiFetch, authToken, onCancel, onSaved }) {
   const [error, setError] = useState(null);
 
   const save = async () => {
-    if (!displayName.trim()) { setError('Name is required'); return; }
+    const dn = displayName.trim();
+    if (!dn) { setError('Display name is required'); return; }
     setSaving(true); setError(null);
     try {
       const r = await apiFetch(`/api/contacts/${contact.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
-          display_name: displayName.trim(),
+          display_name: dn,
+          first_name: firstName.trim() || null,
+          last_name: lastName.trim() || null,
           primary_email: email.trim() || null,
+          primary_phone: phone.trim() || null,
           company: company.trim() || null,
           role: role.trim() || null,
           notes: notes.trim() || null,
@@ -314,9 +383,15 @@ function EditContactForm({ contact, apiFetch, authToken, onCancel, onSaved }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name"
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
+        <input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name"
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
         <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name"
           style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Primary email"
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone"
           style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
         <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company"
           style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />

@@ -380,18 +380,23 @@ const ARIA_TOOLS = [
     group: 'people',
     risk: 'low',
     requires_confirmation: false,
-    description: 'Create a new contact.',
+    description: 'Create a new contact. Pass image_blob_id when creating from a captured business card so the source image attaches to the contact (and the call gets gated for user confirmation). Provide first_name + last_name when extractable from OCR; display_name will be derived from them if you omit it.',
     input_schema: {
       type: 'object',
       properties: {
-        display_name:  { type: 'string' },
-        primary_email: { type: 'string' },
-        primary_phone: { type: 'string' },
-        company:       { type: 'string' },
-        role:          { type: 'string' },
-        notes:         { type: 'string' },
+        display_name:    { type: 'string', description: 'Optional if first_name + last_name are provided — derived as "First Last".' },
+        first_name:      { type: 'string' },
+        last_name:       { type: 'string' },
+        primary_email:   { type: 'string' },
+        primary_phone:   { type: 'string' },
+        company:         { type: 'string' },
+        role:            { type: 'string' },
+        notes:           { type: 'string' },
+        source:          { type: 'string', enum: ['manual', 'aria', 'business_card_ocr', 'calendar_sync'], description: 'Provenance tag. Set "business_card_ocr" when called from a capture_from_image business_card classification.' },
+        image_blob_id:   { type: 'string', description: 'Optional: id of an image_blob this contact was captured from. Presence triggers user confirmation gate.' },
+        raw_ocr_text:    { type: 'string', description: 'Optional: verbatim OCR text from the source card. Preserved for downstream search.' },
       },
-      required: ['display_name'],
+      required: [],
     },
   },
   {
@@ -399,13 +404,16 @@ const ARIA_TOOLS = [
     group: 'people',
     risk: 'low',
     requires_confirmation: false,
-    description: 'Update an existing contact.',
+    description: 'Update an existing contact. Pass only the fields to change.',
     input_schema: {
       type: 'object',
       properties: {
         contact_id:    { type: 'string' },
         display_name:  { type: 'string' },
+        first_name:    { type: 'string' },
+        last_name:     { type: 'string' },
         primary_email: { type: 'string' },
+        primary_phone: { type: 'string' },
         company:       { type: 'string' },
         role:          { type: 'string' },
         notes:         { type: 'string' },
@@ -2727,23 +2735,65 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
       }
 
       case 'create_contact': {
-        if (!toolInput.display_name) {
-          return { success: false, error: 'display_name is required' };
+        // Acceptance rule (per Commit B spec): at least one of
+        // {first_name, last_name, company, primary_email, display_name}
+        // must be populated. The DB layer hard-requires display_name,
+        // so derive it from first+last when caller omitted it. Falling
+        // back to company is acceptable for "ACME Corp" cards with no
+        // person on them.
+        const firstName = toolInput.first_name ? String(toolInput.first_name).trim() : null;
+        const lastName  = toolInput.last_name  ? String(toolInput.last_name).trim()  : null;
+        let displayName = toolInput.display_name ? String(toolInput.display_name).trim() : null;
+        if (!displayName) {
+          const joined = [firstName, lastName].filter(Boolean).join(' ').trim();
+          if (joined) displayName = joined;
+          else if (toolInput.company) displayName = String(toolInput.company).trim();
+        }
+        if (!displayName) {
+          return { success: false, error: 'Need at least a display_name, first/last name, or company to save a contact.' };
         }
         try {
           const contact = await db.createContact(userId, {
-            displayName: String(toolInput.display_name).trim(),
+            displayName,
+            firstName,
+            lastName,
             primaryEmail: toolInput.primary_email || null,
             primaryPhone: toolInput.primary_phone || null,
-            company: toolInput.company || null,
-            role: toolInput.role || null,
-            notes: toolInput.notes || null,
-            source: 'aria',
+            company:      toolInput.company || null,
+            role:         toolInput.role || null,
+            notes:        toolInput.notes || null,
+            // OCR call sets source='business_card_ocr' explicitly. Manual
+            // tool-call paths from Aria default to 'aria' for back-compat
+            // with the existing tag taxonomy.
+            source:       toolInput.source || 'aria',
+            sourceImageBlobId: toolInput.image_blob_id || null,
+            rawOcrText:        toolInput.raw_ocr_text || null,
           });
-          return { success: true, contact_id: contact.id, display_name: contact.displayName };
+          try {
+            await db.logMemory({
+              userId,
+              tool: 'create_contact',
+              content: `Created contact: "${contact.displayName}"${contact.company ? ` (${contact.company})` : ''}`,
+              metadata: {
+                contact_id: contact.id,
+                source: contact.source,
+                image_blob_id: contact.sourceImageBlobId || null,
+              },
+            });
+          } catch {}
+          return {
+            success: true,
+            contact_id: contact.id,
+            display_name: contact.displayName,
+            url: `/people`,
+          };
         } catch (e) {
           if (e.code === '23505') {
-            return { success: false, error: 'A contact with this email already exists' };
+            // Existing partial UNIQUE on (user_id, LOWER(primary_email))
+            // produces 23505 when an OCR card matches an existing email.
+            // Aria sees this and can offer an update_contact follow-up
+            // (Q5 from the OCR Phase 2 spec — "offer update" path).
+            return { success: false, error: 'A contact with this email already exists. Use update_contact to add fields instead.', duplicate: true };
           }
           return { success: false, error: e.message };
         }
@@ -2756,11 +2806,14 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         const existing = await db.getContactById(toolInput.contact_id, userId);
         if (!existing) return { success: false, error: 'Contact not found' };
         const patch = {};
-        if (toolInput.display_name !== undefined) patch.displayName = toolInput.display_name;
+        if (toolInput.display_name !== undefined)  patch.displayName  = toolInput.display_name;
+        if (toolInput.first_name !== undefined)    patch.firstName    = toolInput.first_name || null;
+        if (toolInput.last_name !== undefined)     patch.lastName     = toolInput.last_name || null;
         if (toolInput.primary_email !== undefined) patch.primaryEmail = toolInput.primary_email || null;
-        if (toolInput.company !== undefined) patch.company = toolInput.company || null;
-        if (toolInput.role !== undefined) patch.role = toolInput.role || null;
-        if (toolInput.notes !== undefined) patch.notes = toolInput.notes || null;
+        if (toolInput.primary_phone !== undefined) patch.primaryPhone = toolInput.primary_phone || null;
+        if (toolInput.company !== undefined)       patch.company      = toolInput.company || null;
+        if (toolInput.role !== undefined)          patch.role         = toolInput.role || null;
+        if (toolInput.notes !== undefined)         patch.notes        = toolInput.notes || null;
         try {
           const contact = await db.updateContact(toolInput.contact_id, userId, patch);
           return { success: true, contact_id: contact.id, display_name: contact.displayName };

@@ -53,17 +53,32 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
     try {
       const {
         display_name: displayName,
+        first_name: firstName,
+        last_name: lastName,
         primary_email: primaryEmail,
         primary_phone: primaryPhone,
         company, role, notes,
         linked_user_id: linkedUserId,
         source,
+        source_image_blob_id: sourceImageBlobId,
+        raw_ocr_text: rawOcrText,
       } = req.body || {};
-      if (!displayName || !String(displayName).trim()) {
-        return res.status(400).json({ error: 'display_name required' });
+      // Spec acceptance rule: any one of {display_name, first_name+last_name,
+      // company, email} is enough. UI's "+ New Contact" form still
+      // requires display_name; OCR path may supply first/last only.
+      let finalDisplay = displayName ? String(displayName).trim() : null;
+      if (!finalDisplay) {
+        const joined = [firstName, lastName].filter(Boolean).map(s => String(s).trim()).filter(Boolean).join(' ');
+        if (joined) finalDisplay = joined;
+        else if (company) finalDisplay = String(company).trim();
+      }
+      if (!finalDisplay) {
+        return res.status(400).json({ error: 'Need at least display_name, first/last name, or company.' });
       }
       const contact = await db.createContact(req.user.id, {
-        displayName: String(displayName).trim(),
+        displayName: finalDisplay,
+        firstName: firstName ? String(firstName).trim() : null,
+        lastName:  lastName  ? String(lastName).trim()  : null,
         primaryEmail: primaryEmail || null,
         primaryPhone: primaryPhone || null,
         company: company || null,
@@ -71,6 +86,8 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
         notes: notes || null,
         linkedUserId: linkedUserId || null,
         source: source || 'manual',
+        sourceImageBlobId: sourceImageBlobId || null,
+        rawOcrText: rawOcrText || null,
       });
       res.json({ contact });
     } catch (err) {
@@ -103,6 +120,8 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       const patch = {};
       const b = req.body || {};
       if (b.display_name !== undefined) patch.displayName = b.display_name;
+      if (b.first_name !== undefined)   patch.firstName   = b.first_name || null;
+      if (b.last_name !== undefined)    patch.lastName    = b.last_name || null;
       if (b.primary_email !== undefined) patch.primaryEmail = b.primary_email || null;
       if (b.primary_phone !== undefined) patch.primaryPhone = b.primary_phone || null;
       if (b.company !== undefined) patch.company = b.company || null;
@@ -121,6 +140,11 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
     }
   });
 
+  // DELETE is now soft delete — flips archived_at. Hard delete is
+  // intentionally not exposed. Restore via the dedicated route below.
+  // Existing UI consumers calling DELETE continue to work (the operation
+  // returns the same 200 shape); they just see archived rows disappear
+  // from list responses, same user-visible behavior as before.
   router.delete('/api/contacts/:id', authenticateToken, async (req, res) => {
     try {
       const existing = await db.getContactById(req.params.id, req.user.id);
@@ -129,6 +153,32 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
       res.json({ success: true });
     } catch (err) {
       logger.error('contacts.delete.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Explicit archive route (alias of DELETE for UI clarity — "Archive"
+  // button calls this so the verb matches the user-visible action).
+  router.post('/api/contacts/:id/archive', authenticateToken, async (req, res) => {
+    try {
+      const existing = await db.getContactById(req.params.id, req.user.id);
+      if (!existing) return res.status(404).json({ error: 'Contact not found' });
+      await db.deleteContact(req.params.id, req.user.id);
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('contacts.archive.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.post('/api/contacts/:id/restore', authenticateToken, async (req, res) => {
+    try {
+      const existing = await db.getContactById(req.params.id, req.user.id);
+      if (!existing) return res.status(404).json({ error: 'Contact not found' });
+      const ok = await db.restoreContact(req.params.id, req.user.id);
+      res.json({ success: ok });
+    } catch (err) {
+      logger.error('contacts.restore.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: 'Internal server error' });
     }
   });
