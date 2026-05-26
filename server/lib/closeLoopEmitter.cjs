@@ -50,8 +50,16 @@ async function emitCloseLoop(userId, sourceType, sourceId, titleSnapshot) {
 async function sweepEventCloseLoops(userId) {
   try {
     if (!userId) return 0;
+    // 2026-05-26 (Path C) — multi-account calendars produce N ce rows
+    // per logical meeting. Without DISTINCT ON, the sweep would attempt
+    // N inserts per meeting; pending_close_loop's UNIQUE constraint
+    // makes the 2nd/Nth inserts no-op so behavior is correct, but
+    // emitCloseLoop's logger reports N spurious "emitted" entries.
+    // DISTINCT ON keeps the audit log honest and saves N-1 inserts per
+    // meeting on busy sweeps.
     const { rows } = await db.pool.query(
-      `SELECT ce.id, ce.title FROM calendar_events ce
+      `SELECT DISTINCT ON (ce.user_id, ce.id) ce.id, ce.title
+       FROM calendar_events ce
        LEFT JOIN calendar_notes cn
          ON cn.user_id = ce.user_id AND cn.event_id = ce.id AND cn.post_note IS NOT NULL
        LEFT JOIN pending_close_loop pcl
@@ -61,7 +69,8 @@ async function sweepEventCloseLoops(userId) {
          AND ce.end_time > NOW() - INTERVAL '24 hours'
          AND ce.all_day = false
          AND cn.id IS NULL
-         AND pcl.id IS NULL`,
+         AND pcl.id IS NULL
+       ORDER BY ce.user_id, ce.id, ce.synced_at DESC`,
       [userId],
     );
     let emitted = 0;

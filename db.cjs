@@ -2746,18 +2746,34 @@ async function upsertCalendarEvents(userId, accountEmail, events) {
  * window. User-scoped — no cross-tenant access.
  */
 async function getCalendarEventsForUser(userId, startDate, endDate) {
+  // 2026-05-26 (Path C, Tier 3 calendar dedup) — multi-account users
+  // get N rows per logical meeting (one per Google account it's on).
+  // Same provider event id + same user means same meeting, so collapse
+  // via DISTINCT ON (user_id, id). Tiebreaker: most recently synced row
+  // wins (deterministic; all other fields are identical for same id).
+  // Cross-provider dedup (Outlook + GCal same physical meeting) is a
+  // separate concern handled by future canonical work.
+  //
+  // DISTINCT ON requires its keys to lead the ORDER BY, so the
+  // consumer-facing start_time sort wraps the deduplicated subquery.
   const { rows } = await pool.query(
-    `SELECT id, user_id AS "userId",
-            account_email AS "accountEmail",
-            title, start_time AS "startTime",
-            end_time AS "endTime",
-            all_day AS "allDay", location, description,
-            entity_id AS "entityId"
-     FROM calendar_events
-     WHERE user_id = $1
-       AND start_time >= $2
-       AND start_time < $3
-     ORDER BY start_time ASC`,
+    `SELECT id, "userId", "accountEmail", title, "startTime", "endTime",
+            "allDay", location, description, "entityId"
+     FROM (
+       SELECT DISTINCT ON (user_id, id)
+              id, user_id AS "userId",
+              account_email AS "accountEmail",
+              title, start_time AS "startTime",
+              end_time AS "endTime",
+              all_day AS "allDay", location, description,
+              entity_id AS "entityId"
+       FROM calendar_events
+       WHERE user_id = $1
+         AND start_time >= $2
+         AND start_time < $3
+       ORDER BY user_id, id, synced_at DESC
+     ) deduped
+     ORDER BY "startTime" ASC`,
     [userId, startDate, endDate],
   );
   return rows;
@@ -2794,38 +2810,45 @@ async function getMeetingsNeedingNotes(userId) {
   //   (b) a standalone note was created around the meeting window whose
   //       title/content mentions the event title (legacy / heuristic fallback
   //       for meetings captured before the dedicated flow existed).
+  // 2026-05-26 (Path C) — same multi-account dedup as
+  // getCalendarEventsForUser. Without DISTINCT ON, a single ended
+  // meeting on N accounts surfaces N "needs notes" rows.
   const { rows } = await pool.query(
-    `SELECT
-       ce.id,
-       ce.user_id AS "userId",
-       ce.account_email AS "accountEmail",
-       ce.title,
-       ce.start_time AS "startTime",
-       ce.end_time AS "endTime",
-       ce.entity_id AS "entityId"
-     FROM calendar_events ce
-     WHERE ce.user_id = $1
-       AND ce.end_time < NOW()
-       AND ce.end_time > NOW() - INTERVAL '4 hours'
-       AND ce.all_day = FALSE
-       AND NOT EXISTS (
-         SELECT 1 FROM calendar_notes cn
-         WHERE cn.user_id = $1
-           AND cn.event_id = ce.id
-           AND cn.post_note IS NOT NULL
-           AND cn.post_note <> ''
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM notes n
-         WHERE n.user_id = $1
-           AND n.created_at > ce.start_time
-           AND n.created_at < ce.end_time + INTERVAL '2 hours'
-           AND (
-             n.content ILIKE '%' || ce.title || '%'
-             OR n.title   ILIKE '%' || ce.title || '%'
-           )
-       )
-     ORDER BY ce.end_time DESC
+    `SELECT id, "userId", "accountEmail", title, "startTime", "endTime", "entityId"
+     FROM (
+       SELECT DISTINCT ON (ce.user_id, ce.id)
+         ce.id,
+         ce.user_id AS "userId",
+         ce.account_email AS "accountEmail",
+         ce.title,
+         ce.start_time AS "startTime",
+         ce.end_time AS "endTime",
+         ce.entity_id AS "entityId"
+       FROM calendar_events ce
+       WHERE ce.user_id = $1
+         AND ce.end_time < NOW()
+         AND ce.end_time > NOW() - INTERVAL '4 hours'
+         AND ce.all_day = FALSE
+         AND NOT EXISTS (
+           SELECT 1 FROM calendar_notes cn
+           WHERE cn.user_id = $1
+             AND cn.event_id = ce.id
+             AND cn.post_note IS NOT NULL
+             AND cn.post_note <> ''
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM notes n
+           WHERE n.user_id = $1
+             AND n.created_at > ce.start_time
+             AND n.created_at < ce.end_time + INTERVAL '2 hours'
+             AND (
+               n.content ILIKE '%' || ce.title || '%'
+               OR n.title   ILIKE '%' || ce.title || '%'
+             )
+         )
+       ORDER BY ce.user_id, ce.id, ce.synced_at DESC
+     ) deduped
+     ORDER BY "endTime" DESC
      LIMIT 5`,
     [userId],
   );
@@ -9112,6 +9135,12 @@ async function getCalendarNotesForAI(userId) {
   // passes null for event_start/title/end) still surface by falling back
   // to canonical event metadata. COALESCE picks note-side values first
   // so legacy rows with their own denormalized copy still work.
+  // 2026-05-26 (Path C) — LEFT JOIN to calendar_events fans out when
+  // the same event_id is on N user accounts. cn rows are unique per
+  // (user_id, event_id) so the dedup belongs to the join, not the
+  // outer SELECT. LATERAL with LIMIT 1 picks the most recently synced
+  // ce row deterministically; all other ce fields are identical for
+  // same (user_id, id).
   const { rows } = await pool.query(
     `SELECT cn.event_id AS "eventId",
             COALESCE(NULLIF(cn.event_title, ''), ce.title) AS "eventTitle",
@@ -9121,8 +9150,13 @@ async function getCalendarNotesForAI(userId) {
             cn.pre_note  AS "preNote",
             cn.post_note AS "postNote"
      FROM calendar_notes cn
-     LEFT JOIN calendar_events ce
-       ON ce.id = cn.event_id AND ce.user_id = cn.user_id
+     LEFT JOIN LATERAL (
+       SELECT title, start_time, end_time
+       FROM calendar_events
+       WHERE id = cn.event_id AND user_id = cn.user_id
+       ORDER BY synced_at DESC
+       LIMIT 1
+     ) ce ON TRUE
      WHERE cn.user_id = $1
        AND (cn.pre_note IS NOT NULL OR cn.post_note IS NOT NULL)
        AND COALESCE(cn.event_start, ce.start_time, NOW()) >= NOW() - INTERVAL '7 days'
@@ -10104,6 +10138,16 @@ async function getOpenCloseLoopItems(userId, localMidnightUtc, limit = 5) {
   // exist across users), so the events JOIN must include user_id match.
   // tasks.description defaults to '' — render-site guards on truthy string
   // so empty descriptions don't surface a stray italic block.
+  //
+  // 2026-05-26 (Path C, primary fix) — pending_close_loop has one row
+  // per logical meeting (UNIQUE on user_id, source_type, source_id),
+  // but the plain LEFT JOIN to calendar_events fanned out when the
+  // same provider event id existed on N user accounts. Result: one
+  // pcl row × N calendar_events rows = N output rows for the same
+  // close-loop. User-visible 3x ("Careific: Standup Call Wed 9 PM"
+  // surfaced 3× in close-loop). Fix: LATERAL with LIMIT 1 guarantees
+  // exactly one ce row per outer row; all ce fields are identical
+  // across same-id rows so the pick is arbitrary by data.
   const { rows } = await pool.query(
     `SELECT pcl.id,
             pcl.user_id          AS "userId",
@@ -10118,7 +10162,15 @@ async function getOpenCloseLoopItems(userId, localMidnightUtc, limit = 5) {
             t.description                         AS "sourceDescription"
        FROM pending_close_loop pcl
        LEFT JOIN tasks           t  ON pcl.source_type = 'task'         AND t.id  = pcl.source_id
-       LEFT JOIN calendar_events ce ON pcl.source_type = 'event'        AND ce.id = pcl.source_id AND ce.user_id = pcl.user_id
+       LEFT JOIN LATERAL (
+         SELECT start_time
+         FROM calendar_events
+         WHERE pcl.source_type = 'event'
+           AND id = pcl.source_id
+           AND user_id = pcl.user_id
+         ORDER BY synced_at DESC
+         LIMIT 1
+       ) ce ON TRUE
        LEFT JOIN project_tasks   pt ON pcl.source_type = 'project_task' AND pt.id = pcl.source_id
       WHERE pcl.user_id = $1
         AND pcl.resolved_at IS NULL
