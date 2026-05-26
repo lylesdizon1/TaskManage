@@ -133,7 +133,7 @@ async function enrichJournalEntry(userId, entry) {
       const fact = raw.trim().slice(0, MAX_FACT_CHARS);
       if (!fact) continue;
       try {
-        await db.upsertMemoryFact(userId, null, fact, 'journal_pattern');
+        await db.upsertMemoryFact(userId, null, fact, 'journal_pattern', 'journal');
         factsWritten++;
       } catch (e) {
         logger.error('journal.enrichment.upsertMemoryFact.failed', {

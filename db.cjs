@@ -33,6 +33,7 @@
 
 const { Pool } = require('pg');
 const { DEFAULT_TIMEZONE } = require('./server/utils/timezone.cjs');
+const { assertSourceChannel } = require('./server/utils/sourceChannel.cjs');
 const logger = require('./guardrails/logger.cjs');
 
 const pool = new Pool({
@@ -7202,6 +7203,23 @@ async function runMigrations() {
   // Unique index required by upsertMemoryFact's ON CONFLICT (user_id, fact_text).
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_user_fact_unique ON memory_facts(user_id, fact_text)`).catch((err) => logger.warn('migration.warn', { label: 'memory_facts unique', error: err.message }));
 
+  // M1a (2026-05-26) — Memory Phase 2 infrastructure: track recall +
+  // recency for retrieval scoring (M2), and capture provenance via
+  // source_channel for audit. M1b extractor (held) will populate
+  // source_channel for the new conversation-turn path; existing
+  // extractors are updated in-place to populate it too.
+  await pool.query(`ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS access_count INTEGER DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source_channel TEXT`).catch(() => {});
+  // Retrieval read-path index (consumed by M2's getMemoryFactsForUser
+  // rewrite). Partial on global axis because contact-scoped rows have
+  // their own read path via getTopContactFacts.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS memory_facts_user_retrieval_idx
+    ON memory_facts (user_id, strength_score DESC, last_seen_at DESC)
+    WHERE contact_id IS NULL
+  `).catch((err) => logger.warn('migration.warn', { label: 'memory_facts retrieval idx', error: err.message }));
+
   // ── People Memory + Shared Access V1 ────────────────────────────────────
   // Schema for contacts, identities, shared access grants, and connections.
   // See docs/shared-access-and-people-memory-v1.md (TBD).
@@ -9798,19 +9816,24 @@ async function getConnectionByPeer(userId, peerUserId) {
 
 // ── Contact-scoped memory facts (targets the contact-scoped partial index) ──
 
-async function addContactFact(userId, contactId, factText, factType, strengthScore) {
+async function addContactFact(userId, contactId, factText, factType, strengthScore, sourceChannel /* M1a */) {
   if (!userId || !contactId || !factText) throw new Error('userId, contactId, factText required');
   const start = Number.isFinite(strengthScore) ? Math.max(0, Math.min(1, strengthScore)) : 0.5;
+  // M1a — accept source_channel symmetrically with upsertMemoryFact.
+  // Strict enum, null-tolerant for legacy paths. ON CONFLICT updates
+  // to latest channel so reinforcement reflects the most recent path.
+  const channel = assertSourceChannel(sourceChannel);
   await pool.query(
     `INSERT INTO memory_facts
-       (user_id, contact_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at)
-     VALUES ($1, $2, $3, $4, 1, $5, NOW(), NOW())
+       (user_id, contact_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at, source_channel)
+     VALUES ($1, $2, $3, $4, 1, $5, NOW(), NOW(), $6)
      ON CONFLICT (user_id, contact_id, fact_text) WHERE contact_id IS NOT NULL
      DO UPDATE SET
        supporting_count = memory_facts.supporting_count + 1,
        strength_score   = LEAST(1.0, memory_facts.strength_score + 0.1),
-       last_seen_at     = NOW()`,
-    [userId, contactId, factText, factType || null, start],
+       last_seen_at     = NOW(),
+       source_channel   = COALESCE(EXCLUDED.source_channel, memory_facts.source_channel)`,
+    [userId, contactId, factText, factType || null, start, channel],
   );
 }
 
@@ -10331,22 +10354,31 @@ async function updateOutcomeFollowUp(outcomeId, userId, followUpNeeded, suggesti
  * `source` is accepted for caller symmetry but not persisted — add a
  * source column later if provenance becomes important.
  */
-async function upsertMemoryFact(userId, entityId, factText, factType /*, source */) {
+async function upsertMemoryFact(userId, entityId, factText, factType, sourceChannel /* M1a */) {
   // NOTE: the global unique index on (user_id, fact_text) is partial
   // `WHERE contact_id IS NULL` so the ON CONFLICT inference needs the
   // matching predicate. Rows inserted here have contact_id NULL and so
   // target the global uniqueness axis only. Contact-scoped upserts live
   // in addContactFact() below.
+  //
+  // M1a (2026-05-26) — sourceChannel param replaces the prior commented
+  // `source` placeholder. Strict enum per memory-phase-2.md Q1: throws
+  // on typos, accepts null/undefined for legacy callers that haven't
+  // migrated. ON CONFLICT updates source_channel to the latest write
+  // so a fact reinforced from a different channel reflects its most
+  // recent provenance.
+  const channel = assertSourceChannel(sourceChannel);
   await pool.query(
     `INSERT INTO memory_facts
-       (user_id, entity_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at)
-     VALUES ($1, $2, $3, $4, 1, 0.5, NOW(), NOW())
+       (user_id, entity_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at, source_channel)
+     VALUES ($1, $2, $3, $4, 1, 0.5, NOW(), NOW(), $5)
      ON CONFLICT (user_id, fact_text) WHERE contact_id IS NULL
      DO UPDATE SET
        supporting_count = memory_facts.supporting_count + 1,
        strength_score   = LEAST(1.0, memory_facts.strength_score + 0.1),
-       last_seen_at     = NOW()`,
-    [userId, entityId, factText, factType],
+       last_seen_at     = NOW(),
+       source_channel   = COALESCE(EXCLUDED.source_channel, memory_facts.source_channel)`,
+    [userId, entityId, factText, factType, channel],
   );
 }
 

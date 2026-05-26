@@ -120,7 +120,7 @@ async function extractContactFacts(userId, contactId, contactName, noteContent) 
     }
 
     for (const fact of facts) {
-      await db.addContactFact(userId, contactId, fact, 'extracted', 0.7).catch((e) => {
+      await db.addContactFact(userId, contactId, fact, 'extracted', 0.7, 'contact_note').catch((e) => {
         // 23505 is expected when the same fact repeats — upsert handles
         // it internally, so any leak here is unusual.
         console.error('[contactFactExtractor] addContactFact failed:', e.message);

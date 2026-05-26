@@ -437,6 +437,28 @@ const ARIA_TOOLS = [
       required: ['contact_id', 'content'],
     },
   },
+
+  // ── MEMORY (M1a — explicit recall) ───────────────────────────────────
+  // remember_this lets the user explicitly stamp a fact into long-term
+  // memory. Persists at high strength (0.9) so the entry survives the
+  // weekly decay floor. Channel-agnostic — works from web chat,
+  // WhatsApp, future SMS identically. Non-gated: the user is the one
+  // invoking, so no double-confirmation.
+  {
+    name: 'remember_this',
+    group: 'memory',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Save a fact to long-term memory. Use when the user explicitly asks to remember something (\"remember that I...\", \"don't forget...\", \"keep in mind...\"). If content is omitted, save the previous user message verbatim.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        content:      { type: 'string', description: 'The fact text to save. If omitted, use the previous user message verbatim.' },
+        contact_name: { type: 'string', description: 'Optional: if the fact is about a specific person, the name to resolve to a contact.' },
+      },
+      required: [],
+    },
+  },
   {
     name: 'list_shared_access',
     group: 'people',
@@ -1276,7 +1298,11 @@ function buildRawMime({ to, from, subject, body, inReplyTo, references }) {
 
 // ── Tool execution ─────────────────────────────────────────────────────────
 
-async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
+async function executeTool(toolName, toolInput, userId, entityIds, db, tz, channel) {
+  // M1a (2026-05-26) — `channel` is the source_channel enum value
+  // captured by the route's boundExecuteTool closure ('web_chat' from
+  // ai.cjs, 'whatsapp' from whatsapp.cjs). Tools that persist to
+  // memory_facts use this for provenance; other tools ignore it.
   try {
     switch (toolName) {
       // ── TASKS ──────────────────────────────────────────────────────────
@@ -2833,7 +2859,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
         if (!existing) return { success: false, error: 'Contact not found' };
         const text = String(toolInput.content).trim();
         if (!text) return { success: false, error: 'content is empty' };
-        await db.addContactFact(userId, toolInput.contact_id, text, 'note', 0.5);
+        await db.addContactFact(userId, toolInput.contact_id, text, 'note', 0.5, 'contact_note');
         // Fire-and-forget fact extraction — never awaited, never blocks.
         try {
           const { extractContactFacts } = require('./lib/contactFactExtractor.cjs');
@@ -2841,6 +2867,63 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz) {
             .catch((err) => console.error('[tools] fact extract:', err.message));
         } catch { /* extractor unavailable → skip silently */ }
         return { success: true, contact_id: toolInput.contact_id };
+      }
+
+      // M1a (2026-05-26) — explicit user-stamped memory.
+      case 'remember_this': {
+        const text = String(toolInput?.content || '').trim();
+        if (!text) {
+          // Tool description tells the LLM to populate content from the
+          // previous user message when the user said "remember that".
+          // Empty here means the LLM didn't follow instructions; nudge
+          // back with a clear error rather than persist nothing.
+          return { success: false, error: 'remember_this requires content. If the user said "remember that", pass their statement as content.' };
+        }
+        // Optional contact resolution. Best-effort: ambiguous matches
+        // become a global memory_fact rather than blocking — the user's
+        // intent was to remember, not to disambiguate.
+        let contactId = null;
+        let contactName = null;
+        if (toolInput?.contact_name && typeof toolInput.contact_name === 'string') {
+          const q = toolInput.contact_name.trim();
+          if (q) {
+            try {
+              const matches = await db.searchContactsByName(userId, q, 5);
+              // Exact (case-insensitive) display_name match wins; otherwise
+              // fall back to global if 0 or >1 candidates.
+              const lc = q.toLowerCase();
+              const exact = (matches || []).filter((m) => (m.displayName || '').toLowerCase() === lc);
+              const pick = exact.length === 1 ? exact[0] : (matches?.length === 1 ? matches[0] : null);
+              if (pick) {
+                contactId = pick.id;
+                contactName = pick.displayName;
+              }
+            } catch (e) { console.error('[remember_this] contact resolve failed:', e.message); }
+          }
+        }
+        try {
+          if (contactId) {
+            await db.addContactFact(userId, contactId, text, 'explicit_remember', 0.9, 'explicit_remember');
+          } else {
+            await db.upsertMemoryFact(userId, null, text, 'explicit_remember', 'explicit_remember');
+          }
+          try {
+            await db.logMemory({
+              userId,
+              tool: 'remember_this',
+              content: `Remembered: "${text.length > 120 ? text.slice(0, 120) + '…' : text}"`,
+              metadata: { contact_id: contactId, contact_name: contactName, channel: channel || null },
+            });
+          } catch {}
+          return {
+            success: true,
+            fact_text: text,
+            contact_id: contactId,
+            contact_name: contactName,
+          };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
       }
 
       case 'list_shared_access': {

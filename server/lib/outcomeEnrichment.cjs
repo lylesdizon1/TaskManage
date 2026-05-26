@@ -119,7 +119,11 @@ Respond with JSON only. No markdown, no explanation.`;
     }
 
     if (parsed.memory_fact && String(parsed.memory_fact).trim()) {
-      await db.upsertMemoryFact(userId, null, String(parsed.memory_fact).trim(), 'pattern', MODEL)
+      // M1a — 5th arg is now source_channel (strict enum), not the
+      // legacy MODEL placeholder. MODEL passthrough was a comment-only
+      // placeholder that never persisted; provenance lives in the new
+      // column going forward.
+      await db.upsertMemoryFact(userId, null, String(parsed.memory_fact).trim(), 'pattern', 'outcome')
         .catch(() => {});
     }
 

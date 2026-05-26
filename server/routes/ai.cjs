@@ -464,7 +464,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       };
 
       const boundExecuteTool = (toolName, toolInput, uid) =>
-        executeTool(toolName, toolInput, uid, entityIds, db, tz);
+        executeTool(toolName, toolInput, uid, entityIds, db, tz, 'web_chat');
 
       const onProgress = ({ type, tool, input, result, error }) => {
         if (type === 'tool_start')    send('tool_start',    { tool, input });
@@ -625,6 +625,7 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         gateToolExecution,
         logAction,
         model,
+        channel: 'web_chat',
       });
       let { text, toolSummaries, maxIterationsReached } = loopResult;
 

@@ -59,7 +59,13 @@ function parseDecision(textBlocks) {
   return null;
 }
 
-async function runAgenticLoop({ messages, system, tools, userId, executeTool, onProgress, model, gateToolExecution, logAction }) {
+async function runAgenticLoop({ messages, system, tools, userId, executeTool, onProgress, model, gateToolExecution, logAction, channel }) {
+  // M1a (2026-05-26) — `channel` (one of the source_channel enum values,
+  // typically 'web_chat' or 'whatsapp') threaded through so tools can
+  // attribute writes to the originating surface (memory_facts.source_channel).
+  // Routes pass this in: ai.cjs → 'web_chat', whatsapp.cjs → 'whatsapp'.
+  // Undefined is acceptable (callers haven't migrated); the strict enum
+  // helper treats undefined as "no channel context".
   let currentMessages = [...messages];
   const toolSummaries = [];
   let iterations = 0;

@@ -481,7 +481,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
-        executeTool(toolName, toolInput, uid, entityIds, db, tz);
+        executeTool(toolName, toolInput, uid, entityIds, db, tz, 'whatsapp');
 
       // WhatsApp confirmation gate: for high-risk tools, stash the request,
       // send YES/NO prompt, and deny execution so the loop ends cleanly.
@@ -633,6 +633,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         executeTool: boundExecuteTool,
         gateToolExecution,
         logAction,
+        channel: 'whatsapp',
         // no onProgress — WhatsApp is fire-and-reply
       });
 
