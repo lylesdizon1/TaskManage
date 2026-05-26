@@ -2796,6 +2796,45 @@ async function deleteStaleCalendarEvents(userId, cutoffDate) {
 }
 
 /**
+ * Delete cached events for (userId, accountEmail) that fall in the sync
+ * window but are NOT in the set of IDs the provider just returned.
+ *
+ * Used by GCal + Outlook sync to clean up events that were removed or
+ * un-recurred on the provider side. Before this helper, recreated
+ * recurring series left orphaned instances stuck in cache forever
+ * (visible as duplicate close-loop entries — the May 2026 "Careific
+ * Standup Call" 3x bug).
+ *
+ * SAFETY: caller must guarantee `returnedIds` reflects a successful
+ * provider response. The helper itself does NOT delete when
+ * `returnedIds` is empty — an empty response is treated as suspect
+ * (could be a real empty window OR a transient provider blip) and we
+ * prefer leaving stale rows for a tick over nuking the cache. Real
+ * empty weeks self-heal on subsequent ticks once the user adds events.
+ *
+ * Window is half-open [startUtc, endUtc) to match the fetch window.
+ * Account scoping prevents one account's sync from deleting rows
+ * synced from a different account on the same user.
+ *
+ * Returns the count of rows deleted.
+ */
+async function deleteUnreturnedCalendarEvents(userId, accountEmail, startUtc, endUtc, returnedIds) {
+  if (!userId || !accountEmail) return 0;
+  if (!Array.isArray(returnedIds) || returnedIds.length === 0) return 0;
+  if (!(startUtc instanceof Date) || !(endUtc instanceof Date)) return 0;
+  const result = await pool.query(
+    `DELETE FROM calendar_events
+     WHERE user_id = $1
+       AND account_email = $2
+       AND start_time >= $3
+       AND start_time < $4
+       AND id <> ALL($5::text[])`,
+    [userId, accountEmail, startUtc.toISOString(), endUtc.toISOString(), returnedIds],
+  );
+  return result.rowCount || 0;
+}
+
+/**
  * Meetings that recently ended (in the last 4 hours) for which the user
  * has NOT already captured notes. "Captured" = a note exists whose
  * created_at falls within the meeting window + 2 hours and whose
@@ -10873,6 +10912,7 @@ module.exports = {
   upsertCalendarEvents,
   getCalendarEventsForUser,
   deleteStaleCalendarEvents,
+  deleteUnreturnedCalendarEvents,
   getUsersWithGcalConnected,
   getUsersWithOutlookConnected,
   getMeetingsNeedingNotes,

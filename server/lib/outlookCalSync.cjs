@@ -89,6 +89,23 @@ async function syncOutlookForUser(userId, tz, db) {
         console.log('[outlookCalSync] upserting', events.length, 'events under', taggedEmail);
         await db.upsertCalendarEvents(userId, taggedEmail, events);
 
+        // Drop cached rows Graph didn't return. Mirror of the GCal
+        // sync's stale cleanup (proxy-server.cjs::syncGcalForUser).
+        // Same safety: only run when response was non-empty.
+        if (events.length > 0) {
+          try {
+            const deleted = await db.deleteUnreturnedCalendarEvents(
+              userId, taggedEmail, timeMin, timeMax,
+              events.map((e) => e.id),
+            );
+            if (deleted > 0) {
+              logger.info('outlook-sync.staleDropped', { userId, accountEmail: taggedEmail, deleted });
+            }
+          } catch (delErr) {
+            logger.warn('outlook-sync.staleDrop.failed', { userId, accountEmail: taggedEmail, error: delErr.message });
+          }
+        }
+
         // Fire-and-forget contact ingestion for organizers. V1: organizer
         // only, never attendees. Dedup by (userId, email) happens in the
         // resolver via resolveContactByEmail → no-op on repeat syncs.

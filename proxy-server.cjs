@@ -588,6 +588,30 @@ async function syncGcalForUser(userId, tz) {
 
         await db.upsertCalendarEvents(userId, googleEmail, events);
 
+        // Drop cached rows in this window that Google didn't return.
+        // Without this, edited/replaced recurring series leave orphan
+        // instances stuck in cache forever (the May 2026 "Careific:
+        // Standup Call" 3x bug — three concurrent series IDs, two
+        // already abandoned upstream, no automatic cleanup).
+        //
+        // The helper itself guards against empty responses (treats as
+        // suspect — see deleteUnreturnedCalendarEvents docstring); the
+        // !events.length check here is belt-and-suspenders + saves a
+        // pointless DB roundtrip when Google returned zero events.
+        if (events.length > 0) {
+          try {
+            const deleted = await db.deleteUnreturnedCalendarEvents(
+              userId, googleEmail, timeMin, timeMax,
+              events.map((e) => e.id),
+            );
+            if (deleted > 0) {
+              cronLogger.info('gcal-sync.staleDropped', { userId, googleEmail, deleted });
+            }
+          } catch (delErr) {
+            cronLogger.warn('gcal-sync.staleDrop.failed', { userId, googleEmail, error: delErr.message });
+          }
+        }
+
         // Fire-and-forget contact ingestion for organizers. V1: organizer
         // only, never attendees. Resolver dedups so repeat syncs no-op.
         for (const ev of (res.data.items || [])) {
