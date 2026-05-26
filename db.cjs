@@ -8682,6 +8682,55 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
       timeStr = `${h12}:${String(m).padStart(2, '0')}${ampm}`;
     }
 
+    // 2026-05-26 (Gap 5 fix) — Compute a relative-day qualifier from
+    // fireAt → dueDt in user-tz. Pre-fix template said "due at 10am"
+    // with no day signal; a Monday-morning alert about a Tuesday-noon
+    // task read as "due today at 10am" to the user. Now: "due tomorrow
+    // at 10:00am" / "due today at 10:00am" / "due Tue at 10:00am" /
+    // "due May 31 at 10:00am" depending on lead time. Pure inline —
+    // Phase 2 may extract a helper once 3-4 callers want this pattern.
+    const dateKeyOf = (d) => new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(d);
+    const fireKey = dateKeyOf(fireAt);
+    const dueKey = dateKeyOf(dueDt);
+    const leadMs = dueDt.getTime() - fireAt.getTime();
+    let dayQualifier;
+    if (leadMs <= 60 * 1000) {
+      // Sub-minute lead (or 'at due time' cadence) → "due now".
+      dayQualifier = 'due now';
+    } else if (fireKey === dueKey) {
+      // Same user-local day. < 6h → "due in N hours at TIME". > 6h →
+      // "due today at TIME" (which only happens with a same-day "morning
+      // of" cadence — current defaults don't produce this, but custom
+      // cadences may).
+      const hoursLead = Math.round(leadMs / 3_600_000);
+      if (hoursLead > 0 && hoursLead < 6) {
+        dayQualifier = `due in ${hoursLead} hour${hoursLead === 1 ? '' : 's'}${timeStr ? ` at ${timeStr}` : ''}`;
+      } else {
+        dayQualifier = timeStr ? `due today at ${timeStr}` : 'due today';
+      }
+    } else {
+      const dayDiff = Math.round(
+        (Date.UTC(...dueKey.split('-').map((v, i) => i === 1 ? Number(v) - 1 : Number(v)))
+        - Date.UTC(...fireKey.split('-').map((v, i) => i === 1 ? Number(v) - 1 : Number(v))))
+        / 86_400_000,
+      );
+      if (dayDiff === 1) {
+        dayQualifier = timeStr ? `due tomorrow at ${timeStr}` : 'due tomorrow';
+      } else if (dayDiff > 1 && dayDiff < 7) {
+        const weekday = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(dueDt);
+        dayQualifier = timeStr ? `due ${weekday} at ${timeStr}` : `due ${weekday}`;
+      } else if (dayDiff >= 7) {
+        const monthDay = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'short', day: 'numeric' }).format(dueDt);
+        dayQualifier = timeStr ? `due ${monthDay} at ${timeStr}` : `due ${monthDay}`;
+      } else {
+        // Negative dayDiff — fire is after due. Shouldn't happen given
+        // the skip-past-fire-times guard above, but defensive fallback.
+        dayQualifier = timeStr ? `due at ${timeStr}` : 'due today';
+      }
+    }
+
     const closingLines = {
       high: "This one's time-sensitive — don't let it slip.",
       medium: 'Good time to get ahead of it.',
@@ -8689,9 +8738,7 @@ async function scheduleTaskAlerts(userId, taskId, taskTitle, dueDate, dueTime, p
       floating: 'No hard deadline, but worth a look today.',
     };
     const closing = closingLines[priority] || closingLines.medium;
-    const message = timeStr
-      ? `Hey ${firstName} — you've got "${taskTitle}" due at ${timeStr}.\n\n${closing}`
-      : `Hey ${firstName} — you've got "${taskTitle}" due today.\n\n${closing}`;
+    const message = `Hey ${firstName} — you've got "${taskTitle}" ${dayQualifier}.\n\n${closing}`;
     const alertKey = `sched::${taskId}::${cadenceOffset.minutes_before ?? `dow${cadenceOffset.day_of_week}h${cadenceOffset.hour}`}`;
 
     await pool.query(
