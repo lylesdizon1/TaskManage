@@ -659,6 +659,23 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         if (reply) await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply);
       } catch (e) { logger.error('whatsapp.history.saveFailed', { requestId: req.requestId, userId, error: e.message }); }
 
+      // ── M1b memory extraction (fire-and-forget, env-gated) ─────────────
+      // SHIPPED INERT — controlled by MEMORY_EXTRACTOR_ENABLED Railway env.
+      // Skipped when we sent a confirmation mid-loop (the assistant text
+      // is "Awaiting confirmation" boilerplate, not real signal).
+      if (!waSentConfirmation && msgBody && reply) {
+        try {
+          const { enrichConversationTurn } = require('../lib/conversationEnrichment.cjs');
+          enrichConversationTurn({
+            userId,
+            channel: 'whatsapp',
+            userMessage: msgBody,
+            assistantText: reply,
+            toolsCalled: (toolSummaries || []).map((s) => s.tool).filter(Boolean),
+          }).catch((err) => logger.error('whatsapp.memoryExtract.failed', { userId, error: err.message }));
+        } catch (e) { logger.warn('whatsapp.memoryExtract.requireFailed', { error: e.message }); }
+      }
+
       // ── Reply via user's UltraMsg integration ──────────────────────────
       if (reply) {
         const r = await sendWhatsApp(db, userId, reply, fromRaw);

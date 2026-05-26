@@ -630,9 +630,11 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       let { text, toolSummaries, maxIterationsReached } = loopResult;
 
       // ── Correction learning: detect → extract → persist → ack ──
+      // lastUserMsg also feeds the memory extractor below — derive once.
+      let lastUserMsg = '';
       try {
         const lastUserContent = [...messages].reverse().find(m => m.role === 'user')?.content;
-        const lastUserMsg = typeof lastUserContent === 'string'
+        lastUserMsg = typeof lastUserContent === 'string'
           ? lastUserContent
           : Array.isArray(lastUserContent)
             ? (lastUserContent.find(b => b?.type === 'text')?.text || '')
@@ -645,6 +647,23 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         }
       } catch (err) {
         logger.error('chat.learning.failed', { requestId: req.requestId, userId, error: err.message });
+      }
+
+      // ── M1b memory extraction (fire-and-forget, env-gated) ─────────────
+      // SHIPPED INERT — controlled by MEMORY_EXTRACTOR_ENABLED Railway env.
+      // Skip if the loop bailed without assistant text (maxIterations) or
+      // we never had a real user message to extract from.
+      if (lastUserMsg && text) {
+        try {
+          const { enrichConversationTurn } = require('../lib/conversationEnrichment.cjs');
+          enrichConversationTurn({
+            userId,
+            channel: 'web_chat',
+            userMessage: lastUserMsg,
+            assistantText: text,
+            toolsCalled: (toolSummaries || []).map((s) => s.tool).filter(Boolean),
+          }).catch((err) => logger.error('chat.memoryExtract.failed', { userId, error: err.message }));
+        } catch (e) { logger.warn('chat.memoryExtract.requireFailed', { error: e.message }); }
       }
 
       finalizeStream({ text, toolSummaries, maxIterationsReached });
