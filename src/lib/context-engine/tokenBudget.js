@@ -1,7 +1,7 @@
 // Focused prompt budget — not the full context window
 const BUDGETS = {
   'claude-sonnet': 8000,
-  'claude-sonnet-4-5': 8000,
+  'claude-sonnet-4-6': 8000,
   'gpt-4o': 6000,
 };
 

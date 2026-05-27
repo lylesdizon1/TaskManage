@@ -605,7 +605,7 @@ const ARIA_TOOLS = [
     group: 'communication',
     risk: 'high',
     requires_confirmation: false,
-    description: 'Archive low-priority emails matching criteria (promotions / newsletters / social) for a single account. ALWAYS dry-run first and tell the user the count. Then call dry_run:false. Server-enforced ceilings: ≤50 emails — autonomous (no confirmation needed) — set expected_count to the dry-run count to prove you checked; 51–250 emails — confirmation required (system gate fires the same WhatsApp 4-char / chat confirmation as send_email); >250 emails — REJECTED, server refuses regardless of confirmation; narrow the criteria or run smaller batches. older_than_hours must be ≥24 — recent inbox is never bulk-archived.',
+    description: 'Archive low-priority emails matching criteria (promotions / newsletters / social) for a single account. ALWAYS dry-run first and tell the user the count. Then call dry_run:false. Server-enforced ceilings: ≤50 emails — autonomous (no confirmation needed) — set expected_count to the dry-run count to prove you checked; 51–250 emails — confirmation required (system gate fires the same WhatsApp YES/NO or chat confirmation card as send_email); >250 emails — REJECTED, server refuses regardless of confirmation; narrow the criteria or run smaller batches. older_than_hours must be ≥24 — recent inbox is never bulk-archived.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1117,7 +1117,7 @@ function getToolSchemasForApi() {
 
 // Bulk-archive autonomy thresholds — server-authoritative.
 // ≤50 emails: autonomous (model self-reports expected_count)
-// 51–250:    confirmation required via the existing gate (WhatsApp 4-char / chat)
+// 51–250:    confirmation required via the existing gate (WhatsApp YES/NO or chat card)
 // >250:      hard cap, refused inside the tool body regardless of confirmation
 const BULK_ARCHIVE_AUTONOMY_THRESHOLD = 50;
 const BULK_ARCHIVE_HARD_CAP = 250;
