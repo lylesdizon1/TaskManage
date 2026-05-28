@@ -5,6 +5,7 @@ const bcrypt  = require('bcryptjs');
 const crypto = require('crypto');
 const logger = require('../../guardrails/logger.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
+const { getDailyCostSummary } = require('../lib/anthropicCall.cjs');
 
 /**
  * User routes extracted from proxy-server.cjs
@@ -32,6 +33,20 @@ module.exports = function createUsersRouter({ authenticateToken, requireAdmin, d
    * dropped so existing UIs that re-post the full settings blob keep
    * working without a 400.
    */
+  // ── GET /api/me/cost — today's LLM token usage rollup ────────────────
+  // Layer 1 of the cost-cap architecture: observability-only readback.
+  // Returns global daily total + per-scope breakdown for the calling user.
+  // No admin role required — users only see their own usage.
+  router.get('/api/me/cost', authenticateToken, async (req, res) => {
+    try {
+      const summary = await getDailyCostSummary(req.user.id);
+      return res.json(summary);
+    } catch (err) {
+      logger.error('me.cost.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   router.put('/api/users/settings', authenticateToken, async (req, res) => {
     try {
       const { persona, assistantName, whatsappPhone, profileName, profileBusinesses, profileHousehold, profileLocation, profileNotes } = req.body;

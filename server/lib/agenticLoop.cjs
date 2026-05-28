@@ -22,6 +22,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const crypto = require('crypto');
 const logger = require('../../guardrails/logger.cjs');
 const { getToolByName } = require('../tools.cjs');
+const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 const MAX_ITERATIONS = 5;
@@ -77,13 +78,13 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
     iterations++;
 
     const response = await Promise.race([
-      client.messages.create({
+      trackedAnthropicCall(client, {
         model: model || 'claude-sonnet-4-6',
         max_tokens: 8192,
         system,
         tools: tools ?? [],
         messages: currentMessages,
-      }),
+      }, { userId, scope: 'agentic_loop' }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Aria is taking too long to respond. Please try again.')), 30_000)
       ),

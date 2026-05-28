@@ -18,6 +18,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { withRetry } = require('./anthropicRetry.cjs');
+const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
@@ -68,7 +69,7 @@ function normalizeItems(rawItems) {
  * Returns { items, note } or throws on hard failure (caller decides
  * whether to surface or 500).
  */
-async function estimateNutrition(description) {
+async function estimateNutrition(description, { userId } = {}) {
   if (typeof description !== 'string' || !description.trim()) {
     throw new Error('description required');
   }
@@ -76,12 +77,12 @@ async function estimateNutrition(description) {
   if (!c) throw new Error('CLAUDE_API_KEY not configured');
 
   const response = await withRetry(
-    () => c.messages.create({
+    () => trackedAnthropicCall(c, {
       model: MODEL,
       max_tokens: 1500,
       system: ESTIMATE_SYSTEM,
       messages: [{ role: 'user', content: description.trim().slice(0, 4000) }],
-    }),
+    }, { userId, scope: 'food_estimate' }),
     'food.estimateNutrition',
   );
 
@@ -100,7 +101,7 @@ async function estimateNutrition(description) {
  * Returns the plain-text bullet body. No JSON envelope — the spec
  * explicitly says plain text grouped under Trends + Suggestions.
  */
-async function generateInsights({ goal, days }) {
+async function generateInsights({ goal, days, userId }) {
   const c = client();
   if (!c) throw new Error('CLAUDE_API_KEY not configured');
   const payload = {
@@ -108,12 +109,12 @@ async function generateInsights({ goal, days }) {
     days: Array.isArray(days) ? days : [],
   };
   const response = await withRetry(
-    () => c.messages.create({
+    () => trackedAnthropicCall(c, {
       model: MODEL,
       max_tokens: 1500,
       system: INSIGHTS_SYSTEM,
       messages: [{ role: 'user', content: JSON.stringify(payload) }],
-    }),
+    }, { userId, scope: 'food_insights' }),
     'food.generateInsights',
   );
   return response?.content?.[0]?.text || '';

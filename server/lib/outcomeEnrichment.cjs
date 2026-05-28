@@ -19,6 +19,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../../db.cjs');
 const { withRetry } = require('./anthropicRetry.cjs');
+const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
@@ -78,11 +79,11 @@ Respond with JSON only. No markdown, no explanation.`;
     let response;
     try {
       response = await withRetry(
-        () => c.messages.create({
+        () => trackedAnthropicCall(c, {
           model: MODEL,
           max_tokens: 500,
           messages: [{ role: 'user', content: prompt }],
-        }),
+        }, { userId, scope: 'outcome' }),
         'outcome-enrichment',
       );
     } catch (err) {

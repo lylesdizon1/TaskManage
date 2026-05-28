@@ -40,6 +40,7 @@ const logger = require('../../guardrails/logger.cjs');
 const { withRetry } = require('./anthropicRetry.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 const { incrementDailyCounter } = require('./costTracker.cjs');
+const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 const DEBOUNCE_TTL_SEC = 30; // per spec: 30s per user
@@ -159,12 +160,12 @@ async function enrichConversationTurn({ userId, channel, userMessage, assistantT
     let response;
     try {
       response = await withRetry(
-        () => c.messages.create({
+        () => trackedAnthropicCall(c, {
           model: MODEL,
           max_tokens: 600,
           system: SYSTEM_PROMPT,
           messages: [{ role: 'user', content: promptBody }],
-        }),
+        }, { userId, scope: 'memory_extractor' }),
         'conversation-enrichment',
       );
     } catch (err) {

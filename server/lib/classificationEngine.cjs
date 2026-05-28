@@ -14,6 +14,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { withRetry } = require('./anthropicRetry.cjs');
+const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 const logger = require('../../guardrails/logger.cjs');
 
 const VALID_CATEGORIES = new Set([
@@ -95,7 +96,7 @@ function matchClassificationRule(rules, { from, subject, body }) {
 }
 
 // ── 2. Financial metadata extractor ────────────────────────────────────────
-async function extractFinancialMetadata({ subject, body, anthropicClient }) {
+async function extractFinancialMetadata({ subject, body, anthropicClient, userId }) {
   const client = anthropicClient || _defaultClient();
   if (!client?.messages?.create) return null;
 
@@ -114,11 +115,11 @@ Body (first 400 chars): ${String(body || '').slice(0, 400)}`;
   try {
     const resp = await Promise.race([
       withRetry(
-        () => client.messages.create({
+        () => trackedAnthropicCall(client, {
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 150,
           messages: [{ role: 'user', content: prompt }],
-        }),
+        }, { userId, scope: 'classification' }),
         'classifyFinancialExtract',
       ),
       new Promise((_, rej) => setTimeout(() => rej(new Error('extract-timeout')), 8000)),
@@ -140,7 +141,7 @@ Body (first 400 chars): ${String(body || '').slice(0, 400)}`;
 }
 
 // ── 3. Full AI classifier ──────────────────────────────────────────────────
-async function classifyEmailWithAI({ from, subject, body, entityNames, anthropicClient }) {
+async function classifyEmailWithAI({ from, subject, body, entityNames, anthropicClient, userId }) {
   const client = anthropicClient || _defaultClient();
   if (!client?.messages?.create) return null;
 
@@ -171,11 +172,11 @@ Body (first 300 chars): ${String(body || '').slice(0, 300)}`;
   try {
     const resp = await Promise.race([
       withRetry(
-        () => client.messages.create({
+        () => trackedAnthropicCall(client, {
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 200,
           messages: [{ role: 'user', content: prompt }],
-        }),
+        }, { userId, scope: 'classification' }),
         'classifyEmailWithAI',
       ),
       new Promise((_, rej) => setTimeout(() => rej(new Error('classify-timeout')), 10000)),
@@ -314,7 +315,7 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
 
       const shouldExtract = matched.extractAmount || FINANCIAL_CATEGORIES.has(category);
       if (shouldExtract) {
-        const meta = await extractFinancialMetadata({ subject, body, anthropicClient });
+        const meta = await extractFinancialMetadata({ subject, body, anthropicClient, userId });
         if (meta) {
           if (meta.amount != null) amount = meta.amount;
           if (meta.currency) currency = meta.currency;
@@ -347,7 +348,7 @@ async function classifyEmail({ userId, messageId, threadId, accountEmail, from, 
     if (!resolved) {
       const entities = (await db.getEntitiesForUser?.(userId).catch(() => [])) || [];
       const entityNames = entities.map(e => e.name);
-      const ai = await classifyEmailWithAI({ from, subject, body, entityNames, anthropicClient });
+      const ai = await classifyEmailWithAI({ from, subject, body, entityNames, anthropicClient, userId });
       if (ai) {
         entityId = ai.entity ? (entities.find(e => e.name === ai.entity)?.id || null) : null;
         category = ai.category;

@@ -20,6 +20,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../../db.cjs');
 const { withRetry } = require('./anthropicRetry.cjs');
+const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
@@ -87,7 +88,7 @@ async function extractContactFacts(userId, contactId, contactName, noteContent) 
     let response;
     try {
       response = await withRetry(
-        () => c.messages.create({
+        () => trackedAnthropicCall(c, {
           model: MODEL,
           max_tokens: 500,
           system: SYSTEM_PROMPT,
@@ -95,7 +96,7 @@ async function extractContactFacts(userId, contactId, contactName, noteContent) 
             role: 'user',
             content: `Person: ${contactName || '(unknown)'}\nNote: ${text}`,
           }],
-        }),
+        }, { userId, scope: 'contact_facts' }),
         'contact-fact-extract',
       );
     } catch (err) {

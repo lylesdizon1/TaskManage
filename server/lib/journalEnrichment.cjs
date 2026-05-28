@@ -25,6 +25,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../../db.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { withRetry } = require('./anthropicRetry.cjs');
+const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
@@ -97,12 +98,12 @@ async function enrichJournalEntry(userId, entry) {
     let response;
     try {
       response = await withRetry(
-        () => c.messages.create({
+        () => trackedAnthropicCall(c, {
           model: MODEL,
           max_tokens: 500,
           system: SYSTEM_PROMPT,
           messages: [{ role: 'user', content }],
-        }),
+        }, { userId, scope: 'journal' }),
         'journal-enrichment',
       );
     } catch (err) {

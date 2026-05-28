@@ -59,7 +59,7 @@ module.exports = function createFoodRouter({ authenticateToken, requireOwnership
       const localDate = pickLocalDate(req);
       let estimate;
       try {
-        estimate = await estimateNutrition(description);
+        estimate = await estimateNutrition(description, { userId: req.user.id });
       } catch (err) {
         logger.error('food.log.estimateFailed', { requestId: req.requestId, userId: req.user.id, error: err.message });
         return res.status(502).json({ error: 'estimate_failed', detail: err.message });
@@ -149,7 +149,7 @@ module.exports = function createFoodRouter({ authenticateToken, requireOwnership
       const skipReestimate = req.query?.skipReestimate === '1' || req.query?.skipReestimate === 'true';
       if (patch.description && patch.description !== entry.description && !skipReestimate) {
         try {
-          const est = await estimateNutrition(patch.description);
+          const est = await estimateNutrition(patch.description, { userId: req.user.id });
           patch.items = est.items;
           // If the estimator produced a note and the caller didn't
           // override one, surface the new note. Otherwise preserve the
@@ -229,6 +229,7 @@ module.exports = function createFoodRouter({ authenticateToken, requireOwnership
           ...r.totals,
           meals: r.meals || [],
         })),
+        userId: req.user.id,
       };
       try {
         const text = await generateInsights(payload);

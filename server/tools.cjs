@@ -2874,7 +2874,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
         let estimate;
         try {
           const { estimateNutrition } = require('./lib/foodLogTools.cjs');
-          estimate = await estimateNutrition(description);
+          estimate = await estimateNutrition(description, { userId });
         } catch (e) {
           return { success: false, error: `Nutrition estimate failed: ${e.message}` };
         }
