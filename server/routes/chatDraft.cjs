@@ -73,6 +73,12 @@ module.exports = function createChatDraftRouter({ authenticateToken, db }) {
     if (!Number.isFinite(conversationId)) {
       return res.status(400).json({ error: 'conversation_id required' });
     }
+    // 2026-05-28 — validate the conversation exists AND belongs to
+    // this user before any persistence. Pre-fix, a stale conversation_id
+    // sent from the client would silently land an action_card row as
+    // an orphan. Existence-leak-safe via getConversation's owner scope.
+    const conversation = await db.getConversation(conversationId, userId);
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
 
     const client = _client();
     if (!client?.messages?.create) return res.json({ type: 'default_chat' });

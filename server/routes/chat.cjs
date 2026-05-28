@@ -101,7 +101,19 @@ module.exports = function createChatRouter({ authenticateToken, db }) {
     try {
       const { role, content, model } = req.body;
       if (!role || !content) return res.status(400).json({ error: 'role and content are required' });
-      const msg = await db.addConversationMessage(parseInt(req.params.id, 10), req.user.id, role, content, model);
+      const conversationId = parseInt(req.params.id, 10);
+      if (!Number.isFinite(conversationId)) {
+        return res.status(400).json({ error: 'Invalid conversation id' });
+      }
+      // 2026-05-28 — validate the conversation exists AND belongs to
+      // this user before INSERT. Pre-fix, any integer was accepted and
+      // would silently land as an orphan if the conversation had been
+      // deleted (or never existed). See docs/investigations/cc-persistence-state.md.
+      // Existence-leak-safe: same 404 for "doesn't exist" and "exists
+      // but not yours" because getConversation enforces ownership.
+      const conversation = await db.getConversation(conversationId, req.user.id);
+      if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+      const msg = await db.addConversationMessage(conversationId, req.user.id, role, content, model);
       return res.json(msg);
     } catch (err) {
       logger.error('conversations.messages.saveFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
