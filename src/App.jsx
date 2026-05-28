@@ -103,6 +103,7 @@ const InboxPanel = lazy(() => import('./panels/InboxPanel.jsx'));
 const NotesPanel = lazy(() => import('./panels/NotesPanel.jsx'));
 const ProjectsPanel = lazy(() => import('./panels/ProjectsPanel.jsx'));
 const PeoplePanel = lazy(() => import('./panels/PeoplePanel.jsx'));
+const FoodPanel = lazy(() => import('./panels/FoodPanel.jsx'));
 const SharedAccessPanel = lazy(() => import('./panels/SharedAccessPanel.jsx'));
 const AddTaskForm = lazy(() => import('./components/tasks/AddTaskForm.jsx'));
 const DashboardPanel = lazy(() => import('./panels/DashboardPanel.jsx'));
@@ -1081,6 +1082,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             { key: 'calendar', label: 'Calendar', icon: 'calendar_today' },
             { key: 'notes', label: 'Notes', icon: 'sticky_note_2' },
             { key: 'people', label: 'People', icon: 'group' },
+            { key: 'food', label: 'Food', icon: 'restaurant' },
             { key: 'sharing', label: 'Sharing', icon: 'share' },
             { key: 'chat', label: 'Aria', icon: 'chat' },
             { key: 'agents', label: 'Agents', icon: 'auto_awesome' },
@@ -1227,6 +1229,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <ProjectsPanel entities={userEntities} apiFetch={apiFetch} authToken={authToken} />
           ) : activeView === 'people' ? (
             <PeoplePanel apiFetch={apiFetch} authToken={authToken} />
+          ) : activeView === 'food' ? (
+            <FoodPanel apiFetch={apiFetch} authToken={authToken} />
           ) : activeView === 'sharing' ? (
             <SharedAccessPanel apiFetch={apiFetch} authToken={authToken} />
           ) : activeView === 'calendar' ? (
@@ -1726,7 +1730,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       {(() => {
         // Views that live behind the More drawer. Active-highlight the
         // "More" slot when the current activeView is one of these.
-        const drawerViewKeys = new Set(['projects', 'notes', 'people', 'sharing', 'chat', 'activity', 'admin']);
+        const drawerViewKeys = new Set(['projects', 'notes', 'people', 'food', 'sharing', 'chat', 'activity', 'admin']);
         const moreIsActive = drawerViewKeys.has(activeView);
         return (
           <>
@@ -1774,6 +1778,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                     { view: 'projects', label: 'Projects', icon: 'folder_open' },
                     { view: 'notes',    label: 'Notes',    icon: 'sticky_note_2' },
                     { view: 'people',   label: 'People',   icon: 'group' },
+                    { view: 'food',     label: 'Food',     icon: 'restaurant' },
                     { view: 'sharing',  label: 'Sharing',  icon: 'share' },
                     { view: 'chat',     label: 'Aria',     icon: 'chat' },
                     { view: 'agents',   label: 'Agents',   icon: 'auto_awesome' },
