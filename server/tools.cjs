@@ -2901,6 +2901,36 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
             } catch (e) { console.error('[remember_this] contact resolve failed:', e.message); }
           }
         }
+        // 2026-05-28 — auto-resolve fallback. If the LLM didn't pass
+        // contact_name but the content mentions a known contact by
+        // whole-word name, route to contact-scoped axis. Conservative:
+        // only fire when exactly ONE contact's displayName / firstName /
+        // lastName appears as a whole word. Multiple matches → stay
+        // global (user said "Allen and Sarah" — ambiguous routing).
+        // Observation surfaced from May 27 M1b dogfood: Aria was
+        // calling remember_this without contact_name even when content
+        // clearly referenced a contact, landing as global when it
+        // should have been contact-scoped.
+        if (!contactId) {
+          try {
+            const all = await db.getContactsForUser(userId);
+            const tokens = (all || [])
+              .flatMap((c) => [c.displayName, c.firstName, c.lastName]
+                .filter(Boolean)
+                .map((n) => ({ token: String(n).trim(), id: c.id, displayName: c.displayName })))
+              .filter((t) => t.token.length >= 2);
+            const hits = new Map(); // contact_id → entry
+            for (const t of tokens) {
+              const re = new RegExp(`\\b${t.token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+              if (re.test(text)) hits.set(t.id, t);
+            }
+            if (hits.size === 1) {
+              const only = [...hits.values()][0];
+              contactId = only.id;
+              contactName = only.displayName;
+            }
+          } catch (e) { console.error('[remember_this] auto-resolve failed:', e.message); }
+        }
         try {
           if (contactId) {
             await db.addContactFact(userId, contactId, text, 'explicit_remember', 0.9, 'explicit_remember');
