@@ -2569,6 +2569,18 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
               active_count: active,
             };
           }
+          // Hourly cap (audit-driven 2026-05-28). Each session burns
+          // up to $2 in research-agent budget; 5/hour caps worst-case
+          // burn at $10/hour even if all sessions hit ceiling.
+          const SESSIONS_PER_HOUR_CAP = 5;
+          const recent = await db.countSubAgentSessionsInWindow(userId, 3600);
+          if (recent >= SESSIONS_PER_HOUR_CAP) {
+            return {
+              success: false,
+              error: `max ${SESSIONS_PER_HOUR_CAP} sub-agent dispatches per hour reached — try again later`,
+              recent_count: recent,
+            };
+          }
           const definition = await db.getSubAgentDefinition(definitionId);
           if (!definition) {
             return { success: false, error: `unknown definition: ${definitionId}` };

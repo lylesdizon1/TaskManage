@@ -4576,6 +4576,23 @@ async function countActiveSubAgentSessions(userId) {
   return rows[0]?.n || 0;
 }
 
+/**
+ * Count sub-agent sessions a user has dispatched within the last
+ * `windowSeconds`, regardless of current status. Used to enforce
+ * a sliding rate cap (e.g. "≤ 5 sessions per hour") that complements
+ * the concurrency cap.
+ */
+async function countSubAgentSessionsInWindow(userId, windowSeconds) {
+  if (!userId || !windowSeconds) return 0;
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM sub_agent_sessions
+      WHERE user_id = $1
+        AND created_at > NOW() - ($2 || ' seconds')::interval`,
+    [userId, windowSeconds],
+  );
+  return rows[0]?.n || 0;
+}
+
 async function createSubAgentSession({ userId, definitionId, prompt, budget, parentDecisionId = null }) {
   if (!userId || !definitionId || !prompt) {
     throw new Error('createSubAgentSession: userId, definitionId, prompt are required');
@@ -11647,6 +11664,7 @@ module.exports = {
   getSubAgentDefinition,
   listSubAgentDefinitions,
   countActiveSubAgentSessions,
+  countSubAgentSessionsInWindow,
   createSubAgentSession,
   getSubAgentSession,
   listSubAgentSessions,
