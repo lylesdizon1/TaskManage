@@ -26,8 +26,16 @@ const express = require('express');
 const logger = require('../../guardrails/logger.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
 const { estimateNutrition, generateInsights } = require('../lib/foodLogTools.cjs');
+const { userRateLimit } = require('../middleware/userRateLimit.cjs');
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Per-user rate limits on the two LLM-touching food routes. Sized to
+// human-realistic usage: 30 logs/hour covers even snack-heavy days
+// without throttling; 10 insights/hour stops "Find my trends" button-
+// mash spirals (each click = one Haiku call).
+const logLimit = userRateLimit({ key: 'food-log', limit: 30, windowSec: 3600 });
+const insightsLimit = userRateLimit({ key: 'food-insights', limit: 10, windowSec: 3600 });
 
 function pickLocalDate(req) {
   const requested = req.body?.local_date || req.body?.localDate;
@@ -43,7 +51,7 @@ module.exports = function createFoodRouter({ authenticateToken, requireOwnership
   const router = express.Router();
 
   // ── POST /api/food/log — chat-driven logging ─────────────────────────
-  router.post('/api/food/log', authenticateToken, async (req, res) => {
+  router.post('/api/food/log', authenticateToken, logLimit, async (req, res) => {
     try {
       const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
       if (!description) return res.status(400).json({ error: 'description is required' });
@@ -113,7 +121,7 @@ module.exports = function createFoodRouter({ authenticateToken, requireOwnership
   // Re-estimate trigger: provided description differs from stored. If the
   // caller wants to skip re-estimation (rare — e.g. just fixing a typo
   // without macro changes), pass `?skipReestimate=1`.
-  router.patch('/api/food/entry/:id', authenticateToken, async (req, res) => {
+  router.patch('/api/food/entry/:id', authenticateToken, logLimit, async (req, res) => {
     try {
       const entry = await db.getFoodLogEntryById(req.params.id);
       if (!entry) return res.status(404).json({ error: 'entry not found' });
@@ -203,7 +211,7 @@ module.exports = function createFoodRouter({ authenticateToken, requireOwnership
   });
 
   // ── GET /api/food/insights ───────────────────────────────────────────
-  router.get('/api/food/insights', authenticateToken, async (req, res) => {
+  router.get('/api/food/insights', authenticateToken, insightsLimit, async (req, res) => {
     try {
       const days = Math.min(60, Math.max(3, parseInt(req.query.days, 10) || 14));
       const rollup = await db.getFoodInsightsContext(req.user.id, days);
