@@ -434,11 +434,21 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
       // Fire-and-forget: classify any thread we don't already have a
       // classification for. Uses snippet as body source and keys off
       // latestMessageId (falls back to thread id if missing).
+      //
+      // Per-request cap (audit-driven 2026-05-28): a list refresh with
+      // 50 unclassified threads previously fired 50 Haiku calls; under
+      // a Black Friday inbox burst the user could refresh repeatedly and
+      // multiply this. Cap at 20/request — matches staleClassificationSweep's
+      // MAX_PER_USER_PER_RUN. Remainder gets picked up on next refresh
+      // (newest-first ordering already in place via merged.sort).
+      const CLASSIFY_PER_LIST_CAP = 20;
       (async () => {
         try {
           const ids = finalThreads.map(t => t.latestMessageId || t.id).filter(Boolean);
           const existing = await db.batchGetClassifications(userId, ids).catch(() => ({}));
+          let dispatched = 0;
           for (const t of finalThreads) {
+            if (dispatched >= CLASSIFY_PER_LIST_CAP) break;
             const mid = t.latestMessageId || t.id;
             if (!mid) continue;
             const cached = existing[mid];
@@ -452,6 +462,7 @@ module.exports = function createInboxRouter({ authenticateToken, db }) {
               headers: t.headers || [],
               db,
             }).catch(() => {});
+            dispatched++;
           }
         } catch { /* swallow */ }
       })();
