@@ -105,6 +105,62 @@ module.exports = function createFoodRouter({ authenticateToken, requireOwnership
     }
   });
 
+  // ── PATCH /api/food/entry/:id — edit description/note/date ──────────
+  // Editable fields: description (re-runs nutrition estimate to refresh
+  // items + totals), note (text only), local_date (move to a different
+  // day). Owner-only via requireOwnership on the fetched record.
+  //
+  // Re-estimate trigger: provided description differs from stored. If the
+  // caller wants to skip re-estimation (rare — e.g. just fixing a typo
+  // without macro changes), pass `?skipReestimate=1`.
+  router.patch('/api/food/entry/:id', authenticateToken, async (req, res) => {
+    try {
+      const entry = await db.getFoodLogEntryById(req.params.id);
+      if (!entry) return res.status(404).json({ error: 'entry not found' });
+      if (!requireOwnership(entry, req)) return res.status(403).json({ error: 'forbidden' });
+
+      const patch = {};
+      if (typeof req.body?.description === 'string') {
+        const desc = req.body.description.trim();
+        if (!desc) return res.status(400).json({ error: 'description cannot be empty' });
+        patch.description = desc;
+      }
+      if (req.body?.note !== undefined) {
+        patch.note = req.body.note ? String(req.body.note).slice(0, 500) : null;
+      }
+      if (typeof req.body?.local_date === 'string' || typeof req.body?.localDate === 'string') {
+        const d = req.body.local_date || req.body.localDate;
+        if (!ISO_DATE_RE.test(d)) return res.status(400).json({ error: 'local_date must be YYYY-MM-DD' });
+        patch.localDate = d;
+      }
+
+      // Re-estimate macros when description changed and skipReestimate
+      // wasn't set. Items the user might have wanted (none in V1 spec)
+      // would be passed explicitly; for now items only ever come from
+      // the estimator.
+      const skipReestimate = req.query?.skipReestimate === '1' || req.query?.skipReestimate === 'true';
+      if (patch.description && patch.description !== entry.description && !skipReestimate) {
+        try {
+          const est = await estimateNutrition(patch.description);
+          patch.items = est.items;
+          // If the estimator produced a note and the caller didn't
+          // override one, surface the new note. Otherwise preserve the
+          // user's note.
+          if (patch.note === undefined) patch.note = est.note || entry.note;
+        } catch (err) {
+          logger.error('food.entry.reestimateFailed', { requestId: req.requestId, userId: req.user.id, error: err.message });
+          return res.status(502).json({ error: 'estimate_failed', detail: err.message });
+        }
+      }
+
+      const updated = await db.updateFoodLogEntry(req.params.id, patch);
+      return res.json(updated);
+    } catch (err) {
+      logger.error('food.entry.updateFailed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   // ── DELETE /api/food/entry/:id ───────────────────────────────────────
   router.delete('/api/food/entry/:id', authenticateToken, async (req, res) => {
     try {

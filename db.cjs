@@ -10833,6 +10833,42 @@ async function deleteFoodLogEntryById(entryId) {
   await pool.query(`DELETE FROM food_log_entries WHERE id = $1`, [entryId]);
 }
 
+/**
+ * Partial update of a food log entry. Caller passes only the fields that
+ * changed; null/undefined leaves the existing value alone. When items is
+ * provided, totals is recomputed server-side from those items (never
+ * trusted from the client). Returns the updated row.
+ */
+async function updateFoodLogEntry(entryId, patch) {
+  const fields = [];
+  const values = [];
+  let i = 1;
+  if (typeof patch.description === 'string') {
+    fields.push(`description = $${i++}`); values.push(patch.description);
+  }
+  if (patch.note !== undefined) {
+    fields.push(`note = $${i++}`); values.push(patch.note);
+  }
+  if (typeof patch.localDate === 'string') {
+    fields.push(`local_date = $${i++}`); values.push(patch.localDate);
+  }
+  if (Array.isArray(patch.items)) {
+    const totals = computeFoodTotals(patch.items);
+    fields.push(`items = $${i++}::jsonb`); values.push(JSON.stringify(patch.items));
+    fields.push(`totals = $${i++}::jsonb`); values.push(JSON.stringify(totals));
+  }
+  if (fields.length === 0) {
+    const { rows } = await pool.query(`SELECT * FROM food_log_entries WHERE id = $1`, [entryId]);
+    return rows[0] || null;
+  }
+  values.push(entryId);
+  const { rows } = await pool.query(
+    `UPDATE food_log_entries SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`,
+    values,
+  );
+  return rows[0] || null;
+}
+
 async function addFoodLogPhoto({ entryId, imageBlobId, ocrPayload }) {
   const { rows } = await pool.query(
     `INSERT INTO food_log_photos (entry_id, image_blob_id, ocr_payload)
@@ -11406,6 +11442,7 @@ module.exports = {
   getFoodLogHistory,
   getFoodLogEntryById,
   deleteFoodLogEntryById,
+  updateFoodLogEntry,
   addFoodLogPhoto,
   getFoodLogForContext,
   getFoodInsightsContext,

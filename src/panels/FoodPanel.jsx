@@ -84,49 +84,120 @@ function MacroBar({ totals, height = 7 }) {
 }
 
 // ── Single meal card ────────────────────────────────────────────────────
-function MealCard({ meal, open, onToggle, onDelete }) {
+function MealCard({ meal, open, onToggle, onDelete, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [desc, setDesc] = useState(meal.description);
+  const [note, setNote] = useState(meal.note || '');
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+
+  const beginEdit = () => {
+    setDesc(meal.description);
+    setNote(meal.note || '');
+    setEditError('');
+    setEditing(true);
+  };
+  const cancelEdit = () => {
+    setEditing(false);
+    setEditError('');
+  };
+  const saveEdit = async () => {
+    if (saving) return;
+    const trimmed = desc.trim();
+    if (!trimmed) { setEditError('Description cannot be empty.'); return; }
+    setSaving(true); setEditError('');
+    try {
+      const patch = {};
+      if (trimmed !== meal.description) patch.description = trimmed;
+      // Always send note — sending null clears it; empty string also clears.
+      if ((note || '') !== (meal.note || '')) patch.note = note.trim() || null;
+      if (Object.keys(patch).length === 0) { setEditing(false); return; }
+      await onSave(meal.id, patch);
+      setEditing(false);
+    } catch (e) {
+      setEditError(e?.message || "Couldn't save edits.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="afl-card" style={{ ...card, padding: 16, marginBottom: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-        <div style={{ flex: 1 }}>
-          {meal.time && <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 2 }}>{meal.time}</div>}
-          <div style={{ fontWeight: 600, fontSize: 14.5, lineHeight: 1.35 }}>{meal.description}</div>
-        </div>
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div className="afl-head" style={{ fontWeight: 800, fontSize: 18, color: T.primary }}>{r(meal.totals.calories)}</div>
-          <div style={{ fontSize: 11, color: T.inkFaint }}>kcal</div>
-        </div>
-      </div>
-
-      {meal.photos.length > 0 && (
-        <div style={{ marginTop: 10, fontSize: 11.5, color: T.inkFaint, fontStyle: 'italic' }}>
-          {meal.photos.length} photo{meal.photos.length > 1 ? 's' : ''} attached (view from WhatsApp).
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 12.5, color: T.inkSoft, alignItems: 'center' }}>
-        <span><b style={{ color: T.protein }}>P</b> {r(meal.totals.protein)}g</span>
-        <span><b style={{ color: T.carbs }}>C</b> {r(meal.totals.carbs)}g</span>
-        <span><b style={{ color: T.fat }}>F</b> {r(meal.totals.fat)}g</span>
-        <span style={{ color: T.inkFaint }}>Na {r(meal.totals.sodium)}mg</span>
-        <div style={{ flex: 1 }} />
-        <button onClick={onToggle} style={linkBtn}>{open ? 'hide' : `${meal.items.length} item${meal.items.length > 1 ? 's' : ''}`}</button>
-        <button onClick={onDelete} style={{ ...linkBtn, color: T.warn }}>delete</button>
-      </div>
-
-      {meal.note && <div style={{ marginTop: 8, fontSize: 12, color: T.inkFaint, fontStyle: 'italic' }}>{meal.note}</div>}
-
-      {open && (
-        <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10 }}>
-          {meal.items.map((it, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '5px 0', color: T.inkSoft }}>
-              <span style={{ flex: 1 }}>{it.name}</span>
-              <span style={{ display: 'flex', gap: 12, flexShrink: 0 }}>
-                <span style={{ color: T.ink, fontWeight: 600 }}>{r(it.calories)} kcal</span>
-                <span style={{ width: 120, textAlign: 'right' }}>{r(it.protein)}p · {r(it.carbs)}c · {r(it.fat)}f</span>
-              </span>
+      {!editing ? (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              {meal.time && <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 2 }}>{meal.time}</div>}
+              <div style={{ fontWeight: 600, fontSize: 14.5, lineHeight: 1.35 }}>{meal.description}</div>
             </div>
-          ))}
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div className="afl-head" style={{ fontWeight: 800, fontSize: 18, color: T.primary }}>{r(meal.totals.calories)}</div>
+              <div style={{ fontSize: 11, color: T.inkFaint }}>kcal</div>
+            </div>
+          </div>
+
+          {meal.photos.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 11.5, color: T.inkFaint, fontStyle: 'italic' }}>
+              {meal.photos.length} photo{meal.photos.length > 1 ? 's' : ''} attached (view from WhatsApp).
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 12.5, color: T.inkSoft, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span><b style={{ color: T.protein }}>P</b> {r(meal.totals.protein)}g</span>
+            <span><b style={{ color: T.carbs }}>C</b> {r(meal.totals.carbs)}g</span>
+            <span><b style={{ color: T.fat }}>F</b> {r(meal.totals.fat)}g</span>
+            <span style={{ color: T.inkFaint }}>Na {r(meal.totals.sodium)}mg</span>
+            <div style={{ flex: 1 }} />
+            <button onClick={onToggle} style={linkBtn}>{open ? 'hide' : `${meal.items.length} item${meal.items.length > 1 ? 's' : ''}`}</button>
+            <button onClick={beginEdit} style={linkBtn}>edit</button>
+            <button onClick={onDelete} style={{ ...linkBtn, color: T.warn }}>delete</button>
+          </div>
+
+          {meal.note && <div style={{ marginTop: 8, fontSize: 12, color: T.inkFaint, fontStyle: 'italic' }}>{meal.note}</div>}
+
+          {open && (
+            <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10 }}>
+              {meal.items.map((it, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '5px 0', color: T.inkSoft }}>
+                  <span style={{ flex: 1 }}>{it.name}</span>
+                  <span style={{ display: 'flex', gap: 12, flexShrink: 0 }}>
+                    <span style={{ color: T.ink, fontWeight: 600 }}>{r(it.calories)} kcal</span>
+                    <span style={{ width: 120, textAlign: 'right' }}>{r(it.protein)}p · {r(it.carbs)}c · {r(it.fat)}f</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div>
+          <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 6 }}>Editing meal{meal.time ? ` · ${meal.time}` : ''}</div>
+          <textarea
+            autoFocus
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            rows={2}
+            placeholder='What did you actually eat?'
+            disabled={saving}
+            style={{ ...textInput, width: '100%', resize: 'vertical', fontSize: 14 }}
+          />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder='Optional note (e.g. "post-workout")'
+            disabled={saving}
+            style={{ ...textInput, width: '100%', marginTop: 8, fontSize: 13.5 }}
+          />
+          <div style={{ marginTop: 8, fontSize: 11.5, color: T.inkFaint }}>
+            If you change the description, Aria re-estimates the macros from scratch.
+          </div>
+          {editError && <div style={{ color: T.warn, fontSize: 12.5, marginTop: 8 }}>{editError}</div>}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+            <button onClick={saveEdit} disabled={saving} style={{ ...smallPrimary, opacity: saving ? 0.6 : 1 }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button onClick={cancelEdit} disabled={saving} style={linkBtn}>cancel</button>
+          </div>
         </div>
       )}
     </div>
@@ -241,6 +312,32 @@ export default function FoodPanel({ apiFetch, authToken }) {
       }
       loadHistory();
     } catch {}
+  }
+
+  async function saveMealEdits(dayKey, id, patch) {
+    const res = await apiFetch(`/api/food/entry/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.detail || data?.error || 'edit failed');
+    }
+    const updated = adaptEntry(await res.json());
+    if (dayKey === activeKey) {
+      setMeals((prev) => prev.map((m) => (m.id === id ? updated : m)));
+    } else {
+      setHistoryEntriesByDate((prev) => ({
+        ...prev,
+        [dayKey]: (prev[dayKey] || []).map((m) => (m.id === id ? updated : m)),
+      }));
+    }
+    // If the entry moved to a different date, refresh both sides.
+    if (patch.localDate || patch.local_date) {
+      loadDay(activeKey);
+    }
+    loadHistory();
   }
 
   async function expandHistoryDay(dateKey) {
@@ -395,7 +492,8 @@ export default function FoodPanel({ apiFetch, authToken }) {
         ) : meals.map((meal) => (
           <MealCard key={meal.id} meal={meal} open={expanded[meal.id]}
             onToggle={() => setExpanded((p) => ({ ...p, [meal.id]: !p[meal.id] }))}
-            onDelete={() => deleteMeal(activeKey, meal.id)} />
+            onDelete={() => deleteMeal(activeKey, meal.id)}
+            onSave={(id, patch) => saveMealEdits(activeKey, id, patch)} />
         ))}
 
         {/* Aria Insights */}
@@ -447,7 +545,8 @@ export default function FoodPanel({ apiFetch, authToken }) {
                         ) : dayEntries.map((meal) => (
                           <MealCard key={meal.id} meal={meal} open={expanded[meal.id]}
                             onToggle={() => setExpanded((p) => ({ ...p, [meal.id]: !p[meal.id] }))}
-                            onDelete={() => deleteMeal(k, meal.id)} />
+                            onDelete={() => deleteMeal(k, meal.id)}
+                            onSave={(id, patch) => saveMealEdits(k, id, patch)} />
                         ))}
                       </div>
                     )}
