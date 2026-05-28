@@ -39,6 +39,7 @@ const db = require('../../db.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { withRetry } = require('./anthropicRetry.cjs');
 const { rediGet, rediSet } = require('./redis.cjs');
+const { incrementDailyCounter } = require('./costTracker.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 const DEBOUNCE_TTL_SEC = 30; // per spec: 30s per user
@@ -46,6 +47,15 @@ const MIN_USER_MSG_CHARS = 30;
 const MAX_FACTS = 5;
 const MAX_FACT_CHARS = 300;
 const MIN_CONFIDENCE = 0.3; // server-side floor; Haiku is told 0.5
+
+// Per-user daily Haiku call cap. The 30s debounce already bounds the
+// theoretical max at ~2880/day, but a determined bot still costs ~$2/day.
+// Default 200/day gives Lyle headroom for 100+ chat-turn power-user days.
+// Override via env (`MEMORY_EXTRACTOR_DAILY_CAP=N`) without a redeploy.
+const DAILY_CAP = (() => {
+  const v = Number(process.env.MEMORY_EXTRACTOR_DAILY_CAP);
+  return Number.isFinite(v) && v > 0 ? v : 200;
+})();
 
 // Strict YES/NO/etc. — confirmation replies should never feed
 // extraction. Mirrors the matcher in whatsapp.cjs.
@@ -126,6 +136,17 @@ async function enrichConversationTurn({ userId, channel, userMessage, assistantT
       const hit = await rediGet(debounceKey);
       if (hit) return;
     } catch { /* fail-soft: run anyway */ }
+
+    // Per-user daily cap. Incrementing BEFORE the Haiku call means a
+    // failed call still counts — preferred for cost protection (the user
+    // is "attempting" the spend even when the API blips). The increment
+    // happens after debounce so background fail-soft paths don't bump
+    // the counter unnecessarily.
+    const capCheck = await incrementDailyCounter(userId, 'memory_extractor', { dailyCap: DAILY_CAP });
+    if (capCheck.exceeded) {
+      logger.info('conversation.enrichment.dailyCap', { userId, channel, count: capCheck.count, cap: DAILY_CAP });
+      return;
+    }
 
     const c = client();
     if (!c) return;
