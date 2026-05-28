@@ -10845,6 +10845,24 @@ async function addFoodLogPhoto({ entryId, imageBlobId, ocrPayload }) {
 }
 
 /**
+ * Today + recent days of food entries for Aria's standing context. Kept
+ * lightweight: 2 days default, max 30 rows. Larger windows go through
+ * getFoodLogHistory or the insights tool.
+ */
+async function getFoodLogForContext(userId, daysBack = 2) {
+  const { rows } = await pool.query(
+    `SELECT id, local_date, logged_at, source, description, items, totals
+     FROM food_log_entries
+     WHERE user_id = $1
+       AND local_date >= (CURRENT_DATE - ($2 || ' days')::interval)
+     ORDER BY logged_at DESC
+     LIMIT 30`,
+    [userId, daysBack],
+  );
+  return rows;
+}
+
+/**
  * Recent daily nutrition rollups for the insights tool. Same shape as
  * getFoodLogHistory but also embeds meal descriptions for grounding.
  */
@@ -11389,6 +11407,7 @@ module.exports = {
   getFoodLogEntryById,
   deleteFoodLogEntryById,
   addFoodLogPhoto,
+  getFoodLogForContext,
   getFoodInsightsContext,
   getStaleRelationshipCandidates,
   recordProactiveDispatch,

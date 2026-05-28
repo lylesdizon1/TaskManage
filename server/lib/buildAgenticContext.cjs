@@ -31,6 +31,8 @@ You have access to the user's contacts and relationship memory in the PEOPLE & R
 
 You have access to the user's Gmail labels and Outlook folders in the EMAIL LABELS block above. Reference labels naturally when discussing emails ("you've got 3 unread in Clients"). Prioritize unread in high-signal labels (clients, legal, finance) when triaging. Suggest existing labels when helping the user file an email — don't invent new ones. When you observe a filing pattern (same sender or domain repeatedly going to one label), note it; the move_email tool with scope='sender' or 'domain' lets the user formalize it.
 
+You have access to the user's recent food log in the FOOD LOG block above. When asked "what did I eat", "how many calories today", or anything about meals/nutrition, use this context first — never say nothing is logged when the block contains entries. When the user describes a new meal in chat, call log_food to persist it. The block only shows today + yesterday; for longer windows the data is available via tools.
+
 PREFERENCE CAPTURE
 When the user explicitly states a preference, rule, or constraint, IMMEDIATELY call set_preference — do not ask permission, do not delay. Listen for phrases like:
 - "I prefer..." / "I like..." / "I always..." / "Always..."
@@ -360,6 +362,7 @@ async function buildAgenticContext(opts) {
     ['recentOutcomes',   () => (db.getRecentOutcomeContext       ? db.getRecentOutcomeContext(userId, 5)                    : Promise.resolve([])),     []],
     ['memoryFacts',      () => (db.getMemoryFactsForUserSmart    ? db.getMemoryFactsForUserSmart(userId, userMessage, 10)
                                 : db.getMemoryFactsForUser        ? db.getMemoryFactsForUser(userId, 10)                     : Promise.resolve([])),     []],
+    ['foodLog',          () => (db.getFoodLogForContext          ? db.getFoodLogForContext(userId, 2)                       : Promise.resolve([])),     []],
     ['projectsCtx',      () => (db.getProjectContextForUser      ? db.getProjectContextForUser(userId, 5)                   : Promise.resolve([])),     []],
     ['contactsData',     () => (db.getRelevantContacts           ? db.getRelevantContacts(userId, 10)                       : Promise.resolve([])),     []],
     ['sharedAccessData', () => (db.getSharedAccessSummary        ? db.getSharedAccessSummary(userId)                        : Promise.resolve(sharedAccessDefault)), sharedAccessDefault],
@@ -392,7 +395,7 @@ async function buildAgenticContext(opts) {
   });
   const {
     user, tasks, notes, recentMemories, calendarNotes, calendarFetch, learnings,
-    importantUnread, recentClassified, recentOutcomes, memoryFacts, projectsCtx,
+    importantUnread, recentClassified, recentOutcomes, memoryFacts, foodLog, projectsCtx,
     contactsData, sharedAccessData, todayJournal, yesterdayJournal, emailLabels,
     rulesBundle, pendingProposals,
   } = ctxValues;
@@ -487,6 +490,7 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   // Memory facts — durable patterns extracted by the enrichment worker.
   // Only facts with strength_score >= 0.5 make it in.
   const factsBlock = buildFactsBlock(memoryFacts);
+  const foodLogBlock = buildFoodLogBlock(foodLog, tz);
 
   // Active projects across every entity the user can access.
   const projectsBlock = buildProjectsBlock(projectsCtx);
@@ -559,7 +563,7 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     }
   }
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + skillsBlock + proposalsBlock + journalBlock + contextBlock;
+  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + foodLogBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + skillsBlock + proposalsBlock + journalBlock + contextBlock;
   console.log('[buildAgenticContext] prompt chars:', systemPrompt.length);
 
   return {
@@ -745,6 +749,42 @@ function buildFactsBlock(facts) {
   const strong = facts.filter((f) => Number(f.strength_score) >= 0.5);
   if (strong.length === 0) return '';
   return `\n\nLEARNED PATTERNS\n${strong.map((f) => `- ${f.fact_text}`).join('\n')}`;
+}
+
+/**
+ * Build a FOOD LOG block from food_log_entries. Groups by local_date,
+ * shows totals + each meal one-liner. Returns '' when no entries so
+ * the prompt stays clean for users not tracking food.
+ */
+function buildFoodLogBlock(entries, tz) {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const byDate = new Map();
+  for (const e of entries) {
+    const key = e.local_date instanceof Date
+      ? e.local_date.toISOString().slice(0, 10)
+      : String(e.local_date).slice(0, 10);
+    if (!byDate.has(key)) byDate.set(key, []);
+    byDate.get(key).push(e);
+  }
+  const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: tz || 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const lines = ['FOOD LOG (recent — what the user has logged eating)'];
+  const sortedKeys = [...byDate.keys()].sort().reverse();
+  for (const date of sortedKeys) {
+    const meals = byDate.get(date);
+    const dayTotals = meals.reduce((a, m) => {
+      for (const k of ['calories', 'protein', 'carbs', 'fat']) {
+        a[k] = (a[k] || 0) + (Number(m.totals?.[k]) || 0);
+      }
+      return a;
+    }, {});
+    const label = date === todayKey ? 'Today' : date;
+    lines.push(`- ${label}: ${Math.round(dayTotals.calories || 0)} kcal (P${Math.round(dayTotals.protein || 0)}g · C${Math.round(dayTotals.carbs || 0)}g · F${Math.round(dayTotals.fat || 0)}g)`);
+    for (const m of meals) {
+      const time = m.logged_at ? new Intl.DateTimeFormat('en-US', { timeZone: tz || 'America/Los_Angeles', hour: 'numeric', minute: '2-digit' }).format(new Date(m.logged_at)) : '';
+      lines.push(`  · ${time ? time + ' — ' : ''}${m.description} (${Math.round(Number(m.totals?.calories) || 0)} kcal)`);
+    }
+  }
+  return `\n\n${lines.join('\n')}`;
 }
 
 /**
