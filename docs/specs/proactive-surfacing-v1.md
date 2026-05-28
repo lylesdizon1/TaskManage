@@ -1,6 +1,6 @@
 # Proactive Surfacing — V1 Spec
 
-**Status:** Draft — locked-spec target for P2 kickoff
+**Status:** LOCKED — decisions resolved 2026-05-28. Ready for P2b scaffold work.
 **Date:** 2026-05-28
 **Author:** Claude + Lyle
 **Related:** `agents-foundation-v1.md`, `memory-phase-2.md`, `aria-health-audit-2026-05-05.md`
@@ -61,10 +61,9 @@ V1's job is to fill exactly these gaps while reusing the existing detector frame
 
 ### 3.1 In scope
 
-1. **Three new detectors** in the existing candidateDetector framework:
-   - `stale_relationship` — contact not mentioned in conversation or referenced in calendar/task/notes for N days, where contact is tagged as `active=true` or has a `relationship` field implying expected cadence.
-   - `stale_project` — project entity has no task activity, note, or update for N days.
-   - `memory_fact_followup` — facts with `fact_type='intention'` or `'decision'` whose `last_seen_at` is >X days old. Triggers a "still planning to ___?" check-in.
+1. **Two new detectors** in the existing candidateDetector framework:
+   - `stale_relationship` — contact not mentioned in conversation or referenced in calendar/task/notes for **30+ days** (locked), where contact is tagged as `active=true` or has a `relationship` field implying expected cadence.
+   - `stale_project` — project entity has no task activity, note, or update for 7+ days.
 
 2. **Push pipeline** — a new cron tick that runs `detectAllCandidates` per user (independent of CC visits), filters candidates eligible for push (not all are), and dispatches via WhatsApp (primary) or fallback channel per user preference.
 
@@ -76,6 +75,7 @@ V1's job is to fill exactly these gaps while reusing the existing detector frame
 
 ### 3.2 Out of scope (V2+)
 
+- **`memory_fact_followup` detector** — deferred to V2. Reasoning: (a) corpus is too young to trigger (5 intentions/decisions total, all <1 day old as of 2026-05-28); (b) requires `confirm_fact` / `retire_fact` tools that don't exist yet; (c) "still on the radar?" carries quiz-master risk that better-aged signals can validate first. Revisit once the corpus has >20 intentions/decisions at 21d+ age.
 - Voice / SMS push channels (P3).
 - Cross-user proactive (e.g., "your shared project with Leo hasn't moved").
 - Reply-aware threading (a push that links back to the source conversation).
@@ -182,18 +182,18 @@ All overridable in settings.
 ### 5.1 `stale_relationship`
 
 **Definition:** A contact tagged as `active=true` OR `relationship` field set (accountant, attorney, mentor, etc.), where:
-- No conversation mention in user/assistant messages in last N days (default 14)
-- No calendar event with that contact in last N days
-- No note tagged to the contact in last N days
+- No conversation mention in user/assistant messages in last **30 days** (locked default)
+- No calendar event with that contact in last 30 days
+- No note tagged to the contact in last 30 days
 
-**Priority formula:** `min(100, 40 + 3 * days_silent)` — caps at 100 when silent 20+ days.
+**Priority formula:** `min(100, 40 + 2 * (days_silent - 30))` — fires at 40 on day 30, caps at 100 by day 60.
 
 **Surfacing message template:**
 > "Heads up — you haven't connected with **{contact.display_name}** ({contact.relationship}) in ~{n} days. Want me to draft a quick check-in?"
 
 **Acceptance criteria:**
 - Allen Douglass (accountant, last mentioned today) does NOT fire.
-- A contact set as relationship='mentor' with no mention in 30d DOES fire at priority ~85.
+- A contact set as relationship='mentor' with no mention in 45d DOES fire at priority 70.
 - Confirmed-inactive contacts (tagged `archived_at` or `active=false`) never fire.
 
 ### 5.2 `stale_project`
@@ -213,22 +213,13 @@ All overridable in settings.
 - Projects updated within window don't fire.
 - One nudge per stale project per cooldown (48h).
 
-### 5.3 `memory_fact_followup`
+### 5.3 `memory_fact_followup` — DEFERRED to V2
 
-**Definition:** A memory_fact where:
-- `fact_type IN ('intention', 'decision')`
-- `last_seen_at` is >21 days ago
-- `strength_score >= 0.5`
-
-**Priority formula:** `min(100, 50 + (days_old - 21))` — so 21d=50, 30d=59, 50d=79.
-
-**Surfacing message template:**
-> "Awhile back you mentioned: *"{fact.text}"*. Still on the radar, or has this shifted?"
-
-**Acceptance criteria:**
-- Intentions/decisions only — not preferences (those rarely "stale").
-- User reply "yes still on it" → `confirm_fact` semantics (bump strength, reset last_seen_at). User reply "dropped it" → `retire_fact` (zero strength).
-- Caps at 1 fact-followup per user per week to avoid quiz-master feel.
+See §3.2 for rationale. Detector design retained for V2 reference:
+- `fact_type IN ('intention', 'decision')`, `last_seen_at` >21 days, `strength_score >= 0.5`.
+- Needs `confirm_fact` / `retire_fact` tools before it's useful.
+- Cap at 1 fact-followup per user per week to avoid quiz-master feel.
+- Reopen when corpus has >20 qualifying facts at 21d+ age.
 
 ---
 
@@ -254,10 +245,9 @@ Lock the spec. Lyle reviews. Adjust open questions.
 4. Fatigue + DND check helpers.
 5. Single test detector for validation — `stale_relationship`.
 
-### P2c — Remaining V1 detectors (session +1, ~200-300 LOC)
+### P2c — Remaining V1 detector + Settings UI (session +1, ~150-200 LOC)
 6. Add `stale_project` detector.
-7. Add `memory_fact_followup` detector + the confirm/retire reply parser.
-8. Settings UI for per-detector enable/disable.
+7. Settings UI for per-detector enable/disable, embedded in the existing **Alerts tab** (locked).
 
 ### P2d — Dogfood + tune (session +2)
 9. Run for ~1 week, measure: dispatches/day, ack rate, dismiss rate per detector.
@@ -265,14 +255,16 @@ Lock the spec. Lyle reviews. Adjust open questions.
 
 ---
 
-## 8. Open questions for Lyle
+## 8. Locked decisions (2026-05-28)
 
-1. **Per-user opt-in?** Default ON (with sensible caps) vs default OFF (require explicit enable per detector)?
-2. **Channel preference:** WhatsApp-first the right default given WA is your primary surface? Or rotate channels?
-3. **The "memory_fact_followup" feel:** Does "still on the radar?" feel like a coworker or a quiz-master? Should we cap it lower (1 per 2 weeks?) or kill it entirely until V2?
-4. **Stale-relationship N=14d a reasonable default,** or do you want it higher (21d) given your normal cadence?
-5. **Push during your evening "shutdown" window** (after wrap time, before bed) — silent, or low-priority allowed?
-6. **Settings UI surface:** add to existing Settings → Alerts tab, or a new "Proactive" tab?
+| # | Decision | Locked answer |
+|---|---|---|
+| 1 | Per-detector default state | **ON** (sensible caps still apply) |
+| 2 | Channel preference default | **WhatsApp first**, then fallback per existing alert preferences |
+| 3 | `memory_fact_followup` inclusion | **DEFERRED to V2** — corpus too young, needs write-loop tools, quiz-master risk untested |
+| 4 | Stale-relationship threshold | **30 days** (longer than initial proposal — matches Lyle's normal cadence) |
+| 5 | Push during evening shutdown | **Silent** — full DND respect, no low-priority exception |
+| 6 | Settings UI location | **Extend Alerts tab** — no new tab |
 
 ---
 
@@ -302,11 +294,11 @@ Worth naming so we don't drift:
 
 ---
 
-## Decisions Log (to fill during review)
+## Decisions Log
 
-- [ ] Per-detector default state (ON / OFF)
-- [ ] Channel preference default
-- [ ] Stale-relationship N (14d / 21d / other)
-- [ ] memory_fact_followup inclusion (ship / defer)
-- [ ] Quiet hours allow low-priority (yes / no)
-- [ ] Settings UI location
+- [x] Per-detector default state — **ON**
+- [x] Channel preference default — **WhatsApp first**
+- [x] Stale-relationship N — **30 days**
+- [x] memory_fact_followup inclusion — **DEFERRED to V2**
+- [x] Quiet hours allow low-priority — **No, silent**
+- [x] Settings UI location — **Extend Alerts tab**
