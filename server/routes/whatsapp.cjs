@@ -44,6 +44,7 @@
  */
 
 const express   = require('express');
+const crypto    = require('crypto');
 const sharp     = require('sharp');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
@@ -53,6 +54,7 @@ const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
+const { rediGet, rediSet } = require('../lib/redis.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
@@ -327,6 +329,26 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             return res.json({ ok: true, skipped: 'unsupported media type' });
           }
           let bytes = Buffer.from(await imgRes.arrayBuffer());
+
+          // Per-image dedup gate (audit-driven 2026-05-28). UltraMsg
+          // retries failed webhook deliveries; the same image bytes can
+          // arrive 3-5× within seconds before the persisted blob_id
+          // exists to dedup against. SHA256(bytes) + per-user 5-min
+          // Redis cache short-circuits identical re-deliveries. The
+          // cached value is the original imageBlobId so downstream
+          // tools (capture_from_image etc) get the same reference.
+          const imageHash = crypto.createHash('sha256').update(bytes).digest('hex');
+          const dedupKey = `whatsapp:img:dedup:${userId}:${imageHash}`;
+          try {
+            const cachedBlobId = await rediGet(dedupKey);
+            if (cachedBlobId) {
+              logger.info('whatsapp.image.dedupHit', {
+                requestId: req.requestId, userId, hash: imageHash.slice(0, 8), cachedBlobId,
+              });
+              return res.json({ ok: true, skipped: 'duplicate image (cached)', cached_blob_id: cachedBlobId });
+            }
+          } catch { /* Redis miss — proceed */ }
+
           if (isHeic) {
             // HEIC has no native Anthropic support — transcode to JPEG.
             // Sharp's HEIC support is built-in when libvips is compiled
@@ -356,6 +378,13 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             // can still describe the image, just without blob_id for
             // downstream save tools.
             logger.warn('whatsapp.image.persistFailed', { requestId: req.requestId, error: blobErr.message });
+          }
+          // Stamp the dedup cache with the blob_id so retries within 5
+          // min short-circuit. TTL longer than UltraMsg's worst-case
+          // retry backoff but short enough that a deliberate re-send
+          // 10 minutes later is processed as a new image.
+          if (imageBlobId) {
+            try { await rediSet(dedupKey, imageBlobId, 300); } catch { /* best-effort */ }
           }
           logger.info('whatsapp.image.downloaded', { requestId: req.requestId, mimeType, sizeKB: Math.round(bytes.length / 1024), imageBlobId });
         } catch (imgErr) {
