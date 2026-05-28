@@ -968,7 +968,7 @@ const ARIA_TOOLS = [
     group: 'capture',
     risk: 'low',
     requires_confirmation: false,
-    description: 'Classify a user-submitted photo and extract structured content. Call exactly once per image, before deciding what to save. For documents you may then call create_note with the extracted title + body. For business_card and food, surface the extracted fields to the user — the dedicated save tools (create_contact, log_food) will land in upcoming commits.',
+    description: 'Classify a user-submitted photo and extract structured content. Call exactly once per image, before deciding what to save. For documents you may then call create_note with the extracted title + body. For business_card use create_contact. For food use log_food — pass the description verbatim from your summary, the image_blob_id, and (when the photo arrived via WhatsApp) the inbound message id as source_msg_id.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1019,6 +1019,25 @@ const ARIA_TOOLS = [
         },
       },
       required: ['image_blob_id', 'classification', 'confidence', 'raw_text'],
+    },
+  },
+  {
+    name: 'log_food',
+    group: 'capture',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Persist a food/meal entry to the user\'s food log. Provide a single natural-language `description` (e.g. "2 large eggs, toast, and black coffee" or the food-class summary from capture_from_image). Aria\'s nutrition engine re-estimates per-item macros server-side, so you do NOT need to pass items/calories. Optional: `image_blob_id` to attach a photo, `source_msg_id` for idempotent WhatsApp re-deliveries, `note` for user-provided context. local_date defaults to the user\'s today in their timezone.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        description:    { type: 'string', maxLength: 4000, description: 'Plain-language meal description. Required.' },
+        local_date:     { type: 'string', description: 'YYYY-MM-DD, user-local. Defaults to today.' },
+        source:         { type: 'string', enum: ['chat', 'whatsapp_ocr', 'manual'], description: 'Defaults to whatsapp_ocr when called from WhatsApp, else chat.' },
+        image_blob_id:  { type: 'string', description: 'Attach photo from a prior capture_from_image call.' },
+        source_msg_id:  { type: 'string', description: 'Inbound message id (UltraMsg id or Twilio MessageSid). Idempotency key.' },
+        note:           { type: 'string', maxLength: 500 },
+      },
+      required: ['description'],
     },
   },
 ];
@@ -1156,7 +1175,6 @@ function requiresConfirmation(toolName, llmDecision, toolInput) {
 }
 
 // Save tools that should always gate when called with image_blob_id.
-// Forward-compatible: create_contact lands in Commit B, log_food in C.
 const IMAGE_SAVE_TOOLS = new Set(['create_note', 'create_contact', 'log_food']);
 
 // ── Tool error sanitisation ────────────────────────────────────────────────
@@ -2823,6 +2841,90 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
           }
           return { success: false, error: e.message };
         }
+      }
+
+      case 'log_food': {
+        const description = typeof toolInput.description === 'string' ? toolInput.description.trim() : '';
+        if (!description) return { success: false, error: 'description is required' };
+
+        const userTz = tz || DEFAULT_TIMEZONE;
+        // local_date default = today in user's tz. en-CA locale formats
+        // as YYYY-MM-DD which is exactly the column type.
+        let localDate = typeof toolInput.local_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(toolInput.local_date)
+          ? toolInput.local_date
+          : new Intl.DateTimeFormat('en-CA', { timeZone: userTz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
+        // Default source from channel — whatsapp_ocr when called from WA,
+        // chat otherwise. Caller can override with an explicit toolInput.source.
+        const sourceDefault = channel === 'whatsapp' ? 'whatsapp_ocr' : 'chat';
+        const source = ['chat', 'whatsapp_ocr', 'manual'].includes(toolInput.source) ? toolInput.source : sourceDefault;
+
+        let estimate;
+        try {
+          const { estimateNutrition } = require('./lib/foodLogTools.cjs');
+          estimate = await estimateNutrition(description);
+        } catch (e) {
+          return { success: false, error: `Nutrition estimate failed: ${e.message}` };
+        }
+
+        const entry = await db.createFoodLogEntry(userId, {
+          localDate,
+          source,
+          description,
+          note: toolInput.note || estimate.note || null,
+          items: estimate.items,
+          sourceMsgId: toolInput.source_msg_id || null,
+        });
+
+        // Attach photo if caller provided an image_blob_id. The blob must
+        // exist (createFoodLogPhoto has a FK to image_blobs); failure here
+        // is non-fatal — the entry still landed.
+        let photoAttached = null;
+        if (toolInput.image_blob_id) {
+          try {
+            const p = await db.addFoodLogPhoto({
+              entryId: entry.id,
+              imageBlobId: toolInput.image_blob_id,
+              ocrPayload: null,
+            });
+            photoAttached = p.id;
+          } catch (e) {
+            // FK violation or missing blob — surface to Aria but don't fail the log
+            return {
+              success: true,
+              entry_id: entry.id,
+              local_date: entry.local_date,
+              totals: entry.totals,
+              photo_attached: false,
+              photo_error: e.message,
+            };
+          }
+        }
+
+        try {
+          await db.logMemory({
+            userId,
+            tool: 'log_food',
+            content: `Logged food: ${description.slice(0, 120)}`,
+            metadata: {
+              entry_id: entry.id,
+              local_date: entry.local_date,
+              source: entry.source,
+              item_count: Array.isArray(entry.items) ? entry.items.length : 0,
+              total_calories: entry.totals?.calories || 0,
+            },
+          });
+        } catch {}
+
+        return {
+          success: true,
+          entry_id: entry.id,
+          local_date: entry.local_date,
+          items: entry.items,
+          totals: entry.totals,
+          note: entry.note,
+          photo_attached: !!photoAttached,
+        };
       }
 
       case 'update_contact': {

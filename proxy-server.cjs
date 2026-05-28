@@ -93,6 +93,7 @@ app.use('/', require('./server/routes/notes.cjs')({ authenticateToken, requireOw
 app.use('/', require('./server/routes/preferences.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/chat.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/financial.cjs')({ authenticateToken, requireOwnership, db }));
+app.use('/', require('./server/routes/food.cjs')({ authenticateToken, requireOwnership, db }));
 app.use('/', require('./server/routes/dashboard.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }));
 const { router: alertsRouter, buildAndSendMorningBrief, buildAndSendDailyWrap } = require('./server/routes/alerts.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google });
 app.use('/', alertsRouter);

@@ -6624,6 +6624,46 @@ async function runMigrations() {
     END $$;
   `).catch((err) => logger.warn('migration.warn', { label: 'entity FK', error: err.message }));
 
+  // ── Food Log (2026-05-28) ─────────────────────────────────────────────
+  // food_log_entries: one row per logged meal/snack.
+  //   local_date — getTodayLocal(tz) at insert (never UTC).
+  //   source     — 'chat' | 'whatsapp_ocr' | 'manual'
+  //   items      — [{ name, calories, protein, carbs, fat, fiber, sugar, sodium }]
+  //                kcal + grams + mg, whole numbers.
+  //   totals     — same shape as items, summed server-side (never trusted from client).
+  //   source_msg_id — idempotency key for inbound WhatsApp (UltraMsg id now,
+  //                   Twilio MessageSid post-migration). UNIQUE so retries
+  //                   are exactly-once.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS food_log_entries (
+      id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      local_date    DATE NOT NULL,
+      logged_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      source        TEXT NOT NULL DEFAULT 'chat',
+      description   TEXT NOT NULL,
+      note          TEXT,
+      items         JSONB NOT NULL,
+      totals        JSONB NOT NULL,
+      source_msg_id TEXT UNIQUE,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'food_log_entries', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_food_log_entries_user_date
+    ON food_log_entries(user_id, local_date DESC)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS food_log_photos (
+      id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      entry_id      TEXT NOT NULL REFERENCES food_log_entries(id) ON DELETE CASCADE,
+      image_blob_id TEXT NOT NULL REFERENCES image_blobs(id) ON DELETE CASCADE,
+      ocr_payload   JSONB,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'food_log_photos', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_food_log_photos_entry
+    ON food_log_photos(entry_id)`).catch(() => {});
+
   // ── Proactive Surfacer (P2b, 2026-05-28) ──────────────────────────────
   // Records every proactive dispatch for fatigue, dedup, and ack telemetry.
   // candidate_key matches the hash in candidateDetector so re-fires of the
@@ -10679,6 +10719,158 @@ async function getMemoryFactsForUserSmart(userId, userMessage, limit = 10) {
   return [...matched, ...fallback];
 }
 
+// ── Food Log helpers (2026-05-28) ─────────────────────────────────────
+
+const FOOD_MACRO_KEYS = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium'];
+
+/**
+ * Sum per-item macros into a totals object. Server-side authority — the
+ * client/LLM may return whatever items it wants, but totals are recomputed
+ * here so the persisted row always reconciles with the items.
+ */
+function computeFoodTotals(items) {
+  const totals = Object.fromEntries(FOOD_MACRO_KEYS.map((k) => [k, 0]));
+  if (!Array.isArray(items)) return totals;
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue;
+    for (const k of FOOD_MACRO_KEYS) {
+      const v = Number(it[k]);
+      if (Number.isFinite(v) && v >= 0) totals[k] += Math.round(v);
+    }
+  }
+  return totals;
+}
+
+/**
+ * Insert a food log entry. Idempotent on `sourceMsgId` — if a row with
+ * the same source_msg_id exists, returns it instead of inserting. Caller
+ * never sees a UNIQUE violation, which is what the spec calls
+ * "exactly-once" for WhatsApp retries.
+ */
+async function createFoodLogEntry(userId, { localDate, source, description, note, items, sourceMsgId }) {
+  if (!userId) throw new Error('userId required');
+  if (!localDate) throw new Error('localDate required');
+  if (!description) throw new Error('description required');
+  const totals = computeFoodTotals(items);
+  const safeItems = Array.isArray(items) ? items : [];
+
+  // Idempotency: if sourceMsgId is set and already present, return the
+  // existing row. Avoids races by also using INSERT ... ON CONFLICT.
+  if (sourceMsgId) {
+    const existing = await pool.query(
+      `SELECT * FROM food_log_entries WHERE source_msg_id = $1 AND user_id = $2`,
+      [sourceMsgId, userId],
+    );
+    if (existing.rows[0]) return existing.rows[0];
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO food_log_entries
+       (user_id, local_date, source, description, note, items, totals, source_msg_id)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
+     ON CONFLICT (source_msg_id) DO UPDATE SET source_msg_id = EXCLUDED.source_msg_id
+     RETURNING *`,
+    [userId, localDate, source || 'chat', description, note || null, JSON.stringify(safeItems), JSON.stringify(totals), sourceMsgId || null],
+  );
+  return rows[0];
+}
+
+async function getFoodLogEntriesForDay(userId, localDate) {
+  const { rows } = await pool.query(
+    `SELECT e.*,
+            COALESCE(json_agg(json_build_object(
+              'id', p.id,
+              'imageBlobId', p.image_blob_id,
+              'createdAt', p.created_at
+            )) FILTER (WHERE p.id IS NOT NULL), '[]'::json) AS photos
+     FROM food_log_entries e
+     LEFT JOIN food_log_photos p ON p.entry_id = e.id
+     WHERE e.user_id = $1 AND e.local_date = $2
+     GROUP BY e.id
+     ORDER BY e.logged_at DESC`,
+    [userId, localDate],
+  );
+  return rows;
+}
+
+async function getFoodLogHistory(userId, limit = 30) {
+  const { rows } = await pool.query(
+    `SELECT local_date,
+            COUNT(*)::int AS entry_count,
+            jsonb_build_object(
+              'calories', SUM(COALESCE((totals->>'calories')::int, 0)),
+              'protein',  SUM(COALESCE((totals->>'protein')::int, 0)),
+              'carbs',    SUM(COALESCE((totals->>'carbs')::int, 0)),
+              'fat',      SUM(COALESCE((totals->>'fat')::int, 0)),
+              'fiber',    SUM(COALESCE((totals->>'fiber')::int, 0)),
+              'sugar',    SUM(COALESCE((totals->>'sugar')::int, 0)),
+              'sodium',   SUM(COALESCE((totals->>'sodium')::int, 0))
+            ) AS totals
+     FROM food_log_entries
+     WHERE user_id = $1
+     GROUP BY local_date
+     ORDER BY local_date DESC
+     LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
+/**
+ * Fetch entry by id WITHOUT ownership filter so the route layer can call
+ * requireOwnership() per the architectural rule "Authorization lives in
+ * middleware, not SQL helpers."
+ */
+async function getFoodLogEntryById(entryId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM food_log_entries WHERE id = $1`,
+    [entryId],
+  );
+  return rows[0] || null;
+}
+
+async function deleteFoodLogEntryById(entryId) {
+  await pool.query(`DELETE FROM food_log_entries WHERE id = $1`, [entryId]);
+}
+
+async function addFoodLogPhoto({ entryId, imageBlobId, ocrPayload }) {
+  const { rows } = await pool.query(
+    `INSERT INTO food_log_photos (entry_id, image_blob_id, ocr_payload)
+     VALUES ($1, $2, $3::jsonb)
+     RETURNING id, entry_id AS "entryId", image_blob_id AS "imageBlobId",
+               created_at AS "createdAt"`,
+    [entryId, imageBlobId, ocrPayload ? JSON.stringify(ocrPayload) : null],
+  );
+  return rows[0];
+}
+
+/**
+ * Recent daily nutrition rollups for the insights tool. Same shape as
+ * getFoodLogHistory but also embeds meal descriptions for grounding.
+ */
+async function getFoodInsightsContext(userId, days = 14) {
+  const { rows } = await pool.query(
+    `SELECT local_date,
+            jsonb_build_object(
+              'calories', SUM(COALESCE((totals->>'calories')::int, 0)),
+              'protein',  SUM(COALESCE((totals->>'protein')::int, 0)),
+              'carbs',    SUM(COALESCE((totals->>'carbs')::int, 0)),
+              'fat',      SUM(COALESCE((totals->>'fat')::int, 0)),
+              'fiber',    SUM(COALESCE((totals->>'fiber')::int, 0)),
+              'sugar',    SUM(COALESCE((totals->>'sugar')::int, 0)),
+              'sodium',   SUM(COALESCE((totals->>'sodium')::int, 0))
+            ) AS totals,
+            array_agg(description ORDER BY logged_at) AS meals
+     FROM food_log_entries
+     WHERE user_id = $1
+       AND local_date >= (CURRENT_DATE - ($2 || ' days')::interval)
+     GROUP BY local_date
+     ORDER BY local_date DESC`,
+    [userId, days],
+  );
+  return rows;
+}
+
 // ── Proactive Surfacer helpers (P2b, 2026-05-28) ──────────────────────
 
 /**
@@ -11190,6 +11382,14 @@ module.exports = {
   upsertMemoryFact,
   getMemoryFactsForUser,
   getMemoryFactsForUserSmart,
+  computeFoodTotals,
+  createFoodLogEntry,
+  getFoodLogEntriesForDay,
+  getFoodLogHistory,
+  getFoodLogEntryById,
+  deleteFoodLogEntryById,
+  addFoodLogPhoto,
+  getFoodInsightsContext,
   getStaleRelationshipCandidates,
   recordProactiveDispatch,
   countRecentDispatches,
