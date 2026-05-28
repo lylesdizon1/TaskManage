@@ -847,3 +847,20 @@ cron.schedule('*/30 * * * *', async () => {
   }
 });
 console.log('[cron] Gmail token refresh scheduler started');
+
+// ── Proactive Surfacer cron — runs every 30 min ──────────────────────────
+// P2b (2026-05-28). Walks opted-in users, dispatches push-eligible
+// candidates from candidateDetector via the user's preferred channel
+// (WhatsApp first, Slack fallback). DND + daily cap + per-candidate
+// cooldown enforced inside the surfacer. Tick gated by PROACTIVE_SURFACER_ENABLED
+// so the cron can be hot-disabled in prod without a redeploy.
+const { runProactiveSurfacerTick } = require('./server/lib/proactiveSurfacer.cjs');
+cron.schedule('*/30 * * * *', async () => {
+  if (process.env.PROACTIVE_SURFACER_ENABLED !== 'true') return;
+  try {
+    await runProactiveSurfacerTick({ db, logger: cronLogger });
+  } catch (err) {
+    cronLogger.error('proactive-surfacer.cron-failed', { error: err.message });
+  }
+});
+console.log('[cron] Proactive surfacer scheduler started (inert until PROACTIVE_SURFACER_ENABLED=true)');

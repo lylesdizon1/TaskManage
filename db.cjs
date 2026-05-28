@@ -6624,6 +6624,32 @@ async function runMigrations() {
     END $$;
   `).catch((err) => logger.warn('migration.warn', { label: 'entity FK', error: err.message }));
 
+  // ── Proactive Surfacer (P2b, 2026-05-28) ──────────────────────────────
+  // Records every proactive dispatch for fatigue, dedup, and ack telemetry.
+  // candidate_key matches the hash in candidateDetector so re-fires of the
+  // same underlying signal collapse onto one cooldown window.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS proactive_dispatch (
+      id              SERIAL PRIMARY KEY,
+      user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      candidate_type  TEXT NOT NULL,
+      candidate_key   TEXT NOT NULL,
+      channel         TEXT NOT NULL,
+      priority_score  INT NOT NULL,
+      dispatched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      acknowledged_at TIMESTAMPTZ,
+      outcome_text    TEXT
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'proactive_dispatch table', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_proactive_dispatch_user_time
+    ON proactive_dispatch(user_id, dispatched_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_proactive_dispatch_dedup
+    ON proactive_dispatch(user_id, candidate_type, candidate_key, dispatched_at DESC)`).catch(() => {});
+  // Per-user proactive toggle + WhatsApp cap. Default ON (locked per
+  // spec §8). Cap 3/day matches the spec's WhatsApp default.
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS proactive_surfacing_enabled BOOLEAN DEFAULT TRUE`).catch(() => {});
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS proactive_whatsapp_daily_cap INT DEFAULT 3`).catch(() => {});
+
   // ── Chat persistence FKs (2026-05-28, Commit A of CC persistence fix) ──
   // Pre-fix, chat_messages.conversation_id had no referential integrity, so
   // a deleted/never-existed conversation_id would silently land orphan rows
@@ -10653,6 +10679,131 @@ async function getMemoryFactsForUserSmart(userId, userMessage, limit = 10) {
   return [...matched, ...fallback];
 }
 
+// ── Proactive Surfacer helpers (P2b, 2026-05-28) ──────────────────────
+
+/**
+ * Contacts whose "last touch" (max of contact.updated_at and the most
+ * recent memory_facts.last_seen_at tagged to this contact) is older
+ * than `daysSilent`. Eligibility additionally requires:
+ *   - not archived
+ *   - role is set (proxy for "relationship" — random business cards
+ *     without an assigned role don't warrant stale-relationship nudges)
+ *   - contact older than `daysSilent` (freshly OCR'd contacts shouldn't
+ *     immediately fire on the same day they're added)
+ */
+async function getStaleRelationshipCandidates(userId, daysSilent = 30, limit = 20) {
+  const { rows } = await pool.query(
+    `SELECT
+       c.id, c.display_name AS "displayName", c.role, c.company,
+       c.primary_email AS "primaryEmail",
+       c.updated_at AS "updatedAt",
+       MAX(mf.last_seen_at) AS "lastFactAt",
+       GREATEST(c.updated_at, COALESCE(MAX(mf.last_seen_at), c.updated_at)) AS "lastTouchAt",
+       EXTRACT(DAY FROM NOW() - GREATEST(c.updated_at, COALESCE(MAX(mf.last_seen_at), c.updated_at)))::int AS "daysSilent"
+     FROM contacts c
+     LEFT JOIN memory_facts mf ON mf.contact_id = c.id AND mf.user_id = c.user_id
+     WHERE c.user_id = $1
+       AND c.archived_at IS NULL
+       AND c.role IS NOT NULL AND c.role <> ''
+       AND c.created_at < NOW() - ($2 || ' days')::interval
+     GROUP BY c.id
+     HAVING GREATEST(c.updated_at, COALESCE(MAX(mf.last_seen_at), c.updated_at))
+            < NOW() - ($2 || ' days')::interval
+     ORDER BY "lastTouchAt" ASC
+     LIMIT $3`,
+    [userId, daysSilent, limit],
+  );
+  return rows;
+}
+
+/**
+ * Insert a record of a proactive push for fatigue + dedup + telemetry.
+ * Returns the inserted row id.
+ */
+async function recordProactiveDispatch({ userId, candidateType, candidateKey, channel, priorityScore }) {
+  const { rows } = await pool.query(
+    `INSERT INTO proactive_dispatch
+       (user_id, candidate_type, candidate_key, channel, priority_score)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [userId, candidateType, candidateKey, channel, priorityScore],
+  );
+  return rows[0]?.id;
+}
+
+/**
+ * Count dispatches for a user on a specific channel within the last
+ * `sinceMs` milliseconds. Used for the per-channel daily cap.
+ */
+async function countRecentDispatches(userId, channel, sinceMs) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n
+     FROM proactive_dispatch
+     WHERE user_id = $1
+       AND channel = $2
+       AND dispatched_at > NOW() - ($3 || ' milliseconds')::interval`,
+    [userId, channel, sinceMs],
+  );
+  return rows[0]?.n || 0;
+}
+
+/**
+ * Most recent dispatch for a given candidate (any channel) — used to
+ * enforce per-candidate cooldown windows.
+ */
+async function getLatestDispatchForCandidate(userId, candidateType, candidateKey) {
+  const { rows } = await pool.query(
+    `SELECT id, channel, priority_score AS "priorityScore",
+            dispatched_at AS "dispatchedAt", acknowledged_at AS "acknowledgedAt"
+     FROM proactive_dispatch
+     WHERE user_id = $1 AND candidate_type = $2 AND candidate_key = $3
+     ORDER BY dispatched_at DESC
+     LIMIT 1`,
+    [userId, candidateType, candidateKey],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * True if the user is currently inside their DND window. Uses the same
+ * SQL pattern as the alert scheduler (CASE handles overnight windows
+ * where dnd_start > dnd_end).
+ */
+async function isUserInDND(userId) {
+  const { rows } = await pool.query(
+    `SELECT (
+       CASE
+         WHEN COALESCE(up.dnd_start, '22:00') > COALESCE(up.dnd_end, '07:00')
+           THEN (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time >= COALESCE(up.dnd_start, '22:00')::time
+              OR (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time < COALESCE(up.dnd_end, '07:00')::time
+         ELSE (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time >= COALESCE(up.dnd_start, '22:00')::time
+          AND (NOW() AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::time < COALESCE(up.dnd_end, '07:00')::time
+       END
+     ) AS "inDnd"
+     FROM users u
+     LEFT JOIN user_preferences up ON up.user_id = u.id
+     WHERE u.id = $1`,
+    [userId],
+  );
+  return Boolean(rows[0]?.inDnd);
+}
+
+/**
+ * Users with proactive surfacing enabled. Default TRUE (column default)
+ * so users without an explicit preferences row still appear here.
+ */
+async function getUsersWithProactiveSurfacingEnabled() {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.timezone,
+            COALESCE(up.proactive_whatsapp_daily_cap, 3) AS "whatsappDailyCap"
+     FROM users u
+     LEFT JOIN user_preferences up ON up.user_id = u.id
+     WHERE COALESCE(u.active, TRUE) = TRUE
+       AND COALESCE(up.proactive_surfacing_enabled, TRUE) = TRUE`,
+  );
+  return rows;
+}
+
 /**
  * Recent outcomes with narrative notes — fed into the Aria system prompt
  * so responses reflect what actually happened on prior tasks/events.
@@ -11039,6 +11190,12 @@ module.exports = {
   upsertMemoryFact,
   getMemoryFactsForUser,
   getMemoryFactsForUserSmart,
+  getStaleRelationshipCandidates,
+  recordProactiveDispatch,
+  countRecentDispatches,
+  getLatestDispatchForCandidate,
+  isUserInDND,
+  getUsersWithProactiveSurfacingEnabled,
   // People Memory + Shared Access (Phase 0)
   getContactsForUser,
   getContactById,

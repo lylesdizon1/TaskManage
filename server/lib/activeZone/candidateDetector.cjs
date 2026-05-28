@@ -45,6 +45,7 @@ const CANDIDATE_TYPES = new Set([
   'daily_wrap_due',
   'critical_email_unacked',
   'single_urgent_task',
+  'stale_relationship',
 ]);
 
 // Urgency is downstream of priority — used only for tie-breaks.
@@ -294,6 +295,33 @@ function detectSingleUrgentTask(state) {
   };
 }
 
+/**
+ * 10. Stale relationship — a known contact with role (relationship) set
+ * whose last touch (contact.updated_at OR memory_facts.last_seen_at on
+ * facts tagged to this contact) is older than the threshold (default
+ * 30 days, locked per spec §8). Push-eligible — this is one of two
+ * V1 detectors authorized to dispatch to WhatsApp.
+ *
+ * Priority formula: min(100, 40 + 2 * (days_silent - 30)) — fires at
+ * 40 on day 30, caps at 100 by day 60.
+ */
+function detectStaleRelationshipBatch(state) {
+  const { staleRelationships = [] } = state;
+  if (!staleRelationships.length) return null;
+  const maxDays = staleRelationships.reduce((m, c) => Math.max(m, c.daysSilent || 0), 0);
+  const priority = Math.min(100, 40 + 2 * Math.max(0, maxDays - 30));
+  return {
+    type: 'stale_relationship',
+    candidate_key: hashItems('stale_relationship_batch', staleRelationships.map((c) => c.id)),
+    priority_score: priority,
+    urgency: urgencyFromPriority(priority),
+    push_eligible: true,
+    push_min_priority: 40,
+    items: staleRelationships,
+    context: { count: staleRelationships.length, max_days_silent: maxDays },
+  };
+}
+
 // ── Orchestrator ─────────────────────────────────────────────────────────
 
 /**
@@ -313,6 +341,7 @@ function detectAllCandidates(state, { topN = 3 } = {}) {
     detectCriticalEmailUnacked,
     detectDraftResume,
     detectDailyWrapDue,
+    detectStaleRelationshipBatch, // P2b, push-eligible
   ];
   const raw = detectors.map((fn) => { try { return fn(state); } catch { return null; } }).filter(Boolean);
   raw.sort((a, b) => {
@@ -351,7 +380,7 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
   const winStart = new Date(now.getTime() - 3600000).toISOString();
   const winEnd   = new Date(now.getTime() + 4 * 3600000).toISOString();
 
-  const [tasks, events, closeLoops, pendingConfirmations, criticalFlagged, todayJournal] = await Promise.all([
+  const [tasks, events, closeLoops, pendingConfirmations, criticalFlagged, todayJournal, staleRelationships] = await Promise.all([
     db.getTasksForUser(userId, user?.entityIds || []).catch(() => []),
     db.getCalendarEventsForUser(userId, winStart, winEnd).catch(() => []),
     db.getOpenCloseLoopItems
@@ -372,6 +401,12 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
     db.getJournalEntryByDate
       ? db.getJournalEntryByDate(userId, todayLocalIso).catch(() => null)
       : Promise.resolve(null),
+    // P2b — stale relationships fed into detectStaleRelationshipBatch.
+    // Returns [] when the helper isn't loaded so legacy code paths
+    // (tests, older state loaders) don't break.
+    db.getStaleRelationshipCandidates
+      ? db.getStaleRelationshipCandidates(userId, 30, 20).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
   const flaggedUnackedCount = criticalFlagged?.count || 0;
@@ -389,6 +424,7 @@ async function loadUserStateForActiveZone(userId, db, { now = new Date() } = {})
     flaggedUnackedCount,
     flaggedItems,
     todayJournal,
+    staleRelationships,
     drafts: [], // no persistence yet — see detectDraftResume comment
   };
 }
