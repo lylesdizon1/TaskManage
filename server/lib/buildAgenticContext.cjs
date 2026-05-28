@@ -358,7 +358,8 @@ async function buildAgenticContext(opts) {
     ['importantUnread',  () => (db.getImportantUnread            ? db.getImportantUnread(userId, emailContextMinRank)       : Promise.resolve([])),     []],
     ['recentClassified', () => (db.getRecentClassifications      ? db.getRecentClassifications(userId, recentClassifiedLimit): Promise.resolve([])),    []],
     ['recentOutcomes',   () => (db.getRecentOutcomeContext       ? db.getRecentOutcomeContext(userId, 5)                    : Promise.resolve([])),     []],
-    ['memoryFacts',      () => (db.getMemoryFactsForUser         ? db.getMemoryFactsForUser(userId, 10)                     : Promise.resolve([])),     []],
+    ['memoryFacts',      () => (db.getMemoryFactsForUserSmart    ? db.getMemoryFactsForUserSmart(userId, userMessage, 10)
+                                : db.getMemoryFactsForUser        ? db.getMemoryFactsForUser(userId, 10)                     : Promise.resolve([])),     []],
     ['projectsCtx',      () => (db.getProjectContextForUser      ? db.getProjectContextForUser(userId, 5)                   : Promise.resolve([])),     []],
     ['contactsData',     () => (db.getRelevantContacts           ? db.getRelevantContacts(userId, 10)                       : Promise.resolve([])),     []],
     ['sharedAccessData', () => (db.getSharedAccessSummary        ? db.getSharedAccessSummary(userId)                        : Promise.resolve(sharedAccessDefault)), sharedAccessDefault],

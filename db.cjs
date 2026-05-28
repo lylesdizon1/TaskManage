@@ -10568,6 +10568,91 @@ async function getMemoryFactsForUser(userId, limit = 10) {
   return rows;
 }
 
+// ── Smart recall (M2, 2026-05-28) ──────────────────────────────────────
+// Stopwords + min-len gate together; we keep this list short and
+// English-only by design — the goal is to strip filler ("about", "what",
+// "going") so keyword matches against fact_text are signal-bearing, not
+// to do real NLP. Anything not in the stopword list ≥4 chars passes.
+const SMART_RECALL_STOPWORDS = new Set([
+  'about', 'above', 'after', 'again', 'against', 'because', 'before', 'being', 'below',
+  'between', 'both', 'cant', 'could', 'does', 'doing', 'down', 'during', 'each', 'from',
+  'have', 'having', 'here', 'into', 'just', 'more', 'most', 'only', 'other', 'over',
+  'same', 'some', 'such', 'than', 'that', 'their', 'them', 'then', 'there', 'these',
+  'they', 'this', 'those', 'through', 'under', 'until', 'very', 'were', 'what', 'when',
+  'where', 'which', 'while', 'will', 'with', 'would', 'your', 'yours', 'yourself',
+  'today', 'tomorrow', 'yesterday', 'please', 'thanks', 'thank',
+]);
+
+function extractSmartRecallKeywords(text) {
+  if (typeof text !== 'string') return [];
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 4 && !SMART_RECALL_STOPWORDS.has(t));
+  return [...new Set(tokens)].slice(0, 8);
+}
+
+/**
+ * Query-aware global fact recall (M2). Ranks facts that mention the
+ * user's message keywords ahead of the strength-only fallback. Falls
+ * back to plain strength ranking when the message is empty, too short,
+ * or contains no signal-bearing tokens.
+ *
+ * Strategy:
+ *   1. Tokenize userMessage → keywords (lowercase, ≥4 chars, non-stopword).
+ *   2. Pull facts matching ANY keyword via ILIKE, ranked by strength.
+ *   3. Fill remaining slots with strength-only fallback, excluding ids
+ *      already pulled in step 2.
+ *
+ * Same SELECT shape as getMemoryFactsForUser so buildFactsBlock consumes
+ * either transparently. `id` is added for dedup but not rendered.
+ */
+async function getMemoryFactsForUserSmart(userId, userMessage, limit = 10) {
+  const keywords = extractSmartRecallKeywords(userMessage);
+  if (keywords.length === 0) {
+    return getMemoryFactsForUser(userId, limit);
+  }
+
+  const ilikeClauses = keywords.map((_, i) => `fact_text ILIKE $${i + 2}`).join(' OR ');
+  const ilikeParams = keywords.map((k) => `%${k}%`);
+  const matchedSql = `
+    SELECT id, fact_text, fact_type, supporting_count, strength_score, last_seen_at
+    FROM memory_facts
+    WHERE user_id = $1
+      AND contact_id IS NULL
+      AND (${ilikeClauses})
+    ORDER BY strength_score DESC, last_seen_at DESC
+    LIMIT $${keywords.length + 2}
+  `;
+  const { rows: matched } = await pool.query(matchedSql, [userId, ...ilikeParams, limit]);
+
+  if (matched.length >= limit) return matched;
+
+  const remaining = limit - matched.length;
+  const matchedIds = matched.map((r) => r.id);
+  const fallbackSql = matchedIds.length > 0
+    ? `SELECT id, fact_text, fact_type, supporting_count, strength_score, last_seen_at
+       FROM memory_facts
+       WHERE user_id = $1
+         AND contact_id IS NULL
+         AND id <> ALL($2::int[])
+       ORDER BY strength_score DESC, last_seen_at DESC
+       LIMIT $3`
+    : `SELECT id, fact_text, fact_type, supporting_count, strength_score, last_seen_at
+       FROM memory_facts
+       WHERE user_id = $1
+         AND contact_id IS NULL
+       ORDER BY strength_score DESC, last_seen_at DESC
+       LIMIT $2`;
+  const fallbackParams = matchedIds.length > 0
+    ? [userId, matchedIds, remaining]
+    : [userId, remaining];
+  const { rows: fallback } = await pool.query(fallbackSql, fallbackParams);
+
+  return [...matched, ...fallback];
+}
+
 /**
  * Recent outcomes with narrative notes — fed into the Aria system prompt
  * so responses reflect what actually happened on prior tasks/events.
@@ -10953,6 +11038,7 @@ module.exports = {
   updateOutcomeFollowUp,
   upsertMemoryFact,
   getMemoryFactsForUser,
+  getMemoryFactsForUserSmart,
   // People Memory + Shared Access (Phase 0)
   getContactsForUser,
   getContactById,
