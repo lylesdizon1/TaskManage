@@ -69,7 +69,10 @@ function formatCloseLoopDate(dateInput, tz, opts = {}) {
   let datePart;
   if (dayDiff === 0)       datePart = 'Today';
   else if (dayDiff === 1)  datePart = 'Yesterday';
-  else if (dayDiff > 1 && dayDiff < 7) datePart = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: tz });
+  // Weekday alone ("Wed") was ambiguous when multiple Wednesdays were
+  // visible (e.g. duplicate close-loop entries pre-Path C; recurring
+  // meeting series). Appending m/d disambiguates: "Wed, 5/20 9:00 PM".
+  else if (dayDiff > 1 && dayDiff < 7) datePart = d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric', timeZone: tz });
   else                     datePart = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: tz });
   // Absolute dates use a comma separator before time; relative uses a space.
   const isAbsolute = dayDiff >= 7 || dayDiff < 0;
