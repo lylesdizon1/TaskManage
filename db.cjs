@@ -6624,6 +6624,29 @@ async function runMigrations() {
     END $$;
   `).catch((err) => logger.warn('migration.warn', { label: 'entity FK', error: err.message }));
 
+  // ── Chat persistence FKs (2026-05-28, Commit A of CC persistence fix) ──
+  // Pre-fix, chat_messages.conversation_id had no referential integrity, so
+  // a deleted/never-existed conversation_id would silently land orphan rows
+  // (~556 cleared via Commit C). chat_conversations.user_id FK deferred —
+  // 1 empty orphan conversation (id 239) still references a deleted user
+  // and needs separate cleanup authorization.
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_conversation_id_fkey
+        FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE;
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `).catch((err) => logger.warn('migration.warn', { label: 'chat_messages.conversation_id FK', error: err.message }));
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_user_id_fkey
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `).catch((err) => logger.warn('migration.warn', { label: 'chat_messages.user_id FK', error: err.message }));
+
   // Seed entity types for existing entities (idempotent)
   await pool.query(`
     UPDATE entities SET type = 'personal'
