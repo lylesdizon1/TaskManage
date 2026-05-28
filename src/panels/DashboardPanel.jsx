@@ -456,6 +456,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const ccSendRef    = useRef(null);   // holds latest handleCcSend for cross-surface triggers
   const ccMessagesRef = useRef(ccCacheInit || []);    // mirror of ccMessages for stable reads inside callbacks
   const ccSendingRef = useRef(false);  // mirror of ccSending for reads inside fetchBriefContext
+  const ccConvIdRef  = useRef(null);   // mirror of ccConvId — read at POST time, not via stale closure
   const activeZoneStateRef = useRef('empty'); // mirror of activeZoneState for reads inside fetchBriefContext
 
   // Inline-note capture: exactly one row's textarea is open at a time.
@@ -705,6 +706,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // latest committed state without depending on ccMessages in their deps.
   useEffect(() => { ccMessagesRef.current = ccMessages; }, [ccMessages]);
   useEffect(() => { ccSendingRef.current = ccSending; }, [ccSending]);
+  // Mirror ccConvId so handleCcSend's POSTs read the LATEST value rather
+  // than the closure-captured one. Fixes the race observed 2026-05-28
+  // where init created conversation 1580 while a concurrent send POST'd
+  // to the stale (closure-captured) 1579 — orphaning the message.
+  useEffect(() => { ccConvIdRef.current = ccConvId; }, [ccConvId]);
   // 60s safety-net: if ccSending stays true for a full minute, force-
   // reset it. This covers edge cases where the SSE stream silently dies
   // (network change, server restart) and the finally block never fires.
@@ -1186,7 +1192,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // Send user message + stream Aria response
   const handleCcSend = useCallback(async (textOverride) => {
     const text = (typeof textOverride === 'string' ? textOverride : ccInput).trim();
-    if (!text || ccSending || !ccConvId) return;
+    // Block sends while init is mid-flight. Without this guard, a user
+    // typing fast against a freshly-loaded CC could send before init
+    // finished assigning ccConvId, with the POST landing on whatever
+    // stale ccConvId (from React state) happened to be set at that
+    // moment. See docs/investigations/cc-persistence-state.md Bug 1.
+    if (!text || ccSending || !ccConvId || ccInitRunningRef.current) return;
     setCcInput('');
     setCcSending(true);
     ccStoppedRef.current = false;
@@ -1222,9 +1233,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString(), ts: Date.now() };
     setCcMessages((prev) => [...prev, userMsg]);
 
-    // Save user message
+    // Save user message. Use the ref so a late init flip mid-handler
+    // doesn't leave us POSTing to a stale conversation_id captured at
+    // useCallback invocation.
+    const convIdAtSend = ccConvIdRef.current;
     try {
-      await apiFetch(`/api/conversations/${ccConvId}/messages`, {
+      await apiFetch(`/api/conversations/${convIdAtSend}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ role: 'user', content: text }),
@@ -1236,7 +1250,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (userMsgCount === 0) {
       const autoTitle = text.length > 50 ? text.slice(0, 50).trim() + '...' : text.trim();
       try {
-        await apiFetch(`/api/conversations/${ccConvId}`, {
+        await apiFetch(`/api/conversations/${convIdAtSend}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
           body: JSON.stringify({ title: autoTitle }),
@@ -1261,7 +1275,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         const res = await apiFetch('/api/chat/draft', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ message: text, conversation_id: ccConvId }),
+          body: JSON.stringify({ message: text, conversation_id: convIdAtSend }),
         });
         if (res.ok) {
           const data = await res.json();
@@ -1667,9 +1681,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         });
       }
 
-      // Save assistant response (skip if user stopped mid-stream)
+      // Save assistant response (skip if user stopped mid-stream).
+      // Same convIdAtSend captured at handler entry — assistant reply
+      // must land in the same conversation as the user message even if
+      // ccConvId flipped during streaming.
       if (fullResponse && !ccStoppedRef.current) {
-        await apiFetch(`/api/conversations/${ccConvId}/messages`, {
+        await apiFetch(`/api/conversations/${convIdAtSend}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
           body: JSON.stringify({ role: 'assistant', content: fullResponse }),
