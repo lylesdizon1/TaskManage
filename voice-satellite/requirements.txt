@@ -1,0 +1,24 @@
+# Voice satellite — runtime dependencies.
+# Single external vendor: ElevenLabs (Scribe v2 Realtime STT + Flash v2.5 TTS).
+
+# Local wake-word detection (on-device; the privacy gate).
+openwakeword>=0.6.0
+
+# Audio capture + playback (16 kHz mono int16 PCM end-to-end).
+sounddevice>=0.4.6
+numpy>=1.24
+
+# Global push-to-talk hotkey.
+pynput>=1.7.6
+
+# Power-state detection for `auto` mode (battery vs AC).
+psutil>=5.9
+
+# WebSocket client for ElevenLabs Scribe (STT) and Flash (TTS) streaming.
+websockets>=12.0
+
+# HTTP client for the Aria backend call.
+requests>=2.31
+
+# Local .env loading.
+python-dotenv>=1.0

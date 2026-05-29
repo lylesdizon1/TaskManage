@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd TEMPLATE for the Aria voice satellite (macOS).
+
+  This is a TEMPLATE — it is NOT auto-installed. Replace the __PLACEHOLDERS__
+  below, then copy it to ~/Library/LaunchAgents/ and load it. See README
+  ("Run at login") for the exact commands.
+
+  Placeholders:
+    __PYTHON__       absolute path to the python in your venv
+                     (e.g. /Users/you/TaskManage/voice-satellite/.venv/bin/python)
+    __WORKING_DIR__  absolute path to this voice-satellite/ directory
+                     (e.g. /Users/you/TaskManage/voice-satellite)
+
+  Microphone + Accessibility (hotkey) permissions must be granted to the
+  process that launchd runs — see README troubleshooting.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dizon.aria-voice</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>-m</string>
+        <string>voice_satellite</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__WORKING_DIR__</string>
+
+    <!-- Start at login and keep it alive if it crashes. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Logs (rotate/clean these yourself if they grow). -->
+    <key>StandardOutPath</key>
+    <string>__WORKING_DIR__/voice-satellite.log</string>
+    <key>StandardErrorPath</key>
+    <string>__WORKING_DIR__/voice-satellite.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

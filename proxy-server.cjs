@@ -124,6 +124,7 @@ app.use('/', require('./server/routes/imageBlobs.cjs')({ authenticateToken, db, 
 app.use('/', require('./server/routes/journal.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/activeZone.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/skills.cjs')({ authenticateToken, db }));
+app.use('/', require('./server/routes/voice.cjs')({ authenticateToken, db, loadGcalTokens, loadAllGcalAccounts, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google }));
 
 // ── Sentry error handler ────────────────────────────────────────────────────
 const Sentry = require('./guardrails/instrument.cjs');

@@ -1,0 +1,19 @@
+# Secrets / local config
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Downloaded wake-word model weights (openWakeWord caches pretrained models)
+*.onnx
+*.tflite
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
