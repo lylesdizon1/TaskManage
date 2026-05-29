@@ -7487,6 +7487,18 @@ async function runMigrations() {
   // double-primary collision against this backfill.
   await pool.query(`UPDATE contact_identities SET source = 'manual' WHERE source IS NULL`).catch((err) => logger.warn('migration.warn', { label: 'contact_identities source backfill', error: err.message }));
 
+  // ── Phase A: one-time legacy email/phone migration ───────────────────────
+  // Seeds contact_identities from the singular contacts.primary_email /
+  // primary_phone columns. Idempotent (NOT EXISTS guards) so it re-runs
+  // cheaply on every boot. The scalar columns STAY populated as a derived
+  // mirror (Option A) — they are not dropped here. Calendar-source emails
+  // are detected with a tight allowlist (the spec's `*@google.com` is too
+  // loose and would mislabel personal Google addresses; watch-for endorses
+  // tightness). They get label='calendar', is_primary=false so they never
+  // become the contact's primary email.
+  await migrateLegacyContactIdentities().catch((err) =>
+    logger.warn('migration.warn', { label: 'legacy contact identities', error: err.message }));
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shared_access_grants (
       id                   SERIAL PRIMARY KEY,
@@ -9905,6 +9917,81 @@ async function resolveContactByName(name, userId) {
     [userId, `%${name}%`],
   );
   return rows;
+}
+
+// Tight calendar-source predicate (SQL fragment over LOWER(value)).
+// Matches only well-known automated calendar senders/resources — NOT all
+// of @google.com — so personal addresses are never mislabeled 'calendar'.
+const CALENDAR_EMAIL_PREDICATE = `(
+  LOWER(c.primary_email) = 'noreply@calendly.com'
+  OR LOWER(c.primary_email) = 'noreply@cal.com'
+  OR LOWER(c.primary_email) = 'calendar-notification@google.com'
+  OR LOWER(c.primary_email) LIKE '%@resource.calendar.google.com'
+)`;
+
+async function migrateLegacyContactIdentities() {
+  // Insert email identities for any contact whose primary_email isn't yet
+  // represented in contact_identities. is_primary is set in a guarded
+  // second pass so the partial unique index can't be violated.
+  const emailIns = await pool.query(`
+    INSERT INTO contact_identities (contact_id, kind, value, label, is_primary, source)
+    SELECT c.id, 'email', LOWER(c.primary_email),
+           CASE WHEN ${CALENDAR_EMAIL_PREDICATE} THEN 'calendar' ELSE 'other' END,
+           FALSE, 'legacy_inline'
+    FROM contacts c
+    WHERE c.primary_email IS NOT NULL AND c.primary_email <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM contact_identities ci
+        WHERE ci.contact_id = c.id AND ci.kind = 'email'
+          AND LOWER(ci.value) = LOWER(c.primary_email))
+  `);
+
+  const phoneIns = await pool.query(`
+    INSERT INTO contact_identities (contact_id, kind, value, label, is_primary, source)
+    SELECT c.id, 'phone', c.primary_phone, 'other', FALSE, 'legacy_inline'
+    FROM contacts c
+    WHERE c.primary_phone IS NOT NULL AND c.primary_phone <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM contact_identities ci
+        WHERE ci.contact_id = c.id AND ci.kind = 'phone'
+          AND ci.value = c.primary_phone)
+  `);
+
+  // Promote the identity matching primary_email to primary — but only when
+  // the contact has no email primary yet, and never for calendar-labeled
+  // addresses (those stay non-primary by design).
+  const emailPrim = await pool.query(`
+    UPDATE contact_identities ci SET is_primary = TRUE
+    FROM contacts c
+    WHERE ci.contact_id = c.id AND ci.kind = 'email'
+      AND LOWER(ci.value) = LOWER(c.primary_email)
+      AND c.primary_email IS NOT NULL AND c.primary_email <> ''
+      AND ci.label IS DISTINCT FROM 'calendar'
+      AND NOT EXISTS (
+        SELECT 1 FROM contact_identities x
+        WHERE x.contact_id = c.id AND x.kind = 'email' AND x.is_primary = TRUE)
+  `);
+
+  const phonePrim = await pool.query(`
+    UPDATE contact_identities ci SET is_primary = TRUE
+    FROM contacts c
+    WHERE ci.contact_id = c.id AND ci.kind = 'phone'
+      AND ci.value = c.primary_phone
+      AND c.primary_phone IS NOT NULL AND c.primary_phone <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM contact_identities x
+        WHERE x.contact_id = c.id AND x.kind = 'phone' AND x.is_primary = TRUE)
+  `);
+
+  const insertedEmails = emailIns.rowCount || 0;
+  const insertedPhones = phoneIns.rowCount || 0;
+  const promotedEmails = emailPrim.rowCount || 0;
+  const promotedPhones = phonePrim.rowCount || 0;
+  if (insertedEmails || insertedPhones || promotedEmails || promotedPhones) {
+    logger.info('migration.legacyContactIdentities', {
+      insertedEmails, insertedPhones, promotedEmails, promotedPhones,
+    });
+  }
 }
 
 async function addContactIdentity(contactId, kind, value) {
