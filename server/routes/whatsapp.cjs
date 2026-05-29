@@ -55,6 +55,7 @@ const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
 const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
 const { rediGet, rediSet } = require('../lib/redis.cjs');
+const { transcribeAudio } = require('../lib/audioTranscription.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
@@ -183,8 +184,10 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       logger.info('whatsapp.inbound', { requestId: req.requestId, hasData: !!req.body?.data });
       if (!data) return res.json({ ok: true, skipped: 'no data' });
 
-      // Extract text body and media URL (if any)
-      const msgBody = data.body || '';
+      // Extract text body and media URL (if any). Mutable because voice
+      // notes get transcribed and the transcript is substituted in as
+      // the user's message body for the rest of the handler.
+      let msgBody = data.body || '';
       const fromRaw = data.from;
       const rawMedia = data.media;
       const mediaUrl = (typeof rawMedia === 'string' && rawMedia.trim() !== '') ? rawMedia.trim() : null;
@@ -315,11 +318,67 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       //     and the downstream save tool.
       let imageData = null; // { mimeType, data (base64) }
       let imageBlobId = null;
+      let isAudioMedia = false; // set when contentType is audio/*; suppresses image processing
       if (mediaUrl) {
         try {
           const imgRes = await fetch(mediaUrl);
           if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
           const contentType = (imgRes.headers.get('content-type') || '').toLowerCase();
+
+          // ── Audio (voice note) handling ─────────────────────────────────
+          // WhatsApp voice notes arrive as audio/ogg (Opus). Whisper
+          // handles them natively — transcribe, substitute the transcript
+          // for msgBody, and fall through to the regular agentic loop
+          // as if the user typed it.
+          if (contentType.startsWith('audio/')) {
+            isAudioMedia = true;
+            const audioBytes = Buffer.from(await imgRes.arrayBuffer());
+
+            // Per-user audio dedup (same pattern as image dedup —
+            // UltraMsg may retry voice notes on transport blip).
+            const audioHash = crypto.createHash('sha256').update(audioBytes).digest('hex');
+            const audioDedupKey = `whatsapp:audio:dedup:${user.id}:${audioHash}`;
+            try {
+              const cached = await rediGet(audioDedupKey);
+              if (cached) {
+                logger.info('whatsapp.audio.dedupHit', { requestId: req.requestId, userId: user.id, hash: audioHash.slice(0, 8) });
+                return res.json({ ok: true, skipped: 'duplicate voice note (cached)' });
+              }
+            } catch { /* Redis miss — proceed */ }
+
+            // Immediate ack so the user knows we got it (Whisper can take
+            // 1-3s for short clips). This doubles as their "still working"
+            // signal during transcription.
+            await sendWhatsApp(db, user.id, 'Listening to your voice note…', fromRaw).catch(() => {});
+
+            const result = await transcribeAudio(audioBytes, contentType, { userId: user.id });
+            if (!result.ok) {
+              logger.warn('whatsapp.audio.transcribeFailed', { requestId: req.requestId, userId: user.id, error: result.error });
+              await sendWhatsApp(db, user.id, "I couldn't transcribe that voice note — try again or type it out.", fromRaw).catch(() => {});
+              return res.json({ ok: true, skipped: 'transcription failed' });
+            }
+
+            // Substitute transcript as the user's message body.
+            msgBody = result.text;
+            logger.info('whatsapp.audio.transcribed', {
+              requestId: req.requestId, userId: user.id,
+              audioBytes: audioBytes.length, transcriptChars: msgBody.length,
+            });
+
+            // Stamp dedup so retries within 5 min short-circuit.
+            try { await rediSet(audioDedupKey, 'transcribed', 300); } catch { /* best-effort */ }
+
+            // Fall through to the rest of the handler. The image-processing
+            // block below skips on isAudioMedia. msgBody now contains the
+            // transcript, so the standard agentic loop treats this like
+            // any typed-message turn.
+          }
+
+          // Image processing — skipped entirely when this turn was an
+          // audio voice note (response body already consumed by the
+          // transcription path above; msgBody now holds the transcript
+          // and the handler proceeds as if the user typed it).
+          if (!isAudioMedia) {
           const SUPPORTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
           const HEIC = ['image/heic', 'image/heif'];
           const isHeic = HEIC.some(t => contentType.includes(t));
@@ -387,6 +446,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             try { await rediSet(dedupKey, imageBlobId, 300); } catch { /* best-effort */ }
           }
           logger.info('whatsapp.image.downloaded', { requestId: req.requestId, mimeType, sizeKB: Math.round(bytes.length / 1024), imageBlobId });
+          } // end if (!isAudioMedia)
         } catch (imgErr) {
           logger.error('whatsapp.image.downloadFailed', { requestId: req.requestId, error: imgErr.message });
           await sendWhatsApp(db, user.id, "I couldn't load that image — can you try sending it again?", fromRaw).catch(() => {});
