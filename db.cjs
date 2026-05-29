@@ -6327,6 +6327,40 @@ async function getConversationMessages(conversationId, userId) {
 }
 
 /**
+ * Windowed conversation loader — the most-recent `limit` user/assistant
+ * turns, re-sorted oldest-first so the result can be fed straight into the
+ * agentic messages array.
+ *
+ * getConversationMessages() above is UNCAPPED (it powers the web UI, which
+ * windows on the client). Server-stateful channels (voice) have no client to
+ * slice for them, so they MUST window here or the entire conversation would
+ * be replayed into the model every turn. Only real turn roles are loaded —
+ * synthetic UI rows (action_card etc.) are excluded so they never reach the
+ * Anthropic messages array.
+ *
+ * @param {number} conversationId
+ * @param {string} userId - owner scope (cross-user rows are invisible)
+ * @param {number} [limit=20] - max turns (matches the WhatsApp window)
+ * @returns {Promise<Array<{role,content,createdAt}>>} oldest-first
+ */
+async function getConversationMessagesWindowed(conversationId, userId, limit = 20) {
+  const { rows } = await pool.query(
+    `SELECT * FROM (
+       SELECT role, content, created_at AS "createdAt"
+       FROM chat_messages
+       WHERE conversation_id = $1 AND user_id = $2
+         AND role IN ('user', 'assistant')
+       ORDER BY created_at DESC
+       LIMIT $3
+     ) sub
+     ORDER BY "createdAt" ASC`,
+    [conversationId, userId, limit],
+  );
+  return rows;
+}
+
+
+/**
  * Add a message to a conversation and update the conversation timestamp.
  * If this is the first user message and the conversation has no title,
  * auto-titles with the first 50 characters of the message content.
@@ -6343,12 +6377,12 @@ async function getConversationMessages(conversationId, userId) {
  * @returns {Promise<Object>} Created message record.
  * @throws {Error} If the insert query fails.
  */
-async function addConversationMessage(conversationId, userId, role, content, model) {
+async function addConversationMessage(conversationId, userId, role, content, model, channel) {
   const { rows } = await pool.query(
-    `INSERT INTO chat_messages (conversation_id, user_id, role, content, model)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, conversation_id AS "conversationId", role, content, model, created_at AS "createdAt"`,
-    [conversationId, userId, role, content, model || 'claude'],
+    `INSERT INTO chat_messages (conversation_id, user_id, role, content, model, channel)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, conversation_id AS "conversationId", role, content, model, channel, created_at AS "createdAt"`,
+    [conversationId, userId, role, content, model || 'claude', channel || null],
   );
   // Update conversation timestamp
   await pool.query('UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1', [conversationId]);
@@ -8111,6 +8145,15 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS card_id TEXT`)
     .catch((err) => logger.warn('migration.warn', { label: 'chat_messages.card_id', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS chat_messages_card_id_idx ON chat_messages(card_id) WHERE card_id IS NOT NULL`).catch(() => {});
+
+  // ── Channel provenance (voice parity v1, 2026-05-29) ──
+  // chat_messages is now the unified store for web AND voice turns (voice
+  // rides the same conversation pipeline as text). The channel column tags
+  // each row with its originating surface ('web_chat' | 'voice') so the
+  // Conversations UI / analytics can tell them apart. Nullable — legacy
+  // web rows stay NULL; only callers that pass a channel populate it.
+  await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS channel TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'chat_messages.channel', error: err.message }));
 }
 
 // ── Financial Accounts ────────────────────────────────────────────────────────
@@ -12153,6 +12196,7 @@ module.exports = {
   updateConversationTitle,
   deleteConversation,
   getConversationMessages,
+  getConversationMessagesWindowed,
   addConversationMessage,
   getOrCreateCommandCenterConversation,
   searchContactsByName,

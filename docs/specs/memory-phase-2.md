@@ -65,7 +65,7 @@ CREATE INDEX IF NOT EXISTS memory_facts_user_retrieval_idx
 `agent_memory` extension **dropped per Q7.** Action log stays as-is.
 
 Allowed `source_channel` values (strict, validated at write time):
-`'web_chat'`, `'whatsapp'`, `'sms'` (future), `'journal'`, `'outcome'`, `'contact_note'`, `'explicit_remember'`.
+`'web_chat'`, `'whatsapp'`, `'voice'`, `'sms'` (future), `'journal'`, `'outcome'`, `'contact_note'`, `'explicit_remember'`.
 
 Unknown values throw at the helper layer. No `'unknown'` fallback — if a call site can't determine the channel, the call site is wrong and must be fixed.
 

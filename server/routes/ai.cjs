@@ -57,11 +57,10 @@ const Anthropic = require('@anthropic-ai/sdk');
 const Sentry    = require('@sentry/node');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
-const { closeDecisionWithFeedback, processSkillFeedback } = require('../lib/trustFeedback.cjs');
+const { closeDecisionWithFeedback } = require('../lib/trustFeedback.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
-const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
 const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
-const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
+const { handleConversationTurn, applyCorrectionAndEnrichment } = require('../lib/conversationTurn.cjs');
 const logger = require('../../guardrails/logger.cjs');
 const { userRateLimit } = require('../middleware/userRateLimit.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
@@ -493,89 +492,17 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
           }
         }
       }
-      const ctx = await buildAgenticContext({
-        userId, entityIds, db, tz: userTz, contextHint: context_hint,
-        userMessage: latestUserMessage,
-        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens,
-        makeOAuth2Client, google, logger, requestId: req.requestId,
-      });
-      const tz = ctx.tz;
+      // tz resolves to ctx.tz once the shared handler has built context
+      // (see onContextReady below); boundExecuteTool reads it at call time.
+      let tz = userTz;
 
-      // Skill trust feedback (M1.7) — fire-and-forget. Detects explicit
-      // user phrasing like "stop loading the X skill" / "always load my Y
-      // skill" and applies trust deltas. Implicit positive (turn-without-
-      // correction) is V2.
-      if (latestUserMessage) {
-        processSkillFeedback({ userId, userMessage: latestUserMessage, db })
-          .then((applied) => {
-            if (applied.length && logger?.info) {
-              logger.info('skill.feedback.applied', { userId, applied });
-            }
-          })
-          .catch(() => {});
-      }
-      // Always forward learnings + email + projects + outcomes + facts +
-      // skills to the model, even when the client supplies its own base
-      // system prompt. Missing projectsBlock here was the bug where Aria
-      // claimed no project access despite getProjectContextForUser
-      // returning rows; same shape applies to skills (M1.5).
-      const serverBlocks = (ctx.learningsBlock || '') + (ctx.emailBlock || '') + (ctx.outcomesBlock || '') + (ctx.factsBlock || '') + (ctx.projectsBlock || '') + (ctx.skillsBlock || '');
-      // Prompt-caching: when no client-supplied custom system prompt,
-      // send as a 2-block array so the cacheable prefix (profile,
-      // persona, decision rules, slow-changing context) gets the
-      // ephemeral cache marker. Client-prompt path keeps the legacy
-      // string shape — caller controls that prompt's shape.
-      const fullSystem = clientPrompt
-        ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + serverBlocks + ctx.contextBlock
-        : [
-            { type: 'text', text: ctx.systemCacheable || '', cache_control: { type: 'ephemeral' } },
-            { type: 'text', text: ctx.systemDynamic || '' },
-          ];
-
-      // SSE headers
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.flushHeaders();
-
-      // Idempotent SSE writer + single-shot finalizer. Every terminal path
-      // (happy return, gate-cancel resume, extractor failure, thrown error,
-      // timeout) funnels through finalizeStream so `done` + res.end() fire
-      // exactly once regardless of how control leaves the handler.
+      // SSE plumbing. `send` + `finalizeStream` are (re)assigned in
+      // onContextReady AFTER headers flush — so a context-build failure
+      // still routes through the JSON-500 path in the catch (headers not
+      // yet sent). Every terminal path funnels through finalizeStream so
+      // `done` + res.end() fire exactly once.
       let streamFinalized = false;
-      const send = (event, data) => {
-        if (streamFinalized) return;
-        try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
-      };
-
-      // Emit a skills_loaded event up-front so the CC can render an
-      // inline indicator next to the assistant turn (M2.6). Only fires
-      // when at least one skill matched + loaded — silent otherwise.
-      if (Array.isArray(ctx.loadedSkills) && ctx.loadedSkills.length) {
-        send('skills_loaded', {
-          skills: ctx.loadedSkills.map((s) => ({ id: s.id, name: s.name, reason: s.reason })),
-        });
-      }
-      finalizeStream = (payload = {}) => {
-        if (streamFinalized) return;
-        streamFinalized = true;
-        logger.info('chat.stream.finalized', { requestId: req.requestId, userId, hasError: !!payload.error, hasText: !!(payload.text && payload.text.length) });
-        try {
-          if (payload.error) {
-            res.write(`event: error\ndata: ${JSON.stringify({ message: payload.error })}\n\n`);
-          } else {
-            res.write(`event: text\ndata: ${JSON.stringify({ content: payload.text || '' })}\n\n`);
-            if (payload.toolSummaries?.length) {
-              res.write(`event: tools_executed\ndata: ${JSON.stringify({ tools: payload.toolSummaries.map(s => s.tool), summaries: payload.toolSummaries })}\n\n`);
-            }
-            if (payload.maxIterationsReached) {
-              res.write(`event: warning\ndata: ${JSON.stringify({ message: 'Step limit reached' })}\n\n`);
-            }
-          }
-          res.write(`event: done\ndata: {}\n\n`);
-        } catch {}
-        try { res.end(); } catch {}
-      };
+      let send = () => {};
 
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz, 'web_chat');
@@ -734,22 +661,74 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
         }
       };
 
-      const loopResult = await runAgenticLoop({
-        messages,
-        system: fullSystem,
-        tools: getToolSchemasForApi(),
-        userId,
-        executeTool: boundExecuteTool,
-        onProgress,
-        gateToolExecution,
-        logAction,
-        model,
+      // Fired by the shared handler AFTER a successful context build, BEFORE
+      // the loop runs. This is where web flushes SSE headers + installs the
+      // real `send`/`finalizeStream` — placing it here (not before the
+      // handler call) keeps a context-build throw on the JSON-500 path since
+      // headers aren't sent yet.
+      const onContextReady = (ctx) => {
+        tz = ctx.tz || tz;
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+        send = (event, data) => {
+          if (streamFinalized) return;
+          try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
+        };
+        // skills_loaded indicator (M2.6) — only when a skill matched + loaded.
+        if (Array.isArray(ctx.loadedSkills) && ctx.loadedSkills.length) {
+          send('skills_loaded', {
+            skills: ctx.loadedSkills.map((s) => ({ id: s.id, name: s.name, reason: s.reason })),
+          });
+        }
+        // Idempotent single-shot finalizer. Every terminal path funnels
+        // through here so `done` + res.end() fire exactly once.
+        finalizeStream = (payload = {}) => {
+          if (streamFinalized) return;
+          streamFinalized = true;
+          logger.info('chat.stream.finalized', { requestId: req.requestId, userId, hasError: !!payload.error, hasText: !!(payload.text && payload.text.length) });
+          try {
+            if (payload.error) {
+              res.write(`event: error\ndata: ${JSON.stringify({ message: payload.error })}\n\n`);
+            } else {
+              res.write(`event: text\ndata: ${JSON.stringify({ content: payload.text || '' })}\n\n`);
+              if (payload.toolSummaries?.length) {
+                res.write(`event: tools_executed\ndata: ${JSON.stringify({ tools: payload.toolSummaries.map(s => s.tool), summaries: payload.toolSummaries })}\n\n`);
+              }
+              if (payload.maxIterationsReached) {
+                res.write(`event: warning\ndata: ${JSON.stringify({ message: 'Step limit reached' })}\n\n`);
+              }
+            }
+            res.write(`event: done\ndata: {}\n\n`);
+          } catch {}
+          try { res.end(); } catch {}
+        };
+      };
+
+      const loopResult = await handleConversationTurn({
         channel: 'web_chat',
+        userId, entityIds, db,
+        tz: userTz,
+        contextHint: context_hint,
+        userMessageText: latestUserMessage,
+        messages,
+        clientPrompt,
+        tools: getToolSchemasForApi(),
+        model,
+        executeTool: boundExecuteTool,
+        gateToolExecution,
+        onProgress,
+        logAction,
+        gcalDeps: { loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens, makeOAuth2Client, google },
+        onContextReady,
+        loggerOverride: logger,
+        requestId: req.requestId,
       });
       let { text, toolSummaries, maxIterationsReached } = loopResult;
 
-      // ── Correction learning: detect → extract → persist → ack ──
-      // lastUserMsg also feeds the memory extractor below — derive once.
+      // ── Correction learning + memory extraction (shared post-loop) ──────
+      // lastUserMsg gates both; derive once from the tail user turn.
       let lastUserMsg = '';
       try {
         const lastUserContent = [...messages].reverse().find(m => m.role === 'user')?.content;
@@ -758,32 +737,19 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
           : Array.isArray(lastUserContent)
             ? (lastUserContent.find(b => b?.type === 'text')?.text || '')
             : '';
-        if (lastUserMsg) {
-          const { acknowledgment } = await handlePossibleCorrection({
-            userId, userMessage: lastUserMsg, lastAssistantMessage: text || null, db,
-          });
-          if (acknowledgment) text = (text || '') + acknowledgment;
-        }
       } catch (err) {
-        logger.error('chat.learning.failed', { requestId: req.requestId, userId, error: err.message });
+        logger.error('chat.learning.lastUserMsg.failed', { requestId: req.requestId, userId, error: err.message });
       }
-
-      // ── M1b memory extraction (fire-and-forget, env-gated) ─────────────
-      // SHIPPED INERT — controlled by MEMORY_EXTRACTOR_ENABLED Railway env.
-      // Skip if the loop bailed without assistant text (maxIterations) or
-      // we never had a real user message to extract from.
-      if (lastUserMsg && text) {
-        try {
-          const { enrichConversationTurn } = require('../lib/conversationEnrichment.cjs');
-          enrichConversationTurn({
-            userId,
-            channel: 'web_chat',
-            userMessage: lastUserMsg,
-            assistantText: text,
-            toolsCalled: (toolSummaries || []).map((s) => s.tool).filter(Boolean),
-          }).catch((err) => logger.error('chat.memoryExtract.failed', { userId, error: err.message }));
-        } catch (e) { logger.warn('chat.memoryExtract.requireFailed', { error: e.message }); }
-      }
+      text = await applyCorrectionAndEnrichment({
+        channel: 'web_chat',
+        userId, db,
+        userMessage: lastUserMsg,
+        assistantText: text,
+        toolsCalled: (toolSummaries || []).map((s) => s.tool),
+        doCorrection: !!lastUserMsg,
+        doEnrichment: !!lastUserMsg,
+        loggerOverride: logger,
+      });
 
       finalizeStream({ text, toolSummaries, maxIterationsReached });
       return;

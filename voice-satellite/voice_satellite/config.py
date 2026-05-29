@@ -80,6 +80,10 @@ class Config:
     hotkey: str
     hotkey_mode: str
     wakeword_model: str | None
+    # Local file where the satellite persists the active conversation_id so
+    # multi-turn continuity survives a restart (the server holds the actual
+    # history; this is just the pointer into it).
+    state_path: str
     max_utterance_seconds: float = 15.0
 
     @property
@@ -154,6 +158,10 @@ def load_config() -> Config:
 
     elevenlabs_stt_model = _get("ELEVENLABS_STT_MODEL", SCRIBE_REALTIME_MODEL) or SCRIBE_REALTIME_MODEL
 
+    state_path = _get("VOICE_STATE_PATH") or os.path.join(
+        os.path.expanduser("~"), ".aria-voice", "state.json"
+    )
+
     return Config(
         aria_api_base=aria_api_base,
         aria_jwt=aria_jwt,
@@ -166,5 +174,6 @@ def load_config() -> Config:
         hotkey=hotkey,
         hotkey_mode=hotkey_mode,
         wakeword_model=wakeword_model,
+        state_path=state_path,
         max_utterance_seconds=max_utterance_seconds,
     )

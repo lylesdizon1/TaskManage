@@ -48,11 +48,9 @@ const crypto    = require('crypto');
 const sharp     = require('sharp');
 const { ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
 const { evaluateAction } = require('../lib/decisionEngine.cjs');
-const { closeDecisionWithFeedback, processSkillFeedback } = require('../lib/trustFeedback.cjs');
+const { closeDecisionWithFeedback } = require('../lib/trustFeedback.cjs');
 const { getTodayLocal } = require('../utils/date.cjs');
-const { runAgenticLoop } = require('../lib/agenticLoop.cjs');
-const { buildAgenticContext } = require('../lib/buildAgenticContext.cjs');
-const { handlePossibleCorrection } = require('../lib/learningHandler.cjs');
+const { handleConversationTurn, applyCorrectionAndEnrichment } = require('../lib/conversationTurn.cjs');
 const { sendWhatsApp } = require('../utils/integrations.cjs');
 const { rediGet, rediSet } = require('../lib/redis.cjs');
 const { transcribeAudio } = require('../lib/audioTranscription.cjs');
@@ -523,27 +521,11 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         }
       }
 
-      // ── Load full context via shared builder ──────────────────────────
-      // msgBody powers the chatContext envelope for skills loading (M1.5).
-      const ctx = await buildAgenticContext({
-        userId, entityIds, db, tz: tzForUser,
-        userMessage: msgBody || '',
-        loadGcalTokens, makeOAuth2Client, google,
-        logger, requestId: req.requestId,
-      });
-
-      // Skill trust feedback (M1.7) — fire-and-forget. Same regex
-      // detection as the web chat path.
-      if (msgBody) {
-        processSkillFeedback({ userId, userMessage: msgBody, db })
-          .then((applied) => {
-            if (applied.length && logger?.info) {
-              logger.info('skill.feedback.applied', { userId, applied });
-            }
-          })
-          .catch(() => {});
-      }
-      const tz = ctx.tz;
+      // Context build + skill-feedback detection now live inside the shared
+      // handleConversationTurn (below). `tz` is reassigned to ctx.tz in the
+      // handler's onContextReady before the loop runs, so boundExecuteTool
+      // (which closes over this binding) sees the resolved zone at call time.
+      let tz = tzForUser;
 
       const entityContext = matchedEntity
         ? `\nThe user's message references entity: "${matchedEntity.name}" (id: ${matchedEntity.id}). Apply this entity to any task created in this conversation by passing entity_name="${matchedEntity.name}" to create_task.`
@@ -565,17 +547,9 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // appear in conversation history refer to PAST images, not the
       // current message.
       const captureGuard = `\nDo NOT call capture_from_image unless a new image is attached to the user's current message. image_blob_id values appearing in prior conversation turns refer to past images and are NOT signals to call this tool again.`;
+      // whatsappSuffix rides the handler's `systemSuffix` — it lands on the
+      // dynamic (uncached) system block so it never busts the cache prefix.
       const whatsappSuffix = `\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${captureGuard}${imageInstructions}${entityContext}`;
-      // Prompt-caching split: cacheable prefix gets the ephemeral marker;
-      // dynamic suffix + whatsapp-specific instructions live in the
-      // second (uncached) block. Falls back to a joined string if
-      // buildAgenticContext didn't expose the split fields.
-      const systemPrompt = (ctx.systemCacheable !== undefined && ctx.systemDynamic !== undefined)
-        ? [
-            { type: 'text', text: ctx.systemCacheable, cache_control: { type: 'ephemeral' } },
-            { type: 'text', text: ctx.systemDynamic + whatsappSuffix },
-          ]
-        : ctx.systemPrompt + whatsappSuffix;
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
@@ -759,56 +733,47 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         });
       };
 
-      const { text, toolSummaries } = await runAgenticLoop({
+      const { text, toolSummaries } = await handleConversationTurn({
+        channel: 'whatsapp',
+        userId, entityIds, db,
+        tz: tzForUser,
+        userMessageText: msgBody || '',
         messages: [...priorMessages, { role: 'user', content: userMessageContent }],
-        system: systemPrompt,
+        systemSuffix: whatsappSuffix,
         tools: toolSchemas,
-        userId,
         executeTool: boundExecuteTool,
         gateToolExecution,
-        logAction,
-        channel: 'whatsapp',
         onProgress: onWhatsAppProgress,
+        logAction,
+        gcalDeps: { loadGcalTokens, makeOAuth2Client, google },
+        onContextReady: (ctx) => { tz = ctx.tz; },
+        loggerOverride: logger,
+        requestId: req.requestId,
       });
 
       // If we sent a confirmation prompt mid-loop, skip the model's
       // post-tool text so we don't double-message the user.
       let reply = waSentConfirmation ? '' : text;
 
-      // ── Correction learning: detect → extract → persist → ack ──
-      try {
-        if (reply && msgBody) {
-          const { acknowledgment } = await handlePossibleCorrection({
-            userId, userMessage: msgBody, lastAssistantMessage: reply, db,
-          });
-          if (acknowledgment) reply = reply + acknowledgment;
-        }
-      } catch (err) {
-        logger.error('whatsapp.learning.failed', { requestId: req.requestId, userId, error: err.message });
-      }
+      // ── Correction learning + memory extraction (shared post-loop) ──────
+      // Correction appends an ack to `reply`; enrichment is fired
+      // fire-and-forget inside. Both skip when we only staged a YES/NO
+      // confirmation this turn (reply is '' → guards fall false).
+      reply = await applyCorrectionAndEnrichment({
+        channel: 'whatsapp', userId, db,
+        userMessage: msgBody,
+        assistantText: reply,
+        toolsCalled: (toolSummaries || []).map((s) => s.tool),
+        doCorrection: !!(reply && msgBody),
+        doEnrichment: !waSentConfirmation && !!msgBody && !!reply,
+        loggerOverride: logger,
+      });
 
       // ── Persist conversation (best-effort) ─────────────────────────────
       try {
         await db.saveWhatsAppMessage(userId, normalizedPhone, 'user', msgBody || '[image]');
         if (reply) await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply);
       } catch (e) { logger.error('whatsapp.history.saveFailed', { requestId: req.requestId, userId, error: e.message }); }
-
-      // ── M1b memory extraction (fire-and-forget, env-gated) ─────────────
-      // SHIPPED INERT — controlled by MEMORY_EXTRACTOR_ENABLED Railway env.
-      // Skipped when we sent a confirmation mid-loop (the assistant text
-      // is "Awaiting confirmation" boilerplate, not real signal).
-      if (!waSentConfirmation && msgBody && reply) {
-        try {
-          const { enrichConversationTurn } = require('../lib/conversationEnrichment.cjs');
-          enrichConversationTurn({
-            userId,
-            channel: 'whatsapp',
-            userMessage: msgBody,
-            assistantText: reply,
-            toolsCalled: (toolSummaries || []).map((s) => s.tool).filter(Boolean),
-          }).catch((err) => logger.error('whatsapp.memoryExtract.failed', { userId, error: err.message }));
-        } catch (e) { logger.warn('whatsapp.memoryExtract.requireFailed', { error: e.message }); }
-      }
 
       // ── Reply via user's UltraMsg integration ──────────────────────────
       // Voice-in → voice-out (2026-05-29): when the user sent a voice

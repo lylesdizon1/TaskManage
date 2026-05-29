@@ -19,7 +19,10 @@ the input can't be mistaken for the wake word on the next loop.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
 import threading
 
 from .aria_client import AriaClient
@@ -32,6 +35,22 @@ from .tts import make_tts
 from .wakeword import WakeWordDetector
 
 log = logging.getLogger("voice.orchestrator")
+
+# Spoken phrases that start a fresh server-side conversation. Matched against
+# the whole (normalized) utterance so a passing mention mid-sentence doesn't
+# wipe context — the user has to actually say one of these as the command.
+_RESET_PHRASES = (
+    "new conversation",
+    "start a new conversation",
+    "start new conversation",
+    "new chat",
+    "start over",
+    "let's start over",
+    "forget that",
+    "forget all that",
+    "clear the conversation",
+    "reset the conversation",
+)
 
 
 class Orchestrator:
@@ -56,6 +75,33 @@ class Orchestrator:
         self._hotkey_trigger = threading.Event()
         self._busy_lock = threading.Lock()
         self._busy = False
+
+        # Conversation continuity: an opaque pointer the server uses to load
+        # the windowed working-memory history. Persisted locally so a restart
+        # rejoins the same thread (until the server's idle session reset).
+        self._conversation_id = self._load_conversation_id()
+
+    # ── conversation state ────────────────────────────────────────────────
+    def _load_conversation_id(self) -> int | None:
+        try:
+            with open(self._cfg.state_path, "r", encoding="utf-8") as fh:
+                cid = json.load(fh).get("conversation_id")
+            return cid if isinstance(cid, int) else None
+        except (OSError, ValueError):
+            return None  # no prior state, unreadable, or corrupt — start fresh
+
+    def _save_conversation_id(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self._cfg.state_path), exist_ok=True)
+            with open(self._cfg.state_path, "w", encoding="utf-8") as fh:
+                json.dump({"conversation_id": self._conversation_id}, fh)
+        except OSError as exc:  # best-effort — a failed write just means the
+            log.warning("could not persist conversation state: %s", exc)  # next start rejoins late
+
+    @staticmethod
+    def _is_reset_phrase(transcript: str) -> bool:
+        normalized = re.sub(r"[^a-z' ]", "", transcript.lower()).strip()
+        return normalized in _RESET_PHRASES
 
     # ── trigger sources ──────────────────────────────────────────────────
     def _on_hotkey_activate(self) -> None:
@@ -123,7 +169,22 @@ class Orchestrator:
                 return
             log.info("heard: %s", transcript)
 
-            reply = (self._aria.send(transcript) or "").strip()
+            # Local control command: a reset phrase drops the conversation
+            # pointer so the next turn starts a fresh server-side thread. We
+            # don't send it to Aria — it's a satellite directive, not content.
+            if self._is_reset_phrase(transcript):
+                self._conversation_id = None
+                self._save_conversation_id()
+                reply = "Okay, starting a new conversation."
+                log.info("conversation reset by voice command")
+                self._player.play_stream(self._tts.stream(reply))
+                return
+
+            result = self._aria.send(transcript, self._conversation_id)
+            if result.conversation_id != self._conversation_id:
+                self._conversation_id = result.conversation_id
+                self._save_conversation_id()
+            reply = (result.reply or "").strip()
             if not reply:
                 reply = "I didn't get a reply."
             log.info("aria: %s", reply)

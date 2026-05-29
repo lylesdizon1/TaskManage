@@ -16,6 +16,7 @@
  * Allowed values:
  *   web_chat           — agentic chat from web Command Center
  *   whatsapp           — agentic chat from WhatsApp inbound
+ *   voice              — agentic chat from the voice satellite
  *   sms                — future SMS channel (reserved, not yet wired)
  *   journal            — journalEnrichment writes (daily wrap)
  *   outcome            — outcomeEnrichment writes (post-task/event notes)
@@ -28,6 +29,7 @@
 const ALLOWED = new Set([
   'web_chat',
   'whatsapp',
+  'voice',
   'sms',
   'journal',
   'outcome',
