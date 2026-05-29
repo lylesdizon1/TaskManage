@@ -621,15 +621,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   }, [apiFetch, authToken, tryPlayNextVoiceSlot]);
 
   // Pop complete sentences off the buffer and enqueue them for TTS.
-  // A sentence is text ending in . ! ? followed by whitespace (the
-  // whitespace requirement avoids splitting on abbreviations like
-  // "Dr. Smith" which the trailing space wouldn't be present for).
-  // Min length 20 chars to avoid firing TTS on tiny fragments like
-  // a single-word interjection.
+  // A sentence is text ending in . ! ? followed by whitespace.
+  //   • Trailing whitespace requirement already protects most
+  //     non-sentence punctuation (URLs, mid-line dots, etc).
+  //   • Negative lookbehind blocks splitting after digits (decimals
+  //     like "$3.50 " and version numbers like "v1.5 ") and common
+  //     title abbreviations ("Dr. Smith", "Mr. Jones", "vs. them").
+  //   • Min length 20 chars catches anything the regex misses (one-word
+  //     fragments, "etc." mid-phrase, etc).
+  const SENTENCE_BOUNDARY_RE = /^([\s\S]*?(?<![A-Z][a-z]?|Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|\d)[.!?]+)\s+([\s\S]*)$/;
   const flushVoiceBuffer = useCallback((flushAll = false) => {
     let buf = voiceBufferRef.current;
     while (true) {
-      const m = buf.match(/^([\s\S]*?[.!?]+)\s+([\s\S]*)$/);
+      const m = buf.match(SENTENCE_BOUNDARY_RE);
       if (!m) break;
       const sentence = m[1].trim();
       if (sentence.length >= 20) {
