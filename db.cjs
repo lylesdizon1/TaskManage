@@ -2700,14 +2700,16 @@ async function deleteEntity(id, userId) {
  * @param {string} userId
  * @param {string} accountEmail - Google account the events came from.
  * @param {Array<Object>} events - normalized event rows with {id, title,
- *   start_time, end_time, all_day, location, description}
+ *   start_time, end_time, all_day, location, description, attendees?}.
+ *   `attendees` is an optional array of lowercased attendee emails; omit
+ *   it and the column is written as an empty array.
  */
 async function upsertCalendarEvents(userId, accountEmail, events) {
   if (!events || !events.length) return;
   // Multi-row upsert in chunks of 500 events. Prior code ran one INSERT
   // per event — at 50 users × 2 providers (gcal+outlook) every 15min,
   // that's 10k+ round-trips per cycle. pg's libpq caps at 65535 params
-  // per statement; 9 params/row × 500 rows = 4500, well under cap.
+  // per statement; 10 params/row × 500 rows = 5000, well under cap.
   const CHUNK = 500;
   for (let i = 0; i < events.length; i += CHUNK) {
     const chunk = events.slice(i, i + CHUNK);
@@ -2715,17 +2717,18 @@ async function upsertCalendarEvents(userId, accountEmail, events) {
     const vals = [];
     let idx = 1;
     for (const ev of chunk) {
-      placeholders.push(`($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},NOW())`);
+      placeholders.push(`($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++}::jsonb,NOW())`);
       vals.push(
         ev.id, userId, accountEmail, ev.title,
         ev.start_time, ev.end_time, ev.all_day || false,
         ev.location || null, ev.description || null,
+        JSON.stringify(Array.isArray(ev.attendees) ? ev.attendees : []),
       );
     }
     await pool.query(
       `INSERT INTO calendar_events
          (id, user_id, account_email, title, start_time,
-          end_time, all_day, location, description, synced_at)
+          end_time, all_day, location, description, attendees, synced_at)
        VALUES ${placeholders.join(',')}
        ON CONFLICT (user_id, account_email, id)
        DO UPDATE SET
@@ -2735,6 +2738,7 @@ async function upsertCalendarEvents(userId, accountEmail, events) {
          all_day = EXCLUDED.all_day,
          location = EXCLUDED.location,
          description = EXCLUDED.description,
+         attendees = EXCLUDED.attendees,
          synced_at = NOW()`,
       vals,
     );
@@ -7298,6 +7302,19 @@ async function runMigrations() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS calendar_events_user_start
     ON calendar_events(user_id, start_time)
+  `).catch(() => {});
+
+  // Contact timeline (2026-05-29) — attendee emails per event, stored as a
+  // JSONB array of lowercased addresses (e.g. ["a@x.com","b@y.com"]). Lets
+  // the contact timeline match meetings via `attendees ?| ARRAY[...]`. The
+  // GIN index backs that containment/key-existence operator. Past data is
+  // forward-only: events already cached without attendees stay empty until
+  // re-synced (the rolling window re-writes them within ~one sync cycle).
+  await pool.query(`ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS attendees JSONB`)
+    .catch((err) => logger.warn('migration.warn', { label: 'calendar_events.attendees', error: err.message }));
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS calendar_events_attendees_gin
+    ON calendar_events USING GIN (attendees)
   `).catch(() => {});
 
   // ── Outcome Intelligence Phase 1 — schema only ──────────────────────────
