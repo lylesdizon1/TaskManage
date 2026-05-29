@@ -519,6 +519,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (isListening) {
       try { recognitionRef.current.stop(); } catch {}
     } else {
+      // Prime the audio policy inside this click gesture so Aria's
+      // voice reply can play back automatically when she answers.
+      // (Same primer the speaker toggle does — but the mic path is a
+      // user gesture too, and people skip the speaker toggle entirely
+      // for talk-to-Aria flows.)
+      if (!playTtsRef.current) {
+        const a = new Audio();
+        a.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAACcQCAgICAgICAgICAgICAgICAgICAgICAgID/////////////////////AAAAAExhdmM1OC4xMwAAAAAAAAAAAAAAACQDoAAAAAAAAAJxYZ0YnAAAAAAA//sQxAADwAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+        a.play().catch(() => {});
+        playTtsRef.current = a;
+      }
       setCcInput('');
       finalTranscriptRef.current = '';
       setIsListening(true);
