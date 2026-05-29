@@ -294,6 +294,20 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
     }
   });
 
+  // ── Timeline (recent + upcoming meetings, matched by attendee email) ──
+
+  router.get('/api/contacts/:id/timeline', authenticateToken, async (req, res) => {
+    try {
+      const existing = await db.getContactById(req.params.id, req.user.id);
+      if (!existing) return res.status(404).json({ error: 'Contact not found' });
+      const timeline = await db.getContactTimeline(req.params.id, req.user.id, { limit: 50 });
+      res.json({ timeline });
+    } catch (err) {
+      logger.error('contacts.timeline.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   // ── Facts (enrichment-derived, fact_type != 'note') ───────────────────
 
   router.get('/api/contacts/:id/facts', authenticateToken, async (req, res) => {
