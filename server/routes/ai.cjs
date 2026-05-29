@@ -67,6 +67,7 @@ const { userRateLimit } = require('../middleware/userRateLimit.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 const chatExecuteLimit = userRateLimit({ key: 'chat-execute', limit: 50, windowSec: 3600 });
+const chatWarmupLimit  = userRateLimit({ key: 'chat-warmup',  limit: 15, windowSec: 3600 });
 
 // Confirmation waiters now use pg LISTEN/NOTIFY (db.listenForConfirmation /
 // db.notifyConfirmation). The DB's pending_confirmations row is the
@@ -311,6 +312,76 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
    * when the 'done' event is received or when the component
    * unmounts to prevent connection leaks.
    */
+  /**
+   * POST /api/chat/warmup — prime the prompt cache for this user.
+   *
+   * Frontend fires this when the user focuses the chat input or starts
+   * typing (debounced). By the time they hit send, the cacheable prefix
+   * is already in Anthropic's prompt cache, so the real call hits cache
+   * for ~90% input cost reduction + 2-5× faster TTFT.
+   *
+   * Calls buildAgenticContext + a minimal `max_tokens: 1` Sonnet call
+   * with the same systemBlocks + cached tools as /api/chat/execute.
+   * The output token is discarded — we only care about the input cache write.
+   *
+   * Cost shape per warmup (Sonnet 4.6, 34k cached prefix):
+   *   • cache_creation_input_tokens cost: ~$0.10 first time
+   *   • subsequent warmups in 5-min window: ~$0 (cache hit on warmup itself)
+   *   • savings on the actual user send: ~$0.10 (cache_read instead of input)
+   * Net: roughly break-even at worst, big win when warmup → send within 5 min.
+   *
+   * Rate limit 15/hour caps the abuse worst case at ~$1.50/day per user.
+   */
+  router.post('/api/chat/warmup', authenticateToken, chatWarmupLimit, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const userTz = req.user.timezone || DEFAULT_TIMEZONE;
+      const entityIds = req.user.entityIds || [];
+
+      const ctx = await buildAgenticContext({
+        userId, entityIds, db, tz: userTz, contextHint: 'warmup',
+        userMessage: '',
+        loadAllGcalAccounts, loadGcalTokens, saveGcalTokens, mergeAndSaveGcalTokens,
+        makeOAuth2Client, google, logger, requestId: req.requestId,
+      });
+
+      const systemBlocks = (ctx.systemCacheable !== undefined && ctx.systemDynamic !== undefined)
+        ? [
+            { type: 'text', text: ctx.systemCacheable, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: ctx.systemDynamic },
+          ]
+        : ctx.systemPrompt;
+
+      const tools = getToolSchemasForApi();
+      const cachedTools = tools.length > 0
+        ? tools.map((t, i) =>
+            i === tools.length - 1
+              ? { ...t, cache_control: { type: 'ephemeral' } }
+              : t)
+        : tools;
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const { trackedAnthropicCall } = require('../lib/anthropicCall.cjs');
+      const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+
+      await trackedAnthropicCall(client, {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1,
+        system: systemBlocks,
+        tools: cachedTools,
+        messages: [{ role: 'user', content: 'ping' }],
+      }, { userId, scope: 'warmup' });
+
+      return res.json({ ok: true });
+    } catch (err) {
+      // Warmup failure is non-fatal — the next /execute will just pay
+      // the cache-miss cost as before. Log at warn so we can spot
+      // chronic failures without alarming on transient.
+      logger.warn('chat.warmup.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.json({ ok: false });
+    }
+  });
+
   router.post('/api/chat/execute', authenticateToken, chatExecuteLimit, async (req, res) => {
     const userId = req.user.id;
     const entityIds = req.user.entityIds || [];

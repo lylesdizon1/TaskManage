@@ -450,6 +450,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // show cached messages immediately and let initCommandCenter sync silently.
   const [ccLoading, setCcLoading] = useState(!ccCacheInit);
   const [ccInput, setCcInput] = useState('');
+
+  // Prompt-cache warmup (2026-05-29). When the user starts typing,
+  // fire a background /api/chat/warmup that primes Aria's prompt
+  // cache with the current systemBlocks. By the time they hit send,
+  // the cache is hot — TTFT drops dramatically and 90% of input
+  // tokens are billed at the cached rate. Throttled to one warmup
+  // per 4 min (cache TTL is 5 min, so any later send will hit fresh
+  // anyway from the prior real call).
+  const lastWarmupAtRef = useRef(0);
+  const warmupTimerRef = useRef(null);
+  useEffect(() => {
+    if (!ccInput || ccInput.length < 3) return;
+    const now = Date.now();
+    if (now - lastWarmupAtRef.current < 4 * 60 * 1000) return;
+    if (warmupTimerRef.current) clearTimeout(warmupTimerRef.current);
+    warmupTimerRef.current = setTimeout(() => {
+      lastWarmupAtRef.current = Date.now();
+      apiFetch('/api/chat/warmup', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).catch(() => { /* warmup failures are non-fatal */ });
+    }, 500);
+    return () => { if (warmupTimerRef.current) clearTimeout(warmupTimerRef.current); };
+  }, [ccInput, apiFetch, authToken]);
+
   const [ccSending, setCcSending] = useState(false);
   const ccAbortRef   = useRef(null);   // active AbortController for chat stream
   const ccStoppedRef = useRef(false);  // set true on user Stop so late events are ignored
