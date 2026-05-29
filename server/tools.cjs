@@ -2323,13 +2323,18 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
           const SONNET_SCOPES = new Set(['agentic_loop', 'research_agent']);
           let estCents = 0;
           const byScope = {};
-          for (const [scope, tokens] of Object.entries(summary.byScope || {})) {
+          for (const [scope, stats] of Object.entries(summary.byScope || {})) {
+            const tokens = stats.tokens || 0;
             const ratePerMTokDollars = SONNET_SCOPES.has(scope) ? 5 : 1;
             const estDollars = (tokens / 1_000_000) * ratePerMTokDollars;
             estCents += Math.round(estDollars * 100);
             byScope[scope] = {
               tokens,
               est_cost_usd: Number(estDollars.toFixed(3)),
+              calls: stats.calls || 0,
+              avg_latency_ms: stats.avg_latency_ms || 0,
+              cache_read_tokens: stats.cache_read_tokens || 0,
+              cache_hit_signal: stats.cache_hit_signal || 'no cache hits',
             };
           }
           return {
@@ -2338,7 +2343,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
             est_total_cost_usd: Number((estCents / 100).toFixed(2)),
             by_scope: byScope,
             enforcement_cap: summary.enforcementCap,
-            note: 'Token counts are exact; dollar estimates are rough (Sonnet ~$5/MTok blended, Haiku ~$1/MTok blended). For exact spend, see the Anthropic console.',
+            note: 'Token counts and latency are exact. Dollar estimates are rough (Sonnet ~$5/MTok blended, Haiku ~$1/MTok blended). For exact spend, see the Anthropic console. cache_read_tokens > 0 means prompt caching is hitting — that prefix returned faster and 90% cheaper than uncached.',
           };
         } catch (err) {
           return { success: false, error: err.message };

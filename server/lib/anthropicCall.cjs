@@ -62,7 +62,9 @@ async function trackedAnthropicCall(client, params, opts = {}) {
     }
   }
 
+  const t0 = Date.now();
   const response = await client.messages.create(params);
+  const latencyMs = Date.now() - t0;
 
   // Awaited token recording — sub-millisecond Redis INCR per scope, but
   // crucially happens BEFORE the response returns so a subsequent
@@ -77,13 +79,32 @@ async function trackedAnthropicCall(client, params, opts = {}) {
       if (total > 0) {
         await incrementDailyCounter(userId, 'tokens', { increment: total });
         await incrementDailyCounter(userId, `tokens:${scope}`, { increment: total });
-        logger.debug?.('anthropic.call.tracked', {
-          userId, scope,
-          input_tokens: usage.input_tokens || 0,
-          output_tokens: usage.output_tokens || 0,
-          model: response?.model,
-        });
       }
+      // Latency tracking — per-scope rolling sum + call count. Lets us
+      // measure mean latency per scope and watch the cache-hit-rate
+      // proxy (cache_read_input_tokens vs total input_tokens).
+      await incrementDailyCounter(userId, `latency_ms:${scope}`, { increment: latencyMs });
+      await incrementDailyCounter(userId, `calls:${scope}`, { increment: 1 });
+      // Cache observability — cache_read_input_tokens is non-zero when
+      // the prefix hit the Anthropic prompt cache. Sum the read + create
+      // counts so we can compute hit rate downstream.
+      const cacheRead = Number(usage?.cache_read_input_tokens || 0);
+      const cacheCreate = Number(usage?.cache_creation_input_tokens || 0);
+      if (cacheRead > 0) {
+        await incrementDailyCounter(userId, `cache_read:${scope}`, { increment: cacheRead });
+      }
+      if (cacheCreate > 0) {
+        await incrementDailyCounter(userId, `cache_create:${scope}`, { increment: cacheCreate });
+      }
+      logger.debug?.('anthropic.call.tracked', {
+        userId, scope,
+        latency_ms: latencyMs,
+        input_tokens: usage?.input_tokens || 0,
+        output_tokens: usage?.output_tokens || 0,
+        cache_read_tokens: cacheRead,
+        cache_create_tokens: cacheCreate,
+        model: response?.model,
+      });
     }
   } catch (err) {
     logger.warn('anthropic.call.trackFailed', { userId, scope, error: err.message });
@@ -94,7 +115,8 @@ async function trackedAnthropicCall(client, params, opts = {}) {
 
 /**
  * Read-only daily cost summary for a user. Returns global + per-scope
- * token counters. Useful for an admin dashboard or a /me/cost endpoint.
+ * token counters PLUS per-scope latency stats and cache hit rate so
+ * we can see whether the prompt-caching work is actually landing.
  */
 async function getDailyCostSummary(userId) {
   if (!userId) return { totalTokens: 0, byScope: {} };
@@ -102,8 +124,23 @@ async function getDailyCostSummary(userId) {
   const total = await getDailyCount(userId, 'tokens');
   const byScope = {};
   for (const s of scopes) {
-    const v = await getDailyCount(userId, `tokens:${s}`);
-    if (v > 0) byScope[s] = v;
+    const tokens = await getDailyCount(userId, `tokens:${s}`);
+    if (tokens === 0) continue;
+    const calls = await getDailyCount(userId, `calls:${s}`);
+    const latencyTotalMs = await getDailyCount(userId, `latency_ms:${s}`);
+    const cacheRead = await getDailyCount(userId, `cache_read:${s}`);
+    const cacheCreate = await getDailyCount(userId, `cache_create:${s}`);
+    byScope[s] = {
+      tokens,
+      calls,
+      avg_latency_ms: calls > 0 ? Math.round(latencyTotalMs / calls) : 0,
+      cache_read_tokens: cacheRead,
+      cache_create_tokens: cacheCreate,
+      // Hit rate proxy: cache_read / (cache_read + uncached input). Not
+      // perfect (we don't store non-cached input separately) but enough
+      // to see whether caching is firing at all.
+      cache_hit_signal: cacheRead > 0 ? `${cacheRead} tokens served from cache` : 'no cache hits',
+    };
   }
   return { totalTokens: total, byScope, enforcementCap: ENFORCEMENT_CAP };
 }
