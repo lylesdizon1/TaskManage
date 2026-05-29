@@ -74,6 +74,22 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
   // out of a tool-hallucination loop instead of burning all iterations.
   const failureFingerprintCounts = new Map();
 
+  // Prompt-caching prep (2026-05-29). System is accepted as either a
+  // string (legacy callers) or an array of content blocks (callers that
+  // want to mark a cache breakpoint). Tools array gets a cache_control
+  // marker on its last element — caches the full ~5–10k-token tool
+  // schema array across all turns. Both cache markers default to
+  // ephemeral (5 min TTL) which matches conversational pacing.
+  const systemParam = Array.isArray(system)
+    ? system
+    : (typeof system === 'string' ? system : '');
+  const cachedTools = Array.isArray(tools) && tools.length > 0
+    ? tools.map((t, i) =>
+        i === tools.length - 1
+          ? { ...t, cache_control: { type: 'ephemeral' } }
+          : t)
+    : (tools ?? []);
+
   while (iterations < MAX_ITERATIONS) {
     iterations++;
 
@@ -81,8 +97,8 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
       trackedAnthropicCall(client, {
         model: model || 'claude-sonnet-4-6',
         max_tokens: 8192,
-        system,
-        tools: tools ?? [],
+        system: systemParam,
+        tools: cachedTools,
         messages: currentMessages,
       }, { userId, scope: 'agentic_loop' }),
       new Promise((_, reject) =>

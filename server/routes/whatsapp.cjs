@@ -506,7 +506,16 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // current message.
       const captureGuard = `\nDo NOT call capture_from_image unless a new image is attached to the user's current message. image_blob_id values appearing in prior conversation turns refer to past images and are NOT signals to call this tool again.`;
       const whatsappSuffix = `\nRespond via WhatsApp — max 3 sentences unless more detail is asked for. No sign-off.${captureGuard}${imageInstructions}${entityContext}`;
-      const systemPrompt = ctx.systemPrompt + whatsappSuffix;
+      // Prompt-caching split: cacheable prefix gets the ephemeral marker;
+      // dynamic suffix + whatsapp-specific instructions live in the
+      // second (uncached) block. Falls back to a joined string if
+      // buildAgenticContext didn't expose the split fields.
+      const systemPrompt = (ctx.systemCacheable !== undefined && ctx.systemDynamic !== undefined)
+        ? [
+            { type: 'text', text: ctx.systemCacheable, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: ctx.systemDynamic + whatsappSuffix },
+          ]
+        : ctx.systemPrompt + whatsappSuffix;
 
       // ── Agentic loop — multi-turn tool execution ─────────────────────
       const boundExecuteTool = (toolName, toolInput, uid) =>
@@ -654,6 +663,42 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         ? getToolSchemasForApi()
         : getToolSchemasForApi().filter((t) => t.name !== 'capture_from_image');
 
+      // Pre-ack on first tool call. WhatsApp has no typing indicator;
+      // tool calls (especially web search or inbox queries) can take
+      // 2-8s before the model's final reply. Without an interim ack the
+      // user feels the bot is stuck. Fire exactly one short message
+      // on the first tool_start of the turn — subsequent tools in the
+      // same turn stay silent to avoid chatter. The map below picks
+      // friendlier copy for known tool families; everything else
+      // falls back to a generic acknowledgment.
+      let ackSent = false;
+      const TOOL_ACK_COPY = {
+        web_search: 'Searching the web…',
+        search_inbox: 'Looking in your inbox…',
+        search_gmail: 'Looking in your inbox…',
+        get_email_content: 'Pulling up the email…',
+        search_email_content: 'Searching email content…',
+        list_contacts: 'Looking up your contacts…',
+        get_contact: 'Looking up that contact…',
+        search_tasks: 'Pulling up your tasks…',
+        capture_from_image: 'Reading the photo…',
+        start_sub_agent: 'Spinning up a research agent — I\'ll ping you when it\'s done.',
+      };
+      const onWhatsAppProgress = (evt) => {
+        if (ackSent || evt?.type !== 'tool_start') return;
+        // Suppress acks for confirmation-gated tools — the gate itself
+        // sends a YES/NO prompt and a pre-ack would chain weirdly.
+        const tool = evt.tool;
+        const def = getToolByName(tool);
+        if (def?.requires_confirmation) return;
+        const copy = TOOL_ACK_COPY[tool] || 'Working on it…';
+        ackSent = true;
+        // Fire-and-forget — never block the loop on UltraMsg I/O.
+        sendWhatsApp(db, userId, copy, fromRaw).catch((err) => {
+          logger.warn('whatsapp.preack.failed', { userId, tool, error: err.message });
+        });
+      };
+
       const { text, toolSummaries } = await runAgenticLoop({
         messages: [...priorMessages, { role: 'user', content: userMessageContent }],
         system: systemPrompt,
@@ -663,7 +708,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
         gateToolExecution,
         logAction,
         channel: 'whatsapp',
-        // no onProgress — WhatsApp is fire-and-reply
+        onProgress: onWhatsAppProgress,
       });
 
       // If we sent a confirmation prompt mid-loop, skip the model's

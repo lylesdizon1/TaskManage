@@ -563,8 +563,26 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     }
   }
 
-  const systemPrompt = profileContext + basePrompt + DECISION_INSTRUCTIONS + learningsBlock + emailBlock + outcomesBlock + factsBlock + foodLogBlock + projectsBlock + peopleBlock + sharedAccessBlock + labelsBlock + preferencesBlock + skillsBlock + proposalsBlock + journalBlock + contextBlock;
-  console.log('[buildAgenticContext] prompt chars:', systemPrompt.length);
+  // Prompt-caching split (2026-05-29). Anthropic prompt caching keys on
+  // the byte-equal prefix up to a `cache_control` marker. Everything in
+  // `systemCacheable` is slow-changing within a session — caching it
+  // returns those tokens 2–5× faster on subsequent turns AND drops
+  // their input cost ~90%. Per-turn varying content (current time,
+  // today's calendar/tasks, today's journal, smart-recall facts) goes
+  // in `systemDynamic` AFTER the cache breakpoint so it doesn't
+  // invalidate the prefix.
+  //
+  // Ordering rule: anything that mentions "today", "now", "active",
+  // or otherwise drifts on a per-minute basis goes in dynamic. Stuff
+  // tied to profile / rules / contacts / skills / projects belongs
+  // in cacheable (those change on the order of hours-to-days).
+  const systemCacheable = profileContext + basePrompt + DECISION_INSTRUCTIONS
+    + preferencesBlock + skillsBlock + labelsBlock + sharedAccessBlock
+    + proposalsBlock + peopleBlock + projectsBlock + learningsBlock;
+  const systemDynamic = emailBlock + outcomesBlock + factsBlock + foodLogBlock
+    + journalBlock + contextBlock;
+  const systemPrompt = systemCacheable + systemDynamic;
+  console.log('[buildAgenticContext] prompt chars:', systemPrompt.length, '(cacheable:', systemCacheable.length, '· dynamic:', systemDynamic.length, ')');
 
   return {
     user, tasks, activeTasks, recentCompleted, notes, recentMemories, calendarNotes, calendarEvents, learnings,
@@ -574,6 +592,7 @@ To page through results: use the oldest result's date as date_to in a follow-up 
     tz, todayStr, todayDate, todayDateKey, yesterdayDateKey, currentTime, weekMapStr,
     profileContext, contextBlock, learningsBlock, emailBlock, outcomesBlock, factsBlock, projectsBlock,
     peopleBlock, sharedAccessBlock, labelsBlock, preferencesBlock, proposalsBlock, journalBlock, skillsBlock,
+    systemCacheable, systemDynamic,
     chatContext: chatContextEnvelope,
     loadedSkills,
     userPreferences, inferredRules, pendingRuleProposals,

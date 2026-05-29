@@ -414,9 +414,17 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       // claimed no project access despite getProjectContextForUser
       // returning rows; same shape applies to skills (M1.5).
       const serverBlocks = (ctx.learningsBlock || '') + (ctx.emailBlock || '') + (ctx.outcomesBlock || '') + (ctx.factsBlock || '') + (ctx.projectsBlock || '') + (ctx.skillsBlock || '');
+      // Prompt-caching: when no client-supplied custom system prompt,
+      // send as a 2-block array so the cacheable prefix (profile,
+      // persona, decision rules, slow-changing context) gets the
+      // ephemeral cache marker. Client-prompt path keeps the legacy
+      // string shape — caller controls that prompt's shape.
       const fullSystem = clientPrompt
         ? ctx.profileContext + clientPrompt + ctx.decisionInstructions + serverBlocks + ctx.contextBlock
-        : ctx.systemPrompt;
+        : [
+            { type: 'text', text: ctx.systemCacheable || '', cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: ctx.systemDynamic || '' },
+          ];
 
       // SSE headers
       res.setHeader('Content-Type', 'text/event-stream');
