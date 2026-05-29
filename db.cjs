@@ -10151,6 +10151,52 @@ async function syncPrimaryFromIdentities(contactId, userId) {
   );
 }
 
+/**
+ * Recent + upcoming meetings involving a contact, matched by their email
+ * identities against calendar_events.attendees. Owner-scoped: the contact
+ * must belong to userId, and only that user's events are searched.
+ *
+ * The calendar cache is a rolling window (~30 days past → ~14 days future),
+ * so this is a "recent meetings" view, not a full history. Returns [] when
+ * the contact has no email identities.
+ *
+ * @param {string} contactId
+ * @param {string} userId
+ * @param {Object} [opts]
+ * @param {number} [opts.limit=50]
+ * @returns {Promise<Array<{type:'event', id, title, startTime, endTime, location, accountEmail}>>}
+ */
+async function getContactTimeline(contactId, userId, { limit = 50 } = {}) {
+  // Owner-scoped identity lookup — the join on contacts enforces ownership,
+  // so a non-owner (or unknown contact) yields no emails → empty timeline.
+  const idRes = await pool.query(
+    `SELECT DISTINCT lower(ci.value) AS email
+       FROM contact_identities ci
+       JOIN contacts c ON c.id = ci.contact_id
+      WHERE ci.contact_id = $1 AND c.user_id = $2 AND ci.kind = 'email'`,
+    [contactId, userId],
+  );
+  const emails = idRes.rows.map((r) => r.email).filter(Boolean);
+  if (!emails.length) return [];
+
+  // `attendees ?| ARRAY[...]` — does any stored (lowercased) attendee email
+  // match one of the contact's emails. GIN-indexed (calendar_events_attendees_gin).
+  const { rows } = await pool.query(
+    `SELECT id, title,
+            start_time   AS "startTime",
+            end_time     AS "endTime",
+            location,
+            account_email AS "accountEmail"
+       FROM calendar_events
+      WHERE user_id = $1
+        AND attendees ?| $2::text[]
+      ORDER BY start_time DESC
+      LIMIT $3`,
+    [userId, emails, limit],
+  );
+  return rows.map((r) => ({ type: 'event', ...r }));
+}
+
 // ── Shared access grants ────────────────────────────────────────────────────
 
 const GRANT_FIELDS = `
@@ -11673,6 +11719,7 @@ module.exports = {
   deleteContactIdentity,
   countContactIdentitiesByKind,
   syncPrimaryFromIdentities,
+  getContactTimeline,
   createGrant,
   revokeGrant,
   getGrantsForGrantor,
