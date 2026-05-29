@@ -7440,6 +7440,11 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source_image_blob_id TEXT REFERENCES image_blobs(id) ON DELETE SET NULL`).catch((err) => logger.warn('migration.warn', { label: 'contacts.source_image_blob_id', error: err.message }));
   await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS raw_ocr_text TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`).catch(() => {});
+  // Avatar photo for the People panel detail card. Distinct from
+  // source_image_blob_id (which pins the OCR source business card —
+  // provenance, not a profile picture). Nullable; UI renders initials
+  // fallback when absent.
+  await pool.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS image_blob_id TEXT REFERENCES image_blobs(id) ON DELETE SET NULL`).catch((err) => logger.warn('migration.warn', { label: 'contacts.image_blob_id', error: err.message }));
   // Partial index on the hot read path: list/search active contacts per
   // user, sorted by recency. The prior `contacts_user_id_idx` stays for
   // joins / admin paths; this one accelerates the common UI fetch.
@@ -7460,6 +7465,27 @@ async function runMigrations() {
     )
   `).catch((err) => logger.warn('migration.warn', { label: 'contact_identities table', error: err.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS contact_identities_value_idx ON contact_identities (LOWER(value))`).catch(() => {});
+
+  // People Panel redesign — multi-email/phone with labels + primary
+  // designation. We extend the existing kind/value/verified shape rather
+  // than rename (Option A): the API layer maps spec's identity_type↔kind
+  // and identity_value↔value. contact_identities stays the source of
+  // truth; contacts.primary_email/primary_phone become a derived mirror.
+  await pool.query(`ALTER TABLE contact_identities ADD COLUMN IF NOT EXISTS label TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE contact_identities ADD COLUMN IF NOT EXISTS is_primary BOOLEAN DEFAULT FALSE`).catch(() => {});
+  await pool.query(`ALTER TABLE contact_identities ADD COLUMN IF NOT EXISTS source TEXT`).catch(() => {});
+  // At most one primary per (contact, kind). Endpoint logic demotes the
+  // existing primary in the same transaction before promoting a new one.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS contact_identities_one_primary
+    ON contact_identities (contact_id, kind) WHERE is_primary = TRUE
+  `).catch((err) => logger.warn('migration.warn', { label: 'contact_identities one-primary', error: err.message }));
+  // Pre-existing rows (Commit B OCR business cards) have null source.
+  // Stamp them 'manual' per spec default. Primary designation is owned
+  // by the legacy migration (next commit), which sets it uniformly from
+  // contacts.primary_email/primary_phone — done there to avoid a
+  // double-primary collision against this backfill.
+  await pool.query(`UPDATE contact_identities SET source = 'manual' WHERE source IS NULL`).catch((err) => logger.warn('migration.warn', { label: 'contact_identities source backfill', error: err.message }));
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shared_access_grants (
