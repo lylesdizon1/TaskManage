@@ -590,6 +590,11 @@ async function syncGcalForUser(userId, tz) {
           all_day: !ev.start?.dateTime,
           location: ev.location || null,
           description: ev.description || null,
+          // Human attendees only — drop meeting-room resources. Stored
+          // lowercased for case-insensitive matching against contact emails.
+          attendees: (ev.attendees || [])
+            .filter((a) => a?.email && !a.resource)
+            .map((a) => a.email.toLowerCase()),
         }));
 
         await db.upsertCalendarEvents(userId, googleEmail, events);
