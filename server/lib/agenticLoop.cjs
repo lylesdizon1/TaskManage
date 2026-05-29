@@ -26,6 +26,13 @@ const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 const MAX_ITERATIONS = 5;
+// Defensive cap on per-tool-result JSON size sent back to the model.
+// Unbounded list tools (search_inbox returning 50 long emails,
+// list_contacts returning every contact with all their facts) can
+// blow context size, slow down subsequent iterations, and inflate
+// per-call cost. ~15KB ≈ 3,750 tokens — generous for one result, fits
+// 5 such tools per iteration comfortably under the prompt budget.
+const MAX_TOOL_RESULT_BYTES = 15000;
 // Stagnation guard — when the model retries the SAME (tool, input) twice
 // in a row, force it to stop tool-calling and respond in plain text on
 // the next turn. Catches the "locate the file" hang where the LLM
@@ -210,6 +217,19 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
       try {
         const result = await executeTool(toolUse.name, effectiveInput, userId);
         resultContent = typeof result === 'string' ? result : JSON.stringify(result);
+        // Universal size cap (2026-05-29). Catches the oversized-list case
+        // (e.g. search_inbox with 50 KB of email bodies) without requiring
+        // a per-tool truncation contract. Truncated results include a
+        // sentinel telling the model the data was clipped and to ask for
+        // refinement — keeps Aria from confidently summarizing only the
+        // first half of a result set.
+        if (resultContent.length > MAX_TOOL_RESULT_BYTES) {
+          logger.warn('agenticLoop.toolResult.truncated', {
+            tool: toolUse.name, originalBytes: resultContent.length, cap: MAX_TOOL_RESULT_BYTES,
+          });
+          resultContent = resultContent.slice(0, MAX_TOOL_RESULT_BYTES)
+            + `\n... [TRUNCATED: tool returned ${resultContent.length} bytes, capped at ${MAX_TOOL_RESULT_BYTES}. Ask the user to narrow the query (e.g. add a date range, limit, or specific name) for the rest.]`;
+        }
         if (result?.success === false) success = false;
         toolSummaries.push({ tool: toolUse.name, success: result?.success !== false, result });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result });
