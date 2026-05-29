@@ -125,20 +125,27 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
       await _safeLogAction(logAction, { eventType: 'decision_created', decision });
     }
 
-    const toolResults = [];
-    for (const toolUse of toolUseBlocks) {
+    // Tool dispatch (2026-05-29). When the model emits multiple tool_use
+    // blocks in one iteration, parallel execution cuts the per-iteration
+    // wall clock from sum(tool_durations) to max(tool_durations). Common
+    // case is read-tool fan-out (list_contacts + search_tasks + web_search
+    // in one shot) — each is independent, often 1-3s each, so parallel
+    // saves 4-6s on a 3-tool turn.
+    //
+    // Safety conditions for parallel:
+    //   • All tools known (unknowns fail fast individually anyway)
+    //   • No tool requires_confirmation (the gate sends user-facing
+    //     prompts; parallel would fire multiple prompts at once)
+    //   • Single-tool iterations stay serial (no benefit, simpler)
+    //
+    // The handler is extracted to a closure so both modes share logic.
+    const handleToolUse = async (toolUse) => {
       if (onProgress) onProgress({ type: 'tool_start', tool: toolUse.name, input: toolUse.input });
 
       let resultContent;
       let success = true;
 
       // ── Short-circuit: tool name not in the registry ─────────────────
-      // The "locate the file" hang root cause: model hallucinates a tool
-      // (find_file, search_filesystem, etc.), executeTool's default case
-      // returns "Unknown tool", model retries, repeat. Catch it here so
-      // the failure message tells the model the tool DOESN'T EXIST and
-      // to respond in plain text, instead of just "Unknown tool" which
-      // the model often interprets as a transient error worth retrying.
       const isKnownTool = !!getToolByName(toolUse.name);
       if (!isKnownTool) {
         const errorPayload = {
@@ -149,13 +156,10 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         toolSummaries.push({ tool: toolUse.name, success: false, error: 'unknown_tool' });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: 'unknown_tool' });
         await _safeLogAction(logAction, { eventType: 'tool_unknown', toolName: toolUse.name, input: toolUse.input, status: 'failure' });
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent, is_error: true });
-        continue;
+        return { type: 'tool_result', tool_use_id: toolUse.id, content: resultContent, is_error: true };
       }
 
       // ── Stagnation: same (tool, input) failing repeatedly ────────────
-      // After REPEAT_FAILURE_LIMIT identical failures, force the model
-      // to respond in text instead of letting it keep retrying.
       const fp = _toolFingerprint(toolUse.name, toolUse.input);
       if ((failureFingerprintCounts.get(fp) || 0) >= REPEAT_FAILURE_LIMIT) {
         const errorPayload = {
@@ -165,8 +169,7 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         resultContent = JSON.stringify(errorPayload);
         toolSummaries.push({ tool: toolUse.name, success: false, error: 'stagnation' });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: 'stagnation' });
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent, is_error: true });
-        continue;
+        return { type: 'tool_result', tool_use_id: toolUse.id, content: resultContent, is_error: true };
       }
 
       // Gate: optional pre-execution hook that can short-circuit with its own result.
@@ -184,66 +187,36 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         toolSummaries.push({ tool: toolUse.name, success: false, cancelled: true, reason: gateDecision.reason || 'cancelled' });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: resultContent });
         await _safeLogAction(logAction, { eventType: 'tool_cancelled', toolName: toolUse.name, input: toolUse.input, reason: gateDecision.reason });
-        // Cancellation is a terminal but non-error result — without is_error,
-        // Aria treats the cancelled tool as complete and produces a normal
-        // follow-up acknowledgment instead of retrying.
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent });
-        continue;
+        return { type: 'tool_result', tool_use_id: toolUse.id, content: resultContent };
       }
 
-      // Merge any overrides the confirmation gate attached (e.g. the user
-      // picking a different From account on an email draft).
       const effectiveInput = (gateDecision?.overrides && Object.keys(gateDecision.overrides).length)
         ? { ...toolUse.input, ...gateDecision.overrides }
         : toolUse.input;
 
-      // If the gate says the tool was already executed elsewhere (e.g. the
-      // user confirmed via WhatsApp and the webhook handler ran the tool),
-      // skip executeTool and inject a synthetic success result so the model
-      // can generate its follow-up text without double execution.
       if (gateDecision?.alreadyExecuted) {
-        // Prefer the real result passed through the waiter resolution;
-        // fall back to a minimal synthetic if the other surface didn't
-        // plumb it through.
         const real = gateDecision.result;
         const payload = real && typeof real === 'object'
           ? { ...real, already_executed: true }
           : { success: true, already_executed: true, tool: toolUse.name };
         resultContent = JSON.stringify(payload);
-        const success = payload.success !== false;
-        toolSummaries.push({ tool: toolUse.name, success, result: payload });
+        const ok = payload.success !== false;
+        toolSummaries.push({ tool: toolUse.name, success: ok, result: payload });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result: payload });
-        await _safeLogAction(logAction, { eventType: 'tool_executed_elsewhere', toolName: toolUse.name, input: effectiveInput, output: payload, status: success ? 'success' : 'failure' });
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: resultContent });
-        continue;
+        await _safeLogAction(logAction, { eventType: 'tool_executed_elsewhere', toolName: toolUse.name, input: effectiveInput, output: payload, status: ok ? 'success' : 'failure' });
+        return { type: 'tool_result', tool_use_id: toolUse.id, content: resultContent };
       }
 
       try {
         const result = await executeTool(toolUse.name, effectiveInput, userId);
         resultContent = typeof result === 'string' ? result : JSON.stringify(result);
-        // 2026-05-08 P0 audit fix (B.1): outer success must reflect inner
-        // result.success. Pre-fix, this was hardcoded `success: true` —
-        // the SSE 'tools_executed' event downstream filtered by `s.success`
-        // (e.g. DashboardPanel:1462's start_sub_agent placeholder tile),
-        // so a tool that returned { success: false, error: "..." } would
-        // be reported as a successful tool call with a ghost placeholder
-        // rendering for nonexistent state. Mirrors the alreadyExecuted
-        // branch above (line 190: `payload.success !== false`).
-        //
-        // 2026-05-08 P0.2 follow-up: also flip the OUTER `success` var so
-        // is_error: true propagates to the LLM tool_result message at
-        // line 232. Without this, clean-failure returns reached the LLM
-        // without an error flag and Aria narrated success despite the
-        // tool refusing work (Leo's create_event/invalid_grant case).
         if (result?.success === false) success = false;
         toolSummaries.push({ tool: toolUse.name, success: result?.success !== false, result });
         if (onProgress) onProgress({ type: 'tool_complete', tool: toolUse.name, result });
         await _safeLogAction(logAction, { eventType: 'tool_executed', toolName: toolUse.name, input: effectiveInput, output: result, status: result?.success === false ? 'failure' : 'success' });
-        // Stagnation tracking — bump failure count on result-level failures
-        // too (success=false), reset on success.
         if (result?.success === false) {
-          const fp = _toolFingerprint(toolUse.name, effectiveInput);
-          failureFingerprintCounts.set(fp, (failureFingerprintCounts.get(fp) || 0) + 1);
+          const fp2 = _toolFingerprint(toolUse.name, effectiveInput);
+          failureFingerprintCounts.set(fp2, (failureFingerprintCounts.get(fp2) || 0) + 1);
         }
       } catch (err) {
         success = false;
@@ -251,17 +224,27 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
         toolSummaries.push({ tool: toolUse.name, success: false, error: err.message });
         if (onProgress) onProgress({ type: 'tool_error', tool: toolUse.name, error: err.message });
         await _safeLogAction(logAction, { eventType: 'tool_failed', toolName: toolUse.name, input: toolUse.input, errorMsg: err.message, status: 'failure' });
-        const fp = _toolFingerprint(toolUse.name, effectiveInput);
-        failureFingerprintCounts.set(fp, (failureFingerprintCounts.get(fp) || 0) + 1);
+        const fp2 = _toolFingerprint(toolUse.name, effectiveInput);
+        failureFingerprintCounts.set(fp2, (failureFingerprintCounts.get(fp2) || 0) + 1);
       }
 
-      toolResults.push({
+      return {
         type: 'tool_result',
         tool_use_id: toolUse.id,
         content: resultContent,
         ...(success ? {} : { is_error: true }),
-      });
-    }
+      };
+    };
+
+    const anyConfirmable = toolUseBlocks.some((t) => getToolByName(t.name)?.requires_confirmation);
+    const canParallelize = toolUseBlocks.length > 1 && !anyConfirmable;
+    const toolResults = canParallelize
+      ? await Promise.all(toolUseBlocks.map(handleToolUse))
+      : await (async () => {
+          const out = [];
+          for (const t of toolUseBlocks) out.push(await handleToolUse(t));
+          return out;
+        })();
 
     currentMessages.push({ role: 'user', content: toolResults });
   }
