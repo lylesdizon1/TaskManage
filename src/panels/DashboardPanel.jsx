@@ -495,17 +495,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       catch (e) { setIsListening(false); }
     }
   }, [isListening]);
+  // Persistent Audio element — created on first toggle ON inside the
+  // click handler, which is a user gesture and wakes Chrome/Safari's
+  // autoplay policy. Reusing the same element across subsequent Aria
+  // replies preserves the gesture credit.
+  const playTtsRef = useRef(null);
   const toggleVoiceReplies = useCallback(() => {
     setVoiceRepliesEnabled((prev) => {
       const next = !prev;
       try { localStorage.setItem('aria-voice-replies', next ? '1' : '0'); } catch {}
+      if (next && !playTtsRef.current) {
+        // Prime the audio policy with a real (silent) play inside the
+        // click context. 0.1s of silence is enough to credit the page
+        // for future programmatic playback.
+        const a = new Audio();
+        // Tiny silent mp3 data URI (44 bytes).
+        a.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAACcQCAgICAgICAgICAgICAgICAgICAgICAgID/////////////////////AAAAAExhdmM1OC4xMwAAAAAAAAAAAAAAACQDoAAAAAAAAAJxYZ0YnAAAAAAA//sQxAADwAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+        a.play().catch(() => { /* prime failed, real playback will retry */ });
+        playTtsRef.current = a;
+      }
       return next;
     });
   }, []);
 
-  // Play TTS audio for the given text. Browser's Audio element handles
-  // mp3 from our /api/tts/synthesize endpoint.
-  const playTtsRef = useRef(null);
+  // Play TTS audio for the given text. Reuses the primed Audio element
+  // so the autoplay policy stays credited.
   const playAriaVoice = useCallback(async (text) => {
     if (!text || !voiceRepliesEnabled) return;
     try {
@@ -517,12 +531,21 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       if (!res.ok) return;
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      // Stop any prior playback so successive Aria replies don't overlap.
-      if (playTtsRef.current) { try { playTtsRef.current.pause(); } catch {} }
-      const audio = new Audio(url);
-      playTtsRef.current = audio;
+      // Reuse the persistent audio element (carries the gesture credit
+      // from toggleVoiceReplies). Stop any prior playback first so
+      // successive Aria replies don't overlap.
+      let audio = playTtsRef.current;
+      if (!audio) { audio = new Audio(); playTtsRef.current = audio; }
+      try { audio.pause(); } catch {}
+      audio.src = url;
       audio.onended = () => { URL.revokeObjectURL(url); };
-      audio.play().catch(() => { /* autoplay blocked — first interaction wakes it up */ });
+      try {
+        await audio.play();
+      } catch (err) {
+        // Autoplay still blocked — surface a one-time hint so the user
+        // knows to interact with the page first. Don't throw.
+        console.warn('[voice] autoplay blocked, click anywhere then retry:', err.message);
+      }
     } catch { /* TTS playback failures are non-fatal */ }
   }, [voiceRepliesEnabled, apiFetch, authToken]);
 
