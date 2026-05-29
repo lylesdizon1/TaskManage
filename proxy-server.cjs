@@ -53,7 +53,13 @@ app.use(helmet({
       imgSrc: ["'self'", 'data:', 'https:'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
       objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
+      // Voice mode (2026-05-29): TTS audio arrives from /api/tts/synthesize
+      // and gets wrapped in a blob URL via URL.createObjectURL — that's
+      // a 'blob:' scheme. The autoplay-policy primer uses a tiny silent
+      // mp3 data URI ('data:'). Both must be allowed for browser audio
+      // playback to work. Without these, audio is silently CSP-blocked
+      // and the only signal is a console.warn buried in DevTools.
+      mediaSrc: ["'self'", 'data:', 'blob:'],
       frameSrc: ["'none'"],
       frameAncestors: ["'none'"],
       baseUri: ["'self'"],
