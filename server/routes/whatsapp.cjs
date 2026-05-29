@@ -811,9 +811,37 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       }
 
       // ── Reply via user's UltraMsg integration ──────────────────────────
+      // Voice-in → voice-out (2026-05-29): when the user sent a voice
+      // note, generate TTS for the reply and send it as a WhatsApp
+      // audio message alongside the text. Closes the voice loop end
+      // to end while keeping text available for accessibility / scroll
+      // back / search. Text-input turns stay text-only.
       if (reply) {
         const r = await sendWhatsApp(db, userId, reply, fromRaw);
         if (!r.ok) logger.error('whatsapp.reply.failed', { requestId: req.requestId, userId, reason: r.reason });
+
+        if (isAudioMedia) {
+          // Fire TTS + audio send fire-and-forget so a slow Whisper-to-
+          // TTS round trip doesn't delay the HTTP response back to
+          // UltraMsg's webhook (which expects a quick 200 ack).
+          (async () => {
+            try {
+              const { synthesizeSpeech } = require('../lib/textToSpeech.cjs');
+              const { sendWhatsAppAudio } = require('../utils/integrations.cjs');
+              const tts = await synthesizeSpeech(reply, { userId });
+              if (!tts.ok) {
+                logger.warn('whatsapp.tts.failed', { requestId: req.requestId, userId, error: tts.error });
+                return;
+              }
+              const audioSend = await sendWhatsAppAudio(db, userId, tts.bytes, tts.mimeType, fromRaw);
+              if (!audioSend.ok) {
+                logger.error('whatsapp.audioReply.failed', { requestId: req.requestId, userId, reason: audioSend.reason });
+              }
+            } catch (err) {
+              logger.error('whatsapp.voiceReply.threw', { requestId: req.requestId, userId, error: err.message });
+            }
+          })();
+        }
       }
 
       // ── Completion note follow-up prompt ────────────────────────────────

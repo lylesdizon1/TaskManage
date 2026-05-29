@@ -88,6 +88,41 @@ async function sendWhatsApp(db, userId, text, toPhoneOverride) {
   return { ok: true };
 }
 
+/**
+ * Send a base64-encoded audio file as a WhatsApp voice/audio message.
+ * Used for TTS replies. UltraMsg accepts either a public URL or a
+ * data URI in the `audio` field — we use the data URI form so we
+ * don't need external hosting.
+ */
+async function sendWhatsAppAudio(db, userId, audioBytes, mimeType, toPhoneOverride) {
+  const row = await db.getUserIntegration(userId, 'ultramsg_whatsapp');
+  if (row && row.isEnabled === false) return { ok: false, reason: 'not_configured' };
+
+  const cfg = row?.config || {};
+  const instance = cfg.instance || process.env.ULTRAMSG_INSTANCE || null;
+  const token    = cfg.token    || process.env.ULTRAMSG_TOKEN    || null;
+
+  let to = toPhoneOverride || cfg.phone || null;
+  if (!to) {
+    try {
+      const user = await db.getUserById(userId);
+      to = user?.whatsappPhone || null;
+    } catch { /* leave null → not_configured below */ }
+  }
+
+  if (!instance || !token || !to) return { ok: false, reason: 'not_configured' };
+  if (!Buffer.isBuffer(audioBytes) || audioBytes.length === 0) return { ok: false, reason: 'empty_audio' };
+
+  const dataUri = `data:${mimeType || 'audio/mpeg'};base64,${audioBytes.toString('base64')}`;
+  const r = await fetch(`https://api.ultramsg.com/${instance}/messages/audio`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ token, to, audio: dataUri }),
+  });
+  if (!r.ok) return { ok: false, reason: `whatsapp_audio_${r.status}` };
+  return { ok: true };
+}
+
 async function sendAlertEmail(db, userId, { subject, text, html, toOverride }) {
   const row = await db.getUserIntegration(userId, 'email_alerts');
   if (!row || !row.isEnabled) return { ok: false, reason: 'not_configured' };
@@ -153,6 +188,6 @@ async function migrateSlackWebhooksToEncrypted(db) {
 }
 
 module.exports = {
-  sendSlack, sendWhatsApp, sendAlertEmail, getIntegrationStatus,
+  sendSlack, sendWhatsApp, sendWhatsAppAudio, sendAlertEmail, getIntegrationStatus,
   wrapWebhookUrl, unwrapWebhookUrl, migrateSlackWebhooksToEncrypted,
 };
