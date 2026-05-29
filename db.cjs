@@ -9752,6 +9752,7 @@ const CONTACT_FIELDS = `
   linked_user_id AS "linkedUserId",
   source,
   source_image_blob_id AS "sourceImageBlobId",
+  image_blob_id AS "imageBlobId",
   raw_ocr_text AS "rawOcrText",
   created_at AS "createdAt",
   updated_at AS "updatedAt",
@@ -9833,6 +9834,7 @@ async function updateContact(contactId, userId, patch) {
     source: 'source',
     sourceImageBlobId: 'source_image_blob_id',
     rawOcrText: 'raw_ocr_text',
+    imageBlobId: 'image_blob_id',
   };
   for (const [k, col] of Object.entries(map)) {
     if (patch[k] === undefined) continue;
@@ -10015,6 +10017,121 @@ async function getContactIdentities(contactId) {
     [contactId],
   );
   return rows;
+}
+
+const IDENTITY_RETURN = `id, contact_id AS "contactId", kind, value, label,
+  COALESCE(is_primary, FALSE) AS "isPrimary", source, verified,
+  created_at AS "createdAt"`;
+
+// Emails are stored lowercased (case-insensitive matching + index);
+// phones keep their formatting since LOWER is a no-op on digits.
+function normalizeIdentityValue(kind, value) {
+  return kind === 'email' ? String(value).trim().toLowerCase() : String(value).trim();
+}
+
+async function createContactIdentity(contactId, { kind, value, label, isPrimary, source }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (isPrimary) {
+      await client.query(
+        `UPDATE contact_identities SET is_primary = FALSE
+         WHERE contact_id = $1 AND kind = $2 AND is_primary = TRUE`,
+        [contactId, kind],
+      );
+    }
+    const { rows } = await client.query(
+      `INSERT INTO contact_identities (contact_id, kind, value, label, is_primary, source)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING ${IDENTITY_RETURN}`,
+      [contactId, kind, normalizeIdentityValue(kind, value), label || null, !!isPrimary, source || 'manual'],
+    );
+    await client.query('COMMIT');
+    return rows[0];
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateContactIdentity(identityId, contactId, { label, isPrimary }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query(
+      `SELECT kind FROM contact_identities WHERE id = $1 AND contact_id = $2`,
+      [identityId, contactId],
+    );
+    if (!cur.rows[0]) { await client.query('ROLLBACK'); return null; }
+    const kind = cur.rows[0].kind;
+    if (isPrimary === true) {
+      await client.query(
+        `UPDATE contact_identities SET is_primary = FALSE
+         WHERE contact_id = $1 AND kind = $2 AND is_primary = TRUE AND id <> $3`,
+        [contactId, kind, identityId],
+      );
+    }
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    if (label !== undefined) { sets.push(`label = $${i++}`); vals.push(label || null); }
+    if (isPrimary !== undefined) { sets.push(`is_primary = $${i++}`); vals.push(!!isPrimary); }
+    if (!sets.length) {
+      await client.query('ROLLBACK');
+      const { rows } = await pool.query(`SELECT ${IDENTITY_RETURN} FROM contact_identities WHERE id = $1 AND contact_id = $2`, [identityId, contactId]);
+      return rows[0] || null;
+    }
+    vals.push(identityId, contactId);
+    const { rows } = await client.query(
+      `UPDATE contact_identities SET ${sets.join(', ')}
+       WHERE id = $${i++} AND contact_id = $${i}
+       RETURNING ${IDENTITY_RETURN}`,
+      vals,
+    );
+    await client.query('COMMIT');
+    return rows[0] || null;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteContactIdentity(identityId, contactId) {
+  const { rows } = await pool.query(
+    `DELETE FROM contact_identities WHERE id = $1 AND contact_id = $2
+     RETURNING id, kind, COALESCE(is_primary, FALSE) AS "isPrimary"`,
+    [identityId, contactId],
+  );
+  return rows[0] || null;
+}
+
+async function countContactIdentitiesByKind(contactId, kind) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM contact_identities WHERE contact_id = $1 AND kind = $2`,
+    [contactId, kind],
+  );
+  return rows[0]?.n || 0;
+}
+
+// Recompute the contacts.primary_email/primary_phone scalar mirror from the
+// is_primary identity rows. Option A: identities are the source of truth;
+// the scalars are a derived cache that only this function writes. Call
+// after any identity mutation so downstream readers stay correct.
+async function syncPrimaryFromIdentities(contactId, userId) {
+  await pool.query(
+    `UPDATE contacts c SET
+       primary_email = (SELECT value FROM contact_identities
+                        WHERE contact_id = c.id AND kind = 'email' AND is_primary = TRUE LIMIT 1),
+       primary_phone = (SELECT value FROM contact_identities
+                        WHERE contact_id = c.id AND kind = 'phone' AND is_primary = TRUE LIMIT 1),
+       updated_at = NOW()
+     WHERE c.id = $1 AND c.user_id = $2`,
+    [contactId, userId],
+  );
 }
 
 // ── Shared access grants ────────────────────────────────────────────────────
@@ -11534,6 +11651,11 @@ module.exports = {
   resolveContactByName,
   addContactIdentity,
   getContactIdentities,
+  createContactIdentity,
+  updateContactIdentity,
+  deleteContactIdentity,
+  countContactIdentitiesByKind,
+  syncPrimaryFromIdentities,
   createGrant,
   revokeGrant,
   getGrantsForGrantor,
