@@ -9986,67 +9986,6 @@ async function hasActiveGrant(granteeUserId, grantorUserId, scope) {
   return rows.length > 0;
 }
 
-// ── Connections (person-to-person graph) ────────────────────────────────────
-
-const CONNECTION_FIELDS = `
-  id,
-  user_id AS "userId",
-  peer_user_id AS "peerUserId",
-  peer_contact_id AS "peerContactId",
-  relationship,
-  status,
-  created_at AS "createdAt",
-  accepted_at AS "acceptedAt"
-`;
-
-async function createConnection(userId, peerUserId, peerContactId, relationship) {
-  if (!userId) throw new Error('userId required');
-  if (!peerUserId && !peerContactId) throw new Error('peerUserId or peerContactId required');
-  if (peerUserId && peerContactId) throw new Error('Provide only one of peerUserId or peerContactId');
-  const { rows } = await pool.query(
-    `INSERT INTO connections
-       (user_id, peer_user_id, peer_contact_id, relationship, status)
-     VALUES ($1, $2, $3, $4, 'pending')
-     RETURNING ${CONNECTION_FIELDS}`,
-    [userId, peerUserId || null, peerContactId || null, relationship || null],
-  );
-  return rows[0];
-}
-
-async function updateConnectionStatus(connectionId, userId, status) {
-  const { rows } = await pool.query(
-    `UPDATE connections
-     SET status = $3,
-         accepted_at = CASE WHEN $3 = 'accepted' THEN NOW() ELSE accepted_at END
-     WHERE id = $1 AND user_id = $2
-     RETURNING ${CONNECTION_FIELDS}`,
-    [connectionId, userId, status],
-  );
-  return rows[0] || null;
-}
-
-async function getConnectionsForUser(userId) {
-  const { rows } = await pool.query(
-    `SELECT ${CONNECTION_FIELDS}
-     FROM connections WHERE user_id = $1
-     ORDER BY created_at DESC`,
-    [userId],
-  );
-  return rows;
-}
-
-async function getConnectionByPeer(userId, peerUserId) {
-  if (!userId || !peerUserId) return null;
-  const { rows } = await pool.query(
-    `SELECT ${CONNECTION_FIELDS}
-     FROM connections
-     WHERE user_id = $1 AND peer_user_id = $2
-     LIMIT 1`,
-    [userId, peerUserId],
-  );
-  return rows[0] || null;
-}
-
 // ── Contact-scoped memory facts (targets the contact-scoped partial index) ──
 
 async function addContactFact(userId, contactId, factText, factType, strengthScore, sourceChannel /* M1a */) {
@@ -11485,10 +11424,6 @@ module.exports = {
   getGrantsForGrantor,
   getGrantsForGrantee,
   hasActiveGrant,
-  createConnection,
-  updateConnectionStatus,
-  getConnectionsForUser,
-  getConnectionByPeer,
   addContactFact,
   getContactFacts,
   getRelevantContacts,

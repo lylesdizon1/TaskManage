@@ -119,7 +119,6 @@ app.use('/', require('./server/routes/outlook.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/quickbooks.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/contacts.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/sharedAccess.cjs')({ authenticateToken, db }));
-app.use('/', require('./server/routes/connections.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/closeLoop.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/imageBlobs.cjs')({ authenticateToken, db }));
 app.use('/', require('./server/routes/journal.cjs')({ authenticateToken, db }));
