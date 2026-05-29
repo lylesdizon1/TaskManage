@@ -334,7 +334,7 @@ function ContactDetail({ contactId, apiFetch, authToken, onArchived, onChanged }
         authToken={authToken}
         onAdded={reload}
       />
-      <TimelineSection />
+      <TimelineSection contactId={contactId} apiFetch={apiFetch} authToken={authToken} />
     </div>
   );
 }
@@ -635,15 +635,58 @@ function NotesSection({ notes, contactId, apiFetch, authToken, onAdded }) {
   );
 }
 
-function TimelineSection() {
-  // Placeholder — the calendar+email join requires attendee and recipient
-  // ingestion that isn't built yet. Wiring lands once that exists.
+// Recent + upcoming meetings, matched server-side on attendee email. The
+// calendar cache is a rolling ~30d-past → 14d-future window, so this is a
+// "recent meetings" view, not a full history.
+function fmtWhen(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const date = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
+function TimelineRow({ event }) {
+  const upcoming = event.startTime && new Date(event.startTime) > new Date();
+  return (
+    <div style={{ display: 'flex', gap: 10, padding: '7px 0', borderTop: `1px dashed ${BORDER}` }}>
+      <span className="material-symbols-outlined" style={{ fontSize: 17, color: upcoming ? PRIMARY : TXT3, marginTop: 1 }}>event</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: TXT1, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.title || '(No title)'}</div>
+        <div style={{ fontSize: 11.5, color: TXT2, marginTop: 1 }}>
+          {fmtWhen(event.startTime)}{event.location ? ` · ${event.location}` : ''}{upcoming ? ' · upcoming' : ''}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TimelineSection({ contactId, apiFetch, authToken }) {
+  const [items, setItems] = useState(null); // null = loading
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiFetch(`/api/contacts/${contactId}/timeline`, { headers: { Authorization: `Bearer ${authToken}` } });
+        const d = await r.json().catch(() => ({}));
+        if (!cancelled) setItems(Array.isArray(d?.timeline) ? d.timeline : []);
+      } catch { if (!cancelled) setItems([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [contactId, apiFetch, authToken]);
+
   return (
     <div style={{ marginBottom: 8 }}>
-      <SectionLabel subtitle="last 90 days">Timeline</SectionLabel>
-      <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic' }}>
-        Interaction history (calendar + email) is coming soon.
-      </div>
+      <SectionLabel subtitle="recent meetings">Timeline</SectionLabel>
+      {items === null ? (
+        <div style={{ fontSize: 13, color: TXT3 }}>Loading…</div>
+      ) : items.length === 0 ? (
+        <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic' }}>No recent meetings with this contact.</div>
+      ) : (
+        items.map((e) => <TimelineRow key={e.id} event={e} />)
+      )}
     </div>
   );
 }
