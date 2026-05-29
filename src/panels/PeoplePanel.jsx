@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from 'react';
 
 /**
  * PeoplePanel — master-detail contacts. Left: searchable contact list.
@@ -130,6 +130,34 @@ export default function PeoplePanel({ apiFetch, authToken }) {
 }
 
 function ContactsList({ contacts, total, loaded, query, setQuery, selectedId, onSelect, onNew }) {
+  const listRef = useRef(null);
+  const tileRefs = useRef({});
+  // Keyboard cursor — a highlight that arrows move; Enter commits it to the
+  // detail pane. Distinct from `selectedId` so arrowing doesn't fire a fetch
+  // per keypress. Seeded from the current selection when the list gains focus.
+  const [active, setActive] = useState(-1);
+
+  useEffect(() => {
+    if (active >= contacts.length) setActive(contacts.length - 1);
+  }, [contacts.length, active]);
+
+  const onKeyDown = (e) => {
+    if (!contacts.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((i) => {
+        const base = i < 0 ? contacts.findIndex((c) => c.id === selectedId) : i;
+        const start = base < 0 ? 0 : base;
+        const next = e.key === 'ArrowDown' ? Math.min(contacts.length - 1, start + 1) : Math.max(0, start - 1);
+        tileRefs.current[contacts[next]?.id]?.scrollIntoView({ block: 'nearest' });
+        return next;
+      });
+    } else if (e.key === 'Enter' && active >= 0 && contacts[active]) {
+      e.preventDefault();
+      onSelect(contacts[active].id);
+    }
+  };
+
   return (
     <div style={{ width: 340, flexShrink: 0, borderRight: `1px solid ${BORDER}`, display: 'flex', flexDirection: 'column', background: '#fff' }}>
       <div style={{ padding: '18px 18px 10px' }}>
@@ -146,16 +174,31 @@ function ContactsList({ contacts, total, loaded, query, setQuery, selectedId, on
           style={{ width: '100%', fontSize: 13, padding: '8px 12px', border: `1px solid ${BORDER}`, borderRadius: 8, outline: 'none', fontFamily: 'Manrope, sans-serif', boxSizing: 'border-box' }}
         />
       </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px' }}>
+      <div
+        ref={listRef}
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onBlur={() => setActive(-1)}
+        style={{ flex: 1, overflowY: 'auto', padding: '0 10px', outline: 'none' }}
+      >
         {!loaded ? (
-          <div style={{ fontSize: 13, color: TXT3, padding: '8px 8px' }}>Loading…</div>
+          <ListSkeleton />
         ) : contacts.length === 0 ? (
-          <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic', padding: '8px 8px' }}>
-            {total === 0 ? 'No contacts yet — add one above, or let Aria pick them up from your mail + calendar.' : 'No contacts match that search.'}
+          <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic', padding: '12px 8px', lineHeight: 1.5 }}>
+            {total === 0
+              ? 'No contacts yet. Add one with “+ New Contact” above — or let Aria pick them up automatically from your mail and calendar.'
+              : 'No contacts match that search.'}
           </div>
         ) : (
-          contacts.map((c) => (
-            <ContactTile key={c.id} contact={c} selected={c.id === selectedId} onSelect={() => onSelect(c.id)} />
+          contacts.map((c, i) => (
+            <ContactTile
+              key={c.id}
+              ref={(el) => { if (el) tileRefs.current[c.id] = el; else delete tileRefs.current[c.id]; }}
+              contact={c}
+              selected={c.id === selectedId}
+              active={i === active}
+              onSelect={() => onSelect(c.id)}
+            />
           ))
         )}
       </div>
@@ -166,16 +209,33 @@ function ContactsList({ contacts, total, loaded, query, setQuery, selectedId, on
   );
 }
 
-function ContactTile({ contact, selected, onSelect }) {
+function ListSkeleton() {
+  return (
+    <div style={{ padding: '4px 0' }}>
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px' }}>
+          <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#eceaf4', flexShrink: 0 }} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ height: 11, width: `${55 + (i % 3) * 12}%`, background: '#eceaf4', borderRadius: 6 }} />
+            <div style={{ height: 9, width: `${30 + (i % 2) * 15}%`, background: '#f1eff7', borderRadius: 6 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const ContactTile = forwardRef(function ContactTile({ contact, selected, active, onSelect }, ref) {
   const sub = [contact.role, contact.company].filter(Boolean).join(' · ');
   return (
     <div
+      ref={ref}
       onClick={onSelect}
       style={{
         display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 8, cursor: 'pointer',
         marginBottom: 2,
         background: selected ? SOFT : 'transparent',
-        border: selected ? `1px solid ${BORDER}` : '1px solid transparent',
+        border: selected ? `1px solid ${BORDER}` : active ? `1px solid ${PRIMARY}` : '1px solid transparent',
       }}
     >
       <div style={{ width: 34, height: 34, borderRadius: '50%', background: selected ? PRIMARY : '#e9e7f3', color: selected ? '#fff' : PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
@@ -188,7 +248,7 @@ function ContactTile({ contact, selected, onSelect }) {
       {selected && <span className="material-symbols-outlined" style={{ fontSize: 16, color: PRIMARY }}>chevron_right</span>}
     </div>
   );
-}
+});
 
 function SectionLabel({ children, subtitle, right }) {
   return (
@@ -378,6 +438,14 @@ function ContactInfoSection({ emails, phones, contactId, apiFetch, authToken, on
   const [error, setError] = useState(null);
   const [adding, setAdding] = useState(false);
 
+  // Optimistic mirror of the identity lists. Edits land here instantly; the
+  // server request reconciles on success (via onChanged → parent reload,
+  // which refreshes our props) and reverts to props on failure.
+  const [optEmails, setOptEmails] = useState(emails);
+  const [optPhones, setOptPhones] = useState(phones);
+  useEffect(() => { setOptEmails(emails); }, [emails]);
+  useEffect(() => { setOptPhones(phones); }, [phones]);
+
   const mutate = useCallback(async (path, opts) => {
     setBusy(true); setError(null);
     try {
@@ -390,12 +458,40 @@ function ContactInfoSection({ emails, phones, contactId, apiFetch, authToken, on
     finally { setBusy(false); }
   }, [apiFetch, authToken, onChanged]);
 
-  const setPrimary = (id) => mutate(`/api/contacts/${contactId}/identities/${id}`, { method: 'PATCH', body: JSON.stringify({ is_primary: true }) });
-  const setLabel = (id, label) => mutate(`/api/contacts/${contactId}/identities/${id}`, { method: 'PATCH', body: JSON.stringify({ label }) });
-  const remove = (id) => mutate(`/api/contacts/${contactId}/identities/${id}`, { method: 'DELETE' });
+  // Apply the local change, then fire the request; revert both lists to the
+  // last server-confirmed props if it fails.
+  const runOptimistic = async (applyLocal, path, opts) => {
+    applyLocal();
+    setBusy(true); setError(null);
+    try {
+      const r = await apiFetch(path, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` } });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setError(d.error || `HTTP ${r.status}`); setOptEmails(emails); setOptPhones(phones); return false; }
+      await onChanged?.();
+      return true;
+    } catch (e) { setError(e.message || 'Network error'); setOptEmails(emails); setOptPhones(phones); return false; }
+    finally { setBusy(false); }
+  };
+
+  const inEmails = (id) => optEmails.some((x) => x.id === id);
+  const applyToKind = (id, fn) => (inEmails(id) ? setOptEmails(fn) : setOptPhones(fn));
+
+  const setPrimary = (id) => runOptimistic(
+    () => applyToKind(id, (list) => list.map((x) => ({ ...x, isPrimary: x.id === id }))),
+    `/api/contacts/${contactId}/identities/${id}`, { method: 'PATCH', body: JSON.stringify({ is_primary: true }) },
+  );
+  const setLabel = (id, label) => runOptimistic(
+    () => applyToKind(id, (list) => list.map((x) => (x.id === id ? { ...x, label } : x))),
+    `/api/contacts/${contactId}/identities/${id}`, { method: 'PATCH', body: JSON.stringify({ label }) },
+  );
+  const remove = (id) => runOptimistic(
+    () => applyToKind(id, (list) => list.filter((x) => x.id !== id)),
+    `/api/contacts/${contactId}/identities/${id}`, { method: 'DELETE' },
+  );
+  // Add stays non-optimistic — the server assigns the id we'd need to render.
   const add = (body) => mutate(`/api/contacts/${contactId}/identities`, { method: 'POST', body: JSON.stringify(body) });
 
-  const isEmpty = emails.length === 0 && phones.length === 0;
+  const isEmpty = optEmails.length === 0 && optPhones.length === 0;
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -406,13 +502,13 @@ function ContactInfoSection({ emails, phones, contactId, apiFetch, authToken, on
         <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic' }}>No email or phone yet.</div>
       ) : editing ? (
         <>
-          {emails.map((e) => <IdentityEditRow key={e.id} identity={e} icon="mail" busy={busy} onPrimary={setPrimary} onLabel={setLabel} onRemove={remove} />)}
-          {phones.map((p) => <IdentityEditRow key={p.id} identity={p} icon="call" busy={busy} onPrimary={setPrimary} onLabel={setLabel} onRemove={remove} />)}
+          {optEmails.map((e) => <IdentityEditRow key={e.id} identity={e} icon="mail" busy={busy} onPrimary={setPrimary} onLabel={setLabel} onRemove={remove} />)}
+          {optPhones.map((p) => <IdentityEditRow key={p.id} identity={p} icon="call" busy={busy} onPrimary={setPrimary} onLabel={setLabel} onRemove={remove} />)}
         </>
       ) : (
         <>
-          {emails.map((e) => <IdentityRow key={e.id} identity={e} icon="mail" />)}
-          {phones.map((p) => <IdentityRow key={p.id} identity={p} icon="call" />)}
+          {optEmails.map((e) => <IdentityRow key={e.id} identity={e} icon="mail" />)}
+          {optPhones.map((p) => <IdentityRow key={p.id} identity={p} icon="call" />)}
         </>
       )}
       {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
