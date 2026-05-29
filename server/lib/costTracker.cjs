@@ -54,7 +54,7 @@ async function incrementDailyCounter(userId, scope, { increment = 1, dailyCap = 
 
   const key = `cost:${scope}:${userId}:${dateKey()}`;
   try {
-    const count = await client.incrby(key, increment);
+    const count = await client.incrBy(key, increment);
     if (count === increment) {
       // First write today — set the TTL so Redis reaps the key.
       try { await client.expire(key, DAY_SECONDS); } catch { /* best-effort */ }

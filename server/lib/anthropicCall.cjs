@@ -64,17 +64,19 @@ async function trackedAnthropicCall(client, params, opts = {}) {
 
   const response = await client.messages.create(params);
 
-  // Fire-and-forget token recording — never blocks the response.
+  // Awaited token recording — sub-millisecond Redis INCR per scope, but
+  // crucially happens BEFORE the response returns so a subsequent
+  // get_cost_usage tool call (in the SAME agentic turn) sees the just-
+  // recorded usage. Was originally fire-and-forget; that raced against
+  // intra-turn reads ("Aria, how many tokens have I used today?" returned
+  // 0 because the asking turn's tokens hadn't landed yet).
   try {
     const usage = response?.usage;
     if (usage) {
       const total = (usage.input_tokens || 0) + (usage.output_tokens || 0);
       if (total > 0) {
-        incrementDailyCounter(userId, 'tokens', { increment: total }).catch(() => {});
-        incrementDailyCounter(userId, `tokens:${scope}`, { increment: total }).catch(() => {});
-        // Optional structured log at info level — sized for periodic
-        // sampling, not every call. Comment out if log volume becomes
-        // an issue (rough estimate: 1k calls/day per user = 1k log lines).
+        await incrementDailyCounter(userId, 'tokens', { increment: total });
+        await incrementDailyCounter(userId, `tokens:${scope}`, { increment: total });
         logger.debug?.('anthropic.call.tracked', {
           userId, scope,
           input_tokens: usage.input_tokens || 0,
