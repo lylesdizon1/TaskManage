@@ -68,6 +68,7 @@ const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
 const chatExecuteLimit = userRateLimit({ key: 'chat-execute', limit: 50, windowSec: 3600 });
 const chatWarmupLimit  = userRateLimit({ key: 'chat-warmup',  limit: 15, windowSec: 3600 });
+const ttsLimit         = userRateLimit({ key: 'tts',          limit: 100, windowSec: 3600 });
 
 // Confirmation waiters now use pg LISTEN/NOTIFY (db.listenForConfirmation /
 // db.notifyConfirmation). The DB's pending_confirmations row is the
@@ -379,6 +380,40 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       // chronic failures without alarming on transient.
       logger.warn('chat.warmup.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.json({ ok: false });
+    }
+  });
+
+  /**
+   * POST /api/tts/synthesize — synthesize speech for the browser.
+   *
+   * Body: { text }
+   * Returns: audio bytes (mp3) with proper Content-Type.
+   *
+   * Used by the Command Center voice-reply mode: after Aria's text
+   * response completes, the client posts the assembled text here and
+   * plays the returned audio. Provider auto-selects (ElevenLabs primary,
+   * OpenAI tts-1 fallback) per server/lib/textToSpeech.cjs.
+   *
+   * Rate limit 100/hour — generous for normal interactive use but caps
+   * the abuse worst case at ~$3/day on ElevenLabs at typical reply
+   * length (~$0.03 per call worst case).
+   */
+  router.post('/api/tts/synthesize', authenticateToken, ttsLimit, async (req, res) => {
+    try {
+      const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      if (!text) return res.status(400).json({ error: 'text required' });
+      const { synthesizeSpeech } = require('../lib/textToSpeech.cjs');
+      const result = await synthesizeSpeech(text, { userId: req.user.id });
+      if (!result.ok) {
+        logger.warn('tts.synthesize.failed', { requestId: req.requestId, userId: req.user.id, error: result.error });
+        return res.status(502).json({ error: result.error || 'tts failed' });
+      }
+      res.set('Content-Type', result.mimeType || 'audio/mpeg');
+      res.set('X-TTS-Provider', result.provider || 'unknown');
+      return res.send(result.bytes);
+    } catch (err) {
+      logger.error('tts.synthesize.threw', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

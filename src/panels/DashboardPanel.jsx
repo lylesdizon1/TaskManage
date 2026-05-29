@@ -451,6 +451,81 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const [ccLoading, setCcLoading] = useState(!ccCacheInit);
   const [ccInput, setCcInput] = useState('');
 
+  // ── Voice mode (2026-05-29) ────────────────────────────────────────
+  // Mic button uses browser SpeechRecognition for STT (free, native).
+  // TTS plays back through /api/tts/synthesize (server-side ElevenLabs
+  // or OpenAI fallback).
+  const [isListening, setIsListening] = useState(false);
+  const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(() => {
+    try { return localStorage.getItem('aria-voice-replies') === '1'; } catch { return false; }
+  });
+  const recognitionRef = useRef(null);
+  const speechSupportedRef = useRef(false);
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { speechSupportedRef.current = false; return; }
+    speechSupportedRef.current = true;
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+    rec.onresult = (e) => {
+      const transcript = Array.from(e.results)
+        .map((r) => r[0]?.transcript || '')
+        .join('');
+      setCcInput(transcript);
+    };
+    rec.onend = () => setIsListening(false);
+    rec.onerror = (e) => {
+      // Mostly transient (no-speech detected, network blips). Don't
+      // surface as a toast — just stop listening and let the user retry.
+      setIsListening(false);
+    };
+    recognitionRef.current = rec;
+    return () => { try { rec.stop(); } catch {} };
+  }, []);
+  const toggleMic = useCallback(() => {
+    if (!recognitionRef.current) return;
+    if (isListening) {
+      try { recognitionRef.current.stop(); } catch {}
+    } else {
+      setCcInput('');
+      setIsListening(true);
+      try { recognitionRef.current.start(); }
+      catch (e) { setIsListening(false); }
+    }
+  }, [isListening]);
+  const toggleVoiceReplies = useCallback(() => {
+    setVoiceRepliesEnabled((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('aria-voice-replies', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }, []);
+
+  // Play TTS audio for the given text. Browser's Audio element handles
+  // mp3 from our /api/tts/synthesize endpoint.
+  const playTtsRef = useRef(null);
+  const playAriaVoice = useCallback(async (text) => {
+    if (!text || !voiceRepliesEnabled) return;
+    try {
+      const res = await apiFetch('/api/tts/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      // Stop any prior playback so successive Aria replies don't overlap.
+      if (playTtsRef.current) { try { playTtsRef.current.pause(); } catch {} }
+      const audio = new Audio(url);
+      playTtsRef.current = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); };
+      audio.play().catch(() => { /* autoplay blocked — first interaction wakes it up */ });
+    } catch { /* TTS playback failures are non-fatal */ }
+  }, [voiceRepliesEnabled, apiFetch, authToken]);
+
   // Prompt-cache warmup (2026-05-29). When the user starts typing,
   // fire a background /api/chat/warmup that primes Aria's prompt
   // cache with the current systemBlocks. By the time they hit send,
@@ -1675,6 +1750,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     if (last && last.role === 'assistant' && !last.content) updated.pop();
                     return updated;
                   });
+                } else if (voiceRepliesEnabled) {
+                  // Voice mode: fire TTS playback (fire-and-forget).
+                  playAriaVoice(fullResponse);
                 }
               } else if (currentEvent === 'error') {
                 // Convert the empty placeholder into a user-visible error
@@ -3027,16 +3105,43 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             fixed-sized on mobile (top-14 to bottom-16), so the input
             naturally sits above the bottom nav. Hidden until brief loads. */}
         {!ccLoading && <div className="flex-shrink-0 px-4 py-3 border-t border-primary/5 flex items-center gap-2 bg-white">
+          {/* Voice replies toggle — speaker icon. Persisted in localStorage. */}
+          <button
+            onClick={toggleVoiceReplies}
+            aria-label={voiceRepliesEnabled ? 'Disable voice replies' : 'Enable voice replies'}
+            title={voiceRepliesEnabled ? 'Voice replies on — click to mute Aria' : 'Voice replies off — click to hear Aria'}
+            className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all hover:bg-primary/5"
+            style={{ color: voiceRepliesEnabled ? '#4f4dcf' : '#999' }}
+          >
+            <span className="material-symbols-outlined text-base">
+              {voiceRepliesEnabled ? 'volume_up' : 'volume_off'}
+            </span>
+          </button>
           <input
             type="text"
             value={ccInput}
             onChange={(e) => setCcInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
-            placeholder={`Ask ${assistantName} anything...`}
+            placeholder={isListening ? 'Listening…' : `Ask ${assistantName} anything...`}
             className="flex-1 bg-transparent focus:ring-0 placeholder:text-[#555] outline-none"
             style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', border: '1px solid #4f4dcf', borderRadius: '8px', padding: '8px 12px' }}
             disabled={ccSending}
           />
+          {/* Mic button — STT via Web Speech API. Pulses when listening. */}
+          {speechSupportedRef.current !== false && (
+            <button
+              onClick={toggleMic}
+              disabled={ccSending}
+              aria-label={isListening ? 'Stop listening' : 'Start voice input'}
+              title={isListening ? 'Stop listening' : 'Hold/click to speak'}
+              className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all ${isListening ? 'animate-pulse' : 'hover:bg-primary/5'}`}
+              style={{ backgroundColor: isListening ? '#fee2e2' : 'transparent', border: isListening ? '1px solid #fecaca' : 'none' }}
+            >
+              <span className="material-symbols-outlined text-base" style={{ color: isListening ? '#dc2626' : '#4f4dcf' }}>
+                {isListening ? 'mic' : 'mic_none'}
+              </span>
+            </button>
+          )}
           {ccSending ? (
             <button
               onClick={handleCcStop}
