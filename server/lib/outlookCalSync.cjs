@@ -41,7 +41,7 @@ async function syncOutlookForUser(userId, tz, db) {
         const qs = new URLSearchParams({
           startDateTime: timeMin.toISOString(),
           endDateTime: timeMax.toISOString(),
-          $select: 'id,subject,start,end,location,bodyPreview,isAllDay,organizer',
+          $select: 'id,subject,start,end,location,bodyPreview,isAllDay,organizer,attendees',
           $top: '100',
           $orderby: 'start/dateTime',
         });
@@ -77,6 +77,11 @@ async function syncOutlookForUser(userId, tz, db) {
             all_day: !!ev.isAllDay,
             location: ev.location?.displayName || null,
             description: ev.bodyPreview || null,
+            // Human attendees only — drop room resources. Lowercased to
+            // match contact emails case-insensitively (see contact timeline).
+            attendees: (ev.attendees || [])
+              .filter((a) => a?.type !== 'resource' && a?.emailAddress?.address)
+              .map((a) => a.emailAddress.address.toLowerCase()),
           };
         }).filter((e) => e.start_time && e.end_time);
 
