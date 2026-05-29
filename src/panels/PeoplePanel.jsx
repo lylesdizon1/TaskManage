@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 
 /**
  * PeoplePanel — master-detail contacts. Left: searchable contact list.
@@ -255,6 +255,7 @@ function ContactDetail({ contactId, apiFetch, authToken, onArchived, onChanged }
         authToken={authToken}
         onEdit={() => setEditing(true)}
         onArchive={archive}
+        onPhotoChanged={() => { reload(); onChanged?.(); }}
       />
       <div style={{ height: 1, background: BORDER, margin: '20px 0' }} />
       <ContactInfoSection
@@ -278,22 +279,75 @@ function ContactDetail({ contactId, apiFetch, authToken, onArchived, onChanged }
   );
 }
 
-function ContactHeader({ contact, apiFetch, authToken, onEdit, onArchive }) {
+const PHOTO_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+function ContactHeader({ contact, apiFetch, authToken, onEdit, onArchive, onPhotoChanged }) {
   const avatarUrl = useAuthBlobUrl(apiFetch, authToken, contact.imageBlobId);
   const sub = [contact.role, contact.company].filter(Boolean).join(' · ');
+  const fileRef = useRef(null);
+  const [hover, setHover] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  const onPick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (!PHOTO_MIME.includes(file.type)) { setError('Use a jpeg, png, gif, or webp image'); return; }
+    const localUrl = URL.createObjectURL(file);
+    setPreview(localUrl); setUploading(true); setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      // No Content-Type header — the browser sets the multipart boundary.
+      const up = await apiFetch('/api/image-blobs', { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: fd });
+      const upd = await up.json().catch(() => ({}));
+      if (!up.ok || !upd.blob_id) throw new Error(upd.error || `HTTP ${up.status}`);
+      const pr = await apiFetch(`/api/contacts/${contact.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ image_blob_id: upd.blob_id }),
+      });
+      if (!pr.ok) throw new Error(`HTTP ${pr.status}`);
+      await onPhotoChanged?.();
+    } catch (err) {
+      setError(err.message || 'Upload failed');
+      setPreview(null); // revert to prior avatar
+    } finally { setUploading(false); }
+  };
+
+  const shown = preview || avatarUrl;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-      <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#e9e7f3', color: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, flexShrink: 0, overflow: 'hidden' }}>
-        {avatarUrl ? <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials(contact.displayName)}
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div
+          onClick={() => !uploading && fileRef.current?.click()}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          title="Change photo"
+          style={{ position: 'relative', width: 52, height: 52, borderRadius: '50%', background: '#e9e7f3', color: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, flexShrink: 0, overflow: 'hidden', cursor: uploading ? 'wait' : 'pointer' }}
+        >
+          {shown ? <img src={shown} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials(contact.displayName)}
+          {(hover || uploading) && (
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18, color: '#fff' }}>{uploading ? 'hourglass_top' : 'photo_camera'}</span>
+            </div>
+          )}
+          <input ref={fileRef} type="file" accept="image/*" onChange={onPick} style={{ display: 'none' }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 20, fontWeight: 700, color: TXT1 }}>{contact.displayName || 'Unknown'}</div>
+          {sub && <div style={{ fontSize: 13, color: TXT2, marginTop: 2 }}>{sub}</div>}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onEdit} style={btnGhost}>Edit</button>
+          <button onClick={onArchive} style={{ ...btnGhost, color: '#dc2626' }}>Archive</button>
+        </div>
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 20, fontWeight: 700, color: TXT1 }}>{contact.displayName || 'Unknown'}</div>
-        {sub && <div style={{ fontSize: 13, color: TXT2, marginTop: 2 }}>{sub}</div>}
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={onEdit} style={btnGhost}>Edit</button>
-        <button onClick={onArchive} style={{ ...btnGhost, color: '#dc2626' }}>Archive</button>
-      </div>
+      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
     </div>
   );
 }
