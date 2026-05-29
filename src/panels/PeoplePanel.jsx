@@ -257,7 +257,14 @@ function ContactDetail({ contactId, apiFetch, authToken, onArchived, onChanged }
         onArchive={archive}
       />
       <div style={{ height: 1, background: BORDER, margin: '20px 0' }} />
-      <ContactInfoSection emails={emails} phones={phones} />
+      <ContactInfoSection
+        emails={emails}
+        phones={phones}
+        contactId={contactId}
+        apiFetch={apiFetch}
+        authToken={authToken}
+        onChanged={() => { reload(); onChanged?.(); }}
+      />
       <FactsSection facts={detail.facts || []} />
       <NotesSection
         notes={detail.notes || []}
@@ -309,18 +316,111 @@ function IdentityRow({ identity, icon }) {
   );
 }
 
-function ContactInfoSection({ emails, phones }) {
+const LABEL_OPTIONS = ['work', 'mobile', 'home', 'calendar', 'other'];
+
+function ContactInfoSection({ emails, phones, contactId, apiFetch, authToken, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [adding, setAdding] = useState(false);
+
+  const mutate = useCallback(async (path, opts) => {
+    setBusy(true); setError(null);
+    try {
+      const r = await apiFetch(path, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` } });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setError(d.error || `HTTP ${r.status}`); return false; }
+      await onChanged?.();
+      return true;
+    } catch (e) { setError(e.message || 'Network error'); return false; }
+    finally { setBusy(false); }
+  }, [apiFetch, authToken, onChanged]);
+
+  const setPrimary = (id) => mutate(`/api/contacts/${contactId}/identities/${id}`, { method: 'PATCH', body: JSON.stringify({ is_primary: true }) });
+  const setLabel = (id, label) => mutate(`/api/contacts/${contactId}/identities/${id}`, { method: 'PATCH', body: JSON.stringify({ label }) });
+  const remove = (id) => mutate(`/api/contacts/${contactId}/identities/${id}`, { method: 'DELETE' });
+  const add = (body) => mutate(`/api/contacts/${contactId}/identities`, { method: 'POST', body: JSON.stringify(body) });
+
+  const isEmpty = emails.length === 0 && phones.length === 0;
+
   return (
     <div style={{ marginBottom: 24 }}>
-      <SectionLabel>Contact info</SectionLabel>
-      {emails.length === 0 && phones.length === 0 ? (
+      <SectionLabel right={<button onClick={() => { setEditing((v) => !v); setAdding(false); setError(null); }} style={linkBtn}>{editing ? 'Done' : 'Edit'}</button>}>
+        Contact info
+      </SectionLabel>
+      {isEmpty && !editing ? (
         <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic' }}>No email or phone yet.</div>
+      ) : editing ? (
+        <>
+          {emails.map((e) => <IdentityEditRow key={e.id} identity={e} icon="mail" busy={busy} onPrimary={setPrimary} onLabel={setLabel} onRemove={remove} />)}
+          {phones.map((p) => <IdentityEditRow key={p.id} identity={p} icon="call" busy={busy} onPrimary={setPrimary} onLabel={setLabel} onRemove={remove} />)}
+        </>
       ) : (
         <>
           {emails.map((e) => <IdentityRow key={e.id} identity={e} icon="mail" />)}
           {phones.map((p) => <IdentityRow key={p.id} identity={p} icon="call" />)}
         </>
       )}
+      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
+      {editing && (
+        adding ? (
+          <AddIdentityForm busy={busy} onCancel={() => setAdding(false)} onAdd={async (body) => { const ok = await add(body); if (ok) setAdding(false); }} />
+        ) : (
+          <button onClick={() => setAdding(true)} style={{ ...linkBtn, marginTop: 8 }}>+ Add email or phone</button>
+        )
+      )}
+    </div>
+  );
+}
+
+function IdentityEditRow({ identity, icon, busy, onPrimary, onLabel, onRemove }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
+      <span className="material-symbols-outlined" style={{ fontSize: 17, color: TXT3 }}>{icon}</span>
+      <span style={{ fontSize: 13.5, color: TXT1, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{identity.value}</span>
+      <select value={identity.label || 'other'} disabled={busy} onChange={(e) => onLabel(identity.id, e.target.value)}
+        style={{ fontSize: 11, padding: '2px 4px', border: `1px solid ${BORDER}`, borderRadius: 6, color: TXT2, background: '#fff', cursor: 'pointer' }}>
+        {LABEL_OPTIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+      </select>
+      <button title={identity.isPrimary ? 'Primary' : 'Make primary'} disabled={busy || identity.isPrimary} onClick={() => onPrimary(identity.id)}
+        style={{ background: 'transparent', border: 'none', cursor: identity.isPrimary ? 'default' : 'pointer', padding: 0, lineHeight: 0 }}>
+        <span className="material-symbols-outlined" style={{ fontSize: 16, color: identity.isPrimary ? PRIMARY : TXT3, fontVariationSettings: identity.isPrimary ? "'FILL' 1" : "'FILL' 0" }}>star</span>
+      </button>
+      <button title="Remove" disabled={busy} onClick={() => onRemove(identity.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 0 }}>
+        <span className="material-symbols-outlined" style={{ fontSize: 16, color: TXT3 }}>close</span>
+      </button>
+    </div>
+  );
+}
+
+function AddIdentityForm({ busy, onCancel, onAdd }) {
+  const [type, setType] = useState('email');
+  const [value, setValue] = useState('');
+  const [label, setLabel] = useState('work');
+  const [isPrimary, setIsPrimary] = useState(false);
+
+  const submit = () => {
+    const v = value.trim();
+    if (!v) return;
+    onAdd({ identity_type: type, identity_value: v, label, is_primary: isPrimary });
+  };
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 8, padding: 10, border: `1px solid ${BORDER}`, borderRadius: 8, background: '#fff' }}>
+      <select value={type} onChange={(e) => setType(e.target.value)} style={{ ...inp, padding: '5px 6px' }}>
+        <option value="email">Email</option>
+        <option value="phone">Phone</option>
+      </select>
+      <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()}
+        placeholder={type === 'email' ? 'name@example.com' : 'Phone number'} style={{ ...inp, flex: 1, minWidth: 160 }} />
+      <select value={label} onChange={(e) => setLabel(e.target.value)} style={{ ...inp, padding: '5px 6px' }}>
+        {LABEL_OPTIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+      </select>
+      <label style={{ fontSize: 12, color: TXT2, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+        <input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} /> Primary
+      </label>
+      <button onClick={onCancel} style={btnGhost}>Cancel</button>
+      <button onClick={submit} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }}>Add</button>
     </div>
   );
 }
