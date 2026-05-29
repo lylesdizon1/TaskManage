@@ -562,49 +562,70 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   // ── Streaming TTS plumbing ────────────────────────────────────────
   // Voice plays sentence-by-sentence as Aria streams text. Each completed
-  // sentence fires a TTS call; audio chunks queue and play in order.
-  // Voice catches up with text as quickly as the TTS round trip allows
-  // (~500-800ms for the first sentence on ElevenLabs Turbo).
-  const voiceQueueRef = useRef([]);
-  const voicePlayingRef = useRef(false);
+  // sentence fires a TTS call in parallel (max throughput); audio plays
+  // back in STRICT GENERATION ORDER via sequence-numbered slots so we
+  // never get the bug where sentence 3 plays before sentence 1 just
+  // because its TTS round trip happened to be faster.
   const voiceBufferRef = useRef('');
   const voiceForCurrentTurnRef = useRef(false);
+  const voiceNextSeqRef = useRef(0);     // seq number for next enqueued sentence
+  const voicePlayingSeqRef = useRef(0);  // seq number we're waiting to play next
+  const voiceSlotsRef = useRef(new Map()); // seq → 'pending' | null (failed) | url string
+  const voicePlayingRef = useRef(false);
 
-  const playNextInVoiceQueue = useCallback(() => {
+  const tryPlayNextVoiceSlot = useCallback(() => {
     if (voicePlayingRef.current) return;
-    const next = voiceQueueRef.current.shift();
-    if (!next) return;
+    const seq = voicePlayingSeqRef.current;
+    const slot = voiceSlotsRef.current.get(seq);
+    if (slot === undefined) return;     // sentence not yet enqueued
+    if (slot === 'pending') return;     // TTS still in flight — wait
+    voiceSlotsRef.current.delete(seq);
+    voicePlayingSeqRef.current = seq + 1;
+    if (slot === null) {
+      // TTS failed for this sentence; skip and try next.
+      tryPlayNextVoiceSlot();
+      return;
+    }
     const audio = playTtsRef.current;
-    if (!audio) return; // not primed — should be impossible by the time we get here
+    if (!audio) return;
     voicePlayingRef.current = true;
     try { audio.pause(); } catch {}
-    audio.src = next.url;
+    audio.src = slot;
     audio.onended = () => {
-      URL.revokeObjectURL(next.url);
+      URL.revokeObjectURL(slot);
       voicePlayingRef.current = false;
-      playNextInVoiceQueue();
+      tryPlayNextVoiceSlot();
     };
     audio.play().catch(() => {
       voicePlayingRef.current = false;
-      playNextInVoiceQueue();
+      tryPlayNextVoiceSlot();
     });
   }, []);
 
   const enqueueAudioForText = useCallback(async (text) => {
     if (!text || !text.trim()) return;
+    // Reserve the seq number SYNCHRONOUSLY so generation order is
+    // locked in before the async TTS call fires. Critical for ordering.
+    const seq = voiceNextSeqRef.current++;
+    voiceSlotsRef.current.set(seq, 'pending');
     try {
       const res = await apiFetch('/api/tts/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ text: text.trim() }),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        voiceSlotsRef.current.set(seq, null);
+        return;
+      }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      voiceQueueRef.current.push({ url });
-      playNextInVoiceQueue();
-    } catch { /* TTS chunk failure is non-fatal — text still arrives normally */ }
-  }, [apiFetch, authToken, playNextInVoiceQueue]);
+      voiceSlotsRef.current.set(seq, URL.createObjectURL(blob));
+    } catch {
+      voiceSlotsRef.current.set(seq, null);
+    } finally {
+      tryPlayNextVoiceSlot();
+    }
+  }, [apiFetch, authToken, tryPlayNextVoiceSlot]);
 
   // Pop complete sentences off the buffer and enqueue them for TTS.
   // A sentence is text ending in . ! ? followed by whitespace (the
@@ -634,7 +655,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   const resetVoiceTurn = useCallback(() => {
     voiceBufferRef.current = '';
-    voiceQueueRef.current = [];
+    // Revoke any in-flight blob URLs to free memory
+    voiceSlotsRef.current.forEach((slot) => {
+      if (typeof slot === 'string') { try { URL.revokeObjectURL(slot); } catch {} }
+    });
+    voiceSlotsRef.current.clear();
+    voiceNextSeqRef.current = 0;
+    voicePlayingSeqRef.current = 0;
     voicePlayingRef.current = false;
     voiceForCurrentTurnRef.current = false;
   }, []);
@@ -1707,10 +1734,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
     // Decide voice for this turn BEFORE the stream starts. The toggle
     // or the just-spoke-via-mic ref locks the decision so the user
-    // can flip it after send without breaking mid-turn.
-    voiceForCurrentTurnRef.current = voiceRepliesEnabled || lastSentWasVoiceRef.current;
-    voiceBufferRef.current = '';
-    voiceQueueRef.current = [];
+    // can flip it after send without breaking mid-turn. resetVoiceTurn
+    // clears any leftover state from a prior turn (sequence numbers,
+    // pending audio slots, buffered text).
+    const useVoice = voiceRepliesEnabled || lastSentWasVoiceRef.current;
+    resetVoiceTurn();
+    voiceForCurrentTurnRef.current = useVoice;
 
     try {
       const res = await apiFetch('/api/chat/execute', {
