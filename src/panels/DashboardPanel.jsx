@@ -479,7 +479,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (!SR) { speechSupportedRef.current = false; return; }
     speechSupportedRef.current = true;
     const rec = new SR();
-    rec.continuous = false;
+    // continuous=true means recognition doesn't auto-end on a brief
+    // pause. User explicitly clicks the mic again to stop — which
+    // implies "I'm done, send it." Removes the "cut off mid-sentence"
+    // problem entirely.
+    rec.continuous = true;
     rec.interimResults = true;
     rec.lang = 'en-US';
     rec.onresult = (e) => {
@@ -491,14 +495,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     };
     rec.onend = () => {
       setIsListening(false);
-      // Auto-send when recognition ended naturally (silence) AND the
-      // user didn't manually click stop AND there's actual content.
-      // Mark the turn as voice-originated so the response gets spoken.
+      // Click-to-toggle model: any end-of-recognition (user click stop
+      // OR transient browser hiccup) auto-sends if there's content.
       const text = finalTranscriptRef.current.trim();
-      const wasUserStop = userStoppedMicRef.current;
-      userStoppedMicRef.current = false;
       finalTranscriptRef.current = '';
-      if (text && !wasUserStop) {
+      if (text) {
         lastSentWasVoiceRef.current = true;
         // Defer one tick so React commits the ccInput update first.
         setTimeout(() => {
@@ -507,11 +508,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       }
     };
     rec.onerror = () => {
-      // Mostly transient (no-speech detected, network blips). Don't
-      // surface as a toast — just stop listening and let the user retry.
       setIsListening(false);
       finalTranscriptRef.current = '';
-      userStoppedMicRef.current = false;
     };
     recognitionRef.current = rec;
     return () => { try { rec.stop(); } catch {} };
@@ -519,12 +517,10 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const toggleMic = useCallback(() => {
     if (!recognitionRef.current) return;
     if (isListening) {
-      userStoppedMicRef.current = true; // suppress auto-send on manual stop
       try { recognitionRef.current.stop(); } catch {}
     } else {
       setCcInput('');
       finalTranscriptRef.current = '';
-      userStoppedMicRef.current = false;
       setIsListening(true);
       try { recognitionRef.current.start(); }
       catch (e) { setIsListening(false); }
@@ -3183,16 +3179,35 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               {voiceRepliesEnabled ? 'volume_up' : 'volume_off'}
             </span>
           </button>
-          <input
-            type="text"
-            value={ccInput}
-            onChange={(e) => setCcInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
-            placeholder={isListening ? 'Listening…' : `Ask ${assistantName} anything...`}
-            className="flex-1 bg-transparent focus:ring-0 placeholder:text-[#555] outline-none"
-            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', border: '1px solid #4f4dcf', borderRadius: '8px', padding: '8px 12px' }}
-            disabled={ccSending}
-          />
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={ccInput}
+              onChange={(e) => setCcInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
+              placeholder={isListening ? '🔴 Listening — click mic again to send' : `Ask ${assistantName} anything...`}
+              className="w-full bg-transparent focus:ring-0 placeholder:text-[#555] outline-none"
+              style={{
+                fontFamily: 'Manrope, sans-serif',
+                fontSize: '15px',
+                border: isListening ? '2px solid #dc2626' : '1px solid #4f4dcf',
+                borderRadius: '8px',
+                padding: '8px 12px',
+                paddingRight: isListening ? '70px' : '12px',
+                transition: 'border-color 0.15s ease',
+              }}
+              disabled={ccSending}
+            />
+            {isListening && (
+              <span
+                className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-xs font-semibold"
+                style={{ color: '#dc2626' }}
+              >
+                <span className="inline-block w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: '#dc2626' }} />
+                REC
+              </span>
+            )}
+          </div>
           {/* Mic button — STT via Web Speech API. Pulses when listening. */}
           {speechSupportedRef.current !== false && (
             <button
