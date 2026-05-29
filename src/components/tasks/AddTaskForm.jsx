@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { buildGroupedEntities, uid } from '../../utils/helpers.js';
 import { getEntityStyle } from '../../constants/colors.js';
 import { XIcon, SpinnerIcon } from '../icons/Icons.jsx';
@@ -21,6 +21,7 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
   const [aiSuggested, setAiSuggested] = useState([]); // tags AI recommended
   const [suggesting, setSuggesting] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [contact, setContact] = useState(null); // { id, name } | null — manual contact link
   const debounceRef = useRef(null);
   const suggestionIdRef = useRef(0);
 
@@ -87,12 +88,14 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
       tags: form.tags,
       visibility: form.visibility,
       syncToCalendar: form.syncToCalendar,
+      contactId: contact?.id || null,
       completed: false,
       owner: currentUser?.id || 'unknown',
       createdAt: new Date().toISOString(),
     });
     setForm(emptyForm);
     setAiSuggested([]);
+    setContact(null);
     setIsOpen(false);
     onClose?.();
   }
@@ -124,6 +127,7 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
                 setIsOpen(false);
                 setForm(emptyForm);
                 setAiSuggested([]);
+                setContact(null);
                 onClose?.();
               }}
               className="text-gray-400 hover:text-gray-600 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
@@ -278,6 +282,13 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
               </div>
             </div>
 
+            {/* Related contact (optional) — links the task so it surfaces in
+                the contact's timeline and Aria can reason over it. */}
+            <div>
+              <span className="text-xs font-medium text-gray-500 mb-1 block">Related contact (optional)</span>
+              <ContactLinkPicker value={contact} onChange={setContact} apiFetch={apiFetch} authToken={authToken} />
+            </div>
+
             {/* Google Calendar sync option */}
             {gcalConnected && form.dueDate && (
               <label className="flex items-center gap-2 cursor-pointer">
@@ -314,6 +325,92 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
             </div>
           </div>
         </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Typeahead against /api/contacts/search that captures the contact `id` (not
+// just email), since task linkage needs the FK. value = { id, name } | null.
+function ContactLinkPicker({ value, onChange, apiFetch, authToken }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [matches, setMatches] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const containerRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = query.trim();
+    if (!q) { setMatches([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await apiFetch(`/api/contacts/search?q=${encodeURIComponent(q)}&limit=6`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setMatches(Array.isArray(data) ? data : []);
+        }
+      } catch {}
+      finally { setLoading(false); }
+    }, 200);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [query, open, apiFetch, authToken]);
+
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  if (value) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg">
+        <span className="material-symbols-outlined text-indigo-600" style={{ fontSize: 16 }}>person</span>
+        <span className="text-sm text-indigo-800 flex-1 truncate">{value.name}</span>
+        <button
+          type="button"
+          onClick={() => { onChange(null); setQuery(''); }}
+          className="text-indigo-400 hover:text-indigo-700 text-xs font-medium"
+        >Clear</button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder="Search contacts by name or email"
+        className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+      />
+      {open && (matches.length > 0 || loading) && (
+        <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          {loading && <div className="px-3 py-2 text-xs text-gray-400">Searching…</div>}
+          {!loading && matches.map((m, i) => (
+            <button
+              key={m.id || `${m.primaryEmail}-${i}`}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { onChange({ id: m.id, name: m.displayName || m.primaryEmail }); setOpen(false); }}
+              className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-0"
+            >
+              <div className="text-sm text-gray-900 truncate">{m.displayName || m.primaryEmail}</div>
+              {m.primaryEmail && m.displayName !== m.primaryEmail && (
+                <div className="text-xs text-gray-500 truncate">{m.primaryEmail}</div>
+              )}
+            </button>
+          ))}
         </div>
       )}
     </div>

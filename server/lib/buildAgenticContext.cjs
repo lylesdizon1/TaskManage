@@ -643,22 +643,39 @@ function buildProjectsBlock(projects) {
  * Contract: returns '' when the contact set is empty so callers can
  * concatenate blindly.
  */
-const PEOPLE_BLOCK_CHAR_CAP = 400;
+const PEOPLE_BLOCK_CHAR_CAP = 650;
 
 async function buildPeopleBlock(contacts, db, userId) {
   if (!Array.isArray(contacts) || contacts.length === 0) return '';
   const getFacts = db.getTopContactFacts
     ? (cid) => db.getTopContactFacts(cid, userId, 3).catch(() => [])
     : async () => [];
+  // Ambient last-email awareness: one most-recent message per contact so
+  // Aria knows the state of the correspondence without calling
+  // get_contact_emails. Bounded (limit 1, primary email only) and guarded.
+  const getLastEmail = (db.getEmailInteractionsForEmails)
+    ? async (email) => {
+        if (!email) return null;
+        const rows = await db.getEmailInteractionsForEmails(userId, [String(email).toLowerCase()], { limit: 1 }).catch(() => []);
+        return rows[0] || null;
+      }
+    : async () => null;
   const lines = [];
   let out = '\n\nPEOPLE & RELATIONSHIPS';
   for (const c of contacts) {
-    const factTexts = await getFacts(c.id);
+    const [factTexts, lastEmail] = await Promise.all([getFacts(c.id), getLastEmail(c.primaryEmail)]);
     const parenBits = [c.role || c.relationship || 'contact'];
     if (c.company) parenBits.push(c.company);
     const head = `\n- ${c.displayName || 'Unknown'} (${parenBits.filter(Boolean).join(', ')})`;
     const facts = factTexts.length ? `\n  Facts: ${factTexts.join('; ')}` : '';
-    const candidate = out + head + facts;
+    let emailLine = '';
+    if (lastEmail && lastEmail.occurredAt) {
+      const dir = lastEmail.direction === 'outbound' ? 'you emailed them' : 'they emailed you';
+      const when = new Date(lastEmail.occurredAt).toISOString().slice(0, 10);
+      const subj = (lastEmail.subject || '(no subject)').slice(0, 60);
+      emailLine = `\n  Last email: ${dir} ${when} — "${subj}"`;
+    }
+    const candidate = out + head + facts + emailLine;
     if (candidate.length > PEOPLE_BLOCK_CHAR_CAP) break;
     out = candidate;
     lines.push(head);

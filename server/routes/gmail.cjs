@@ -324,18 +324,22 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
       const inboxIds = (inboxList.data.messages || []).map((m) => m.id);
       const inboxMessages = await Promise.all(
         inboxIds.map((id) =>
-          gmail.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] })
+          gmail.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'To', 'Cc', 'Subject', 'Date'] })
             .then((r) => r.data).catch(() => null),
         ),
       );
 
+      // Sent mail is fetched unconditionally now — it feeds two consumers:
+      // commitment detection (guarded below) AND the email_interactions log
+      // that powers the contact timeline + Aria's email tool. Logging
+      // outbound is what lets Aria answer "when did I last email X".
       let sentMessages = [];
-      if (commitmentDetection) {
+      {
         const sentList = await gmail.users.messages.list({ userId: 'me', maxResults: 20, q: `in:sent ${windowQ}` });
         const sentIds = (sentList.data.messages || []).map((m) => m.id);
         sentMessages = await Promise.all(
           sentIds.map((id) =>
-            gmail.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['To', 'Subject', 'Date'] })
+            gmail.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'To', 'Cc', 'Subject', 'Date'] })
               .then((r) => r.data).catch(() => null),
           ),
         );
@@ -376,6 +380,47 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
             flagged.push({ msg, type: 'COMMITMENT', reason: 'Commitment detected in sent email' });
           }
         }
+      }
+
+      // ── email_interactions log (2026-05-29) ──────────────────────────
+      // Log EVERY scanned message (inbound + outbound), independent of the
+      // flagging pipeline. This is the full-correspondence substrate the
+      // contact timeline + Aria's get_contact_emails tool read. no-reply
+      // dropping + dedupe happen inside db.upsertEmailInteractions.
+      try {
+        const extractEmails = (val) =>
+          (String(val || '').match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi) || [])
+            .map((e) => e.toLowerCase());
+        const toRow = (msg, direction) => {
+          if (!msg) return null;
+          const from = extractEmails(getHeader(msg, 'From'));
+          const to = extractEmails(getHeader(msg, 'To'));
+          const cc = extractEmails(getHeader(msg, 'Cc'));
+          const participants = [...new Set([...from, ...to, ...cc])];
+          if (!participants.length) return null;
+          const occurredAt = msg.internalDate
+            ? new Date(Number(msg.internalDate))
+            : (getHeader(msg, 'Date') ? new Date(getHeader(msg, 'Date')) : null);
+          return {
+            provider: 'gmail',
+            account_email: account.accountEmail || null,
+            message_id: msg.id,
+            thread_id: msg.threadId || null,
+            direction,
+            from_email: from[0] || null,
+            participants,
+            subject: getHeader(msg, 'Subject') || null,
+            snippet: msg.snippet || null,
+            occurred_at: occurredAt && !isNaN(occurredAt) ? occurredAt.toISOString() : null,
+          };
+        };
+        const emailLog = [
+          ...inboxMessages.map((m) => toRow(m, 'inbound')),
+          ...sentMessages.map((m) => toRow(m, 'outbound')),
+        ].filter(Boolean);
+        await db.upsertEmailInteractions(userId, emailLog);
+      } catch (logErr) {
+        logger.warn('gmailScan.emailLog.failed', { requestId, userId, error: logErr.message });
       }
 
       const newFlagged = [];
@@ -484,6 +529,16 @@ module.exports = function createGmailRouter({ authenticateToken, db, makeGmailOA
     // mapper. Internal Redis debounce (24h) keeps this from being a per-tick
     // cost — typically runs once per day per user.
     mapLabelsToCategories(userId).catch(() => {});
+
+    // email_interactions retention — 180-day rolling window. Best-effort,
+    // once per scan (not per account). Mirrors the calendar_events sweep.
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 180);
+      await db.deleteStaleEmailInteractions(userId, cutoff);
+    } catch (e) {
+      logger.warn('gmailScan.emailRetention.failed', { requestId: req.requestId, userId, error: e.message });
+    }
 
     logger.info('gmailScan.complete', { requestId: req.requestId, userId, total, accounts: accounts.length });
     if (anyInvalidGrant && total === 0) {

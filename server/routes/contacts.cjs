@@ -300,7 +300,15 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
     try {
       const existing = await db.getContactById(req.params.id, req.user.id);
       if (!existing) return res.status(404).json({ error: 'Contact not found' });
-      const timeline = await db.getContactTimeline(req.params.id, req.user.id, { limit: 50 });
+      // Universal timeline: clean sources only. `sources` query param
+      // (comma-separated) filters which to include; defaults to all.
+      const VALID_SOURCES = ['email', 'event', 'meeting_outcome', 'note', 'task'];
+      const requested = String(req.query.sources || '')
+        .split(',').map((s) => s.trim()).filter((s) => VALID_SOURCES.includes(s));
+      const sources = requested.length ? requested : VALID_SOURCES;
+      const before = req.query.before ? String(req.query.before) : null;
+      const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+      const timeline = await db.getEntityTimeline(req.user.id, 'contact', req.params.id, { sources, limit, before });
       res.json({ timeline });
     } catch (err) {
       logger.error('contacts.timeline.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });

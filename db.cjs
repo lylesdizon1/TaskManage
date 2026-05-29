@@ -2838,6 +2838,111 @@ async function deleteUnreturnedCalendarEvents(userId, accountEmail, startUtc, en
   return result.rowCount || 0;
 }
 
+// ── email_interactions helpers (2026-05-29) ────────────────────────────────
+
+// Drop obvious automated/bulk senders at ingestion so they never bloat the
+// table — they'll never be contacts and only add noise. Matches common
+// no-reply / list-mail local-parts and known bulk subdomains.
+const NOREPLY_RE = /^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|noreply|donotreply|notifications?|mailer[-_.]?daemon|postmaster|bounce[sd]?|auto[-_.]?(?:reply|confirm)|alerts?|updates?|newsletter|news|info|support|notify)[-+.@]|@(?:bounce|email|mailer|news|notify|reply|mail)\./i;
+
+function isNoReplyAddress(addr) {
+  if (!addr || typeof addr !== 'string') return false;
+  return NOREPLY_RE.test(addr.trim().toLowerCase());
+}
+
+/**
+ * Upsert a batch of scanned messages for one user. Idempotent via
+ * (user_id, provider, message_id); re-scanning the same inbox is a no-op
+ * (ON CONFLICT DO NOTHING — message content is immutable once sent).
+ *
+ * Rows whose from_email is an obvious no-reply/bulk sender are dropped here
+ * (caller need not pre-filter). Rows missing a message_id are skipped.
+ *
+ * @param {string} userId
+ * @param {Array<Object>} messages - {provider, account_email, message_id,
+ *   thread_id, direction, from_email, participants (array of lowercased
+ *   emails), subject, snippet, occurred_at}.
+ * @returns {Promise<number>} count of rows inserted (excludes conflicts/drops).
+ */
+async function upsertEmailInteractions(userId, messages) {
+  if (!userId || !Array.isArray(messages) || !messages.length) return 0;
+  const rows = messages.filter((m) => m && m.message_id && !isNoReplyAddress(m.from_email));
+  if (!rows.length) return 0;
+  const CHUNK = 500;
+  let inserted = 0;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const placeholders = [];
+    const vals = [];
+    let idx = 1;
+    for (const m of chunk) {
+      placeholders.push(`($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++}::jsonb,$${idx++},$${idx++},$${idx++})`);
+      vals.push(
+        userId, m.provider || null, m.account_email || null, m.message_id,
+        m.thread_id || null, m.direction || null, m.from_email || null,
+        JSON.stringify(Array.isArray(m.participants) ? m.participants : []),
+        m.subject || null, m.snippet || null, m.occurred_at || null,
+      );
+    }
+    const res = await pool.query(
+      `INSERT INTO email_interactions
+         (user_id, provider, account_email, message_id, thread_id,
+          direction, from_email, participants, subject, snippet, occurred_at)
+       VALUES ${placeholders.join(',')}
+       ON CONFLICT (user_id, provider, message_id) DO NOTHING`,
+      vals,
+    );
+    inserted += res.rowCount || 0;
+  }
+  return inserted;
+}
+
+/**
+ * Purge logged messages older than cutoffDate (180-day rolling window).
+ * User-scoped. Mirrors the calendar_events retention sweep.
+ */
+async function deleteStaleEmailInteractions(userId, cutoffDate) {
+  await pool.query(
+    `DELETE FROM email_interactions
+     WHERE user_id = $1 AND occurred_at < $2`,
+    [userId, cutoffDate],
+  );
+}
+
+/**
+ * Recent messages involving any of `emails`, newest first. Owner-scoped by
+ * userId. Backs both the timeline email source and the get_contact_emails
+ * Aria tool. Returns [] when emails is empty.
+ *
+ * @param {string} userId
+ * @param {string[]} emails - lowercased contact email identities.
+ * @param {Object} [opts]
+ * @param {number} [opts.limit=50]
+ * @param {string|Date} [opts.before] - occurred_at cursor (exclusive) for pagination.
+ */
+async function getEmailInteractionsForEmails(userId, emails, { limit = 50, before = null } = {}) {
+  if (!userId || !Array.isArray(emails) || !emails.length) return [];
+  const params = [userId, emails];
+  let cursorClause = '';
+  if (before) {
+    params.push(before);
+    cursorClause = ` AND occurred_at < $${params.length}`;
+  }
+  params.push(limit);
+  const { rows } = await pool.query(
+    `SELECT id, provider, account_email AS "accountEmail", message_id AS "messageId",
+            thread_id AS "threadId", direction, from_email AS "fromEmail",
+            subject, snippet, occurred_at AS "occurredAt"
+       FROM email_interactions
+      WHERE user_id = $1
+        AND participants ?| $2::text[]${cursorClause}
+      ORDER BY occurred_at DESC
+      LIMIT $${params.length}`,
+    params,
+  );
+  return rows;
+}
+
 /**
  * Meetings that recently ended (in the last 4 hours) for which the user
  * has NOT already captured notes. "Captured" = a note exists whose
@@ -2963,7 +3068,7 @@ async function getTaskById(taskId, userId) {
   const { rows } = await pool.query(
     `SELECT id, title, description, priority, status, due_date AS "dueDate",
             due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-            google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
+            google_event_id AS "googleEventId", completion_note AS "completionNote", contact_id AS "contactId", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM tasks
      WHERE id = $1 AND owner = $2
      LIMIT 1`,
@@ -2999,7 +3104,7 @@ async function getTasksForUser(userId, userEntityIds, limit = 100) {
     const { rows } = await pool.query(
       `SELECT id, title, description, priority, status, due_date AS "dueDate",
               due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-              google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
+              google_event_id AS "googleEventId", completion_note AS "completionNote", contact_id AS "contactId", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM tasks
        WHERE owner = $1
        ORDER BY created_at DESC
@@ -3014,7 +3119,7 @@ async function getTasksForUser(userId, userEntityIds, limit = 100) {
   const { rows } = await pool.query(
     `SELECT id, title, description, priority, status, due_date AS "dueDate",
             due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-            google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"
+            google_event_id AS "googleEventId", completion_note AS "completionNote", contact_id AS "contactId", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM tasks
      WHERE owner = $1
         OR (visibility = 'shared' AND tags ?| $2)
@@ -3101,8 +3206,8 @@ async function upsertTask(t) {
     `INSERT INTO tasks (id, title, description, priority, status, due_date, due_time,
                         tags, visibility, completed, owner, created_by, google_event_id,
                         source_email_id, source_email_subject, source_email_sender,
-                        created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, NOW())
+                        contact_id, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, NOW())
      ON CONFLICT (id) DO UPDATE SET
        title = EXCLUDED.title,
        description = EXCLUDED.description,
@@ -3117,6 +3222,7 @@ async function upsertTask(t) {
        source_email_id = COALESCE(EXCLUDED.source_email_id, tasks.source_email_id),
        source_email_subject = COALESCE(EXCLUDED.source_email_subject, tasks.source_email_subject),
        source_email_sender = COALESCE(EXCLUDED.source_email_sender, tasks.source_email_sender),
+       contact_id = COALESCE(EXCLUDED.contact_id, tasks.contact_id),
        updated_at = NOW()
      RETURNING *`,
     [
@@ -3136,6 +3242,7 @@ async function upsertTask(t) {
       t.sourceEmailId || null,
       t.sourceEmailSubject || null,
       t.sourceEmailSender || null,
+      t.contactId || null,
       t.createdAt || new Date().toISOString(),
     ],
   );
@@ -6343,11 +6450,12 @@ async function updateTask(id, userId, fields) {
          google_event_id = COALESCE($11, google_event_id),
          completed_at    = CASE WHEN $12::text = '__null__' THEN NULL WHEN $12::text IS NOT NULL THEN $12::timestamptz ELSE completed_at END,
          completion_note = COALESCE($13, completion_note),
+         contact_id      = CASE WHEN $14::text = '__null__' THEN NULL WHEN $14::text IS NOT NULL THEN $14 ELSE contact_id END,
          updated_at      = NOW()
      WHERE id = $1 AND owner = $2
      RETURNING id, title, description, priority, status, due_date AS "dueDate",
                due_time AS "dueTime", tags, visibility, completed, completed_at AS "completedAt", owner, created_by AS "createdBy",
-               google_event_id AS "googleEventId", completion_note AS "completionNote", created_at AS "createdAt", updated_at AS "updatedAt"`,
+               google_event_id AS "googleEventId", completion_note AS "completionNote", contact_id AS "contactId", created_at AS "createdAt", updated_at AS "updatedAt"`,
     [
       id,
       userId,
@@ -6362,6 +6470,7 @@ async function updateTask(id, userId, fields) {
       fields.googleEventId ?? null,
       fields.completedAt !== undefined ? (fields.completedAt === null ? '__null__' : fields.completedAt) : null,
       fields.completionNote ?? null,
+      fields.contactId !== undefined ? (fields.contactId === null ? '__null__' : fields.contactId) : null,
     ],
   );
   return rows[0] || null;
@@ -7317,6 +7426,42 @@ async function runMigrations() {
     ON calendar_events USING GIN (attendees)
   `).catch(() => {});
 
+  // ── email_interactions (2026-05-29) ─────────────────────────────────────
+  // Full log of every scanned message (inbound + outbound), not just the
+  // flagged subset that lands in inbox_items. This is the substrate the
+  // universal contact timeline and Aria's get_contact_emails tool read
+  // from: `participants ?| ARRAY[<contact emails>]` matches any message a
+  // contact took part in. We store snippet only (Gmail `snippet` / Graph
+  // `bodyPreview`), never the full body — enough for Aria to reason about
+  // what a thread was about without persisting verbatim email content.
+  // Bounded to a 180-day rolling window (see deleteStaleEmailInteractions).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_interactions (
+      id            BIGSERIAL PRIMARY KEY,
+      user_id       TEXT NOT NULL,
+      provider      TEXT NOT NULL,
+      account_email TEXT,
+      message_id    TEXT NOT NULL,
+      thread_id     TEXT,
+      direction     TEXT,
+      from_email    TEXT,
+      participants  JSONB,
+      subject       TEXT,
+      snippet       TEXT,
+      occurred_at   TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, provider, message_id)
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'email_interactions table', error: err.message }));
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS email_interactions_participants_gin
+    ON email_interactions USING GIN (participants)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS email_interactions_user_occurred
+    ON email_interactions(user_id, occurred_at DESC)
+  `).catch(() => {});
+
   // ── Outcome Intelligence Phase 1 — schema only ──────────────────────────
   // See docs/aria-outcome-intelligence-system.md.
   // completion_note already exists (line ~118); the other three are new.
@@ -7470,6 +7615,16 @@ async function runMigrations() {
     ON contacts (user_id, created_at DESC)
     WHERE archived_at IS NULL
   `).catch(() => {});
+
+  // tasks.contact_id (2026-05-29) — links a task to a contact so the
+  // universal timeline can surface tasks as a CLEAN source (FK match, no
+  // name-guessing). Placed here, after contacts exists, since the tasks
+  // ALTER block runs earlier in init. ON DELETE SET NULL: deleting a
+  // contact orphans the link, never the task.
+  await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS contact_id TEXT REFERENCES contacts(id) ON DELETE SET NULL`)
+    .catch((err) => logger.warn('migration.warn', { label: 'tasks.contact_id', error: err.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tasks_contact ON tasks (contact_id) WHERE contact_id IS NOT NULL`)
+    .catch(() => {});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS contact_identities (
@@ -10197,6 +10352,193 @@ async function getContactTimeline(contactId, userId, { limit = 50 } = {}) {
   return rows.map((r) => ({ type: 'event', ...r }));
 }
 
+/**
+ * Universal interaction timeline for an entity. Generalizes
+ * getContactTimeline across multiple CLEAN sources (FK / email-match only —
+ * never name-guessing). entityType is 'contact' today; 'operator' is the
+ * planned reuse for Careific, hence the generic signature.
+ *
+ * Each source contributes normalized entries:
+ *   { type, title, date_iso, meta, source_table, source_id, deep_link:{panel,id} }
+ *
+ * The `days` window + `limit` apply to the MERGED set; `before` is an ISO
+ * cursor (exclusive) for pagination. Owner-scoped throughout.
+ *
+ * @param {string} userId
+ * @param {string} entityType - 'contact' (only supported value for now)
+ * @param {string} entityId   - contact id
+ * @param {Object} [opts]
+ * @param {string[]} [opts.sources] - subset of
+ *   ['email','event','meeting_outcome','note','task']; defaults to all.
+ * @param {number}  [opts.days=90]
+ * @param {number}  [opts.limit=50]
+ * @param {string}  [opts.before] - ISO timestamp cursor (exclusive).
+ * @returns {Promise<Array<Object>>} merged entries, newest first.
+ */
+async function getEntityTimeline(userId, entityType, entityId, opts = {}) {
+  const {
+    sources = ['email', 'event', 'meeting_outcome', 'note', 'task'],
+    days = 90,
+    limit = 50,
+    before = null,
+  } = opts;
+  if (entityType !== 'contact' || !entityId || !userId) return [];
+
+  const wanted = new Set(sources);
+  const sinceIso = new Date(Date.now() - days * 86400000).toISOString();
+  const beforeIso = before ? new Date(before).toISOString() : null;
+  const cutoff = new Date(sinceIso);
+  const beforeDate = beforeIso ? new Date(beforeIso) : null;
+  const toIso = (d) => (d instanceof Date ? d.toISOString() : (d ? new Date(d).toISOString() : null));
+  const inWindow = (iso) => {
+    if (!iso) return false;
+    const d = new Date(iso);
+    if (d < cutoff) return false;
+    if (beforeDate && d >= beforeDate) return false;
+    return true;
+  };
+
+  // Owner-scoped email identities (the contacts join enforces ownership).
+  const idRes = await pool.query(
+    `SELECT DISTINCT lower(ci.value) AS email
+       FROM contact_identities ci
+       JOIN contacts c ON c.id = ci.contact_id
+      WHERE ci.contact_id = $1 AND c.user_id = $2 AND ci.kind = 'email'`,
+    [entityId, userId],
+  );
+  const emails = idRes.rows.map((r) => r.email).filter(Boolean);
+
+  const entries = [];
+
+  // EMAIL — full correspondence log, matched by participants.
+  if (wanted.has('email') && emails.length) {
+    const rows = await getEmailInteractionsForEmails(userId, emails, { limit, before: beforeIso });
+    for (const r of rows) {
+      const iso = toIso(r.occurredAt);
+      if (!inWindow(iso)) continue;
+      entries.push({
+        type: 'email',
+        title: r.subject || '(no subject)',
+        date_iso: iso,
+        meta: { direction: r.direction, from: r.fromEmail, snippet: r.snippet, provider: r.provider },
+        source_table: 'email_interactions',
+        source_id: String(r.id),
+        deep_link: { panel: 'inbox', id: r.threadId || r.messageId || null },
+      });
+    }
+  }
+
+  // EVENT — calendar meetings the contact attended.
+  if (wanted.has('event') && emails.length) {
+    const { rows } = await pool.query(
+      `SELECT id, title, start_time AS "startTime", end_time AS "endTime",
+              location, account_email AS "accountEmail"
+         FROM calendar_events
+        WHERE user_id = $1 AND attendees ?| $2::text[]
+          AND start_time >= $3 ${beforeIso ? 'AND start_time < $5' : ''}
+        ORDER BY start_time DESC
+        LIMIT $4`,
+      beforeIso ? [userId, emails, sinceIso, limit, beforeIso] : [userId, emails, sinceIso, limit],
+    );
+    for (const r of rows) {
+      entries.push({
+        type: 'event',
+        title: r.title || '(untitled meeting)',
+        date_iso: toIso(r.startTime),
+        meta: { endTime: toIso(r.endTime), location: r.location, accountEmail: r.accountEmail },
+        source_table: 'calendar_events',
+        source_id: String(r.id),
+        deep_link: { panel: 'calendar', id: r.id },
+      });
+    }
+  }
+
+  // MEETING_OUTCOME — transitive: outcomes for events the contact attended.
+  if (wanted.has('meeting_outcome') && emails.length) {
+    const { rows } = await pool.query(
+      `SELECT o.id, o.title_snapshot AS "title", o.raw_note AS "note",
+              o.outcome_status AS "status", o.completed_at AS "completedAt",
+              o.follow_up_needed AS "followUpNeeded", o.follow_up_by AS "followUpBy",
+              o.source_id AS "eventId"
+         FROM outcome_records o
+        WHERE o.user_id = $1 AND o.source_type = 'event'
+          AND o.source_id IN (
+            SELECT id FROM calendar_events
+             WHERE user_id = $1 AND attendees ?| $2::text[])
+          AND o.completed_at >= $3 ${beforeIso ? 'AND o.completed_at < $5' : ''}
+        ORDER BY o.completed_at DESC
+        LIMIT $4`,
+      beforeIso ? [userId, emails, sinceIso, limit, beforeIso] : [userId, emails, sinceIso, limit],
+    );
+    for (const r of rows) {
+      entries.push({
+        type: 'meeting_outcome',
+        title: r.title || 'Meeting outcome',
+        date_iso: toIso(r.completedAt),
+        meta: { status: r.status, note: r.note, followUpNeeded: r.followUpNeeded, followUpBy: toIso(r.followUpBy) },
+        source_table: 'outcome_records',
+        source_id: String(r.id),
+        deep_link: { panel: 'calendar', id: r.eventId },
+      });
+    }
+  }
+
+  // NOTE — contact-attached facts (memory_facts, fact_type='note').
+  if (wanted.has('note')) {
+    const { rows } = await pool.query(
+      `SELECT id, fact_text AS "factText", last_seen_at AS "lastSeenAt"
+         FROM memory_facts
+        WHERE user_id = $1 AND contact_id = $2 AND fact_type = 'note'
+          AND last_seen_at >= $3 ${beforeIso ? 'AND last_seen_at < $5' : ''}
+        ORDER BY last_seen_at DESC
+        LIMIT $4`,
+      beforeIso ? [userId, entityId, sinceIso, limit, beforeIso] : [userId, entityId, sinceIso, limit],
+    );
+    for (const r of rows) {
+      const text = r.factText || '';
+      entries.push({
+        type: 'note',
+        title: text.length > 80 ? `${text.slice(0, 77)}…` : text,
+        date_iso: toIso(r.lastSeenAt),
+        meta: { text },
+        source_table: 'memory_facts',
+        source_id: String(r.id),
+        deep_link: { panel: 'people', id: entityId },
+      });
+    }
+  }
+
+  // TASK — tasks explicitly linked to the contact (contact_id FK).
+  if (wanted.has('task')) {
+    const { rows } = await pool.query(
+      `SELECT id, title, status, priority, due_date AS "dueDate", completed,
+              COALESCE(completed_at, created_at) AS "timelineDate"
+         FROM tasks
+        WHERE owner = $1 AND contact_id = $2
+          AND COALESCE(completed_at, created_at) >= $3
+          ${beforeIso ? 'AND COALESCE(completed_at, created_at) < $5' : ''}
+        ORDER BY COALESCE(completed_at, created_at) DESC
+        LIMIT $4`,
+      beforeIso ? [userId, entityId, sinceIso, limit, beforeIso] : [userId, entityId, sinceIso, limit],
+    );
+    for (const r of rows) {
+      entries.push({
+        type: 'task',
+        title: r.title || '(untitled task)',
+        date_iso: toIso(r.timelineDate),
+        meta: { status: r.status, priority: r.priority, dueDate: r.dueDate, completed: r.completed },
+        source_table: 'tasks',
+        source_id: String(r.id),
+        deep_link: { panel: 'tasks', id: r.id },
+      });
+    }
+  }
+
+  // Merge: newest first, then cap to the requested limit.
+  entries.sort((a, b) => (b.date_iso || '').localeCompare(a.date_iso || ''));
+  return entries.slice(0, limit);
+}
+
 // ── Shared access grants ────────────────────────────────────────────────────
 
 const GRANT_FIELDS = `
@@ -11676,6 +12018,9 @@ module.exports = {
   getCalendarEventsForUser,
   deleteStaleCalendarEvents,
   deleteUnreturnedCalendarEvents,
+  upsertEmailInteractions,
+  deleteStaleEmailInteractions,
+  getEmailInteractionsForEmails,
   getUsersWithGcalConnected,
   getUsersWithOutlookConnected,
   getMeetingsNeedingNotes,
@@ -11720,6 +12065,7 @@ module.exports = {
   countContactIdentitiesByKind,
   syncPrimaryFromIdentities,
   getContactTimeline,
+  getEntityTimeline,
   createGrant,
   revokeGrant,
   getGrantsForGrantor,

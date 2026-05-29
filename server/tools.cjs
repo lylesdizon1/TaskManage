@@ -43,8 +43,9 @@ const ARIA_TOOLS = [
         priority:    { type: 'string', enum: ['low', 'medium', 'high'] },
         due_date:    { type: 'string', description: 'YYYY-MM-DD' },
         due_time:    { type: 'string', description: 'HH:MM 24hr' },
-        notes:       { type: 'string' },
-        entity_name: { type: 'string' },
+        notes:        { type: 'string' },
+        entity_name:  { type: 'string' },
+        contact_name: { type: 'string', description: 'Name of a person this task relates to. Links the task to that contact so it appears on their timeline. Use only when the task is clearly about a specific person.' },
       },
       required: ['title'],
     },
@@ -74,12 +75,13 @@ const ARIA_TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        task_id:  { type: 'string' },
-        title:    { type: 'string' },
-        priority: { type: 'string', enum: ['low', 'medium', 'high'] },
-        due_date: { type: 'string' },
-        due_time: { type: 'string' },
-        notes:    { type: 'string' },
+        task_id:      { type: 'string' },
+        title:        { type: 'string' },
+        priority:     { type: 'string', enum: ['low', 'medium', 'high'] },
+        due_date:     { type: 'string' },
+        due_time:     { type: 'string' },
+        notes:        { type: 'string' },
+        contact_name: { type: 'string', description: 'Link this task to a person. Pass an empty string to unlink. Use only when the task is clearly about a specific person.' },
       },
       required: ['task_id'],
     },
@@ -372,6 +374,23 @@ const ARIA_TOOLS = [
         contact_id: { type: 'string' },
         email:      { type: 'string' },
         name:       { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'get_contact_emails',
+    group: 'people',
+    risk: 'low',
+    requires_confirmation: false,
+    description: 'Dig into the email correspondence with a contact: recent inbound + outbound messages (subject, snippet, direction, date). Use this to answer "when did I last email X", "what was my last exchange with Y about", or to ground a follow-up. At least one of contact_id, email, or name is required.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contact_id: { type: 'string' },
+        email:      { type: 'string' },
+        name:       { type: 'string' },
+        days:       { type: 'number', description: 'Look-back window in days (default 90, max 365).' },
+        limit:      { type: 'number', description: 'Max messages to return (default 20, max 50).' },
       },
     },
   },
@@ -1338,6 +1357,17 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
       case 'create_task': {
         const id = `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
         const tags = toolInput.entity_name ? [toolInput.entity_name] : [];
+        // Resolve contact_name → a single contact_id. Ambiguous/no match
+        // is non-fatal: we still create the task, just unlinked, and tell
+        // Aria why so it can ask the user to disambiguate.
+        let contactId = null;
+        let contactNote = null;
+        if (toolInput.contact_name) {
+          const matches = await db.resolveContactByName(toolInput.contact_name, userId).catch(() => []);
+          if (matches.length === 1) contactId = matches[0].id;
+          else if (matches.length > 1) contactNote = `Multiple contacts match "${toolInput.contact_name}" — task created unlinked. Ask which one to link.`;
+          else contactNote = `No contact named "${toolInput.contact_name}" — task created without a contact link.`;
+        }
         await db.upsertTask({
           id,
           title: toolInput.title,
@@ -1350,6 +1380,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
           completed: false,
           owner: userId,
           createdBy: userId,
+          contactId,
         });
         try {
           await db.logMemory({
@@ -1367,7 +1398,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
         setImmediate(() => {
           inferRulesFromBehavior(userId, 'task_created', { taskId: id, entityName: toolInput.entity_name }, 'success').catch(() => {});
         });
-        return { success: true, task_id: id, title: toolInput.title, due_date: toolInput.due_date || null, due_time: toolInput.due_time || null, priority: toolInput.priority || 'medium', entity_name: toolInput.entity_name || null };
+        return { success: true, task_id: id, title: toolInput.title, due_date: toolInput.due_date || null, due_time: toolInput.due_time || null, priority: toolInput.priority || 'medium', entity_name: toolInput.entity_name || null, contact_linked: !!contactId, ...(contactNote ? { note: contactNote } : {}) };
       }
 
       case 'complete_task': {
@@ -1424,6 +1455,17 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
         if (toolInput.due_date !== undefined) fields.dueDate = toolInput.due_date;
         if (toolInput.due_time !== undefined) fields.dueTime = toolInput.due_time;
         if (toolInput.notes !== undefined) fields.description = toolInput.notes;
+        let updContactNote = null;
+        if (toolInput.contact_name !== undefined) {
+          if (toolInput.contact_name === '') {
+            fields.contactId = null; // explicit unlink
+          } else {
+            const matches = await db.resolveContactByName(toolInput.contact_name, userId).catch(() => []);
+            if (matches.length === 1) fields.contactId = matches[0].id;
+            else if (matches.length > 1) updContactNote = `Multiple contacts match "${toolInput.contact_name}" — contact link unchanged. Ask which one.`;
+            else updContactNote = `No contact named "${toolInput.contact_name}" — contact link unchanged.`;
+          }
+        }
         await db.updateTask(toolInput.task_id, userId, fields);
         try {
           await db.logMemory({
@@ -1442,7 +1484,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
             }
           } catch (e) { console.error('[schedule] alert rescheduling failed:', e.message); }
         }
-        return { success: true, task_id: toolInput.task_id, title: fields.title || task.title, due_date: fields.dueDate ?? task.dueDate, due_time: fields.dueTime ?? task.dueTime, priority: fields.priority ?? task.priority };
+        return { success: true, task_id: toolInput.task_id, title: fields.title || task.title, due_date: fields.dueDate ?? task.dueDate, due_time: fields.dueTime ?? task.dueTime, priority: fields.priority ?? task.priority, ...(updContactNote ? { note: updContactNote } : {}) };
       }
 
       case 'delete_task': {
@@ -2838,6 +2880,45 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
         const notes = allFacts.filter((f) => f.factType === 'note').slice(0, 10);
         const facts = allFacts.filter((f) => f.factType !== 'note');
         return { success: true, contact, notes, facts, identities };
+      }
+
+      case 'get_contact_emails': {
+        let contact = null;
+        if (toolInput.contact_id) contact = await db.getContactById(toolInput.contact_id, userId);
+        if (!contact && toolInput.email) contact = await db.resolveContactByEmail(toolInput.email, userId);
+        if (!contact && toolInput.name) {
+          const matches = await db.resolveContactByName(toolInput.name, userId);
+          if (Array.isArray(matches) && matches.length === 1) contact = matches[0];
+          else if (Array.isArray(matches) && matches.length > 1) {
+            return {
+              success: false,
+              error: `Multiple contacts match "${toolInput.name}". Which one?`,
+              candidates: matches.map((m) => ({ id: m.id, displayName: m.displayName, primaryEmail: m.primaryEmail })),
+            };
+          }
+        }
+        if (!contact) return { success: false, error: 'Contact not found. Provide contact_id, email, or name.' };
+
+        const identities = await db.getContactIdentities(contact.id);
+        const emails = identities.filter((i) => i.kind === 'email').map((i) => String(i.value).toLowerCase());
+        if (!emails.length) {
+          return { success: true, contact_id: contact.id, display_name: contact.displayName, count: 0, messages: [], note: 'No email addresses on file for this contact.' };
+        }
+        const days = Math.min(Math.max(parseInt(toolInput.days, 10) || 90, 1), 365);
+        const limit = Math.min(Math.max(parseInt(toolInput.limit, 10) || 20, 1), 50);
+        const rows = await db.getEmailInteractionsForEmails(userId, emails, { limit });
+        const cutoff = Date.now() - days * 86400000;
+        const messages = rows
+          .filter((r) => r.occurredAt && new Date(r.occurredAt).getTime() >= cutoff)
+          .map((r) => ({
+            direction: r.direction,
+            from: r.fromEmail,
+            subject: r.subject || '(no subject)',
+            snippet: r.snippet || '',
+            date: r.occurredAt instanceof Date ? r.occurredAt.toISOString() : new Date(r.occurredAt).toISOString(),
+            provider: r.provider,
+          }));
+        return { success: true, contact_id: contact.id, display_name: contact.displayName, count: messages.length, messages };
       }
 
       case 'create_contact': {

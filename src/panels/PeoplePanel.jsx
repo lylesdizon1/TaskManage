@@ -635,9 +635,10 @@ function NotesSection({ notes, contactId, apiFetch, authToken, onAdded }) {
   );
 }
 
-// Recent + upcoming meetings, matched server-side on attendee email. The
-// calendar cache is a rolling ~30d-past → 14d-future window, so this is a
-// "recent meetings" view, not a full history.
+// Universal interaction timeline — emails, calendar events, meeting outcomes,
+// notes, and linked tasks, merged server-side via getEntityTimeline and matched
+// on the contact's email identities (plus clean FK joins for notes/tasks). The
+// calendar slice is a rolling window, so this leans recent, not full history.
 function fmtWhen(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -648,44 +649,128 @@ function fmtWhen(iso) {
   return `${date} · ${time}`;
 }
 
+// type → icon + accent + secondary-line builder. meta shapes come straight from
+// getEntityTimeline (db.cjs): email{direction,from,snippet,provider},
+// event{endTime,location,accountEmail}, meeting_outcome{status,note,followUpNeeded,followUpBy},
+// note{text}, task{status,priority,dueDate,completed}.
+const TIMELINE_TYPES = {
+  email:           { icon: 'mail',          accent: '#4f4dcf' },
+  event:           { icon: 'event',         accent: '#7777fa' },
+  meeting_outcome: { icon: 'task_alt',      accent: '#2f9e6e' },
+  note:            { icon: 'sticky_note_2', accent: '#b9892b' },
+  task:            { icon: 'check_circle',  accent: '#5a6b7b' },
+};
+
+// deep_link.panel → App.jsx activeView name. Tasks live on the dashboard.
+const PANEL_TO_VIEW = { inbox: 'inbox', calendar: 'calendar', people: 'people', tasks: 'dashboard' };
+
+function timelineSecondary(e) {
+  const m = e.meta || {};
+  const when = fmtWhen(e.date_iso);
+  switch (e.type) {
+    case 'email': {
+      const who = m.direction === 'outbound' ? 'You emailed them' : 'They emailed you';
+      return { line: `${who} · ${when}`, sub: m.snippet || '' };
+    }
+    case 'event': {
+      const upcoming = e.date_iso && new Date(e.date_iso) > new Date();
+      return { line: `${when}${m.location ? ` · ${m.location}` : ''}${upcoming ? ' · upcoming' : ''}`, sub: '' };
+    }
+    case 'meeting_outcome':
+      return { line: `Outcome${m.status ? ` · ${m.status}` : ''} · ${when}`, sub: m.note || '' };
+    case 'note':
+      return { line: `Note · ${when}`, sub: m.text || '' };
+    case 'task': {
+      const bits = [m.completed ? 'Done' : (m.status || 'open')];
+      if (m.dueDate) bits.push(`due ${fmtWhen(m.dueDate).split(' · ')[0]}`);
+      return { line: `Task · ${bits.join(' · ')}`, sub: '' };
+    }
+    default:
+      return { line: when, sub: '' };
+  }
+}
+
 function TimelineRow({ event }) {
-  const upcoming = event.startTime && new Date(event.startTime) > new Date();
+  const cfg = TIMELINE_TYPES[event.type] || { icon: 'circle', accent: TXT3 };
+  const { line, sub } = timelineSecondary(event);
+  const targetView = PANEL_TO_VIEW[event.deep_link?.panel];
+  // 'people' deep-links point back at this same panel — no useful nav.
+  const canNav = targetView && targetView !== 'people';
+  const go = () => {
+    if (!canNav) return;
+    try { window.dispatchEvent(new CustomEvent('navigate-app', { detail: { view: targetView } })); } catch {}
+  };
   return (
-    <div style={{ display: 'flex', gap: 10, padding: '7px 0', borderTop: `1px dashed ${BORDER}` }}>
-      <span className="material-symbols-outlined" style={{ fontSize: 17, color: upcoming ? PRIMARY : TXT3, marginTop: 1 }}>event</span>
+    <div
+      onClick={go}
+      style={{ display: 'flex', gap: 10, padding: '7px 0', borderTop: `1px dashed ${BORDER}`, cursor: canNav ? 'pointer' : 'default' }}
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 17, color: cfg.accent, marginTop: 1 }}>{cfg.icon}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, color: TXT1, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.title || '(No title)'}</div>
-        <div style={{ fontSize: 11.5, color: TXT2, marginTop: 1 }}>
-          {fmtWhen(event.startTime)}{event.location ? ` · ${event.location}` : ''}{upcoming ? ' · upcoming' : ''}
-        </div>
+        <div style={{ fontSize: 11.5, color: TXT2, marginTop: 1 }}>{line}</div>
+        {sub ? (
+          <div style={{ fontSize: 11.5, color: TXT3, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
+        ) : null}
       </div>
     </div>
   );
 }
 
+const TIMELINE_FILTERS = [
+  { key: 'all',             label: 'All' },
+  { key: 'email',           label: 'Emails' },
+  { key: 'event',           label: 'Meetings' },
+  { key: 'meeting_outcome', label: 'Outcomes' },
+  { key: 'note',            label: 'Notes' },
+  { key: 'task',            label: 'Tasks' },
+];
+
 function TimelineSection({ contactId, apiFetch, authToken }) {
   const [items, setItems] = useState(null); // null = loading
+  const [filter, setFilter] = useState('all');
   useEffect(() => {
     let cancelled = false;
+    setItems(null);
     (async () => {
       try {
-        const r = await apiFetch(`/api/contacts/${contactId}/timeline`, { headers: { Authorization: `Bearer ${authToken}` } });
+        const qs = filter === 'all' ? '' : `?sources=${filter}`;
+        const r = await apiFetch(`/api/contacts/${contactId}/timeline${qs}`, { headers: { Authorization: `Bearer ${authToken}` } });
         const d = await r.json().catch(() => ({}));
         if (!cancelled) setItems(Array.isArray(d?.timeline) ? d.timeline : []);
       } catch { if (!cancelled) setItems([]); }
     })();
     return () => { cancelled = true; };
-  }, [contactId, apiFetch, authToken]);
+  }, [contactId, apiFetch, authToken, filter]);
 
   return (
     <div style={{ marginBottom: 8 }}>
-      <SectionLabel subtitle="recent meetings">Timeline</SectionLabel>
+      <SectionLabel subtitle="emails, meetings, notes & tasks">Timeline</SectionLabel>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '4px 0 8px' }}>
+        {TIMELINE_FILTERS.map((f) => {
+          const active = filter === f.key;
+          return (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              style={{
+                fontSize: 11.5, padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+                border: `1px solid ${active ? PRIMARY : BORDER}`,
+                background: active ? PRIMARY : 'transparent',
+                color: active ? '#fff' : TXT2,
+              }}
+            >{f.label}</button>
+          );
+        })}
+      </div>
       {items === null ? (
         <div style={{ fontSize: 13, color: TXT3 }}>Loading…</div>
       ) : items.length === 0 ? (
-        <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic' }}>No recent meetings with this contact.</div>
+        <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic' }}>
+          {filter === 'all' ? 'No recent activity with this contact.' : 'Nothing here yet.'}
+        </div>
       ) : (
-        items.map((e) => <TimelineRow key={e.id} event={e} />)
+        items.map((e) => <TimelineRow key={`${e.source_table}:${e.source_id}`} event={e} />)
       )}
     </div>
   );

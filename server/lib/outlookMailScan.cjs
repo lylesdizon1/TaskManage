@@ -48,7 +48,7 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
   }
 
   const qs = new URLSearchParams({
-    $select: 'id,subject,from,bodyPreview,receivedDateTime,webLink,conversationId',
+    $select: 'id,subject,from,toRecipients,ccRecipients,bodyPreview,receivedDateTime,webLink,conversationId',
     $top: '50',
     $orderby: 'receivedDateTime desc',
     $filter: `receivedDateTime ge ${sinceIso}`,
@@ -70,6 +70,67 @@ async function scanOneOutlookAccount({ userId, account, config, db, requestId })
     console.error('[outlookMailScan] fetch threw', { userId, accountEmail: account.accountEmail, error: err.message });
     logger.error('outlookScan.fetch.threw', { requestId, userId, accountEmail: account.accountEmail, error: err.message });
     return { newItems: 0, error: err.message };
+  }
+
+  // Sent mail — outbound half of the correspondence log. Bounded fetch,
+  // best-effort (failure here never blocks the inbox flagging pipeline).
+  let sentMessages = [];
+  try {
+    const sentQs = new URLSearchParams({
+      $select: 'id,subject,from,toRecipients,ccRecipients,bodyPreview,sentDateTime,webLink,conversationId',
+      $top: '20',
+      $orderby: 'sentDateTime desc',
+      $filter: `sentDateTime ge ${sinceIso}`,
+    });
+    const sentRes = await fetch(`${GRAPH_BASE}/me/mailFolders/SentItems/messages?${sentQs.toString()}`,
+      { headers: { Authorization: `Bearer ${tokens.access_token}` } });
+    if (sentRes.ok) {
+      const sentJson = await sentRes.json();
+      sentMessages = Array.isArray(sentJson.value) ? sentJson.value : [];
+    }
+  } catch (err) {
+    logger.warn('outlookScan.sentFetch.failed', { requestId, userId, accountEmail: account.accountEmail, error: err.message });
+  }
+
+  // ── email_interactions log (2026-05-29) ──────────────────────────────
+  // Log every scanned message (inbound + outbound), independent of the
+  // flagging pipeline below. no-reply dropping + dedupe happen inside
+  // db.upsertEmailInteractions.
+  try {
+    const addrs = (recips) =>
+      (Array.isArray(recips) ? recips : [])
+        .map((r) => r?.emailAddress?.address?.toLowerCase())
+        .filter(Boolean);
+    const toRow = (msg, direction) => {
+      if (!msg) return null;
+      const from = msg.from?.emailAddress?.address?.toLowerCase();
+      const participants = [...new Set([
+        ...(from ? [from] : []),
+        ...addrs(msg.toRecipients),
+        ...addrs(msg.ccRecipients),
+      ])];
+      if (!participants.length) return null;
+      const when = msg.receivedDateTime || msg.sentDateTime || null;
+      return {
+        provider: 'outlook',
+        account_email: account.accountEmail || null,
+        message_id: msg.id,
+        thread_id: msg.conversationId || null,
+        direction,
+        from_email: from || null,
+        participants,
+        subject: msg.subject || null,
+        snippet: msg.bodyPreview || null,
+        occurred_at: when,
+      };
+    };
+    const emailLog = [
+      ...messages.map((m) => toRow(m, 'inbound')),
+      ...sentMessages.map((m) => toRow(m, 'outbound')),
+    ].filter(Boolean);
+    await db.upsertEmailInteractions(userId, emailLog);
+  } catch (logErr) {
+    logger.warn('outlookScan.emailLog.failed', { requestId, userId, error: logErr.message });
   }
 
   const flagged = [];
@@ -217,6 +278,14 @@ async function scanOutlookMailForUser({ userId, db, requestId }) {
   }
   // Single Haiku call per scan tick (Redis-debounced 24h inside the mapper).
   mapLabelsToCategories(userId).catch(() => {});
+  // email_interactions retention — 180-day rolling window, once per scan.
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 180);
+    await db.deleteStaleEmailInteractions(userId, cutoff);
+  } catch (e) {
+    logger.warn('outlookScan.emailRetention.failed', { requestId, userId, error: e.message });
+  }
   logger.info('outlookScan.complete', { requestId, userId, total, accounts: accounts.length });
   return { newItems: total, accounts: perAccount };
 }
