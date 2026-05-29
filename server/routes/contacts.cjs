@@ -102,11 +102,20 @@ module.exports = function createContactsRouter({ authenticateToken, db }) {
 
   // ── Single contact ────────────────────────────────────────────────────
 
+  // Map a DB identity row to the API shape. DB keeps kind/value (Option A);
+  // the API exposes value/label/is_primary/source. kind selects the bucket.
+  function toIdentity(r) {
+    return { id: r.id, value: r.value, label: r.label || null, is_primary: !!r.isPrimary, source: r.source || null };
+  }
+
   router.get('/api/contacts/:id', authenticateToken, async (req, res) => {
     try {
       const contact = await db.getContactById(req.params.id, req.user.id);
       if (!contact) return res.status(404).json({ error: 'Contact not found' });
-      res.json({ contact });
+      const identities = await db.getContactIdentities(req.params.id);
+      const emails = identities.filter((r) => r.kind === 'email').map(toIdentity);
+      const phones = identities.filter((r) => r.kind === 'phone').map(toIdentity);
+      res.json({ contact: { ...contact, emails, phones } });
     } catch (err) {
       logger.error('contacts.get.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       res.status(500).json({ error: 'Internal server error' });

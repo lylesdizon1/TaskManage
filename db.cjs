@@ -10007,9 +10007,11 @@ async function addContactIdentity(contactId, kind, value) {
 
 async function getContactIdentities(contactId) {
   const { rows } = await pool.query(
-    `SELECT id, contact_id AS "contactId", kind, value, verified, created_at AS "createdAt"
+    `SELECT id, contact_id AS "contactId", kind, value, label,
+            COALESCE(is_primary, FALSE) AS "isPrimary", source,
+            verified, created_at AS "createdAt"
      FROM contact_identities WHERE contact_id = $1
-     ORDER BY created_at ASC`,
+     ORDER BY is_primary DESC NULLS LAST, (source = 'manual') DESC, LOWER(value) ASC`,
     [contactId],
   );
   return rows;
