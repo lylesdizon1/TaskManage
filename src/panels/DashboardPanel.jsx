@@ -519,17 +519,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (isListening) {
       try { recognitionRef.current.stop(); } catch {}
     } else {
-      // Prime the audio policy inside this click gesture so Aria's
-      // voice reply can play back automatically when she answers.
-      // (Same primer the speaker toggle does — but the mic path is a
-      // user gesture too, and people skip the speaker toggle entirely
-      // for talk-to-Aria flows.)
-      if (!playTtsRef.current) {
-        const a = new Audio();
-        a.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAACcQCAgICAgICAgICAgICAgICAgICAgICAgID/////////////////////AAAAAExhdmM1OC4xMwAAAAAAAAAAAAAAACQDoAAAAAAAAAJxYZ0YnAAAAAAA//sQxAADwAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
-        a.play().catch(() => {});
-        playTtsRef.current = a;
-      }
+      // Ensure the persistent audio element exists so the TTS pipeline
+      // has a target. Used to also play a silent mp3 here to bypass the
+      // browser autoplay policy, but that was a workaround for what
+      // turned out to be a CSP violation (mediaSrc didn't allow blob:
+      // and data:). After commit 2901584 relaxed CSP, the silent primer
+      // does nothing useful — removed.
+      if (!playTtsRef.current) playTtsRef.current = new Audio();
       setCcInput('');
       finalTranscriptRef.current = '';
       setIsListening(true);
@@ -546,16 +542,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     setVoiceRepliesEnabled((prev) => {
       const next = !prev;
       try { localStorage.setItem('aria-voice-replies', next ? '1' : '0'); } catch {}
-      if (next && !playTtsRef.current) {
-        // Prime the audio policy with a real (silent) play inside the
-        // click context. 0.1s of silence is enough to credit the page
-        // for future programmatic playback.
-        const a = new Audio();
-        // Tiny silent mp3 data URI (44 bytes).
-        a.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAACcQCAgICAgICAgICAgICAgICAgICAgICAgID/////////////////////AAAAAExhdmM1OC4xMwAAAAAAAAAAAAAAACQDoAAAAAAAAAJxYZ0YnAAAAAAA//sQxAADwAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
-        a.play().catch(() => { /* prime failed, real playback will retry */ });
-        playTtsRef.current = a;
-      }
+      // Ensure the persistent audio element exists for the TTS pipeline.
+      // Used to also play a silent mp3 here as a workaround for what
+      // looked like an autoplay-policy block — turned out to be a CSP
+      // violation against mediaSrc. After commit 2901584 relaxed CSP to
+      // allow data: and blob:, the silent primer no longer serves a
+      // purpose. Removed.
+      if (next && !playTtsRef.current) playTtsRef.current = new Audio();
       return next;
     });
   }, []);
