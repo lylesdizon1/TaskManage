@@ -560,36 +560,84 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     });
   }, []);
 
-  // Play TTS audio for the given text. Reuses the primed Audio element
-  // so the autoplay policy stays credited.
-  const playAriaVoice = useCallback(async (text) => {
-    if (!text || !voiceRepliesEnabled) return;
+  // ── Streaming TTS plumbing ────────────────────────────────────────
+  // Voice plays sentence-by-sentence as Aria streams text. Each completed
+  // sentence fires a TTS call; audio chunks queue and play in order.
+  // Voice catches up with text as quickly as the TTS round trip allows
+  // (~500-800ms for the first sentence on ElevenLabs Turbo).
+  const voiceQueueRef = useRef([]);
+  const voicePlayingRef = useRef(false);
+  const voiceBufferRef = useRef('');
+  const voiceForCurrentTurnRef = useRef(false);
+
+  const playNextInVoiceQueue = useCallback(() => {
+    if (voicePlayingRef.current) return;
+    const next = voiceQueueRef.current.shift();
+    if (!next) return;
+    const audio = playTtsRef.current;
+    if (!audio) return; // not primed — should be impossible by the time we get here
+    voicePlayingRef.current = true;
+    try { audio.pause(); } catch {}
+    audio.src = next.url;
+    audio.onended = () => {
+      URL.revokeObjectURL(next.url);
+      voicePlayingRef.current = false;
+      playNextInVoiceQueue();
+    };
+    audio.play().catch(() => {
+      voicePlayingRef.current = false;
+      playNextInVoiceQueue();
+    });
+  }, []);
+
+  const enqueueAudioForText = useCallback(async (text) => {
+    if (!text || !text.trim()) return;
     try {
       const res = await apiFetch('/api/tts/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: text.trim() }),
       });
       if (!res.ok) return;
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      // Reuse the persistent audio element (carries the gesture credit
-      // from toggleVoiceReplies). Stop any prior playback first so
-      // successive Aria replies don't overlap.
-      let audio = playTtsRef.current;
-      if (!audio) { audio = new Audio(); playTtsRef.current = audio; }
-      try { audio.pause(); } catch {}
-      audio.src = url;
-      audio.onended = () => { URL.revokeObjectURL(url); };
-      try {
-        await audio.play();
-      } catch (err) {
-        // Autoplay still blocked — surface a one-time hint so the user
-        // knows to interact with the page first. Don't throw.
-        console.warn('[voice] autoplay blocked, click anywhere then retry:', err.message);
+      voiceQueueRef.current.push({ url });
+      playNextInVoiceQueue();
+    } catch { /* TTS chunk failure is non-fatal — text still arrives normally */ }
+  }, [apiFetch, authToken, playNextInVoiceQueue]);
+
+  // Pop complete sentences off the buffer and enqueue them for TTS.
+  // A sentence is text ending in . ! ? followed by whitespace (the
+  // whitespace requirement avoids splitting on abbreviations like
+  // "Dr. Smith" which the trailing space wouldn't be present for).
+  // Min length 20 chars to avoid firing TTS on tiny fragments like
+  // a single-word interjection.
+  const flushVoiceBuffer = useCallback((flushAll = false) => {
+    let buf = voiceBufferRef.current;
+    while (true) {
+      const m = buf.match(/^([\s\S]*?[.!?]+)\s+([\s\S]*)$/);
+      if (!m) break;
+      const sentence = m[1].trim();
+      if (sentence.length >= 20) {
+        enqueueAudioForText(sentence);
+        buf = m[2];
+        continue;
       }
-    } catch { /* TTS playback failures are non-fatal */ }
-  }, [voiceRepliesEnabled, apiFetch, authToken]);
+      break;
+    }
+    if (flushAll && buf.trim()) {
+      enqueueAudioForText(buf.trim());
+      buf = '';
+    }
+    voiceBufferRef.current = buf;
+  }, [enqueueAudioForText]);
+
+  const resetVoiceTurn = useCallback(() => {
+    voiceBufferRef.current = '';
+    voiceQueueRef.current = [];
+    voicePlayingRef.current = false;
+    voiceForCurrentTurnRef.current = false;
+  }, []);
 
   // Prompt-cache warmup (2026-05-29). When the user starts typing,
   // fire a background /api/chat/warmup that primes Aria's prompt
@@ -1657,6 +1705,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     let fullResponse = '';
     setCcMessages((prev) => [...prev, { role: 'assistant', content: '', createdAt: new Date().toISOString(), ts: Date.now() }]);
 
+    // Decide voice for this turn BEFORE the stream starts. The toggle
+    // or the just-spoke-via-mic ref locks the decision so the user
+    // can flip it after send without breaking mid-turn.
+    voiceForCurrentTurnRef.current = voiceRepliesEnabled || lastSentWasVoiceRef.current;
+    voiceBufferRef.current = '';
+    voiceQueueRef.current = [];
+
     try {
       const res = await apiFetch('/api/chat/execute', {
         method: 'POST',
@@ -1711,12 +1766,20 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 // the user sees Aria's text as it's generated rather
                 // than waiting for the full assembly.
                 if (ccStoppedRef.current) { currentEvent = null; continue; }
-                fullResponse += parsed.text || '';
+                const delta = parsed.text || '';
+                fullResponse += delta;
                 setCcMessages((prev) => {
                   const updated = [...prev];
                   updated[updated.length - 1] = { ...updated[updated.length - 1], content: fullResponse };
                   return updated;
                 });
+                // Streaming TTS: append to voice buffer and flush any
+                // complete sentences so audio starts playing while text
+                // is still streaming.
+                if (voiceForCurrentTurnRef.current && delta) {
+                  voiceBufferRef.current += delta;
+                  flushVoiceBuffer(false);
+                }
               } else if (currentEvent === 'text') {
                 // Server sends a final 'text' event with the fully
                 // assembled content after streaming closes — use it as
@@ -1815,12 +1878,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     if (last && last.role === 'assistant' && !last.content) updated.pop();
                     return updated;
                   });
-                } else if (voiceRepliesEnabled || lastSentWasVoiceRef.current) {
-                  // Voice mode: either the user enabled the toggle OR this
-                  // turn originated from the mic (talk to her, she talks
-                  // back). Reset the per-turn flag after consuming it.
+                } else if (voiceForCurrentTurnRef.current) {
+                  // Flush any trailing text (final sentence may not have
+                  // a punctuation+whitespace terminator) so the last
+                  // segment gets voiced. Reset the per-turn flag.
+                  flushVoiceBuffer(true);
+                  voiceForCurrentTurnRef.current = false;
                   lastSentWasVoiceRef.current = false;
-                  playAriaVoice(fullResponse);
                 }
               } else if (currentEvent === 'error') {
                 // Convert the empty placeholder into a user-visible error
