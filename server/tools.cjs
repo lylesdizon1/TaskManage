@@ -672,6 +672,17 @@ const ARIA_TOOLS = [
     },
   },
   {
+    name: 'get_cost_usage',
+    group: 'intelligence',
+    risk: 'low',
+    requires_confirmation: false,
+    description: "Return today's LLM token usage rollup for the current user. Use when the user asks 'how many tokens have I used today?', 'what's my LLM usage?', 'am I spending a lot on AI today?', or similar. Returns total tokens + per-scope breakdown (agentic_loop, memory_extractor, classification, food_estimate, etc.) plus a rough cost estimate. Summarize in 1-3 sentences — don't dump raw numbers unless asked.",
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
     name: 'list_preferences',
     group: 'intelligence',
     risk: 'low',
@@ -2294,6 +2305,40 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
             description: row.description,
             context: row.context,
             strength: row.strength,
+          };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      case 'get_cost_usage': {
+        try {
+          const { getDailyCostSummary } = require('./lib/anthropicCall.cjs');
+          const summary = await getDailyCostSummary(userId);
+
+          // Rough cost estimate per scope. Sonnet-class scopes use a
+          // blended $5/MTok; Haiku-class scopes use $1/MTok. The wrapper
+          // tracks input+output combined so this is approximate — point
+          // the user at the Anthropic dashboard if they need exact spend.
+          const SONNET_SCOPES = new Set(['agentic_loop', 'research_agent']);
+          let estCents = 0;
+          const byScope = {};
+          for (const [scope, tokens] of Object.entries(summary.byScope || {})) {
+            const ratePerMTokDollars = SONNET_SCOPES.has(scope) ? 5 : 1;
+            const estDollars = (tokens / 1_000_000) * ratePerMTokDollars;
+            estCents += Math.round(estDollars * 100);
+            byScope[scope] = {
+              tokens,
+              est_cost_usd: Number(estDollars.toFixed(3)),
+            };
+          }
+          return {
+            success: true,
+            total_tokens: summary.totalTokens || 0,
+            est_total_cost_usd: Number((estCents / 100).toFixed(2)),
+            by_scope: byScope,
+            enforcement_cap: summary.enforcementCap,
+            note: 'Token counts are exact; dollar estimates are rough (Sonnet ~$5/MTok blended, Haiku ~$1/MTok blended). For exact spend, see the Anthropic console.',
           };
         } catch (err) {
           return { success: false, error: err.message };
