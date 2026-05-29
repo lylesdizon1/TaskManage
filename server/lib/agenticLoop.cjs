@@ -22,7 +22,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const crypto = require('crypto');
 const logger = require('../../guardrails/logger.cjs');
 const { getToolByName } = require('../tools.cjs');
-const { trackedAnthropicCall } = require('./anthropicCall.cjs');
+const { trackedAnthropicStream } = require('./anthropicCall.cjs');
 const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 const MAX_ITERATIONS = 5;
@@ -100,14 +100,24 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
   while (iterations < MAX_ITERATIONS) {
     iterations++;
 
+    // Streaming call (2026-05-29). Switched from messages.create to
+    // messages.stream so we can forward text_delta events to onProgress
+    // as they arrive. Caller (ai.cjs) translates them to SSE events;
+    // browser renders incrementally. Net effect: TTFT drops from
+    // 3-5s (wait for full assembly) to ~500-800ms (first generated tokens).
+    // WhatsApp callers don't pass an onTextDelta handler, so the stream
+    // accumulates silently — same behavior as before.
+    const onTextDelta = onProgress
+      ? (text) => onProgress({ type: 'text_delta', text })
+      : undefined;
     const response = await Promise.race([
-      trackedAnthropicCall(client, {
+      trackedAnthropicStream(client, {
         model: model || 'claude-sonnet-4-6',
         max_tokens: 8192,
         system: systemParam,
         tools: cachedTools,
         messages: currentMessages,
-      }, { userId, scope: 'agentic_loop' }),
+      }, { userId, scope: 'agentic_loop', onTextDelta }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Aria is taking too long to respond. Please try again.')), 30_000)
       ),

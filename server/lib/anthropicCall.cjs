@@ -145,7 +145,93 @@ async function getDailyCostSummary(userId) {
   return { totalTokens: total, byScope, enforcementCap: ENFORCEMENT_CAP };
 }
 
+/**
+ * Streaming variant. Uses client.messages.stream() so the caller can
+ * forward text_delta events live (SSE → client → incremental render).
+ * After the stream completes, returns the assembled final message in
+ * the same shape as trackedAnthropicCall — so callers downstream of
+ * the await (tool_use block extraction, etc.) work unchanged.
+ *
+ * @param {object} client — Anthropic SDK instance.
+ * @param {object} params — messages.stream params (model, system, tools, messages, ...).
+ * @param {object} [opts]
+ * @param {string} [opts.userId]
+ * @param {string} [opts.scope]
+ * @param {(text: string) => void} [opts.onTextDelta] — fires per
+ *   text chunk as the model produces tokens. Use this to forward
+ *   incremental text to the user (SSE text_delta event).
+ * @returns {Promise<object>} The assembled final message.
+ */
+async function trackedAnthropicStream(client, params, opts = {}) {
+  const { userId = 'anon', scope = 'unscoped', onTextDelta } = opts;
+
+  if (ENFORCEMENT_CAP && userId !== 'anon') {
+    const current = await getDailyCount(userId, 'tokens');
+    if (current > ENFORCEMENT_CAP) {
+      const err = new Error('token_cap_exceeded');
+      err.code = 'token_cap_exceeded';
+      err.current = current;
+      err.cap = ENFORCEMENT_CAP;
+      throw err;
+    }
+  }
+
+  const t0 = Date.now();
+  const stream = client.messages.stream(params);
+
+  // Iterate stream events. Text deltas are the user-facing payload;
+  // everything else is for the final assembled message which we get
+  // from finalMessage() once the stream closes.
+  try {
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta'
+          && event.delta?.type === 'text_delta'
+          && typeof onTextDelta === 'function') {
+        try { onTextDelta(event.delta.text || ''); } catch { /* never let handler crash the stream */ }
+      }
+    }
+  } catch (err) {
+    logger.error('anthropic.stream.failed', { userId, scope, error: err.message });
+    throw err;
+  }
+
+  const response = await stream.finalMessage();
+  const latencyMs = Date.now() - t0;
+
+  // Same accounting as the non-streaming path.
+  try {
+    const usage = response?.usage;
+    if (usage) {
+      const total = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+      if (total > 0) {
+        await incrementDailyCounter(userId, 'tokens', { increment: total });
+        await incrementDailyCounter(userId, `tokens:${scope}`, { increment: total });
+      }
+      await incrementDailyCounter(userId, `latency_ms:${scope}`, { increment: latencyMs });
+      await incrementDailyCounter(userId, `calls:${scope}`, { increment: 1 });
+      const cacheRead = Number(usage?.cache_read_input_tokens || 0);
+      const cacheCreate = Number(usage?.cache_creation_input_tokens || 0);
+      if (cacheRead > 0)   await incrementDailyCounter(userId, `cache_read:${scope}`,   { increment: cacheRead });
+      if (cacheCreate > 0) await incrementDailyCounter(userId, `cache_create:${scope}`, { increment: cacheCreate });
+      logger.debug?.('anthropic.stream.tracked', {
+        userId, scope,
+        latency_ms: latencyMs,
+        input_tokens: usage.input_tokens || 0,
+        output_tokens: usage.output_tokens || 0,
+        cache_read_tokens: cacheRead,
+        cache_create_tokens: cacheCreate,
+        model: response?.model,
+      });
+    }
+  } catch (err) {
+    logger.warn('anthropic.stream.trackFailed', { userId, scope, error: err.message });
+  }
+
+  return response;
+}
+
 module.exports = {
   trackedAnthropicCall,
+  trackedAnthropicStream,
   getDailyCostSummary,
 };

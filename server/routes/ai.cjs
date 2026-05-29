@@ -474,10 +474,15 @@ function createAiRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalAcco
       const boundExecuteTool = (toolName, toolInput, uid) =>
         executeTool(toolName, toolInput, uid, entityIds, db, tz, 'web_chat');
 
-      const onProgress = ({ type, tool, input, result, error }) => {
+      const onProgress = ({ type, tool, input, result, error, text }) => {
         if (type === 'tool_start')    send('tool_start',    { tool, input });
         if (type === 'tool_complete') send('tool_complete', { tool, result });
         if (type === 'tool_error')    send('tool_error',    { tool, error });
+        // 2026-05-29 — token-level streaming. The agentic loop forwards
+        // text_delta events as Anthropic emits them; flush each one
+        // through SSE so the client can render incrementally instead of
+        // waiting for the full assembled message.
+        if (type === 'text_delta' && text) send('text_delta', { text });
       };
 
       const logAction = async (event) => {

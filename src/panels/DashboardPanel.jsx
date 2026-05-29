@@ -848,7 +848,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             try {
               const parsed = JSON.parse(dataMatch[1]);
 
-              if (currentEvent === 'text') {
+              if (currentEvent === 'text_delta') {
+                // Narration path streams too (2026-05-29). Accumulate
+                // deltas so the final ariaResponse matches the
+                // server-assembled message.
+                ariaResponse += parsed.text || '';
+              } else if (currentEvent === 'text') {
+                // Final reconciliation event — replace with the
+                // server's authoritative assembled text.
                 ariaResponse = parsed.content || '';
               } else if (currentEvent === 'tools_executed') {
                 const tools = parsed.tools || [];
@@ -1533,7 +1540,23 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             try {
               const parsed = JSON.parse(dataMatch[1]);
 
-              if (currentEvent === 'text') {
+              if (currentEvent === 'text_delta') {
+                // 2026-05-29 — token streaming. Append each delta to the
+                // running response and update the message in place so
+                // the user sees Aria's text as it's generated rather
+                // than waiting for the full assembly.
+                if (ccStoppedRef.current) { currentEvent = null; continue; }
+                fullResponse += parsed.text || '';
+                setCcMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { ...updated[updated.length - 1], content: fullResponse };
+                  return updated;
+                });
+              } else if (currentEvent === 'text') {
+                // Server sends a final 'text' event with the fully
+                // assembled content after streaming closes — use it as
+                // a safety net to reconcile in case any delta was
+                // missed (and as the canonical version to persist).
                 if (ccStoppedRef.current) { currentEvent = null; continue; }
                 fullResponse = parsed.content || '';
                 setCcMessages((prev) => {
