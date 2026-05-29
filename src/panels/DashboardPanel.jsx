@@ -461,6 +461,19 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   });
   const recognitionRef = useRef(null);
   const speechSupportedRef = useRef(false);
+  // Tracks whether the current pending turn originated from a voice
+  // input (mic). When true, the SSE 'done' handler triggers a voice
+  // reply regardless of the global voiceRepliesEnabled toggle —
+  // "talk to her, she talks back" implicit UX.
+  const lastSentWasVoiceRef = useRef(false);
+  // Distinguishes "user explicitly stopped recording" from
+  // "recognition auto-stopped after silence." Auto-stop with
+  // non-empty transcript → auto-send. User stop → leave transcript
+  // in the input for editing.
+  const userStoppedMicRef = useRef(false);
+  const finalTranscriptRef = useRef('');
+  // Refs we need from later code — bound after handleCcSend is defined.
+  const handleCcSendRef = useRef(null);
   useEffect(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { speechSupportedRef.current = false; return; }
@@ -474,12 +487,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         .map((r) => r[0]?.transcript || '')
         .join('');
       setCcInput(transcript);
+      finalTranscriptRef.current = transcript;
     };
-    rec.onend = () => setIsListening(false);
-    rec.onerror = (e) => {
+    rec.onend = () => {
+      setIsListening(false);
+      // Auto-send when recognition ended naturally (silence) AND the
+      // user didn't manually click stop AND there's actual content.
+      // Mark the turn as voice-originated so the response gets spoken.
+      const text = finalTranscriptRef.current.trim();
+      const wasUserStop = userStoppedMicRef.current;
+      userStoppedMicRef.current = false;
+      finalTranscriptRef.current = '';
+      if (text && !wasUserStop) {
+        lastSentWasVoiceRef.current = true;
+        // Defer one tick so React commits the ccInput update first.
+        setTimeout(() => {
+          if (handleCcSendRef.current) handleCcSendRef.current();
+        }, 0);
+      }
+    };
+    rec.onerror = () => {
       // Mostly transient (no-speech detected, network blips). Don't
       // surface as a toast — just stop listening and let the user retry.
       setIsListening(false);
+      finalTranscriptRef.current = '';
+      userStoppedMicRef.current = false;
     };
     recognitionRef.current = rec;
     return () => { try { rec.stop(); } catch {} };
@@ -487,9 +519,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const toggleMic = useCallback(() => {
     if (!recognitionRef.current) return;
     if (isListening) {
+      userStoppedMicRef.current = true; // suppress auto-send on manual stop
       try { recognitionRef.current.stop(); } catch {}
     } else {
       setCcInput('');
+      finalTranscriptRef.current = '';
+      userStoppedMicRef.current = false;
       setIsListening(true);
       try { recognitionRef.current.start(); }
       catch (e) { setIsListening(false); }
@@ -1773,8 +1808,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     if (last && last.role === 'assistant' && !last.content) updated.pop();
                     return updated;
                   });
-                } else if (voiceRepliesEnabled) {
-                  // Voice mode: fire TTS playback (fire-and-forget).
+                } else if (voiceRepliesEnabled || lastSentWasVoiceRef.current) {
+                  // Voice mode: either the user enabled the toggle OR this
+                  // turn originated from the mic (talk to her, she talks
+                  // back). Reset the per-turn flag after consuming it.
+                  lastSentWasVoiceRef.current = false;
                   playAriaVoice(fullResponse);
                 }
               } else if (currentEvent === 'error') {
@@ -1868,6 +1906,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       setCcSending(false);
     }
   }, [ccInput, ccSending, ccConvId, ccMessages, currentUser, firstName, apiKeys, authToken, apiFetch, tasks, entities, notes, calendarEvents, chatCalendarEvents, fetchBriefContext]);
+
+  // Bind handleCcSend into the ref so the SpeechRecognition.onend
+  // callback (defined inside a once-only useEffect on mount) can call
+  // it without holding a stale closure.
+  useEffect(() => { handleCcSendRef.current = handleCcSend; }, [handleCcSend]);
 
   // Keep a live ref to the latest send handler so window-event listeners
   // can trigger a send without re-binding on every render.
