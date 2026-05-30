@@ -2299,7 +2299,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
                 <p className="text-xs text-on-surface-variant mb-3">
                   Choose how Dizon.ai looks. System follows your device setting.
                 </p>
-                <div className="inline-flex rounded-xl border border-border p-1 bg-surface-container-low">
+                <div className="inline-flex rounded-xl border border-outline-variant/40 p-1 bg-surface-container-low">
                   {[
                     { key: 'system', label: 'System', icon: 'brightness_auto' },
                     { key: 'light',  label: 'Light',  icon: 'light_mode' },
