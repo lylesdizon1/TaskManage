@@ -936,7 +936,21 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     });
   }, []);
 
-  useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
+  // Auto-follow new + streaming messages. Depends on the LAST message's
+  // content (not just count) so Aria's reply is followed as it streams in.
+  // Skips the very first population (the existing brief) so a long brief is
+  // readable from its TOP on load rather than jumping to the bottom. The
+  // userScrolledAwayRef guard inside scrollToBottom still respects a user who
+  // scrolled up to read history.
+  const ccDidInitialPopulateRef = useRef(false);
+  const ccLastMsg = ccMessages[ccMessages.length - 1];
+  useEffect(() => {
+    if (!ccDidInitialPopulateRef.current) {
+      if (ccMessages.length > 0) ccDidInitialPopulateRef.current = true; // brief loaded — leave at top
+      return;
+    }
+    scrollToBottom();
+  }, [ccMessages.length, ccLastMsg?.content, scrollToBottom]);
 
   // Mirror ccMessages into a ref so callbacks (handleCcSend) can read the
   // latest committed state without depending on ccMessages in their deps.
@@ -1480,6 +1494,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (wantsContext) fetchBriefContext();
 
     const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString(), ts: Date.now() };
+    // Own send always follows to the bottom, even if the user had scrolled up.
+    userScrolledAwayRef.current = false;
     setCcMessages((prev) => [...prev, userMsg]);
 
     // Save user message. Use the ref so a late init flip mid-handler
@@ -2742,7 +2758,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           focal block; the chat scrolls inside the CC card and the page
           scrolls below for Timeline/Tasks. `contents` keeps mobile (where
           AZ is hidden + CC is fixed) completely unaffected. */}
-      <div className="contents md:flex md:flex-col md:max-h-[66vh]">
+      <div className="contents md:flex md:flex-col md:h-[66vh]">
       <section className={`px-1 md:px-0 hidden md:block md:shrink-0 ${azIsEmpty ? '' : 'mb-3'}`} aria-label="Active Zone">
         <div className="space-y-2">
           <ActiveZoneOrchestrator

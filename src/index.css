@@ -69,6 +69,8 @@
   --border-strong: rgba(79,77,207,.28);
   --glow: rgba(79,77,207,.30);
   --focus-ring: rgba(79,77,207,.5);
+  /* calendar grid hairlines — light matches the default look (unchanged) */
+  --grid-line: #dddddd;
 }
 
 [data-theme="dark"] {
@@ -122,6 +124,8 @@
   --border-strong: rgba(140,130,255,.3);
   --glow: rgba(124,120,255,.45);
   --focus-ring: rgba(124,120,255,.6);
+  /* calendar grid hairlines — barely-there hint in dark */
+  --grid-line: rgba(140,130,255,.06);
 }
 
 html, body {

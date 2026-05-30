@@ -17,6 +17,27 @@ const ENTITY_COLORS = [
 ];
 const NEUTRAL_COLOR = '#94a3b8';
 
+// FIX 2: legible event-bar text, keyed on the fill's luminance (not per-event).
+// White text on a light fill (e.g. green/amber) washes out — there we use a
+// dark shade of the fill's OWN color family. On dark fills we keep white.
+// Unparseable fills (e.g. 'rgb(var(--accent))') are dark → white.
+function eventTextColor(fill) {
+  const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec((fill || '').trim());
+  if (!m) return '#ffffff';
+  let hex = m[1];
+  if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  // Above ~0.36 relative luminance, white text drops below ~2.6:1 contrast →
+  // use a dark shade of the same family instead.
+  if (L < 0.36) return '#ffffff';
+  const dark = (c) => Math.round(c * 0.4).toString(16).padStart(2, '0');
+  return `#${dark(r)}${dark(g)}${dark(b)}`;
+}
+
 export default function CalendarPanel({ currentUser, authToken, addToast, apiFetch }) {
   const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null, accounts: [] });
   const [outlookAccounts, setOutlookAccounts] = useState([]); // [{ id, account_email, provider, created_at }]
@@ -455,7 +476,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     return {
       style: {
         backgroundColor: bg,
-        color: 'rgb(var(--accent-contrast))',
+        color: eventTextColor(bg),
         border: 'none',
         borderRadius: '4px',
         fontSize: '12px',
@@ -1175,6 +1196,19 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         .dizon-calendar .rbc-allday-cell {
           min-height: 20px;
         }
+        /* FIX 1: soft grid hairlines — match default in light, recede to a
+           hint in dark. Only empty grid lines (hour lines, cell borders,
+           day-column dividers) across week/day/month — never event bars. */
+        .dizon-calendar .rbc-timeslot-group { border-bottom: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-day-slot .rbc-time-slot { border-top: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-content { border-top: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-content > * + * > * { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-day-bg + .rbc-day-bg { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-month-row + .rbc-month-row { border-top: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-header + .rbc-header { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-header-content { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-header.rbc-overflowing { border-right: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-header-content > .rbc-header { border-bottom: 1px solid var(--grid-line); }
       `}</style>
     </div>
   );
