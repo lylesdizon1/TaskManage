@@ -16,9 +16,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 // ── Design tokens (matches docs/design-system.md) ───────────────────────
 const T = {
-  surface: '#fbf8fe', sidebar: '#f5f2fa', primary: '#4f4dcf', primaryContainer: '#7777fa',
-  ink: '#1c1b2e', inkSoft: '#5b5870', inkFaint: '#908ca8', line: '#e8e2f2', card: '#ffffff',
-  protein: '#4f4dcf', carbs: '#7c6df2', fat: '#b794f6', good: '#2f9e6f', warn: '#b4453a',
+  surface: 'rgb(var(--surface))', sidebar: 'rgb(var(--surface-container-low))', primary: 'rgb(var(--accent))', primaryContainer: 'rgb(var(--primary-container))',
+  ink: 'rgb(var(--text-primary))', inkSoft: 'rgb(var(--text-secondary))', inkFaint: 'rgb(var(--text-faint))', line: 'rgb(var(--outline-variant))', card: 'rgb(var(--surface-card))',
+  protein: 'rgb(var(--accent))', carbs: 'rgb(var(--primary-container))', fat: 'rgb(var(--tertiary))', good: 'rgb(var(--success))', warn: 'rgb(var(--danger))',
 };
 
 const GOAL_STORAGE_KEY = 'aria-food-daily-goal';
@@ -401,7 +401,7 @@ export default function FoodPanel({ apiFetch, authToken }) {
       <style>{`
         .afl-head { font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; }
         .afl-card { transition: box-shadow .18s ease, transform .18s ease; }
-        .afl-card:hover { box-shadow: 0 8px 28px rgba(79,77,207,.10); }
+        .afl-card:hover { box-shadow: 0 8px 28px rgb(var(--accent) / .10); }
         .afl-btn:active { transform: translateY(1px); }
         .afl-row { cursor: pointer; transition: background .15s ease; }
         .afl-row:hover { background: ${T.sidebar}; }
@@ -412,7 +412,7 @@ export default function FoodPanel({ apiFetch, authToken }) {
       <div style={{ maxWidth: 720, margin: '0 auto' }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 12, background: `linear-gradient(135deg, ${T.primary}, ${T.primaryContainer})`, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontFamily: "'Plus Jakarta Sans'", fontSize: 18 }}>A</div>
+          <div style={{ width: 38, height: 38, borderRadius: 12, background: `linear-gradient(135deg, ${T.primary}, ${T.primaryContainer})`, display: 'grid', placeItems: 'center', color: 'rgb(var(--accent-contrast))', fontWeight: 800, fontFamily: "'Plus Jakarta Sans'", fontSize: 18 }}>A</div>
           <div>
             <div className="afl-head" style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.3 }}>Aria · Food Log</div>
             <div style={{ fontSize: 13, color: T.inkFaint }}>Tell me what you ate — I'll handle the macros.</div>
@@ -497,7 +497,7 @@ export default function FoodPanel({ apiFetch, authToken }) {
         ))}
 
         {/* Aria Insights */}
-        <div className="afl-card" style={{ ...card, padding: 18, marginTop: 22, marginBottom: 14, borderColor: T.primaryContainer + '55', background: 'linear-gradient(180deg,#ffffff, #faf8ff)' }}>
+        <div className="afl-card" style={{ ...card, padding: 18, marginTop: 22, marginBottom: 14, borderColor: T.primaryContainer + '55', background: 'linear-gradient(180deg,rgb(var(--surface-card)), rgb(var(--surface-container-low)))' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <div>
               <div className="afl-head" style={{ fontWeight: 800, fontSize: 15 }}>Aria Insights</div>
@@ -563,10 +563,10 @@ export default function FoodPanel({ apiFetch, authToken }) {
   );
 }
 
-const card = { background: T.card, border: `1px solid ${T.line}`, borderRadius: 18, boxShadow: '0 1px 3px rgba(28,27,46,.04)' };
+const card = { background: T.card, border: `1px solid ${T.line}`, borderRadius: 18, boxShadow: '0 1px 3px rgb(var(--text-primary) / .04)' };
 const textInput = { border: `1px solid ${T.line}`, borderRadius: 12, padding: '11px 14px', fontSize: 14, fontFamily: 'inherit', color: T.ink, outline: 'none', background: T.surface };
-const primaryBtn = { background: T.primary, color: '#fff', border: 'none', borderRadius: 12, padding: '11px 20px', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' };
-const smallPrimary = { background: T.primary, color: '#fff', border: 'none', borderRadius: 10, padding: '7px 14px', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' };
+const primaryBtn = { background: T.primary, color: 'rgb(var(--accent-contrast))', border: 'none', borderRadius: 12, padding: '11px 20px', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' };
+const smallPrimary = { background: T.primary, color: 'rgb(var(--accent-contrast))', border: 'none', borderRadius: 10, padding: '7px 14px', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' };
 const navBtn = { width: 34, height: 34, borderRadius: 10, border: `1px solid ${T.line}`, background: T.card, color: T.inkSoft, fontSize: 18, cursor: 'pointer', lineHeight: 1 };
 const linkBtn = { background: 'none', border: 'none', color: T.primary, fontWeight: 600, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit', padding: 0 };
 const chip = { display: 'flex', gap: 6, alignItems: 'center', background: T.sidebar, borderRadius: 99, padding: '6px 12px', fontSize: 12.5 };

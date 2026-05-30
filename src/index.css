@@ -2,6 +2,137 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   SEMANTIC THEME TOKENS — single source of truth.
+   :root = light (brand). [data-theme="dark"] on <html> = dark.
+   tailwind.config.js color names all resolve to these vars, so
+   class-based AND inline usages theme from one place.
+   Light reproduces production exactly EXCEPT text neutrals, which
+   are corrected to the brand values (decision 2026-05-29).
+   ============================================================ */
+/*
+   CONVENTION:
+   - SOLID tokens are stored as "R G B" channel triplets so Tailwind opacity
+     modifiers work (bg-primary/10 → rgb(var(--accent)/0.1)). In inline styles
+     / raw CSS, wrap them: rgb(var(--accent)).
+   - ALPHA tokens (--border, --border-strong, --glow, --focus-ring) are full
+     rgba() values; use them directly: var(--border).
+*/
+:root {
+  color-scheme: light;
+  /* surfaces */
+  --surface: 251 248 254;
+  --surface-elevated: 255 255 255;
+  --surface-card: 255 255 255;
+  --sidebar: 245 242 250;
+  --surface-container-low: 245 242 250;
+  --surface-container: 239 237 245;
+  --surface-container-high: 233 231 240;
+  --surface-container-highest: 227 225 236;
+  --surface-dim: 219 217 227;
+  --surface-variant: 227 225 236;
+  /* text */
+  --text-primary: 28 24 48;
+  --text-secondary: 95 91 122;
+  --text-faint: 138 134 166;
+  /* outlines (solid) */
+  --outline: 122 122 131;
+  --outline-variant: 178 177 187;
+  /* accent */
+  --accent: 79 77 207;
+  --accent-deep: 60 58 168;
+  --accent-contrast: 255 255 255;
+  --primary-container: 119 119 250;
+  --primary-dim: 66 63 194;
+  --inverse-primary: 130 130 255;
+  /* secondary / tertiary */
+  --secondary: 92 92 124;
+  --secondary-container: 225 223 255;
+  --on-secondary-container: 79 79 110;
+  --tertiary: 117 84 120;
+  --tertiary-container: 252 210 254;
+  --on-tertiary-container: 101 69 105;
+  /* status */
+  --success: 29 158 117;
+  --danger: 216 90 48;
+  --warning: 186 117 23;
+  --error: 168 54 75;
+  --error-container: 249 115 134;
+  --on-error-container: 110 5 35;
+  /* pale status surfaces (callout backgrounds) */
+  --danger-surface: 254 242 242;
+  --success-surface: 240 253 244;
+  --warning-surface: 255 251 235;
+  --accent-surface: 238 242 255;
+  /* alpha tokens (full rgba — use var() directly) */
+  --border: rgba(79,77,207,.14);
+  --border-strong: rgba(79,77,207,.28);
+  --glow: rgba(79,77,207,.30);
+  --focus-ring: rgba(79,77,207,.5);
+  /* calendar grid hairlines — light matches the default look (unchanged) */
+  --grid-line: #dddddd;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  /* surfaces — flat dark neutrals; accent is NOT a background flood */
+  --surface: 11 10 22;
+  --surface-elevated: 22 20 43;
+  --surface-card: 28 25 54;
+  --sidebar: 14 12 28;
+  --surface-container-low: 33 30 62;
+  --surface-container: 33 30 62;
+  --surface-container-high: 39 35 80;
+  --surface-container-highest: 45 40 88;
+  --surface-dim: 19 17 31;
+  --surface-variant: 45 40 88;
+  /* text */
+  --text-primary: 236 234 255;
+  --text-secondary: 157 153 196;
+  --text-faint: 109 106 147;
+  /* outlines */
+  --outline: 109 106 147;
+  --outline-variant: 58 54 88;
+  /* accent — deliberately brighter than light for contrast on dark */
+  --accent: 124 120 255;
+  --accent-deep: 79 77 207;
+  --accent-contrast: 255 255 255;
+  --primary-container: 154 151 255;
+  --primary-dim: 79 77 207;
+  --inverse-primary: 79 77 207;
+  /* secondary / tertiary */
+  --secondary: 157 153 196;
+  --secondary-container: 42 39 82;
+  --on-secondary-container: 207 203 233;
+  --tertiary: 201 160 204;
+  --tertiary-container: 58 36 64;
+  --on-tertiary-container: 243 196 245;
+  /* status */
+  --success: 61 220 151;
+  --danger: 240 153 123;
+  --warning: 239 159 39;
+  --error: 240 153 123;
+  --error-container: 90 31 18;
+  --on-error-container: 255 217 204;
+  /* pale status surfaces */
+  --danger-surface: 58 26 18;
+  --success-surface: 15 42 30;
+  --warning-surface: 51 38 17;
+  --accent-surface: 30 27 58;
+  /* alpha tokens */
+  --border: rgba(140,130,255,.14);
+  --border-strong: rgba(140,130,255,.3);
+  --glow: rgba(124,120,255,.45);
+  --focus-ring: rgba(124,120,255,.6);
+  /* calendar grid hairlines — barely-there hint in dark */
+  --grid-line: rgba(140,130,255,.06);
+}
+
+html, body {
+  background: rgb(var(--surface));
+  color: rgb(var(--text-primary));
+}
+
 /* Smooth scrollbar for chat panel */
 ::-webkit-scrollbar {
   width: 4px;
@@ -10,11 +141,11 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #e5e7eb;
+  background: var(--border-strong);
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #d1d5db;
+  background: rgb(var(--text-faint));
 }
 
 /* Prevent textarea resize in chat */
@@ -52,7 +183,7 @@ textarea {
 }
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  color: #9CA3AF;
+  color: rgb(var(--text-faint));
   pointer-events: none;
   float: left;
   height: 0;
@@ -95,14 +226,14 @@ textarea {
   list-style-type: decimal;
 }
 .tiptap-editor blockquote {
-  border-left: 3px solid #7C3AED;
+  border-left: 3px solid rgb(var(--accent));
   padding-left: 1em;
   margin: 0.5em 0;
   font-style: italic;
-  color: #6B7280;
+  color: rgb(var(--text-secondary));
 }
 .tiptap-editor pre {
-  background: #F3F4F6;
+  background: rgb(var(--surface-container));
   border-radius: 6px;
   padding: 12px 16px;
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, monospace;
@@ -113,7 +244,7 @@ textarea {
 }
 .tiptap-editor code {
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, monospace;
-  background: #F3F4F6;
+  background: rgb(var(--surface-container));
   border-radius: 3px;
   padding: 0.15em 0.3em;
   font-size: 0.9em;
@@ -124,7 +255,7 @@ textarea {
 }
 .tiptap-editor hr {
   border: none;
-  border-top: 1px solid #E5E7EB;
+  border-top: 1px solid var(--border);
   margin: 1em 0;
 }
 .tiptap-editor img {
@@ -136,7 +267,7 @@ textarea {
 .tiptap-editor p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
-  color: #D1D5DB;
+  color: rgb(var(--text-faint));
   pointer-events: none;
   height: 0;
 }

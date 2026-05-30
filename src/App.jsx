@@ -5,6 +5,7 @@ import { buildContext } from './lib/context-engine/buildContext';
 import { detectIntent } from './lib/context-engine/intentDetector';
 import { routePersona } from './lib/context-engine/personaRouter';
 import { usePersona } from './contexts/PersonaContext';
+import { useTheme } from './contexts/ThemeContext';
 import SkeletonBlock from './components/ui/SkeletonBlock.jsx';
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'));
 
@@ -277,21 +278,21 @@ export default function App() {
   // Session expired modal
   if (sessionExpired) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full text-center">
-          <div className="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg className="w-7 h-7 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="min-h-screen bg-surface-container-low flex items-center justify-center p-4">
+        <div className="bg-surface-container-lowest rounded-2xl shadow-xl p-8 max-w-sm w-full text-center">
+          <div className="w-14 h-14 bg-warning-surface rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-7 h-7 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
             </svg>
           </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">Session Expired</h2>
-          <p className="text-sm text-gray-500 mb-4">Your session has expired. Please log in again to continue.</p>
+          <h2 className="text-lg font-semibold text-on-surface mb-2">Session Expired</h2>
+          <p className="text-sm text-on-surface-variant mb-4">Your session has expired. Please log in again to continue.</p>
           {localStorage.getItem('tm_chat_draft') && (
-            <p className="text-xs text-gray-400 mb-4">Your unsent message has been saved and will be restored after login.</p>
+            <p className="text-xs text-text-faint mb-4">Your unsent message has been saved and will be restored after login.</p>
           )}
           <button
             onClick={handleLogout}
-            className="w-full py-2.5 px-4 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
+            className="w-full py-2.5 px-4 bg-primary text-on-primary rounded-lg font-medium hover:bg-primary transition-colors"
           >
             Log In Again
           </button>
@@ -310,6 +311,7 @@ export default function App() {
 }
 
 function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
+  const { setThemePref } = useTheme();
   const [currentUser, setCurrentUser]           = useState(initialUser);
   const [tasks, setTasks]                       = useState([]);
   const tasksLoadedRef                           = useRef(false);
@@ -501,6 +503,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           localStorage.setItem('tm_user', JSON.stringify(data.user));
         }
       })
+      .catch(() => {});
+    // Reconcile theme with the per-user server preference (source of truth).
+    // The pre-mount script in index.html already painted from the cached
+    // value; this only flips if the server differs, then re-caches it.
+    apiFetch('/api/preferences', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (data && data.theme) setThemePref(data.theme); })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1068,10 +1077,10 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
     <div className="min-h-screen bg-background flex" style={{ fontFamily: "'Manrope', sans-serif" }}>
 
       {/* ── Sidebar ── */}
-      <aside className="hidden md:flex fixed left-0 top-0 h-full flex-col py-6 px-5 bg-slate-50/80 backdrop-blur-xl w-52 shadow-[0px_20px_40px_rgba(79,77,207,0.08)] z-50">
+      <aside className="hidden md:flex fixed left-0 top-0 h-full flex-col py-6 px-5 bg-surface-container-low/80 backdrop-blur-xl w-52 shadow-[0px_20px_40px_rgba(79,77,207,0.08)] z-50">
         <div className="mb-8 px-2">
           <h1 className="text-base font-bold tracking-tight text-primary" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Dizon.ai</h1>
-          <p className="text-[8px] uppercase tracking-[0.2em] text-slate-400 mt-1 font-bold">Personal OS</p>
+          <p className="text-[8px] uppercase tracking-[0.2em] text-text-faint mt-1 font-bold">Personal OS</p>
         </div>
         <nav className="flex-1 space-y-1">
           {[
@@ -1095,14 +1104,14 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all duration-200 text-left ${
                 activeView === key
                   ? 'text-primary font-bold border-r-4 border-primary bg-primary/5'
-                  : 'text-slate-500 font-medium hover:bg-primary/5'
+                  : 'text-on-surface-variant font-medium hover:bg-primary/5'
               }`}
             >
               <span className="relative inline-flex">
                 <span className="material-symbols-outlined text-lg">{icon}</span>
                 {key === 'inbox' && inboxUnread > 0 && (
                   <span
-                    className="absolute -top-0.5 -right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center"
+                    className="absolute -top-0.5 -right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-danger text-on-primary text-[9px] font-bold flex items-center justify-center"
                     style={{ lineHeight: 1 }}
                   >
                     {inboxUnread > 99 ? '99+' : inboxUnread}
@@ -1114,12 +1123,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           ))}
         </nav>
         <div className="mt-auto space-y-2 px-2">
-          <div className="flex items-center gap-2 pt-3 border-t border-slate-200">
-            <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+          <div className="flex items-center gap-2 pt-3 border-t border-outline-variant">
+            <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-on-primary text-xs font-bold flex-shrink-0">
               {currentUser.displayName?.[0] || 'L'}
             </div>
             <span className="text-[11px] font-medium text-on-surface-variant truncate">{currentUser.displayName}</span>
-            <button onClick={onLogout} className="ml-auto text-slate-400 hover:text-error transition-colors" title="Sign out">
+            <button onClick={onLogout} className="ml-auto text-text-faint hover:text-error transition-colors" title="Sign out">
               <LogoutIcon className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -1132,7 +1141,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         {/* ── Top bar ── */}
         <header className="hidden md:flex items-center justify-end px-8 h-12 bg-background/80 backdrop-blur-xl sticky top-0 z-40 border-b border-surface-container-low flex-shrink-0">
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowSettings(true)} className="p-1.5 text-slate-400 hover:text-primary transition-colors" title="Settings">
+            <button onClick={() => setShowSettings(true)} className="p-1.5 text-text-faint hover:text-primary transition-colors" title="Settings">
               <GearIcon className="w-4 h-4" />
             </button>
           </div>
@@ -1142,12 +1151,12 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         <header className="md:hidden bg-background border-b border-surface-container-low px-4 py-3 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center">
-              <span className="text-white text-xs font-bold">D</span>
+              <span className="text-on-primary text-xs font-bold">D</span>
             </div>
             <h1 className="text-sm font-bold text-primary">Dizon.ai</h1>
           </div>
           <div className="flex items-center gap-1">
-            <button onClick={() => setShowSettings(true)} className="p-2 text-slate-400 hover:text-primary">
+            <button onClick={() => setShowSettings(true)} className="p-2 text-text-faint hover:text-primary">
               <GearIcon className="w-4 h-4" />
             </button>
           </div>
@@ -1285,17 +1294,17 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
             <div className="px-8 pb-5 flex items-center gap-2 flex-wrap">
               <button
                 onClick={() => setActiveTagFilters([])}
-                className={`px-4 py-1.5 rounded-full text-[10px] font-bold shadow shadow-primary/20 transition-all ${activeTagFilters.length === 0 ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                className={`px-4 py-1.5 rounded-full text-[10px] font-bold shadow shadow-primary/20 transition-all ${activeTagFilters.length === 0 ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
               >All</button>
               {userEntities.map((entity, idx) => {
-                const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+                const ENTITY_COLORS = ['rgb(var(--accent))','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
                 const dotColor = (entity.color && entity.color.startsWith('#')) ? entity.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
                 const isActive = activeTagFilters.includes(entity.name);
                 return (
                   <button
                     key={entity.id}
                     onClick={() => setActiveTagFilters([entity.name])}
-                    className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[10px] font-bold transition-all ${isActive ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                    className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[10px] font-bold transition-all ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
                   >
                     {!isActive && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />}
                     {entity.name}
@@ -1353,7 +1362,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                           if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
                           else if (e.key === 'Escape') { e.preventDefault(); cancelInlineEdit(); }
                         }}
-                        className="w-full text-xs font-bold leading-tight bg-white border border-primary/30 rounded px-1.5 py-0.5 text-on-background focus:outline-none focus:ring-1 focus:ring-primary"
+                        className="w-full text-xs font-bold leading-tight bg-surface-container-lowest border border-primary/30 rounded px-1.5 py-0.5 text-on-background focus:outline-none focus:ring-1 focus:ring-primary"
                       />
                     ) : (
                       <p
@@ -1384,9 +1393,9 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
               );
 
               const priorityDot = {
-                high:   'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]',
-                medium: 'bg-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.4)]',
-                low:    'bg-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]',
+                high:   'bg-danger shadow-[0_0_8px_rgba(239,68,68,0.4)]',
+                medium: 'bg-warning shadow-[0_0_8px_rgba(249,115,22,0.4)]',
+                low:    'bg-primary shadow-[0_0_8px_rgba(59,130,246,0.4)]',
               };
               const priorityLabel = { high: 'High Priority', medium: 'Medium Priority', low: 'Low Priority' };
 
@@ -1414,7 +1423,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                             if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
                             else if (e.key === 'Escape') { e.preventDefault(); cancelInlineEdit(); }
                           }}
-                          className="w-full text-sm font-bold bg-white border border-primary/30 rounded px-1.5 py-0.5 text-on-background focus:outline-none focus:ring-1 focus:ring-primary"
+                          className="w-full text-sm font-bold bg-surface-container-lowest border border-primary/30 rounded px-1.5 py-0.5 text-on-background focus:outline-none focus:ring-1 focus:ring-primary"
                         />
                       ) : (
                         <h3
@@ -1496,17 +1505,17 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         {/* Entity chips */}
                         <button
                           onClick={() => { setHistoryEntity(''); fetchCompletedHistory('', historyDateRange, historySearch); }}
-                          className={`px-3 py-1 rounded-full text-[9px] font-bold transition-all ${!historyEntity ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                          className={`px-3 py-1 rounded-full text-[9px] font-bold transition-all ${!historyEntity ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
                         >All</button>
                         {userEntities.map((entity, idx) => {
-                          const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+                          const ENTITY_COLORS = ['rgb(var(--accent))','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
                           const dotColor = (entity.color && entity.color.startsWith('#')) ? entity.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
                           const isActive = historyEntity === entity.name;
                           return (
                             <button
                               key={entity.id}
                               onClick={() => { setHistoryEntity(entity.name); fetchCompletedHistory(entity.name, historyDateRange, historySearch); }}
-                              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-bold transition-all ${isActive ? 'bg-primary text-white' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-bold transition-all ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest border border-surface-container-high text-on-surface-variant hover:border-primary/20'}`}
                             >
                               {!isActive && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />}
                               {entity.name}
@@ -1556,8 +1565,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         <div className="space-y-2">
                           {historyTasks.map((t) => (
                             <div key={t.id} onClick={() => setEditingTask(t)} className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl cursor-pointer hover:bg-surface-container-low transition-colors group">
-                              <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
-                                <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
+                              <div className="h-4 w-4 rounded-full bg-success flex items-center justify-center flex-shrink-0">
+                                <span className="material-symbols-outlined text-on-primary text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
                               </div>
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs font-medium text-on-surface-variant line-through truncate">{t.title}</p>
@@ -1580,8 +1589,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   {completedToday.length > 0 && (
                     <section className="opacity-60 grayscale-[0.5]">
                       <div className="flex items-center gap-3 mb-3">
-                        <span className="material-symbols-outlined text-emerald-500 text-base">task_alt</span>
-                        <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-slate-400">Completed Today</h2>
+                        <span className="material-symbols-outlined text-success text-base">task_alt</span>
+                        <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-text-faint">Completed Today</h2>
                         <div className="h-px flex-1 bg-surface-container-high" />
                         <button
                           onClick={() => {
@@ -1602,8 +1611,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         {completedToday.map((t) => (
                           <div key={t.id}>
                             <div onClick={() => setEditingTask(t)} className="flex items-center gap-3 bg-surface-container-lowest/50 p-3 rounded-xl cursor-pointer hover:bg-surface-container-low transition-colors group">
-                              <div className="h-4 w-4 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
-                                <span className="material-symbols-outlined text-white text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
+                              <div className="h-4 w-4 rounded-full bg-success flex items-center justify-center flex-shrink-0">
+                                <span className="material-symbols-outlined text-on-primary text-[10px]" style={{fontVariationSettings:"'FILL' 1"}}>check</span>
                               </div>
                               <p className="text-xs font-medium text-on-surface-variant line-through flex-1 truncate">{t.title}</p>
                               <span className="text-[9px] text-on-surface-variant font-medium flex-shrink-0">
@@ -1671,7 +1680,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         {mobileView === 'chat' && (
           <section
             className="md:hidden flex flex-col overflow-hidden"
-            style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 50, backgroundColor: '#fff' }}
+            style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 50, backgroundColor: 'rgb(var(--surface-container-lowest))' }}
           >
             {/* Header — only shows on list view; chat view has its own header with back */}
             {!mobileChatOpen && (
@@ -1682,7 +1691,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                 >
                   <span className="material-symbols-outlined text-lg text-on-surface-variant">arrow_back</span>
                 </button>
-                <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: '#4f4dcf' }}>Aria</h3>
+                <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: 'rgb(var(--accent))' }}>Aria</h3>
               </div>
             )}
             <ChatTabPanel
@@ -1735,7 +1744,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         return (
           <>
             <nav
-              className={`md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-outline-variant/10 flex z-40 rounded-t-2xl shadow-[0px_-10px_30px_rgba(79,77,207,0.06)] transition-transform duration-300 md:translate-y-0 ${hideBottomNav ? 'translate-y-full' : 'translate-y-0'}`}
+              className={`md:hidden fixed bottom-0 left-0 right-0 bg-surface-container-lowest/90 backdrop-blur-xl border-t border-outline-variant/10 flex z-40 rounded-t-2xl shadow-[0px_-10px_30px_rgba(79,77,207,0.06)] transition-transform duration-300 md:translate-y-0 ${hideBottomNav ? 'translate-y-full' : 'translate-y-0'}`}
             >
               {[
                 { key: 'tasks',    label: 'Home',     icon: 'dashboard',       onActivate: () => { setActiveView('dashboard'); setMobileView('tasks'); setMobileChatOpen(false); } },
@@ -1755,7 +1764,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   <button
                     key={key}
                     onClick={onActivate}
-                    className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-bold transition-colors ${active ? 'text-primary' : 'text-slate-400'}`}
+                    className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-bold transition-colors ${active ? 'text-primary' : 'text-text-faint'}`}
                   >
                     <span className="material-symbols-outlined text-xl">{icon}</span>
                     <span className="text-[9px] uppercase tracking-wider">{label}</span>
@@ -1772,8 +1781,8 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                   onClick={() => setMoreDrawerOpen(false)}
                   className="absolute inset-0 bg-black/30 backdrop-blur-sm"
                 />
-                <div className="relative bg-white rounded-t-3xl shadow-[0px_-10px_40px_rgba(0,0,0,0.15)] p-4 pb-8 space-y-1 animate-[slideup_200ms_ease-out]">
-                  <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3" />
+                <div className="relative bg-surface-container-lowest rounded-t-3xl shadow-[0px_-10px_40px_rgba(0,0,0,0.15)] p-4 pb-8 space-y-1 animate-[slideup_200ms_ease-out]">
+                  <div className="w-10 h-1 bg-surface-container-highest rounded-full mx-auto mb-3" />
                   {[
                     { view: 'projects', label: 'Projects', icon: 'folder_open' },
                     { view: 'notes',    label: 'Notes',    icon: 'sticky_note_2' },
@@ -1793,7 +1802,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
                         else setMobileView(view);
                         setMoreDrawerOpen(false);
                       }}
-                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeView === view ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-gray-50'}`}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeView === view ? 'bg-primary/10 text-primary' : 'text-on-surface hover:bg-surface-container-low'}`}
                     >
                       <span className="material-symbols-outlined text-xl">{icon}</span>
                       <span className="text-sm font-semibold">{label}</span>

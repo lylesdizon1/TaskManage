@@ -11,7 +11,7 @@ function LabeledTextarea({ label, value, onChange, onKeyDown, placeholder, input
   return (
     <div>
       <div
-        className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400 mb-0.5"
+        className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-faint mb-0.5"
         style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
       >
         {label}
@@ -25,9 +25,9 @@ function LabeledTextarea({ label, value, onChange, onKeyDown, placeholder, input
         placeholder={placeholder}
         style={{
           width: '100%', minHeight, fontSize: 13, padding: '6px 8px',
-          border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none',
+          border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, outline: 'none',
           resize: 'vertical', fontFamily: 'Manrope, sans-serif',
-          background: disabled ? '#f9fafb' : '#fff',
+          background: disabled ? 'rgb(var(--surface-container-low))' : 'rgb(var(--surface-container-lowest))',
         }}
       />
     </div>
@@ -89,18 +89,18 @@ export default function DailyWrapTile({ payload = {}, status = 'draft', error, o
 
   return (
     <div
-      className="bg-white border border-gray-200 rounded-xl"
+      className="bg-surface-container-lowest border border-outline-variant rounded-xl"
       style={{ fontFamily: 'Manrope, sans-serif' }}
     >
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
         <span style={{ fontSize: 14, lineHeight: 1 }}>🌙</span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
           Daily wrap
         </span>
-        <span className="text-[10px] text-gray-400 ml-auto">{today}</span>
+        <span className="text-[10px] text-text-faint ml-auto">{today}</span>
       </div>
       {statsLine && (
-        <div className="px-3 pb-1 text-[11px] text-gray-500">{statsLine}</div>
+        <div className="px-3 pb-1 text-[11px] text-on-surface-variant">{statsLine}</div>
       )}
 
       <div className="px-3 pb-2 space-y-2">
@@ -141,14 +141,14 @@ export default function DailyWrapTile({ payload = {}, status = 'draft', error, o
       </div>
 
       {error && (
-        <div className="px-3 pb-1 text-[12px] text-red-600">{error}</div>
+        <div className="px-3 pb-1 text-[12px] text-danger">{error}</div>
       )}
 
-      <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-gray-100">
+      <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-outline-variant">
         <button
           onClick={() => onDismiss?.()}
           disabled={executing}
-          className="px-2.5 py-1 text-[11px] font-semibold text-gray-600 hover:bg-gray-50 rounded-lg"
+          className="px-2.5 py-1 text-[11px] font-semibold text-on-surface-variant hover:bg-surface-container-low rounded-lg"
         >
           Not now
         </button>
@@ -156,7 +156,7 @@ export default function DailyWrapTile({ payload = {}, status = 'draft', error, o
           onClick={handleSave}
           disabled={!canSubmit}
           className="px-2.5 py-1 text-[11px] font-semibold rounded-lg disabled:opacity-40"
-          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+          style={{ backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
         >
           {executing ? 'Saving…' : 'Save wrap'}
         </button>

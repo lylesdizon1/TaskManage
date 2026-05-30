@@ -11,9 +11,9 @@ export default function FilterBar({
   const hasFilters = activeTagFilters.length > 0 || statusFilter !== 'all';
 
   return (
-    <div className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 mb-4">
+    <div className="bg-surface-container-lowest border border-outline-variant rounded-xl px-3 py-2.5 mb-4">
       <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1 md:flex-wrap md:overflow-visible">
-        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex-shrink-0">
+        <span className="text-xs font-semibold text-text-faint uppercase tracking-wide flex-shrink-0">
           Filter
         </span>
 
@@ -33,7 +33,7 @@ export default function FilterBar({
               className={`text-xs px-2.5 py-1.5 md:py-1 rounded-full font-medium border transition-all flex-shrink-0 min-h-[32px] md:min-h-0 ${
                 active
                   ? `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
-                  : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600'
+                  : 'bg-surface-container-low text-text-faint border-outline-variant hover:bg-surface-container hover:text-on-surface-variant'
               }`}
             >
               {tag}{ent.shared ? ' 🔗' : ''}
@@ -42,7 +42,7 @@ export default function FilterBar({
         })}
 
         {/* Divider */}
-        <span className="text-gray-200 flex-shrink-0">|</span>
+        <span className="text-text-faint flex-shrink-0">|</span>
 
         {/* Status filters */}
         {[
@@ -55,8 +55,8 @@ export default function FilterBar({
             onClick={() => setStatusFilter(key)}
             className={`text-xs px-2.5 py-1.5 md:py-1 rounded-full font-medium border transition-all flex-shrink-0 min-h-[32px] md:min-h-0 ${
               statusFilter === key
-                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600'
+                ? 'bg-primary text-on-primary border-primary shadow-sm'
+                : 'bg-surface-container-low text-text-faint border-outline-variant hover:bg-surface-container hover:text-on-surface-variant'
             }`}
           >
             {label}
@@ -70,7 +70,7 @@ export default function FilterBar({
               setActiveTagFilters([]);
               setStatusFilter('all');
             }}
-            className="text-xs text-indigo-500 hover:text-indigo-700 font-medium ml-1 transition-colors flex-shrink-0"
+            className="text-xs text-primary hover:opacity-80 font-medium ml-1 transition-colors flex-shrink-0"
           >
             Clear all
           </button>

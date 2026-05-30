@@ -12,10 +12,31 @@ const locales = { 'en-US': enUS };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
 
 const ENTITY_COLORS = [
-  '#4f4dcf', '#0ea5e9', '#10b981', '#f59e0b',
+  'rgb(var(--accent))', '#0ea5e9', '#10b981', '#f59e0b',
   '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6',
 ];
 const NEUTRAL_COLOR = '#94a3b8';
+
+// FIX 2: legible event-bar text, keyed on the fill's luminance (not per-event).
+// White text on a light fill (e.g. green/amber) washes out — there we use a
+// dark shade of the fill's OWN color family. On dark fills we keep white.
+// Unparseable fills (e.g. 'rgb(var(--accent))') are dark → white.
+function eventTextColor(fill) {
+  const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec((fill || '').trim());
+  if (!m) return '#ffffff';
+  let hex = m[1];
+  if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  // Above ~0.36 relative luminance, white text drops below ~2.6:1 contrast →
+  // use a dark shade of the same family instead.
+  if (L < 0.36) return '#ffffff';
+  const dark = (c) => Math.round(c * 0.4).toString(16).padStart(2, '0');
+  return `#${dark(r)}${dark(g)}${dark(b)}`;
+}
 
 export default function CalendarPanel({ currentUser, authToken, addToast, apiFetch }) {
   const [gcalStatus, setGcalStatus] = useState({ connected: false, email: null, accounts: [] });
@@ -455,7 +476,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
     return {
       style: {
         backgroundColor: bg,
-        color: '#fff',
+        color: eventTextColor(bg),
         border: 'none',
         borderRadius: '4px',
         fontSize: '12px',
@@ -468,7 +489,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   // ── Loading state ─────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400">
+      <div className="flex-1 flex items-center justify-center text-text-faint">
         <SpinnerIcon className="w-6 h-6 animate-spin" />
       </div>
     );
@@ -478,16 +499,16 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   if (!gcalStatus.connected) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
-        <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mb-4">
-          <CalendarIcon className="w-8 h-8 text-indigo-600" />
+        <div className="w-16 h-16 bg-accent-surface rounded-2xl flex items-center justify-center mb-4">
+          <CalendarIcon className="w-8 h-8 text-primary" />
         </div>
-        <h3 className="text-lg font-bold text-gray-900 mb-2">Connect Google Calendar</h3>
-        <p className="text-sm text-gray-500 mb-6 max-w-xs">
+        <h3 className="text-lg font-bold text-on-surface mb-2">Connect Google Calendar</h3>
+        <p className="text-sm text-on-surface-variant mb-6 max-w-xs">
           Sign in with Google to view your calendar and sync tasks with due dates as calendar events.
         </p>
         <button
           onClick={handleConnect}
-          className="flex items-center gap-3 px-5 py-3 bg-white border border-gray-300 rounded-xl shadow-sm hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700"
+          className="flex items-center gap-3 px-5 py-3 bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm hover:bg-surface-container-low transition-colors text-sm font-medium text-on-surface"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
             <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
@@ -517,16 +538,16 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
   // Pill palette flips: green (healthy) → amber (some broken) →
   // red (all broken). Keeps the eye drawn even when the row is
   // collapsed, mirroring the per-row badge severity.
-  const pillBg = allBroken ? 'bg-red-50 border-red-200'
-    : anyBroken ? 'bg-amber-50 border-amber-200'
-    : 'bg-green-50 border-green-100';
-  const headerText = allBroken ? 'text-red-800 hover:text-red-900'
-    : anyBroken ? 'text-amber-800 hover:text-amber-900'
-    : 'text-green-700 hover:text-green-800';
-  const subText = allBroken ? 'text-red-700' : 'text-amber-800';
+  const pillBg = allBroken ? 'bg-danger-surface border-danger'
+    : anyBroken ? 'bg-warning-surface border-warning'
+    : 'bg-success-surface border-success';
+  const headerText = allBroken ? 'text-danger hover:opacity-80'
+    : anyBroken ? 'text-warning hover:opacity-80'
+    : 'text-success hover:opacity-80';
+  const subText = allBroken ? 'text-danger' : 'text-warning';
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: '#fbf8fe' }}>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: 'rgb(var(--surface))' }}>
       {/* Accounts bar. Collapsed by default to reclaim vertical space
           on mobile; header row shows count + chevron, tap to expand. */}
       <div className={`px-4 py-2 border-b flex-shrink-0 ${pillBg}`}>
@@ -548,21 +569,21 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           <div className="relative">
             <button
               onClick={() => setAddMenuOpen((v) => !v)}
-              className="text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
+              className="text-xs text-primary hover:opacity-80 font-medium transition-colors"
             >
               + Add Account
             </button>
             {addMenuOpen && (
-              <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+              <div className="absolute right-0 top-full mt-1 z-20 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-lg py-1 min-w-[160px]">
                 <button
                   onClick={() => { setAddMenuOpen(false); handleConnect(); }}
-                  className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+                  className="w-full text-left px-3 py-1.5 text-xs text-on-surface hover:bg-surface-container-low"
                 >
                   Connect Google
                 </button>
                 <button
                   onClick={handleConnectOutlook}
-                  className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+                  className="w-full text-left px-3 py-1.5 text-xs text-on-surface hover:bg-surface-container-low"
                 >
                   Connect Outlook
                 </button>
@@ -580,20 +601,20 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             const broken = !!acct.needsReconnect;
             return (
               <div key={`g:${acct.email}`} className="flex items-center justify-between text-xs">
-                <div className={`flex items-center gap-2 ${broken ? 'text-red-700' : 'text-green-700'}`}>
-                  <span className={`w-2 h-2 rounded-full ${broken ? 'bg-red-500' : 'bg-green-500'}`} />
+                <div className={`flex items-center gap-2 ${broken ? 'text-danger' : 'text-success'}`}>
+                  <span className={`w-2 h-2 rounded-full ${broken ? 'bg-danger-surface0' : 'bg-success-surface0'}`} />
                   <span>{acct.email}</span>
-                  <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Google</span>
+                  <span className="px-1.5 py-0.5 bg-surface-container text-on-surface-variant rounded text-[10px] font-medium">Google</span>
                   {/* Primary badge is driven by gcal_tokens.is_primary on the
                       server. Never inferred from array position here. */}
                   {acct.isPrimary === true && (
-                    <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded text-[10px] font-medium">
+                    <span className="px-1.5 py-0.5 bg-accent-surface text-primary rounded text-[10px] font-medium">
                       Primary
                     </span>
                   )}
                   {broken && (
                     <span
-                      className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium"
+                      className="px-1.5 py-0.5 bg-danger-surface text-danger rounded text-[10px] font-medium"
                       title={acct.error || 'invalid_grant'}
                     >
                       Reconnect needed
@@ -604,7 +625,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                   {broken && (
                     <button
                       onClick={() => handleConnect()}
-                      className="text-red-600 hover:text-red-800 transition-colors font-semibold"
+                      className="text-danger hover:opacity-80 transition-colors font-semibold"
                     >
                       Reconnect
                     </button>
@@ -612,14 +633,14 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                   {!broken && !acct.isPrimary && accounts.length > 1 && (
                     <button
                       onClick={() => handleSetPrimary(acct.email)}
-                      className="text-gray-400 hover:text-indigo-600 transition-colors font-medium"
+                      className="text-text-faint hover:text-primary transition-colors font-medium"
                     >
                       Set Primary
                     </button>
                   )}
                   <button
                     onClick={() => handleDisconnect(acct.email)}
-                    className="text-gray-400 hover:text-red-500 transition-colors font-medium"
+                    className="text-text-faint hover:text-danger transition-colors font-medium"
                   >
                     Disconnect
                   </button>
@@ -631,13 +652,13 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             const broken = acct.auth_status === 'needs_reauth';
             return (
               <div key={`o:${acct.id}`} className="flex items-center justify-between text-xs">
-                <div className={`flex items-center gap-2 ${broken ? 'text-red-700' : 'text-green-700'}`}>
-                  <span className={`w-2 h-2 rounded-full ${broken ? 'bg-red-500' : 'bg-green-500'}`} />
+                <div className={`flex items-center gap-2 ${broken ? 'text-danger' : 'text-success'}`}>
+                  <span className={`w-2 h-2 rounded-full ${broken ? 'bg-danger-surface0' : 'bg-success-surface0'}`} />
                   <span>{acct.account_email || '(unknown — reconnect)'}</span>
-                  <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-medium">Outlook</span>
+                  <span className="px-1.5 py-0.5 bg-surface-container text-on-surface-variant rounded text-[10px] font-medium">Outlook</span>
                   {broken && (
                     <span
-                      className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium"
+                      className="px-1.5 py-0.5 bg-danger-surface text-danger rounded text-[10px] font-medium"
                       title={acct.last_sync_error || 'invalid_grant'}
                     >
                       Reconnect needed
@@ -648,14 +669,14 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                   {broken && (
                     <button
                       onClick={handleConnectOutlook}
-                      className="text-red-600 hover:text-red-800 transition-colors font-semibold"
+                      className="text-danger hover:opacity-80 transition-colors font-semibold"
                     >
                       Reconnect
                     </button>
                   )}
                   <button
                     onClick={() => handleDisconnectOutlook(acct.id, acct.account_email)}
-                    className="text-gray-400 hover:text-red-500 transition-colors font-medium"
+                    className="text-text-faint hover:text-danger transition-colors font-medium"
                   >
                     Disconnect
                   </button>
@@ -669,11 +690,11 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       {/* View toggle + calendar header. overflow-x-auto on mobile so
           the Month/Week/Day/History pills don't get clipped on narrow
           screens; desktop keeps the usual justify-between row. */}
-      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-100 flex-shrink-0 overflow-x-auto md:overflow-visible" style={{ scrollbarWidth: 'none' }}>
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-outline-variant flex-shrink-0 overflow-x-auto md:overflow-visible" style={{ scrollbarWidth: 'none' }}>
         <div className="flex items-center gap-2">
           <button
             onClick={() => { setCurrentDate(new Date()); if (view !== 'day') setView('day'); }}
-            className="px-3 py-1 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            className="px-3 py-1 text-xs font-medium bg-surface-container-lowest border border-outline-variant rounded-lg hover:bg-surface-container-low transition-colors"
           >
             Today
           </button>
@@ -683,7 +704,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
               : view === 'day' ? subDays(d, 1)
               : new Date(d.getTime() - 7 * 86400000)
             ))}
-            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-container transition-colors text-on-surface-variant"
           >
             <span className="material-symbols-outlined text-[18px]">chevron_left</span>
           </button>
@@ -693,11 +714,11 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
               : view === 'day' ? addDays(d, 1)
               : new Date(d.getTime() + 7 * 86400000)
             ))}
-            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-container transition-colors text-on-surface-variant"
           >
             <span className="material-symbols-outlined text-[18px]">chevron_right</span>
           </button>
-          <h2 className="text-sm font-semibold text-gray-900 ml-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          <h2 className="text-sm font-semibold text-on-surface ml-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
             {view === 'day'
               ? format(currentDate, 'EEEE, MMMM d yyyy')
               : view === 'week'
@@ -708,18 +729,18 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         <div className="flex items-center gap-2">
           <button
             onClick={() => openCreateModal(null)}
-            className="px-3 py-1 text-xs font-medium text-white rounded-lg transition-colors"
-            style={{ backgroundColor: '#4f4dcf' }}
+            className="px-3 py-1 text-xs font-medium text-on-primary rounded-lg transition-colors"
+            style={{ backgroundColor: 'rgb(var(--accent))' }}
           >
             + New Event
           </button>
-          <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
+          <div className="flex bg-surface-container rounded-lg p-0.5 flex-shrink-0">
           {['month', 'week', 'day', 'history'].map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
               className={`px-3 py-1 text-xs font-medium rounded-md transition-colors capitalize ${
-                view === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                view === v ? 'bg-surface-container-lowest text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
               }`}
             >
               {v}
@@ -739,13 +760,13 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
               value={historySearch}
               onChange={e => setHistorySearch(e.target.value)}
               placeholder="Search meetings…"
-              className="flex-1 text-xs bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+              className="flex-1 text-xs bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
               style={{ fontFamily: "'Manrope', sans-serif" }}
             />
             <select
               value={historyRange}
               onChange={e => setHistoryRange(e.target.value)}
-              className="text-xs bg-white border border-gray-200 rounded-lg px-2 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+              className="text-xs bg-surface-container-lowest border border-outline-variant rounded-lg px-2 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
               style={{ fontFamily: "'Manrope', sans-serif" }}
             >
               <option value="week">Past Week</option>
@@ -756,38 +777,38 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           </div>
 
           {historyLoading ? (
-            <div className="flex items-center justify-center py-8 text-gray-400">
+            <div className="flex items-center justify-center py-8 text-text-faint">
               <SpinnerIcon className="w-5 h-5 animate-spin" />
             </div>
           ) : historyNotes.length === 0 ? (
-            <div className="text-center py-8 text-gray-400 text-sm">
+            <div className="text-center py-8 text-text-faint text-sm">
               {historySearch ? 'No matching meeting notes found' : 'No meeting notes yet. Click any past event to add notes.'}
             </div>
           ) : (
             <div className="space-y-3">
               {historyNotes.map(note => (
-                <div key={note.id || note.eventId} className="bg-white rounded-lg border border-gray-200 p-3">
+                <div key={note.id || note.eventId} className="bg-surface-container-lowest rounded-lg border border-outline-variant p-3">
                   <div className="flex items-start justify-between gap-2 mb-1">
-                    <h4 className="text-sm font-semibold text-gray-900">{note.eventTitle || note.event_title || '(Untitled)'}</h4>
-                    <span className="text-[10px] text-gray-400 flex-shrink-0">
+                    <h4 className="text-sm font-semibold text-on-surface">{note.eventTitle || note.event_title || '(Untitled)'}</h4>
+                    <span className="text-[10px] text-text-faint flex-shrink-0">
                       {note.eventStart || note.event_start
                         ? format(new Date(note.eventStart || note.event_start), 'MMM d, yyyy · h:mm a')
                         : ''}
                     </span>
                   </div>
                   {note.sourceAccount || note.source_account ? (
-                    <div className="text-[10px] text-gray-400 mb-2">{note.sourceAccount || note.source_account}</div>
+                    <div className="text-[10px] text-text-faint mb-2">{note.sourceAccount || note.source_account}</div>
                   ) : null}
                   {(note.preNote || note.pre_note) && (
                     <div className="mb-2">
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agenda</span>
-                      <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap">{note.preNote || note.pre_note}</p>
+                      <span className="text-[10px] font-semibold text-text-faint uppercase tracking-wider">Agenda</span>
+                      <p className="text-xs text-on-surface-variant mt-0.5 whitespace-pre-wrap">{note.preNote || note.pre_note}</p>
                     </div>
                   )}
                   {(note.postNote || note.post_note) && (
                     <div>
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Outcomes</span>
-                      <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap">{note.postNote || note.post_note}</p>
+                      <span className="text-[10px] font-semibold text-text-faint uppercase tracking-wider">Outcomes</span>
+                      <p className="text-xs text-on-surface-variant mt-0.5 whitespace-pre-wrap">{note.postNote || note.post_note}</p>
                     </div>
                   )}
                 </div>
@@ -845,7 +866,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         return (
           <div
             ref={popoverRef}
-            className="fixed z-50 bg-white rounded-xl shadow-lg border border-gray-200 p-4 w-80 max-h-[80vh] overflow-y-auto"
+            className="fixed z-50 bg-surface-container-lowest rounded-xl shadow-lg border border-outline-variant p-4 w-80 max-h-[80vh] overflow-y-auto"
             style={{ top: Math.min(popoverPos.top, window.innerHeight - 300), left: popoverPos.left }}
           >
             {/* Header */}
@@ -855,15 +876,15 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                   className="w-3 h-3 rounded-full flex-shrink-0"
                   style={{ backgroundColor: getEventColor(selectedEvent) }}
                 />
-                <h4 className="text-sm font-semibold text-gray-900 leading-tight">{selectedEvent.title}</h4>
+                <h4 className="text-sm font-semibold text-on-surface leading-tight">{selectedEvent.title}</h4>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 {noteSaved && (
-                  <span className="text-[10px] text-green-600 font-medium animate-pulse">Saved</span>
+                  <span className="text-[10px] text-success font-medium animate-pulse">Saved</span>
                 )}
                 <button
                   onClick={() => setSelectedEvent(null)}
-                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                  className="text-text-faint hover:text-on-surface-variant transition-colors"
                 >
                   <span className="material-symbols-outlined text-[16px]">close</span>
                 </button>
@@ -871,7 +892,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             </div>
 
             {/* Date/Time + Account */}
-            <div className="text-xs text-gray-500 space-y-1 mb-3">
+            <div className="text-xs text-on-surface-variant space-y-1 mb-3">
               <div className="flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-[14px]">schedule</span>
                 {selectedEvent.allDay
@@ -888,14 +909,14 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             </div>
 
             {notesLoading ? (
-              <div className="flex items-center justify-center py-3 text-gray-400">
+              <div className="flex items-center justify-center py-3 text-text-faint">
                 <SpinnerIcon className="w-4 h-4 animate-spin" />
               </div>
             ) : (
               <>
                 {/* Pre-meeting note */}
                 <div className="mb-3">
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                  <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">
                     Agenda / Prep
                   </label>
                   <textarea
@@ -906,7 +927,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                     }}
                     placeholder="Meeting agenda, prep notes…"
                     rows={3}
-                    className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-300 focus:border-indigo-300 placeholder-gray-300"
+                    className="w-full text-xs text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary placeholder:text-text-faint"
                     style={{ fontFamily: "'Manrope', sans-serif" }}
                   />
                 </div>
@@ -914,7 +935,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                 {/* Post-meeting note — only if event has ended */}
                 {eventEnded && (
                   <div>
-                    <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                    <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">
                       Outcomes / Decisions
                     </label>
                     <textarea
@@ -925,35 +946,35 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                       }}
                       placeholder="Key outcomes, action items…"
                       rows={3}
-                      className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-300 focus:border-indigo-300 placeholder-gray-300"
+                      className="w-full text-xs text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary placeholder:text-text-faint"
                       style={{ fontFamily: "'Manrope', sans-serif" }}
                     />
                   </div>
                 )}
 
                 {/* Delete */}
-                <div className="mt-3 pt-2 border-t border-gray-100">
+                <div className="mt-3 pt-2 border-t border-outline-variant">
                   {!confirmDelete ? (
                     <button
                       onClick={() => setConfirmDelete(true)}
-                      className="text-[11px] text-red-400 hover:text-red-600 transition-colors font-medium"
+                      className="text-[11px] text-danger hover:opacity-80 transition-colors font-medium"
                     >
                       Delete Event
                     </button>
                   ) : (
                     <div>
-                      <p className="text-[11px] text-gray-500 mb-1.5">Delete this event? This cannot be undone.</p>
+                      <p className="text-[11px] text-on-surface-variant mb-1.5">Delete this event? This cannot be undone.</p>
                       <div className="flex items-center gap-2">
                         <button
                           onClick={handleDeleteEvent}
                           disabled={deleting}
-                          className="text-[11px] font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-50"
+                          className="text-[11px] font-medium text-danger hover:opacity-80 transition-colors disabled:opacity-50"
                         >
                           {deleting ? 'Deleting…' : 'Yes, delete'}
                         </button>
                         <button
                           onClick={() => setConfirmDelete(false)}
-                          className="text-[11px] font-medium text-gray-400 hover:text-gray-600 transition-colors"
+                          className="text-[11px] font-medium text-text-faint hover:text-on-surface-variant transition-colors"
                         >
                           Cancel
                         </button>
@@ -970,10 +991,10 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       {/* Create event modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setShowCreateModal(false)}>
-          <div className="bg-white rounded-xl shadow-xl border border-gray-200 w-96 max-h-[90vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
+          <div className="bg-surface-container-lowest rounded-xl shadow-xl border border-outline-variant w-96 max-h-[90vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>New Event</h3>
-              <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+              <h3 className="text-sm font-bold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>New Event</h3>
+              <button onClick={() => setShowCreateModal(false)} className="text-text-faint hover:text-on-surface-variant transition-colors">
                 <span className="material-symbols-outlined text-[18px]">close</span>
               </button>
             </div>
@@ -981,26 +1002,26 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
             <div className="space-y-3">
               {/* Title */}
               <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Title</label>
+                <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">Title</label>
                 <input
                   type="text"
                   value={createForm.title}
                   onChange={e => setCreateForm(f => ({ ...f, title: e.target.value }))}
                   placeholder="Event title"
                   autoFocus
-                  className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300 focus:border-indigo-300"
+                  className="w-full text-sm text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
                   style={{ fontFamily: "'Manrope', sans-serif" }}
                 />
               </div>
 
               {/* Date */}
               <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Date</label>
+                <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">Date</label>
                 <input
                   type="date"
                   value={createForm.date}
                   onChange={e => setCreateForm(f => ({ ...f, date: e.target.value }))}
-                  className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                  className="w-full text-sm text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
                   style={{ fontFamily: "'Manrope', sans-serif" }}
                 />
               </div>
@@ -1008,7 +1029,7 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
               {/* Start / End time */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Start Time</label>
+                  <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">Start Time</label>
                   <input
                     type="time"
                     value={createForm.startTime}
@@ -1024,17 +1045,17 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
                         return updated;
                       });
                     }}
-                    className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    className="w-full text-sm text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
                     style={{ fontFamily: "'Manrope', sans-serif" }}
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">End Time</label>
+                  <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">End Time</label>
                   <input
                     type="time"
                     value={createForm.endTime}
                     onChange={e => setCreateForm(f => ({ ...f, endTime: e.target.value }))}
-                    className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    className="w-full text-sm text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
                     style={{ fontFamily: "'Manrope', sans-serif" }}
                   />
                 </div>
@@ -1042,11 +1063,11 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
 
               {/* Calendar account */}
               <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Calendar</label>
+                <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">Calendar</label>
                 <select
                   value={createForm.googleEmail}
                   onChange={e => setCreateForm(f => ({ ...f, googleEmail: e.target.value }))}
-                  className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                  className="w-full text-sm text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
                   style={{ fontFamily: "'Manrope', sans-serif" }}
                 >
                   {(gcalStatus.accounts || []).map(acct => (
@@ -1058,11 +1079,11 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
               {/* Entity tag */}
               {entities.length > 0 && (
                 <div>
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Entity Tag</label>
+                  <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">Entity Tag</label>
                   <select
                     value={createForm.entityTag}
                     onChange={e => setCreateForm(f => ({ ...f, entityTag: e.target.value }))}
-                    className="w-full text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    className="w-full text-sm text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
                     style={{ fontFamily: "'Manrope', sans-serif" }}
                   >
                     <option value="">None</option>
@@ -1075,31 +1096,31 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
 
               {/* Notes */}
               <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Agenda / Notes</label>
+                <label className="block text-[10px] font-semibold text-text-faint uppercase tracking-wider mb-1">Agenda / Notes</label>
                 <textarea
                   value={createForm.notes}
                   onChange={e => setCreateForm(f => ({ ...f, notes: e.target.value }))}
                   placeholder="Meeting agenda, prep notes…"
                   rows={3}
-                  className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-300 placeholder-gray-300"
+                  className="w-full text-xs text-on-surface bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-text-faint"
                   style={{ fontFamily: "'Manrope', sans-serif" }}
                 />
               </div>
             </div>
 
             {/* Actions */}
-            <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+            <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-outline-variant">
               <button
                 onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors"
+                className="px-4 py-2 text-xs font-medium text-on-surface-variant hover:text-on-surface transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreateEvent}
                 disabled={createSaving}
-                className="px-4 py-2 text-xs font-medium text-white rounded-lg transition-colors disabled:opacity-50"
-                style={{ backgroundColor: '#4f4dcf' }}
+                className="px-4 py-2 text-xs font-medium text-on-primary rounded-lg transition-colors disabled:opacity-50"
+                style={{ backgroundColor: 'rgb(var(--accent))' }}
               >
                 {createSaving ? 'Creating…' : 'Create Event'}
               </button>
@@ -1112,41 +1133,41 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
       <style>{`
         .dizon-calendar .rbc-calendar {
           font-family: 'Manrope', sans-serif;
-          background: #fbf8fe;
+          background: rgb(var(--surface));
         }
         .dizon-calendar .rbc-header {
           font-family: 'Plus Jakarta Sans', sans-serif;
           font-size: 11px;
           font-weight: 600;
-          color: #6b7280;
+          color: rgb(var(--text-secondary));
           text-transform: uppercase;
           letter-spacing: 0.05em;
           padding: 8px 4px;
-          border-bottom: 1px solid #e5e7eb;
+          border-bottom: 1px solid rgb(var(--surface-container-high));
         }
         .dizon-calendar .rbc-month-view,
         .dizon-calendar .rbc-time-view {
-          border: 1px solid #e5e7eb;
+          border: 1px solid rgb(var(--surface-container-high));
           border-radius: 8px;
           overflow: hidden;
         }
         .dizon-calendar .rbc-day-bg {
-          background: #fff;
+          background: rgb(var(--surface-container-lowest));
         }
         .dizon-calendar .rbc-off-range-bg {
-          background: #f9fafb;
+          background: rgb(var(--surface-container-low));
         }
         .dizon-calendar .rbc-today {
-          background: #f0edff !important;
+          background: rgb(var(--accent-surface)) !important;
         }
         .dizon-calendar .rbc-date-cell {
           font-size: 12px;
           padding: 4px 6px;
-          color: #374151;
+          color: rgb(var(--text-primary));
         }
         .dizon-calendar .rbc-date-cell.rbc-now {
           font-weight: 700;
-          color: #4f4dcf;
+          color: rgb(var(--accent));
         }
         .dizon-calendar .rbc-event {
           border-radius: 4px !important;
@@ -1155,11 +1176,11 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
           line-height: 1.4;
         }
         .dizon-calendar .rbc-event.rbc-selected {
-          box-shadow: 0 0 0 2px #4f4dcf;
+          box-shadow: 0 0 0 2px rgb(var(--accent));
         }
         .dizon-calendar .rbc-show-more {
           font-size: 11px;
-          color: #4f4dcf;
+          color: rgb(var(--accent));
           font-weight: 500;
         }
         .dizon-calendar .rbc-time-header-cell .rbc-header {
@@ -1167,14 +1188,27 @@ export default function CalendarPanel({ currentUser, authToken, addToast, apiFet
         }
         .dizon-calendar .rbc-time-slot {
           font-size: 10px;
-          color: #9ca3af;
+          color: rgb(var(--text-faint));
         }
         .dizon-calendar .rbc-current-time-indicator {
-          background-color: #4f4dcf;
+          background-color: rgb(var(--accent));
         }
         .dizon-calendar .rbc-allday-cell {
           min-height: 20px;
         }
+        /* FIX 1: soft grid hairlines — match default in light, recede to a
+           hint in dark. Only empty grid lines (hour lines, cell borders,
+           day-column dividers) across week/day/month — never event bars. */
+        .dizon-calendar .rbc-timeslot-group { border-bottom: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-day-slot .rbc-time-slot { border-top: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-content { border-top: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-content > * + * > * { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-day-bg + .rbc-day-bg { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-month-row + .rbc-month-row { border-top: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-header + .rbc-header { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-header-content { border-left: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-header.rbc-overflowing { border-right: 1px solid var(--grid-line); }
+        .dizon-calendar .rbc-time-header-content > .rbc-header { border-bottom: 1px solid var(--grid-line); }
       `}</style>
     </div>
   );

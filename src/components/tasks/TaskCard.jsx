@@ -41,13 +41,13 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
 
   if (editing && draft) {
     return (
-      <div className={`bg-white rounded-xl border border-gray-100 shadow-sm p-4 ${PRIORITY_BORDER[draft.priority]}`}>
+      <div className={`bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm p-4 ${PRIORITY_BORDER[draft.priority]}`}>
         <form onSubmit={handleSaveEdit} className="space-y-3">
           <input
             type="text"
             value={draft.title}
             onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+            className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition"
             placeholder="Task title *"
             autoFocus
             required
@@ -55,17 +55,17 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
           <textarea
             value={draft.description}
             onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
-            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+            className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition resize-none"
             placeholder="Description (optional)"
             rows={2}
           />
           <div className="flex gap-2">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Priority</label>
+              <label className="block text-xs font-medium text-on-surface-variant mb-1">Priority</label>
               <select
                 value={draft.priority}
                 onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
-                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -73,17 +73,17 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
               </select>
             </div>
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Due Date</label>
+              <label className="block text-xs font-medium text-on-surface-variant mb-1">Due Date</label>
               <input
                 type="date"
                 value={draft.dueDate}
                 onChange={(e) => setDraft((d) => ({ ...d, dueDate: e.target.value }))}
-                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition"
               />
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Tags</label>
+            <label className="block text-xs font-medium text-on-surface-variant mb-1">Tags</label>
             <div className="flex flex-wrap gap-1.5">
               {buildGroupedEntities(entities || []).map((ent) => {
                 const tag = ent.name;
@@ -99,7 +99,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
                     className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${
                       draft.tags.includes(tag)
                         ? `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
-                        : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                        : 'bg-surface-container-low text-on-surface-variant border-outline-variant hover:bg-surface-container'
                     }`}
                   >
                     {ent._indent ? '\u2514 ' : ''}{tag}{ent.shared ? ' \u{1F517}' : ''}
@@ -109,7 +109,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Visibility</label>
+            <label className="block text-xs font-medium text-on-surface-variant mb-1">Visibility</label>
             <div className="flex gap-2">
               {['shared', 'private'].map((v) => (
                 <button
@@ -119,9 +119,9 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
                   className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
                     draft.visibility === v
                       ? v === 'private'
-                        ? 'bg-amber-50 text-amber-700 border-amber-300 ring-2 ring-offset-1 ring-amber-300'
-                        : 'bg-indigo-50 text-indigo-700 border-indigo-300 ring-2 ring-offset-1 ring-indigo-300'
-                      : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
+                        ? 'bg-warning-surface text-warning border-warning ring-2 ring-offset-1 ring-warning'
+                        : 'bg-accent-surface text-primary border-primary ring-2 ring-offset-1 ring-primary'
+                      : 'bg-surface-container-low text-text-faint border-outline-variant hover:bg-surface-container'
                   }`}
                 >
                   {v === 'private' ? 'Private' : 'Shared'}
@@ -133,13 +133,13 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
             <button
               type="button"
               onClick={() => { setEditing(false); setDraft(null); }}
-              className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
+              className="flex-1 px-4 py-2 border border-outline-variant rounded-lg text-on-surface-variant hover:bg-surface-container-low text-sm font-medium transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm"
+              className="flex-1 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary text-sm font-medium transition-colors shadow-sm"
             >
               Save
             </button>
@@ -151,7 +151,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
 
   return (
     <div
-      className={`bg-white rounded-xl border border-gray-100 shadow-sm p-4 ${PRIORITY_BORDER[task.priority]} transition-opacity ${
+      className={`bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm p-4 ${PRIORITY_BORDER[task.priority]} transition-opacity ${
         task.completed ? 'opacity-55' : 'opacity-100'
       }`}
     >
@@ -162,7 +162,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
             type="checkbox"
             checked={task.completed}
             onChange={() => onToggle(task.id)}
-            className="w-5 h-5 md:w-4 md:h-4 accent-indigo-600 rounded cursor-pointer"
+            className="w-5 h-5 md:w-4 md:h-4 accent-primary rounded cursor-pointer"
           />
         </label>
 
@@ -172,8 +172,8 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
             <h4
               className={`text-sm font-medium leading-snug ${
                 task.completed
-                  ? 'line-through text-gray-400'
-                  : 'text-gray-900'
+                  ? 'line-through text-text-faint'
+                  : 'text-on-surface'
               }`}
             >
               {task.title}
@@ -183,7 +183,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
               {isOwner && !task.completed && (
                 <button
                   onClick={openEdit}
-                  className="text-gray-300 hover:text-indigo-500 transition-colors min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                  className="text-text-faint hover:text-primary transition-colors min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
                   title="Edit task"
                 >
                   <PencilIcon className="w-4 h-4 md:w-3.5 md:h-3.5" />
@@ -194,7 +194,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
                 <button
                   onClick={handleSync}
                   disabled={syncing}
-                  className="text-[10px] px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors disabled:opacity-50 min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                  className="text-[10px] px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium bg-accent-surface text-primary hover:bg-accent-surface transition-colors disabled:opacity-50 min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
                   title="Sync to Google Calendar"
                 >
                   {syncing ? <SpinnerIcon className="w-4 h-4 md:w-3 md:h-3 animate-spin" /> : <SyncIcon className="w-4 h-4 md:w-3 md:h-3" />}
@@ -206,8 +206,8 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
                   onClick={() => onToggleVisibility(task.id)}
                   className={`text-[11px] md:text-[10px] px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium transition-colors min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center ${
                     task.visibility === 'private'
-                      ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
-                      : 'bg-indigo-50 text-indigo-500 hover:bg-indigo-100'
+                      ? 'bg-warning-surface text-warning hover:bg-warning-surface'
+                      : 'bg-accent-surface text-primary hover:bg-accent-surface'
                   }`}
                   title={task.visibility === 'private' ? 'Private — click to share' : 'Shared — click to make private'}
                 >
@@ -215,13 +215,13 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
                 </button>
               )}
               {!isOwner && (
-                <span className="text-[11px] md:text-[10px] bg-gray-100 text-gray-400 px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center">
+                <span className="text-[11px] md:text-[10px] bg-surface-container text-text-faint px-2 py-1 md:px-1.5 md:py-0.5 rounded font-medium min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center">
                   👥
                 </span>
               )}
               <button
                 onClick={() => onDelete(task.id)}
-                className="flex-shrink-0 text-gray-200 hover:text-red-400 transition-colors mt-0.5 min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                className="flex-shrink-0 text-text-faint hover:text-danger transition-colors mt-0.5 min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center"
                 title="Delete task"
               >
                 <XIcon className="w-5 h-5 md:w-4 md:h-4" />
@@ -230,7 +230,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
           </div>
 
           {task.description && (
-            <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">
+            <p className="text-xs text-on-surface-variant mt-1 line-clamp-2 leading-relaxed">
               {task.description}
             </p>
           )}
@@ -252,7 +252,7 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit, onToggleVis
               {task.dueDate && (
                 <span
                   className={`text-[11px] ${
-                    overdue ? 'text-red-500 font-medium' : 'text-gray-400'
+                    overdue ? 'text-danger font-medium' : 'text-text-faint'
                   }`}
                 >
                   {overdue && '⚠ '}

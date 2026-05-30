@@ -49,47 +49,47 @@ export function CreateEventModal({ currentUser, onClose, onCreated, addToast, ap
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-surface-container-lowest rounded-xl shadow-xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
-          <h3 className="text-base font-semibold text-gray-900">New Event</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><XIcon className="w-5 h-5" /></button>
+          <h3 className="text-base font-semibold text-on-surface">New Event</h3>
+          <button onClick={onClose} className="text-text-faint hover:text-on-surface-variant"><XIcon className="w-5 h-5" /></button>
         </div>
         <form onSubmit={handleSubmit} className="px-5 pb-5 space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Title *</label>
+            <label className="block text-xs font-medium text-on-surface-variant mb-1">Title *</label>
             <input type="text" required autoFocus value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
           </div>
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Date *</label>
+              <label className="block text-xs font-medium text-on-surface-variant mb-1">Date *</label>
               <input type="date" required value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
             </div>
             <div style={{ flex: '0 0 100px' }}>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Time</label>
+              <label className="block text-xs font-medium text-on-surface-variant mb-1">Time</label>
               <input type="time" value={form.startTime} onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))}
-                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
             </div>
           </div>
           <div style={{ flex: '0 0 100px' }}>
-            <label className="block text-xs font-medium text-gray-500 mb-1">End Time (optional)</label>
+            <label className="block text-xs font-medium text-on-surface-variant mb-1">End Time (optional)</label>
             <input type="time" value={form.endTime} onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))}
-              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style={{ width: 120 }} />
+              className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" style={{ width: 120 }} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Description (optional)</label>
+            <label className="block text-xs font-medium text-on-surface-variant mb-1">Description (optional)</label>
             <textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} rows={2}
-              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
+              className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none" />
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={form.syncToGcal} onChange={(e) => setForm((f) => ({ ...f, syncToGcal: e.target.checked }))}
-              className="w-4 h-4 accent-indigo-600 rounded" />
-            <span className="text-xs font-medium text-gray-600">{'\uD83D\uDCC5'} Add to Google Calendar</span>
+              className="w-4 h-4 accent-primary rounded" />
+            <span className="text-xs font-medium text-on-surface-variant">{'\uD83D\uDCC5'} Add to Google Calendar</span>
           </label>
           <div className="flex gap-2 pt-1">
-            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium">Cancel</button>
-            <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 border border-outline-variant rounded-lg text-on-surface-variant hover:bg-surface-container-low text-sm font-medium">Cancel</button>
+            <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary text-sm font-medium disabled:opacity-50">
               {saving ? 'Creating...' : 'Create Event'}
             </button>
           </div>
@@ -186,13 +186,13 @@ export function QuickCaptureModal({ authToken, categories, activeView, onClose, 
 
       {/* Modal */}
       <div
-        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[480px] overflow-hidden"
+        className="relative bg-surface-container-lowest rounded-2xl shadow-2xl w-full max-w-[480px] overflow-hidden"
         style={{ animation: 'qcSlideUp 150ms ease-out' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="px-5 pt-4 pb-2">
-          <h3 className="text-sm font-medium text-gray-400 tracking-wide uppercase">Quick Capture</h3>
+          <h3 className="text-sm font-medium text-text-faint tracking-wide uppercase">Quick Capture</h3>
         </div>
 
         {/* Textarea */}
@@ -203,7 +203,7 @@ export function QuickCaptureModal({ authToken, categories, activeView, onClose, 
             onChange={handleTextChange}
             placeholder="What's on your mind?"
             rows={3}
-            className="w-full resize-none border-0 focus:ring-0 text-gray-900 placeholder-gray-400 text-[15px] leading-relaxed p-0 outline-none"
+            className="w-full resize-none border-0 focus:ring-0 text-on-surface placeholder:text-text-faint text-[15px] leading-relaxed p-0 outline-none"
             style={{ minHeight: '4.5rem', maxHeight: '16rem' }}
           />
         </div>
@@ -221,7 +221,7 @@ export function QuickCaptureModal({ authToken, categories, activeView, onClose, 
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
                   selected
                     ? `${cfg.bg} ${cfg.text} ${cfg.border} border`
-                    : 'bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-300'
+                    : 'bg-surface-container-low text-on-surface-variant border border-outline-variant hover:border-outline'
                 }`}
               >
                 {cfg.emoji} {cfg.label}
@@ -236,7 +236,7 @@ export function QuickCaptureModal({ authToken, categories, activeView, onClose, 
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:ring-2 focus:ring-purple-300 focus:border-purple-300 bg-gray-50"
+              className="w-full text-sm border border-outline-variant rounded-lg px-3 py-2 text-on-surface focus:ring-2 focus:ring-primary focus:border-primary bg-surface-container-low"
             >
               <option value="">No category</option>
               {pillarCategories.map((c) => (
@@ -247,17 +247,17 @@ export function QuickCaptureModal({ authToken, categories, activeView, onClose, 
         )}
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
-          <span className="text-xs text-gray-400">{content.length} chars</span>
+        <div className="px-5 py-3 border-t border-outline-variant flex items-center justify-between">
+          <span className="text-xs text-text-faint">{content.length} chars</span>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-on-surface-variant hover:text-on-surface rounded-lg hover:bg-surface-container-low transition-colors">
               Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={!content.trim()}
-              className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ backgroundColor: content.trim() ? '#7C3AED' : '#a78bfa' }}
+              className="px-4 py-2 text-sm font-medium text-on-primary rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ backgroundColor: content.trim() ? 'rgb(var(--accent))' : 'rgb(var(--primary-container))' }}
             >
               Save
             </button>
@@ -307,16 +307,16 @@ export function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, ad
           height: 56,
           bottom: bottomBase + 48 + 12, // above note FAB + spacing
           right: fabRight,
-          backgroundColor: chatPanelOpen ? '#6366F1' : '#7C3AED',
+          backgroundColor: chatPanelOpen ? 'rgb(var(--accent))' : 'rgb(var(--accent))',
         }}
         title={chatPanelOpen ? 'Hide chat' : 'Open chat'}
       >
         {chatPanelOpen ? (
-          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <svg className="w-6 h-6 text-on-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <path d="M18 6L6 18M6 6l12 12" />
           </svg>
         ) : (
-          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <svg className="w-6 h-6 text-on-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
           </svg>
         )}
@@ -330,12 +330,12 @@ export function QuickCaptureFAB({ authToken, categories, activeView, hideFAB, ad
           height: 48,
           bottom: bottomBase,
           right: fabRight,
-          backgroundColor: '#7C3AED',
+          backgroundColor: 'rgb(var(--accent))',
         }}
         aria-label="Quick Capture"
         title="Quick capture"
       >
-        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}>
+        <svg className="w-5 h-5 text-on-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}>
           <path d="M12 20h9" />
           <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
         </svg>

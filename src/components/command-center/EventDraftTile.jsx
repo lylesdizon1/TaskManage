@@ -60,12 +60,12 @@ export default function EventDraftTile({
 
   return (
     <div
-      className="bg-white border border-gray-200 rounded-xl"
+      className="bg-surface-container-lowest border border-outline-variant rounded-xl"
       style={{ fontFamily: 'Manrope, sans-serif' }}
     >
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
-        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '15px' }}>calendar_month</span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+        <span className="material-symbols-outlined" style={{ color: 'rgb(var(--accent))', fontSize: '15px' }}>calendar_month</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
           Event draft
         </span>
       </div>

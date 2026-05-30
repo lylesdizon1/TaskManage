@@ -10,7 +10,7 @@ export default function TagPill({ tag, isAi = false, entities = [] }) {
       {tag}
       {entity?.shared && <span>{'\u{1F517}'}</span>}
       {isAi && (
-        <span className="text-[9px] leading-none bg-indigo-500 text-white px-1 py-0.5 rounded-full">
+        <span className="text-[9px] leading-none bg-primary text-on-primary px-1 py-0.5 rounded-full">
           AI
         </span>
       )}

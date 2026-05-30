@@ -5,7 +5,6 @@ import buildSystemPrompt from '../utils/systemPrompt';
 import { getTodayLocal } from '../utils/helpers.js';
 import { parseActionDraft } from '../utils/parseActionDraft.js';
 import ActiveZoneOrchestrator from '../components/dashboard/ActiveZoneOrchestrator.jsx';
-import ActiveZoneVoice from '../components/dashboard/ActiveZoneVoice.jsx';
 import TaskDraftTile from '../components/command-center/TaskDraftTile.jsx';
 import EventDraftTile from '../components/command-center/EventDraftTile.jsx';
 import ProjectDraftTile from '../components/command-center/ProjectDraftTile.jsx';
@@ -26,10 +25,10 @@ const MD_COMPONENTS = {
   li: ({ node, ordered, ...p }) => <li style={{ margin: '0.15em 0' }} {...p} />,
   strong: ({ node, ...p }) => <strong style={{ fontWeight: 700 }} {...p} />,
   em: ({ node, ...p }) => <em style={{ fontStyle: 'italic' }} {...p} />,
-  a: ({ node, ...p }) => <a style={{ color: '#4f4dcf', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
+  a: ({ node, ...p }) => <a style={{ color: 'rgb(var(--accent-contrast))', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
   code: ({ node, inline, ...p }) =>
     inline
-      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', background: 'rgba(79,77,207,0.06)', padding: '0 4px', borderRadius: '4px' }} {...p} />
+      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', background: 'rgba(255,255,255,0.15)', padding: '0 4px', borderRadius: '4px' }} {...p} />
       : <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', whiteSpace: 'pre-wrap' }} {...p} />,
   h1: ({ node, ...p }) => <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '16px', margin: '0.25em 0 0.4em 0' }} {...p} />,
   h2: ({ node, ...p }) => <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '15px', margin: '0.25em 0 0.35em 0' }} {...p} />,
@@ -892,6 +891,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   };
   const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
+  const ccInputRef = useRef(null);          // CC text input — for refocus after send
+  const ccShouldRefocusRef = useRef(false); // set on send; refocus once input re-enables
   const lastCheckedRef = useRef(new Date().toISOString());
   const ccAutoRefreshedRef = useRef(false);
 
@@ -937,7 +938,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     });
   }, []);
 
-  useEffect(() => { scrollToBottom(); }, [ccMessages.length, scrollToBottom]);
+  // Auto-follow new + streaming messages. Depends on the LAST message's
+  // content (not just count) so Aria's reply is followed as it streams in.
+  // Skips the very first population (the existing brief) so a long brief is
+  // readable from its TOP on load rather than jumping to the bottom. The
+  // userScrolledAwayRef guard inside scrollToBottom still respects a user who
+  // scrolled up to read history.
+  const ccDidInitialPopulateRef = useRef(false);
+  const ccLastMsg = ccMessages[ccMessages.length - 1];
+  useEffect(() => {
+    if (!ccDidInitialPopulateRef.current) {
+      if (ccMessages.length > 0) ccDidInitialPopulateRef.current = true; // brief loaded — leave at top
+      return;
+    }
+    scrollToBottom();
+  }, [ccMessages.length, ccLastMsg?.content, scrollToBottom]);
+
+  // Keep focus in the input after a send. The input is disabled while Aria
+  // responds (which drops focus); refocus once it re-enables so the user can
+  // type the next message with no re-click. Works for Enter and the button.
+  useEffect(() => {
+    if (!ccSending && ccShouldRefocusRef.current) {
+      ccShouldRefocusRef.current = false;
+      requestAnimationFrame(() => ccInputRef.current?.focus());
+    }
+  }, [ccSending]);
 
   // Mirror ccMessages into a ref so callbacks (handleCcSend) can read the
   // latest committed state without depending on ccMessages in their deps.
@@ -1441,8 +1466,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // finished assigning ccConvId, with the POST landing on whatever
     // stale ccConvId (from React state) happened to be set at that
     // moment. See docs/investigations/cc-persistence-state.md Bug 1.
-    if (!text || ccSending || !ccConvId || ccInitRunningRef.current) return;
+    if (!text || ccSending || ccInitRunningRef.current) return;
+    // Self-heal: if the one-shot session init never set a conversation id
+    // (e.g. a transient auth/5xx blip at load), re-init instead of silently
+    // blocking every send for the rest of the session. Input text is
+    // preserved (cleared only past this guard), so the resend lands once
+    // ccConvId is set. We never POST against a null conversation id.
+    if (!ccConvId) { initCommandCenterRef.current?.(); return; }
     setCcInput('');
+    ccShouldRefocusRef.current = true; // refocus the input once Aria's reply completes
     setCcSending(true);
     ccStoppedRef.current = false;
     const controller = new AbortController();
@@ -1475,6 +1507,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (wantsContext) fetchBriefContext();
 
     const userMsg = { role: 'user', content: text, createdAt: new Date().toISOString(), ts: Date.now() };
+    // Own send always follows to the bottom, even if the user had scrolled up.
+    userScrolledAwayRef.current = false;
     setCcMessages((prev) => [...prev, userMsg]);
 
     // Save user message. Use the ref so a late init flip mid-handler
@@ -2672,13 +2706,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
   const pillarBadge = (pillar) => {
     if (!pillar) return null;
-    const cfg = { hustle: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Hustle' }, home: { bg: 'bg-green-100', text: 'text-green-700', label: 'Home' }, move: { bg: 'bg-orange-100', text: 'text-orange-700', label: 'Move' }, grow: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Grow' } }[pillar];
+    const cfg = { hustle: { bg: 'bg-accent-surface', text: 'text-primary', label: 'Hustle' }, home: { bg: 'bg-success-surface', text: 'text-success', label: 'Home' }, move: { bg: 'bg-warning-surface', text: 'text-warning', label: 'Move' }, grow: { bg: 'bg-accent-surface', text: 'text-primary', label: 'Grow' } }[pillar];
     if (!cfg) return null;
     return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cfg.bg} ${cfg.text}`}>{cfg.label}</span>;
   };
 
   // Entity color map: entity name → hex color
-  const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+  const ENTITY_COLORS = ['rgb(var(--accent))','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
   const entityColorMap = useMemo(() => {
     const map = {};
     (entities || []).forEach((e, i) => {
@@ -2695,9 +2729,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     if (['hustle', 'home', 'move', 'grow'].includes(pillarLower)) return pillarBadge(pillarLower);
     const color = entityColorMap[pillarLower];
     if (color) {
-      return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: color }}>{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
+      return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium text-on-primary" style={{ backgroundColor: color }}>{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
     }
-    return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
+    return <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-surface-container text-on-surface-variant">{tag.length > 12 ? tag.slice(0, 12) + '…' : tag}</span>;
   };
 
   // Performance stats (30 day window)
@@ -2720,27 +2754,26 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       {/* ROW 1: Greeting — hidden on mobile so the CC box starts
           immediately below the top bar. */}
       <div className="hidden md:block" style={{ marginBottom: '16px' }}>
-        <h1 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '32px', fontWeight: 700, color: '#31323a', lineHeight: 1.1 }}>
+        <h1 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '32px', fontWeight: 700, color: 'rgb(var(--text-primary))', lineHeight: 1.1 }}>
           {greeting}, {firstName}.
         </h1>
-        <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
+        <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--text-faint))', marginTop: '4px' }}>
           {dateStr}
         </p>
       </div>
 
       {/* ROW 1.5: Active Zone — Aria's orchestration surface (AZ5/6).
-          Renders up to 3 tiles ranked by priority, or the empty-state
-          Aria voice panel when there's nothing to surface. Refresh-
-          debounced via azRefreshKey wired by AZ7. */}
-      <section className="px-1 md:px-0 mb-3 hidden md:block" aria-label="Active Zone">
-        <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="material-symbols-outlined text-primary" style={{ fontSize: '14px' }}>auto_awesome</span>
-          <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-primary">Active Zone</h2>
-        </div>
+          Renders up to 3 tiles ranked by priority. When there are no
+          tiles the orchestrator returns null and this section collapses
+          to nothing (no label, no empty-state). Refresh-debounced via
+          azRefreshKey wired by AZ7. */}
+      {/* Active Zone + Command Center capped to ~66vh as the dashboard's
+          focal block; the chat scrolls inside the CC card and the page
+          scrolls below for Timeline/Tasks. `contents` keeps mobile (where
+          AZ is hidden + CC is fixed) completely unaffected. */}
+      <div className="contents md:flex md:flex-col md:h-[66vh]">
+      <section className={`px-1 md:px-0 hidden md:block md:shrink-0 ${azIsEmpty ? '' : 'mb-3'}`} aria-label="Active Zone">
         <div className="space-y-2">
-          {azIsEmpty && (
-            <ActiveZoneVoice apiFetch={apiFetch} authToken={authToken} refreshKey={azRefreshKey} />
-          )}
           <ActiveZoneOrchestrator
           apiFetch={apiFetch}
           authToken={authToken}
@@ -2801,18 +2834,18 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           bar (56px / top-14) and the bottom nav (64px / bottom-16) so
           the input stays above the nav regardless of browser-chrome
           animations. Desktop: static flex-col card with max-height cap. */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:max-h-[calc(100vh-300px)] z-30 md:z-auto" style={{ width: '100%' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:flex-1 md:min-h-0 z-30 md:z-auto" style={{ width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5" style={{ flexShrink: 0 }}>
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-lg" style={{ color: '#4f4dcf' }}>auto_awesome</span>
-            <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: '#4f4dcf' }}>Command Center</h3>
+            <span className="material-symbols-outlined text-lg" style={{ color: 'rgb(var(--accent))' }}>auto_awesome</span>
+            <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: 'rgb(var(--accent))' }}>Command Center</h3>
           </div>
           <select
             value={backend}
             onChange={(e) => onBackendChange(e.target.value)}
             className="bg-transparent border-none focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
-            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, color: '#4f4dcf' }}
+            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, color: 'rgb(var(--accent))' }}
           >
             <option value="claude">Claude</option>
             <option value="chatgpt">ChatGPT</option>
@@ -2934,12 +2967,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         <div ref={ccScrollRef} onScroll={handleCcScroll} className="flex-1 min-h-0 overflow-y-auto" style={{ fontFamily: 'Manrope, sans-serif', scrollBehavior: 'smooth' }}>
          <div className="px-5 py-3 space-y-3">
           {ccLoading ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: '#4f4dcf' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: 'rgb(var(--accent))' }}>
               <span className="material-symbols-outlined" style={{ animation: 'spin 1s linear infinite', fontSize: '24px' }}>auto_awesome</span>
-              <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', color: '#6b7280', transition: 'opacity 0.3s' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>
+              <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', color: 'rgb(var(--text-secondary))', transition: 'opacity 0.3s' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>
             </div>
           ) : ccMessages.length === 0 ? (
-            <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: '#6b7280' }}>No messages yet.</p>
+            <p style={{ fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', color: 'rgb(var(--text-secondary))' }}>No messages yet.</p>
           ) : (
             <>
               {ccMessages.map((msg, i) => {
@@ -2991,15 +3024,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   return (
                     <div key={msg.ts || i} className="flex justify-start">
                       <div
-                        className="max-w-[92%] w-full bg-white border border-gray-200 rounded-xl shadow-sm"
+                        className="max-w-[92%] w-full bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm"
                         style={{ fontFamily: 'Manrope, sans-serif' }}
                       >
-                        <div style={{ padding: '12px 14px', fontSize: '13px', color: '#374151' }}>
-                          <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
+                        <div style={{ padding: '12px 14px', fontSize: '13px', color: 'rgb(var(--text-primary))' }}>
+                          <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '11px', color: 'rgb(var(--text-secondary))', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
                             Email draft
                           </div>
                           <div className="grid grid-cols-[56px_1fr] gap-y-1 gap-x-2">
-                            <div className="text-gray-400">From</div>
+                            <div className="text-text-faint">From</div>
                             {multiAccount ? (
                               <select
                                 defaultValue={currentFrom}
@@ -3007,7 +3040,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                                 style={{
                                   fontFamily: 'Manrope, sans-serif',
                                   fontSize: '13px',
-                                  color: '#1f2937',
+                                  color: 'rgb(var(--text-primary))',
                                   background: 'transparent',
                                   border: 'none',
                                   padding: 0,
@@ -3023,9 +3056,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                                 ))}
                               </select>
                             ) : (
-                              <div className="text-gray-800 truncate">{currentFrom || '—'}</div>
+                              <div className="text-on-surface truncate">{currentFrom || '—'}</div>
                             )}
-                            <div className="text-gray-400">To</div>
+                            <div className="text-text-faint">To</div>
                             <input
                               type="text"
                               defaultValue={d.to || ''}
@@ -3034,7 +3067,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                               style={{
                                 fontFamily: 'Manrope, sans-serif',
                                 fontSize: '13px',
-                                color: '#1f2937',
+                                color: 'rgb(var(--text-primary))',
                                 background: 'transparent',
                                 border: 'none',
                                 borderBottom: '1px solid transparent',
@@ -3043,13 +3076,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                                 outline: 'none',
                                 width: '100%',
                               }}
-                              onFocus={(e) => { e.target.style.borderBottom = '1px solid rgba(79,77,207,0.4)'; }}
+                              onFocus={(e) => { e.target.style.borderBottom = '1px solid rgb(var(--accent) / 0.4)'; }}
                               onBlur={(e) => { e.target.style.borderBottom = '1px solid transparent'; }}
                             />
-                            <div className="text-gray-400">Subject</div><div className="text-gray-800" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
+                            <div className="text-text-faint">Subject</div><div className="text-on-surface" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
                           </div>
                         </div>
-                        <div style={{ borderTop: '1px solid #e5e7eb' }} />
+                        <div style={{ borderTop: '1px solid rgb(var(--surface-container-high))' }} />
                         <textarea
                           defaultValue={d.body || ''}
                           onChange={(e) => { draftBodyRef.current[msg.ts] = e.target.value; }}
@@ -3061,7 +3094,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                             fontFamily: 'Manrope, sans-serif',
                             fontSize: '13px',
                             lineHeight: '1.55',
-                            color: '#1f2937',
+                            color: 'rgb(var(--text-primary))',
                             background: 'transparent',
                             border: 'none',
                             borderTop: '1px solid transparent',
@@ -3072,7 +3105,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                             maxHeight: '320px',
                             boxSizing: 'border-box',
                           }}
-                          onFocus={(e) => { e.target.style.borderTop = '1px solid rgba(79,77,207,0.4)'; }}
+                          onFocus={(e) => { e.target.style.borderTop = '1px solid rgb(var(--accent) / 0.4)'; }}
                           onBlur={(e) => { e.target.style.borderTop = '1px solid transparent'; }}
                         />
                       </div>
@@ -3135,13 +3168,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     <div key={msg.ts || i} className="flex justify-start">
                       <div
                         className="max-w-[85%] border"
-                        style={{ backgroundColor: '#fbf8fe', borderColor: 'rgba(79,77,207,0.2)', fontFamily: 'Manrope, sans-serif', fontSize: '14px', lineHeight: '1.5', borderRadius: '12px', padding: '12px 14px' }}
+                        style={{ backgroundColor: 'rgb(var(--surface))', borderColor: 'rgb(var(--accent) / 0.2)', fontFamily: 'Manrope, sans-serif', fontSize: '14px', lineHeight: '1.5', borderRadius: '12px', padding: '12px 14px' }}
                       >
-                        <div style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '13px', color: '#4f4dcf', marginBottom: '6px' }}>
+                        <div style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '13px', color: 'rgb(var(--accent))', marginBottom: '6px' }}>
                           <span className="material-symbols-outlined" style={{ fontSize: '16px', verticalAlign: 'text-bottom', marginRight: '4px' }}>priority_high</span>
                           Approval required
                         </div>
-                        <div style={{ color: '#1f2937', marginBottom: '4px' }}>
+                        <div style={{ color: 'rgb(var(--text-primary))', marginBottom: '4px' }}>
                           {msg.tool === 'send_email' && <>Send email to <b>{p.to}</b>?</>}
                           {msg.tool === 'reply_email' && <>Reply on thread <b>{p.thread_id}</b>?</>}
                           {msg.tool === 'delete_task' && <>Delete task <b>{p.task_id}</b>?</>}
@@ -3149,31 +3182,31 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                           {!['send_email','reply_email','delete_task','delete_event'].includes(msg.tool) && <>Confirm {msg.tool}?</>}
                         </div>
                         {p.subject && (
-                          <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                          <div style={{ fontSize: '13px', color: 'rgb(var(--text-primary))', marginBottom: '2px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
                             Subject: {p.subject}
                           </div>
                         )}
                         {preview && (
-                          <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px', whiteSpace: 'pre-wrap' }}>
+                          <div style={{ fontSize: '12px', color: 'rgb(var(--text-secondary))', marginBottom: '8px', whiteSpace: 'pre-wrap' }}>
                             {preview}
                           </div>
                         )}
                         {msg.status === 'pending' && (
                           <div className="flex gap-2 mt-2">
                             <button onClick={() => handleConfirm(true)}
-                              style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '12px', fontWeight: 600, background: '#4f4dcf', color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer' }}>
+                              style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '12px', fontWeight: 600, background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))', border: 'none', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer' }}>
                               ✓ Send
                             </button>
                             <button onClick={() => handleConfirm(false)}
-                              style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '12px', fontWeight: 600, background: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.3)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer' }}>
+                              style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '12px', fontWeight: 600, background: 'transparent', color: 'rgb(var(--accent))', border: '1px solid rgb(var(--accent) / 0.3)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer' }}>
                               ✗ Cancel
                             </button>
                           </div>
                         )}
-                        {msg.status === 'approved' && <div style={{ fontSize: '12px', color: '#059669', fontWeight: 600 }}>Sent ✓</div>}
-                        {msg.status === 'rejected' && <div style={{ fontSize: '12px', color: '#6b7280' }}>Cancelled</div>}
-                        {msg.status === 'expired' && <div style={{ fontSize: '12px', color: '#6b7280' }}>Expired</div>}
-                        {msg.status === 'error' && <div style={{ fontSize: '12px', color: '#dc2626' }}>Confirmation failed</div>}
+                        {msg.status === 'approved' && <div style={{ fontSize: '12px', color: 'rgb(var(--success))', fontWeight: 600 }}>Sent ✓</div>}
+                        {msg.status === 'rejected' && <div style={{ fontSize: '12px', color: 'rgb(var(--text-secondary))' }}>Cancelled</div>}
+                        {msg.status === 'expired' && <div style={{ fontSize: '12px', color: 'rgb(var(--text-secondary))' }}>Expired</div>}
+                        {msg.status === 'error' && <div style={{ fontSize: '12px', color: 'rgb(var(--danger))' }}>Confirmation failed</div>}
                       </div>
                     </div>
                   );
@@ -3182,7 +3215,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   return (
                     <div key={msg.ts || i} className="flex justify-center my-1">
                       <span
-                        className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-3 py-1"
+                        className="inline-flex items-center gap-1.5 text-[11px] text-on-surface-variant bg-surface-container border border-outline-variant rounded-full px-3 py-1"
                         style={{ fontFamily: 'Manrope, sans-serif' }}
                       >
                         <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>info</span>
@@ -3202,17 +3235,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 return (
                   <div key={msg.ts || i} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                     <div
-                      className={`max-w-[85%] ${isUser ? 'text-white' : ''}`}
+                      className="max-w-[85%]"
                       style={isUser
-                        ? { backgroundColor: '#4f4dcf', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
-                        : { backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+                        ? { backgroundColor: 'rgb(var(--surface-card))', color: 'rgb(var(--text-primary))', border: '1px solid var(--border)', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '16px', borderTopRightRadius: '5px', padding: '12px 16px', boxShadow: '0 2px 8px rgba(16,24,40,0.06)' }
+                        : { background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-deep)))', color: 'rgb(var(--accent-contrast))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '16px', borderTopLeftRadius: '5px', padding: '12px 16px', boxShadow: '0 6px 22px rgb(var(--accent) / 0.35)' }
                       }
                     >
                       {msg.content
                         ? (isUser
                             ? msg.content
                             : <ReactMarkdown components={MD_COMPONENTS}>{msg.content}</ReactMarkdown>)
-                        : <span className="animate-pulse" style={{ color: '#6b7280' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>}
+                        : <span className="animate-pulse" style={{ color: 'rgb(var(--accent-contrast) / 0.85)' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>}
                     </div>
                     {!isUser && Array.isArray(msg.loadedSkills) && msg.loadedSkills.length > 0 && (
                       <div style={{ marginTop: 4, marginLeft: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -3222,7 +3255,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                             onClick={() => { window.dispatchEvent(new CustomEvent('navigate-app', { detail: { view: 'agents' } })); }}
                             title={s.reason ? `Loaded because: ${s.reason}` : 'Loaded skill'}
                             style={{
-                              fontSize: 11, color: '#6b7280', background: 'transparent',
+                              fontSize: 11, color: 'rgb(var(--text-secondary))', background: 'transparent',
                               border: 'none', padding: '0 4px', cursor: 'pointer',
                               fontFamily: 'Manrope, sans-serif',
                             }}
@@ -3244,7 +3277,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               })}
               {ccRefreshing && (
                 <div className="flex justify-start">
-                  <div style={{ backgroundColor: '#f5f2fa', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }}>
+                  <div style={{ background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-deep)))', color: 'rgb(var(--accent-contrast))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '16px', borderTopLeftRadius: '5px', padding: '12px 16px', boxShadow: '0 6px 22px rgb(var(--accent) / 0.35)' }}>
                     <span className="animate-pulse">Updating...</span>
                   </div>
                 </div>
@@ -3253,7 +3286,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 <div className="flex justify-start pt-1">
                   <button
                     onClick={handleFreshUpdate}
-                    style={{ fontFamily: 'Manrope, sans-serif', fontSize: '12px', fontWeight: 600, color: '#4f4dcf', background: 'none', border: '1px solid rgba(79,77,207,0.2)', borderRadius: '16px', padding: '4px 12px', cursor: 'pointer' }}
+                    style={{ fontFamily: 'Manrope, sans-serif', fontSize: '12px', fontWeight: 600, color: 'rgb(var(--accent))', background: 'none', border: '1px solid rgb(var(--accent) / 0.2)', borderRadius: '16px', padding: '4px 12px', cursor: 'pointer' }}
                     className="hover:bg-primary/5 transition-colors"
                   >
                     ✦ Get update
@@ -3267,14 +3300,14 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         {/* Input — static in the flex-col flow. CC container is
             fixed-sized on mobile (top-14 to bottom-16), so the input
             naturally sits above the bottom nav. Hidden until brief loads. */}
-        {!ccLoading && <div className="flex-shrink-0 px-4 py-3 border-t border-primary/5 flex items-center gap-2 bg-white">
+        {!ccLoading && <div className="flex-shrink-0 px-4 py-3 border-t border-primary/5 flex items-center gap-2 bg-surface-container-lowest">
           {/* Voice replies toggle — speaker icon. Persisted in localStorage. */}
           <button
             onClick={toggleVoiceReplies}
             aria-label={voiceRepliesEnabled ? 'Disable voice replies' : 'Enable voice replies'}
             title={voiceRepliesEnabled ? 'Voice replies on — click to mute Aria' : 'Voice replies off — click to hear Aria'}
             className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all hover:bg-primary/5"
-            style={{ color: voiceRepliesEnabled ? '#4f4dcf' : '#999' }}
+            style={{ color: voiceRepliesEnabled ? 'rgb(var(--accent))' : 'rgb(var(--text-faint))' }}
           >
             <span className="material-symbols-outlined text-base">
               {voiceRepliesEnabled ? 'volume_up' : 'volume_off'}
@@ -3282,16 +3315,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           </button>
           <div className="flex-1 relative">
             <input
+              ref={ccInputRef}
               type="text"
               value={ccInput}
               onChange={(e) => setCcInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCcSend(); } }}
               placeholder={isListening ? '🔴 Listening — click mic again to send' : `Ask ${assistantName} anything...`}
-              className="w-full bg-transparent focus:ring-0 placeholder:text-[#555] outline-none"
+              className="w-full bg-transparent focus:ring-0 placeholder:text-text-faint outline-none"
               style={{
                 fontFamily: 'Manrope, sans-serif',
                 fontSize: '15px',
-                border: isListening ? '2px solid #dc2626' : '1px solid #4f4dcf',
+                border: isListening ? '2px solid rgb(var(--danger))' : '1px solid rgb(var(--accent))',
                 borderRadius: '8px',
                 padding: '8px 12px',
                 paddingRight: isListening ? '70px' : '12px',
@@ -3302,9 +3336,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             {isListening && (
               <span
                 className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-xs font-semibold"
-                style={{ color: '#dc2626' }}
+                style={{ color: 'rgb(var(--danger))' }}
               >
-                <span className="inline-block w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: '#dc2626' }} />
+                <span className="inline-block w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: 'rgb(var(--danger))' }} />
                 REC
               </span>
             )}
@@ -3317,9 +3351,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               aria-label={isListening ? 'Stop listening' : 'Start voice input'}
               title={isListening ? 'Stop listening' : 'Hold/click to speak'}
               className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all ${isListening ? 'animate-pulse' : 'hover:bg-primary/5'}`}
-              style={{ backgroundColor: isListening ? '#fee2e2' : 'transparent', border: isListening ? '1px solid #fecaca' : 'none' }}
+              style={{ backgroundColor: isListening ? 'rgb(var(--danger-surface))' : 'transparent', border: isListening ? '1px solid rgb(var(--danger))' : 'none' }}
             >
-              <span className="material-symbols-outlined text-base" style={{ color: isListening ? '#dc2626' : '#4f4dcf' }}>
+              <span className="material-symbols-outlined text-base" style={{ color: isListening ? 'rgb(var(--danger))' : 'rgb(var(--accent))' }}>
                 {isListening ? 'mic' : 'mic_none'}
               </span>
             </button>
@@ -3330,9 +3364,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               aria-label="Stop generating"
               title="Stop generating"
               className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all hover:brightness-110"
-              style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca' }}
+              style={{ backgroundColor: 'rgb(var(--danger-surface))', border: '1px solid rgb(var(--danger))' }}
             >
-              <span className="material-symbols-outlined text-base" style={{ color: '#dc2626' }}>stop_circle</span>
+              <span className="material-symbols-outlined text-base" style={{ color: 'rgb(var(--danger))' }}>stop_circle</span>
             </button>
           ) : (
             <button
@@ -3340,12 +3374,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               disabled={!ccInput.trim()}
               aria-label="Send message"
               className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
-              style={{ backgroundColor: ccInput.trim() ? '#4f4dcf' : 'transparent' }}
+              style={{ backgroundColor: ccInput.trim() ? 'rgb(var(--accent))' : 'transparent' }}
             >
-              <span className={`material-symbols-outlined text-base ${ccInput.trim() ? 'text-white' : 'text-slate-400'}`}>send</span>
+              <span className={`material-symbols-outlined text-base ${ccInput.trim() ? 'text-on-primary' : 'text-text-faint'}`}>send</span>
             </button>
           )}
         </div>}
+      </div>
       </div>
 
       {/* ROW 4: Timeline + Tasks + Upcoming — desktop-only; mobile
@@ -3363,7 +3398,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   <span className="material-symbols-outlined text-on-surface-variant text-base">calendar_today</span>
                 </div>
                 <div className="bg-surface-container-low p-3 rounded-xl shadow-sm">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Today</span>
+                  <span className="text-[8px] font-bold text-text-faint uppercase tracking-widest">Today</span>
                   <h4 className="text-sm font-bold mt-1 text-on-surface-variant">No events scheduled</h4>
                   <button onClick={() => onNavigate('calendar')} className="text-primary text-[10px] font-bold mt-1 hover:underline">Open Calendar</button>
                 </div>
@@ -3383,7 +3418,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     </div>
                     <div className={`${i===1?'border-l-4 border-primary ':''} ${i===2?'bg-surface-container-low':'bg-surface-container-lowest'} p-3 rounded-xl shadow-sm hover:shadow-md transition-shadow flex items-start gap-2`}>
                       <div className="flex-1 min-w-0">
-                        <span className={`text-[8px] font-bold uppercase tracking-widest ${i===0?'text-primary':'text-slate-400'}`}>{timeStr}</span>
+                        <span className={`text-[8px] font-bold uppercase tracking-widest ${i===0?'text-primary':'text-text-faint'}`}>{timeStr}</span>
                         <h4 className="text-sm font-bold mt-1">{ev.title}</h4>
                       </div>
                       {isEventPast(ev) && renderEventNoteAction(ev)}
@@ -3509,12 +3544,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {notes.filter((n) => n.type !== 'digest').slice(0,3).map((note, i) => {
-            const borders = ['border-[#4f4dcf]', 'border-tertiary', 'border-error'];
+            const borders = ['border-primary', 'border-tertiary', 'border-error'];
             const hovers = ['group-hover:text-primary', 'group-hover:text-tertiary', 'group-hover:text-error'];
             const timeAgo = note.updatedAt ? (() => { const diff = Date.now() - new Date(note.updatedAt).getTime(); const h = Math.floor(diff/3600000); if(h<1) return 'Just now'; if(h<24) return 'Modified '+h+'h ago'; if(h<48) return 'Modified Yesterday'; return 'Modified '+Math.floor(h/24)+'d ago'; })() : '';
             return (
               <button key={note.id} onClick={() => onOpenNote(note)} className={'bg-surface-container-lowest p-5 rounded-xl shadow-sm border-t-4 '+borders[i%3]+' group hover:scale-[1.01] transition-transform cursor-pointer border-x border-b border-x-surface-container-low border-b-surface-container-low text-left w-full'}>
-                <span className="text-[8px] font-bold uppercase text-slate-400 tracking-widest">{timeAgo}</span>
+                <span className="text-[8px] font-bold uppercase text-text-faint tracking-widest">{timeAgo}</span>
                 <h4 className={'text-sm font-bold mt-2 '+hovers[i%3]+' transition-colors'}>{note.title || 'Untitled'}</h4>
                 <p className="text-on-surface-variant text-[11px] mt-2.5 line-clamp-3 leading-relaxed">{(note.content||'').replace(/<[^>]+>/g,'').slice(0,120)}</p>
               </button>
@@ -3538,15 +3573,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         <div className="grid grid-cols-4 gap-3">
           <div className="bg-surface-container-lowest rounded-xl p-4 shadow-sm border border-surface-container-low group hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-3">
-              <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center">
-                <span className="material-symbols-outlined text-emerald-500 text-lg">task_alt</span>
+              <div className="w-8 h-8 rounded-full bg-success-surface flex items-center justify-center">
+                <span className="material-symbols-outlined text-success text-lg">task_alt</span>
               </div>
-              <span className="text-[8px] font-bold uppercase tracking-wider text-emerald-500 bg-emerald-50 px-2 py-0.5 rounded-full">On Time</span>
+              <span className="text-[8px] font-bold uppercase tracking-wider text-success bg-success-surface px-2 py-0.5 rounded-full">On Time</span>
             </div>
             <p className="text-3xl font-extrabold font-headline text-on-background leading-none">{String(completedOnTime).padStart(2,'0')}</p>
             <p className="text-[10px] text-on-surface-variant font-medium mt-1">tasks completed on time</p>
             <div className="mt-3 h-1 bg-surface-container-high rounded-full overflow-hidden">
-              <div className="h-full bg-emerald-400 rounded-full" style={{width:onTimePct+'%'}} />
+              <div className="h-full bg-success rounded-full" style={{width:onTimePct+'%'}} />
             </div>
             <p className="text-[8px] text-on-surface-variant mt-1">{onTimePct}% of total</p>
           </div>
@@ -3566,15 +3601,15 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           </div>
           <div className="bg-surface-container-lowest rounded-xl p-4 shadow-sm border border-surface-container-low group hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-3">
-              <div className="w-8 h-8 rounded-full bg-amber-50 flex items-center justify-center">
-                <span className="material-symbols-outlined text-amber-500 text-lg">schedule</span>
+              <div className="w-8 h-8 rounded-full bg-warning-surface flex items-center justify-center">
+                <span className="material-symbols-outlined text-warning text-lg">schedule</span>
               </div>
-              <span className="text-[8px] font-bold uppercase tracking-wider text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">Late</span>
+              <span className="text-[8px] font-bold uppercase tracking-wider text-warning bg-warning-surface px-2 py-0.5 rounded-full">Late</span>
             </div>
             <p className="text-3xl font-extrabold font-headline text-on-background leading-none">{String(completedLate).padStart(2,'0')}</p>
             <p className="text-[10px] text-on-surface-variant font-medium mt-1">tasks completed late</p>
             <div className="mt-3 h-1 bg-surface-container-high rounded-full overflow-hidden">
-              <div className="h-full bg-amber-400 rounded-full" style={{width:latePct+'%'}} />
+              <div className="h-full bg-warning rounded-full" style={{width:latePct+'%'}} />
             </div>
             <p className="text-[8px] text-on-surface-variant mt-1">{latePct}% of total</p>
           </div>
@@ -3620,10 +3655,10 @@ const ROW_BTN_STYLE = {
   fontFamily: "'Plus Jakarta Sans', sans-serif",
   fontSize: '11px',
   padding: '2px 8px',
-  border: '0.5px solid #d1d5db',
+  border: '0.5px solid rgb(var(--outline-variant))',
   borderRadius: '8px',
   background: 'transparent',
-  color: '#4b5563',
+  color: 'rgb(var(--text-secondary))',
   cursor: 'pointer',
   transition: 'background 120ms',
 };
@@ -3640,9 +3675,9 @@ function ErrorBubble({ details }) {
       <div
         className="max-w-[85%]"
         style={{
-          background: '#fef2f2',
-          border: '1px solid #fecaca',
-          color: '#991b1b',
+          background: 'rgb(var(--danger-surface))',
+          border: '1px solid rgb(var(--danger))',
+          color: 'rgb(var(--danger))',
           fontFamily: 'Manrope, sans-serif',
           fontSize: '14px',
           lineHeight: '1.5',
@@ -3658,7 +3693,7 @@ function ErrorBubble({ details }) {
               marginTop: 6,
               fontSize: '12px',
               fontWeight: 600,
-              color: '#7f1d1d',
+              color: 'rgb(var(--danger))',
               background: 'transparent',
               border: 'none',
               padding: 0,
@@ -3674,14 +3709,14 @@ function ErrorBubble({ details }) {
             style={{
               marginTop: 6,
               padding: '8px 10px',
-              background: '#fff5f5',
-              border: '1px solid #fecaca',
+              background: 'rgb(var(--danger-surface))',
+              border: '1px solid rgb(var(--danger))',
               borderRadius: 6,
               fontSize: '11px',
               fontFamily: 'Menlo, Monaco, Consolas, monospace',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              color: '#7f1d1d',
+              color: 'rgb(var(--danger))',
               maxHeight: 200,
               overflow: 'auto',
             }}
@@ -3728,8 +3763,8 @@ function SubAgentTile({ sessionId, apiFetch }) {
   if (!session) {
     return (
       <div style={{
-        fontSize: 12, color: '#6b7280', padding: '8px 12px',
-        background: '#f5f2fa', borderRadius: 8, border: '1px solid #e5e7eb',
+        fontSize: 12, color: 'rgb(var(--text-secondary))', padding: '8px 12px',
+        background: 'rgb(var(--surface-container-low))', borderRadius: 8, border: '1px solid rgb(var(--surface-container-high))',
         fontFamily: 'Manrope, sans-serif', maxWidth: 480,
       }}>
         🔬 Research dispatched…
@@ -3742,13 +3777,13 @@ function SubAgentTile({ sessionId, apiFetch }) {
   const budget = session.budget || {};
 
   const statusStyles = {
-    queued:            { bg: '#f5f2fa', text: '#6b7280', label: 'queued' },
-    running:           { bg: '#dbeafe', text: '#1e40af', label: 'running' },
-    completed:         { bg: '#dcfce7', text: '#166534', label: 'done' },
-    failed:            { bg: '#fee2e2', text: '#991b1b', label: 'failed' },
-    budget_exhausted:  { bg: '#fef3c7', text: '#92400e', label: 'budget reached' },
-    killed:            { bg: '#f3f4f6', text: '#374151', label: 'cancelled' },
-    stagnated:         { bg: '#f3f4f6', text: '#374151', label: 'stagnated' },
+    queued:            { bg: 'rgb(var(--surface-container-low))', text: 'rgb(var(--text-secondary))', label: 'queued' },
+    running:           { bg: 'rgb(var(--accent-surface))', text: 'rgb(var(--accent))', label: 'running' },
+    completed:         { bg: 'rgb(var(--success-surface))', text: 'rgb(var(--success))', label: 'done' },
+    failed:            { bg: 'rgb(var(--danger-surface))', text: 'rgb(var(--danger))', label: 'failed' },
+    budget_exhausted:  { bg: 'rgb(var(--warning-surface))', text: 'rgb(var(--warning))', label: 'budget reached' },
+    killed:            { bg: 'rgb(var(--surface-container))', text: 'rgb(var(--text-primary))', label: 'cancelled' },
+    stagnated:         { bg: 'rgb(var(--surface-container))', text: 'rgb(var(--text-primary))', label: 'stagnated' },
   };
   const s = statusStyles[session.status] || statusStyles.completed;
 
@@ -3760,7 +3795,7 @@ function SubAgentTile({ sessionId, apiFetch }) {
       onClick={goToDetail}
       style={{
         textAlign: 'left', padding: '10px 12px', background: s.bg,
-        borderRadius: 8, border: '1px solid #e5e7eb',
+        borderRadius: 8, border: '1px solid rgb(var(--surface-container-high))',
         fontFamily: 'Manrope, sans-serif', cursor: 'pointer', maxWidth: 540,
         display: 'block', width: '100%',
       }}
@@ -3771,13 +3806,13 @@ function SubAgentTile({ sessionId, apiFetch }) {
           {s.label}
         </span>
         {isActive && session.currentPhase && (
-          <span style={{ fontSize: 11, color: '#6b7280' }}>· {session.currentPhase}</span>
+          <span style={{ fontSize: 11, color: 'rgb(var(--text-secondary))' }}>· {session.currentPhase}</span>
         )}
         {!isActive && findingCount > 0 && (
-          <span style={{ fontSize: 11, color: '#6b7280' }}>· {findingCount} finding{findingCount === 1 ? '' : 's'}</span>
+          <span style={{ fontSize: 11, color: 'rgb(var(--text-secondary))' }}>· {findingCount} finding{findingCount === 1 ? '' : 's'}</span>
         )}
       </div>
-      <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.4 }}>
+      <div style={{ fontSize: 13, color: 'rgb(var(--text-primary))', lineHeight: 1.4 }}>
         {summary || (isActive
           ? `Tool calls ${used.tool_calls || 0}/${budget.tool_calls || 30} · click to view trace`
           : `Click to view ${session.status === 'completed' ? 'result' : 'details'}`)}
@@ -3791,7 +3826,7 @@ function RowButton({ children, onClick }) {
     <button
       onClick={onClick}
       style={ROW_BTN_STYLE}
-      onMouseEnter={(e) => { e.currentTarget.style.background = '#f3f4f6'; }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgb(var(--surface-container))'; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
     >
       {children}
@@ -3820,8 +3855,8 @@ function ActiveZone({
   const wrapperStyle = {
     flexShrink: 0,
     padding: '14px 16px',
-    borderBottom: '0.5px solid rgba(79,77,207,0.08)',
-    background: '#fcfbff',
+    borderBottom: '0.5px solid rgb(var(--accent) / 0.08)',
+    background: 'rgb(var(--surface))',
   };
 
 
@@ -3834,8 +3869,8 @@ function ActiveZone({
     return (
       <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
-          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'rgb(var(--accent))', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: 'rgb(var(--accent))', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             {activeTile.type === 'task' ? 'Task draft' : activeTile.type === 'project' ? 'Project draft' : activeTile.type === 'project_task' ? 'Project task draft' : activeTile.type === 'checklist' ? 'Checklist draft' : 'Event draft'}
           </span>
         </div>
@@ -3865,47 +3900,47 @@ function ActiveZone({
     return (
       <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
-          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#4f4dcf', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Email draft</span>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'rgb(var(--accent))', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: 'rgb(var(--accent))', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Email draft</span>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm" style={{ fontFamily: 'Manrope, sans-serif' }}>
-          <div style={{ padding: '12px 14px', fontSize: '13px', color: '#374151' }}>
+        <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm" style={{ fontFamily: 'Manrope, sans-serif' }}>
+          <div style={{ padding: '12px 14px', fontSize: '13px', color: 'rgb(var(--text-primary))' }}>
             <div className="grid grid-cols-[56px_1fr] gap-y-1 gap-x-2">
-              <div className="text-gray-400">From</div>
+              <div className="text-text-faint">From</div>
               {multiAccount ? (
                 <select
                   defaultValue={currentFrom}
                   onChange={(e) => { draftFromRef.current[activeTile.ts] = e.target.value; }}
-                  style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#1f2937', background: 'transparent', border: 'none', padding: 0, outline: 'none', cursor: 'pointer' }}
+                  style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--text-primary))', background: 'transparent', border: 'none', padding: 0, outline: 'none', cursor: 'pointer' }}
                 >
                   {gmailAccounts.map((a) => (
                     <option key={a.account_email} value={a.account_email}>{a.account_email}</option>
                   ))}
                 </select>
               ) : (
-                <div className="text-gray-800 truncate">{currentFrom || '—'}</div>
+                <div className="text-on-surface truncate">{currentFrom || '—'}</div>
               )}
-              <div className="text-gray-400">To</div>
+              <div className="text-text-faint">To</div>
               <input
                 type="text"
                 defaultValue={d.to || ''}
                 onChange={(e) => { draftToRef.current[activeTile.ts] = e.target.value; }}
                 placeholder="recipient@email.com"
-                style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#1f2937', background: 'transparent', border: 'none', borderBottom: '1px solid transparent', padding: '1px 0', outline: 'none', width: '100%' }}
-                onFocus={(e) => { e.target.style.borderBottom = '1px solid rgba(79,77,207,0.4)'; }}
+                style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--text-primary))', background: 'transparent', border: 'none', borderBottom: '1px solid transparent', padding: '1px 0', outline: 'none', width: '100%' }}
+                onFocus={(e) => { e.target.style.borderBottom = '1px solid rgb(var(--accent) / 0.4)'; }}
                 onBlur={(e) => { e.target.style.borderBottom = '1px solid transparent'; }}
               />
-              <div className="text-gray-400">Subject</div>
-              <div className="text-gray-800" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
+              <div className="text-text-faint">Subject</div>
+              <div className="text-on-surface" style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{d.subject || '—'}</div>
             </div>
           </div>
-          <div style={{ borderTop: '1px solid #e5e7eb' }} />
+          <div style={{ borderTop: '1px solid rgb(var(--surface-container-high))' }} />
           <textarea
             defaultValue={d.body || ''}
             onChange={(e) => { draftBodyRef.current[activeTile.ts] = e.target.value; }}
             placeholder="Email body"
-            style={{ display: 'block', width: '100%', padding: '12px 14px', fontFamily: 'Manrope, sans-serif', fontSize: '13px', lineHeight: '1.55', color: '#1f2937', background: 'transparent', border: 'none', borderTop: '1px solid transparent', outline: 'none', resize: 'vertical', minHeight: '80px', maxHeight: '320px', boxSizing: 'border-box' }}
-            onFocus={(e) => { e.target.style.borderTop = '1px solid rgba(79,77,207,0.4)'; }}
+            style={{ display: 'block', width: '100%', padding: '12px 14px', fontFamily: 'Manrope, sans-serif', fontSize: '13px', lineHeight: '1.55', color: 'rgb(var(--text-primary))', background: 'transparent', border: 'none', borderTop: '1px solid transparent', outline: 'none', resize: 'vertical', minHeight: '80px', maxHeight: '320px', boxSizing: 'border-box' }}
+            onFocus={(e) => { e.target.style.borderTop = '1px solid rgb(var(--accent) / 0.4)'; }}
             onBlur={(e) => { e.target.style.borderTop = '1px solid transparent'; }}
           />
         </div>
@@ -3918,12 +3953,12 @@ function ActiveZone({
     return (
       <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4f4dcf', animation: 'pulse 1.5s infinite' }} />
-          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: '#1f2937' }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'rgb(var(--accent))', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: 'rgb(var(--text-primary))' }}>
             {event.title || 'Meeting'} just ended
           </span>
         </div>
-        <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+        <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12, color: 'rgb(var(--text-secondary))', marginBottom: 8 }}>
           Any notes? I&apos;ll save them.
         </div>
         <textarea
@@ -3933,13 +3968,13 @@ function ActiveZone({
           placeholder="What came out of it? Decisions, follow-ups, anything worth remembering..."
           style={{
             display: 'block', width: '100%', padding: '10px 12px',
-            fontFamily: 'Manrope, sans-serif', fontSize: 13, lineHeight: 1.55, color: '#1f2937',
-            background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+            fontFamily: 'Manrope, sans-serif', fontSize: 13, lineHeight: 1.55, color: 'rgb(var(--text-primary))',
+            background: 'rgb(var(--surface-container-lowest))', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 8,
             outline: 'none', resize: 'vertical', minHeight: 60, boxSizing: 'border-box',
           }}
         />
         {activeTile.error && (
-          <div style={{ color: '#dc2626', fontSize: 12, marginTop: 6 }}>{activeTile.error}</div>
+          <div style={{ color: 'rgb(var(--danger))', fontSize: 12, marginTop: 6 }}>{activeTile.error}</div>
         )}
         <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
           <button
@@ -3954,7 +3989,7 @@ function ActiveZone({
               const body = el ? el.value : '';
               onSaveMeetingNotes?.(event, body);
             }}
-            style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 12, fontWeight: 600, padding: '4px 12px', background: '#4f4dcf', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+            style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 12, fontWeight: 600, padding: '4px 12px', background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))', border: 'none', borderRadius: 8, cursor: 'pointer' }}
           >
             Save notes
           </button>
@@ -3970,7 +4005,7 @@ function ActiveZone({
   if (state === 'success') {
     return (
       <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#059669' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'rgb(var(--success))' }}>
           <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>check_circle</span>
           <span style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600 }}>Done</span>
         </div>
@@ -4032,12 +4067,12 @@ function CloseLoopTile({ tile, onChange, onDismiss, onConfirm }) {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', animation: 'pulse 1.5s infinite' }} />
-        <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'rgb(var(--warning))', animation: 'pulse 1.5s infinite' }} />
+        <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 10, color: 'rgb(var(--warning))', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
           Close the loop
         </span>
       </div>
-      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 14, color: '#1f2937', fontWeight: 500, marginBottom: 8 }}>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 14, color: 'rgb(var(--text-primary))', fontWeight: 500, marginBottom: 8 }}>
         {payload.title || 'Anything to capture?'}
       </div>
       <textarea
@@ -4051,25 +4086,25 @@ function CloseLoopTile({ tile, onChange, onDismiss, onConfirm }) {
         placeholder="A quick note — outcomes, decisions, follow-ups…"
         style={{
           width: '100%', minHeight: 60, fontSize: 13, padding: '8px 10px',
-          border: '1px solid #e5e7eb', borderRadius: 8, outline: 'none',
+          border: '1px solid rgb(var(--surface-container-high))', borderRadius: 8, outline: 'none',
           resize: 'vertical', fontFamily: 'Manrope, sans-serif',
         }}
       />
       {error && (
-        <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>
+        <div style={{ fontSize: 12, color: 'rgb(var(--danger))', marginTop: 6 }}>{error}</div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
         <button
           onClick={() => onDismiss?.()}
           disabled={executing}
-          style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: executing ? 'default' : 'pointer' }}
+          style={{ fontSize: 12, color: 'rgb(var(--text-secondary))', background: 'transparent', border: 'none', cursor: executing ? 'default' : 'pointer' }}
         >
           Not now
         </button>
         <button
           onClick={handleSave}
           disabled={!text.trim() || executing}
-          style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: (!text.trim() || executing) ? 0.4 : 1 }}
+          style={{ fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: 'rgb(var(--accent))', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: (!text.trim() || executing) ? 0.4 : 1 }}
         >
           {executing ? 'Saving…' : 'Save note'}
         </button>
@@ -4083,11 +4118,11 @@ function CloseLoopTile({ tile, onChange, onDismiss, onConfirm }) {
 // "How did it go?" capture UI shown after a task completes. Status chip +
 // optional narrative; either writes to outcome_records or dismisses.
 const OUTCOME_STATUS_CONFIG = [
-  { key: 'success',   label: '✓ Success',   fg: '#3b6d11', bg: '#eaf3de' },
-  { key: 'mixed',     label: '~ Mixed',     fg: '#534ab7', bg: '#eeedfe' },
-  { key: 'neutral',   label: '— Neutral',   fg: '#534ab7', bg: '#eeedfe' },
-  { key: 'failed',    label: '✗ Failed',    fg: '#a32d2d', bg: '#fcebeb' },
-  { key: 'cancelled', label: '⊘ Cancelled', fg: '#5f5e5a', bg: '#f1efe8' },
+  { key: 'success',   label: '✓ Success',   fg: 'rgb(var(--success))', bg: 'rgb(var(--success-surface))' },
+  { key: 'mixed',     label: '~ Mixed',     fg: 'rgb(var(--accent))', bg: 'rgb(var(--accent-surface))' },
+  { key: 'neutral',   label: '— Neutral',   fg: 'rgb(var(--accent))', bg: 'rgb(var(--accent-surface))' },
+  { key: 'failed',    label: '✗ Failed',    fg: 'rgb(var(--danger))', bg: 'rgb(var(--danger-surface))' },
+  { key: 'cancelled', label: '⊘ Cancelled', fg: 'rgb(var(--text-secondary))', bg: 'rgb(var(--surface-container))' },
 ];
 
 function OutcomePrompt({ tile, onSave, onSkip }) {
@@ -4098,8 +4133,8 @@ function OutcomePrompt({ tile, onSave, onSkip }) {
   const wrapperStyle = {
     flexShrink: 0,
     padding: '14px 16px',
-    borderBottom: '0.5px solid rgba(79,77,207,0.08)',
-    background: '#fcfbff',
+    borderBottom: '0.5px solid rgb(var(--accent) / 0.08)',
+    background: 'rgb(var(--surface))',
   };
 
   const chipBase = {
@@ -4108,9 +4143,9 @@ function OutcomePrompt({ tile, onSave, onSkip }) {
     fontWeight: 600,
     padding: '4px 10px',
     borderRadius: 10,
-    border: '0.5px solid #d1d5db',
+    border: '0.5px solid rgb(var(--outline-variant))',
     background: 'transparent',
-    color: '#4b5563',
+    color: 'rgb(var(--text-secondary))',
     cursor: 'pointer',
     transition: 'background 120ms, color 120ms, border-color 120ms',
   };
@@ -4132,10 +4167,10 @@ function OutcomePrompt({ tile, onSave, onSkip }) {
 
   return (
     <div className="max-h-[40vh] md:max-h-none overflow-y-auto md:overflow-visible" style={wrapperStyle}>
-      <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: '#1f2937' }}>
+      <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: 13, color: 'rgb(var(--text-primary))' }}>
         {tile.taskTitle || 'Task completed'}
       </div>
-      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12, color: '#6b7280', marginTop: 2, marginBottom: 8 }}>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12, color: 'rgb(var(--text-secondary))', marginTop: 2, marginBottom: 8 }}>
         How did it go?
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -4161,13 +4196,13 @@ function OutcomePrompt({ tile, onSave, onSkip }) {
         placeholder="Any notes? Decisions, follow-ups, what actually happened..."
         style={{
           display: 'block', width: '100%', padding: '10px 12px',
-          fontFamily: 'Manrope, sans-serif', fontSize: 13, lineHeight: 1.55, color: '#1f2937',
-          background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+          fontFamily: 'Manrope, sans-serif', fontSize: 13, lineHeight: 1.55, color: 'rgb(var(--text-primary))',
+          background: 'rgb(var(--surface-container-lowest))', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 8,
           outline: 'none', resize: 'vertical', minHeight: 60, boxSizing: 'border-box',
         }}
       />
       {tile.error && (
-        <div style={{ color: '#dc2626', fontSize: 12, marginTop: 6 }}>{tile.error}</div>
+        <div style={{ color: 'rgb(var(--danger))', fontSize: 12, marginTop: 6 }}>{tile.error}</div>
       )}
       <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
         <button
@@ -4180,7 +4215,7 @@ function OutcomePrompt({ tile, onSave, onSkip }) {
         <button
           onClick={handleSave}
           disabled={busy}
-          style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 12, fontWeight: 600, padding: '4px 14px', background: '#4f4dcf', color: '#fff', border: 'none', borderRadius: 8, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.7 : 1 }}
+          style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 12, fontWeight: 600, padding: '4px 14px', background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))', border: 'none', borderRadius: 8, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.7 : 1 }}
         >
           {busy ? 'Saving…' : 'Save'}
         </button>

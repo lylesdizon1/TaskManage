@@ -86,18 +86,18 @@ export default function ContactPickerInput({
         onBlur={commitTyped}
         placeholder="Name or email address"
         disabled={disabled}
-        className="w-full px-2 py-1.5 text-[13px] border border-gray-200 rounded-md focus:outline-none focus:border-[#4f4dcf] disabled:bg-gray-50"
+        className="w-full px-2 py-1.5 text-[13px] border border-outline-variant rounded-md focus:outline-none focus:border-primary disabled:bg-surface-container-low"
         style={{ fontFamily: 'Manrope, sans-serif' }}
       />
       {isResolved && !open && value.display_name && value.display_name !== value.email && (
-        <div className="text-[11px] text-gray-500 mt-0.5 px-1">
+        <div className="text-[11px] text-on-surface-variant mt-0.5 px-1">
           → {value.display_name}
         </div>
       )}
       {open && (matches.length > 0 || loading) && (
-        <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-y-auto">
+        <div className="absolute z-20 left-0 right-0 mt-1 bg-surface-container-lowest border border-outline-variant rounded-md shadow-lg max-h-48 overflow-y-auto">
           {loading && (
-            <div className="px-2 py-1.5 text-[12px] text-gray-400">Searching…</div>
+            <div className="px-2 py-1.5 text-[12px] text-text-faint">Searching…</div>
           )}
           {!loading && matches.map((m, i) => (
             <button
@@ -105,11 +105,11 @@ export default function ContactPickerInput({
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => pickMatch(m)}
-              className="w-full text-left px-2 py-1.5 hover:bg-gray-50 border-b border-gray-100 last:border-0"
+              className="w-full text-left px-2 py-1.5 hover:bg-surface-container-low border-b border-outline-variant last:border-0"
             >
-              <div className="text-[13px] text-gray-900 truncate">{m.displayName}</div>
+              <div className="text-[13px] text-on-surface truncate">{m.displayName}</div>
               {m.displayName !== m.primaryEmail && (
-                <div className="text-[11px] text-gray-500 truncate">{m.primaryEmail}</div>
+                <div className="text-[11px] text-on-surface-variant truncate">{m.primaryEmail}</div>
               )}
             </button>
           ))}

@@ -24,11 +24,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 // available on the server enum but kept off the chip strip for V1
 // since it's a niche signal that confuses the binary user.
 const CHIPS = [
-  { key: 'success',   label: '✓', tooltip: 'Success',    fg: '#3b6d11', bg: '#eaf3de' },
-  { key: 'mixed',     label: '~', tooltip: 'Mixed',      fg: '#534ab7', bg: '#eeedfe' },
-  { key: 'neutral',   label: '—', tooltip: 'Neutral',    fg: '#534ab7', bg: '#eeedfe' },
-  { key: 'failed',    label: '✗', tooltip: 'Failed',     fg: '#a32d2d', bg: '#fcebeb' },
-  { key: 'cancelled', label: '⊘', tooltip: 'Cancelled',  fg: '#5f5e5a', bg: '#f1efe8' },
+  { key: 'success',   label: '✓', tooltip: 'Success',    fg: 'rgb(var(--success))', bg: 'rgb(var(--success-surface))' },
+  { key: 'mixed',     label: '~', tooltip: 'Mixed',      fg: 'rgb(var(--accent))', bg: 'rgb(var(--accent-surface))' },
+  { key: 'neutral',   label: '—', tooltip: 'Neutral',    fg: 'rgb(var(--accent))', bg: 'rgb(var(--accent-surface))' },
+  { key: 'failed',    label: '✗', tooltip: 'Failed',     fg: 'rgb(var(--danger))', bg: 'rgb(var(--danger-surface))' },
+  { key: 'cancelled', label: '⊘', tooltip: 'Cancelled',  fg: 'rgb(var(--text-secondary))', bg: 'rgb(var(--surface-container))' },
 ];
 
 // 2026-05-13 close-loop enrichment — universal date formatter for the
@@ -593,7 +593,7 @@ function ActiveZoneTile({ tile, expanded, isFresh, isItemCompleted, expandedPrim
       <div className="flex items-center gap-2 mt-3">
         <button
           onClick={onPrimary}
-          className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 bg-primary text-on-primary rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50"
           disabled={isExpandable && expanded && remainingCount === 0}
         >
           {primaryLabel}
@@ -818,7 +818,7 @@ function CheckBox({ checked, onChange }) {
       }`}
     >
       {checked && (
-        <span className="material-symbols-outlined text-white" style={{ fontSize: '12px', fontVariationSettings: "'FILL' 1, 'wght' 700" }}>check</span>
+        <span className="material-symbols-outlined text-on-primary" style={{ fontSize: '12px', fontVariationSettings: "'FILL' 1, 'wght' 700" }}>check</span>
       )}
     </button>
   );

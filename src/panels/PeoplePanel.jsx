@@ -12,20 +12,20 @@ import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from 'r
  * the join requires attendee + recipient ingestion that isn't built yet.
  */
 
-const PRIMARY = '#4f4dcf';
-const SURFACE = '#fbf8fe';
-const SOFT = '#eeedfe';
-const BORDER = '#e8e4f0';
-const TXT1 = '#31323a';
-const TXT2 = '#6b7280';
-const TXT3 = '#9ca3af';
+const PRIMARY = 'rgb(var(--accent))';
+const SURFACE = 'rgb(var(--surface))';
+const SOFT = 'rgb(var(--accent-surface))';
+const BORDER = 'rgb(var(--outline-variant))';
+const TXT1 = 'rgb(var(--text-primary))';
+const TXT2 = 'rgb(var(--text-secondary))';
+const TXT3 = 'rgb(var(--text-faint))';
 
 const LABEL_STYLES = {
-  work:     { bg: '#e0edff', fg: '#1d4ed8' },
-  mobile:   { bg: '#dcfce7', fg: '#15803d' },
-  home:     { bg: '#fef3c7', fg: '#b45309' },
+  work:     { bg: 'rgb(var(--accent-surface))',  fg: 'rgb(var(--primary))' },
+  mobile:   { bg: 'rgb(var(--success-surface))', fg: 'rgb(var(--success))' },
+  home:     { bg: 'rgb(var(--warning-surface))', fg: 'rgb(var(--warning))' },
   calendar: { bg: SOFT,      fg: PRIMARY },
-  other:    { bg: '#f1f1f4', fg: TXT2 },
+  other:    { bg: 'rgb(var(--surface-container))', fg: TXT2 },
 };
 
 function initials(name) {
@@ -159,7 +159,7 @@ function ContactsList({ contacts, total, loaded, query, setQuery, selectedId, on
   };
 
   return (
-    <div style={{ width: 340, flexShrink: 0, borderRight: `1px solid ${BORDER}`, display: 'flex', flexDirection: 'column', background: '#fff' }}>
+    <div style={{ width: 340, flexShrink: 0, borderRight: `1px solid ${BORDER}`, display: 'flex', flexDirection: 'column', background: 'rgb(var(--surface-container-lowest))' }}>
       <div style={{ padding: '18px 18px 10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <h1 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 20, fontWeight: 700, color: TXT1, margin: 0 }}>People</h1>
@@ -214,10 +214,10 @@ function ListSkeleton() {
     <div style={{ padding: '4px 0' }}>
       {[0, 1, 2, 3, 4, 5].map((i) => (
         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px' }}>
-          <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#eceaf4', flexShrink: 0 }} />
+          <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgb(var(--surface-container))', flexShrink: 0 }} />
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ height: 11, width: `${55 + (i % 3) * 12}%`, background: '#eceaf4', borderRadius: 6 }} />
-            <div style={{ height: 9, width: `${30 + (i % 2) * 15}%`, background: '#f1eff7', borderRadius: 6 }} />
+            <div style={{ height: 11, width: `${55 + (i % 3) * 12}%`, background: 'rgb(var(--surface-container))', borderRadius: 6 }} />
+            <div style={{ height: 9, width: `${30 + (i % 2) * 15}%`, background: 'rgb(var(--surface-container))', borderRadius: 6 }} />
           </div>
         </div>
       ))}
@@ -238,7 +238,7 @@ const ContactTile = forwardRef(function ContactTile({ contact, selected, active,
         border: selected ? `1px solid ${BORDER}` : active ? `1px solid ${PRIMARY}` : '1px solid transparent',
       }}
     >
-      <div style={{ width: 34, height: 34, borderRadius: '50%', background: selected ? PRIMARY : '#e9e7f3', color: selected ? '#fff' : PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+      <div style={{ width: 34, height: 34, borderRadius: '50%', background: selected ? PRIMARY : 'rgb(var(--accent-surface))', color: selected ? 'rgb(var(--accent-contrast))' : PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
         {initials(contact.displayName)}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -388,12 +388,12 @@ function ContactHeader({ contact, apiFetch, authToken, onEdit, onArchive, onPhot
           onMouseEnter={() => setHover(true)}
           onMouseLeave={() => setHover(false)}
           title="Change photo"
-          style={{ position: 'relative', width: 52, height: 52, borderRadius: '50%', background: '#e9e7f3', color: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, flexShrink: 0, overflow: 'hidden', cursor: uploading ? 'wait' : 'pointer' }}
+          style={{ position: 'relative', width: 52, height: 52, borderRadius: '50%', background: 'rgb(var(--accent-surface))', color: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, flexShrink: 0, overflow: 'hidden', cursor: uploading ? 'wait' : 'pointer' }}
         >
           {shown ? <img src={shown} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials(contact.displayName)}
           {(hover || uploading) && (
             <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18, color: '#fff' }}>{uploading ? 'hourglass_top' : 'photo_camera'}</span>
+              <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'rgb(var(--accent-contrast))' }}>{uploading ? 'hourglass_top' : 'photo_camera'}</span>
             </div>
           )}
           <input ref={fileRef} type="file" accept="image/*" onChange={onPick} style={{ display: 'none' }} />
@@ -404,10 +404,10 @@ function ContactHeader({ contact, apiFetch, authToken, onEdit, onArchive, onPhot
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onEdit} style={btnGhost}>Edit</button>
-          <button onClick={onArchive} style={{ ...btnGhost, color: '#dc2626' }}>Archive</button>
+          <button onClick={onArchive} style={{ ...btnGhost, color: 'rgb(var(--danger))' }}>Archive</button>
         </div>
       </div>
-      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
+      {error && <div style={{ fontSize: 12, color: 'rgb(var(--danger))', marginTop: 6 }}>{error}</div>}
     </div>
   );
 }
@@ -511,7 +511,7 @@ function ContactInfoSection({ emails, phones, contactId, apiFetch, authToken, on
           {optPhones.map((p) => <IdentityRow key={p.id} identity={p} icon="call" />)}
         </>
       )}
-      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
+      {error && <div style={{ fontSize: 12, color: 'rgb(var(--danger))', marginTop: 6 }}>{error}</div>}
       {editing && (
         adding ? (
           <AddIdentityForm busy={busy} onCancel={() => setAdding(false)} onAdd={async (body) => { const ok = await add(body); if (ok) setAdding(false); }} />
@@ -529,7 +529,7 @@ function IdentityEditRow({ identity, icon, busy, onPrimary, onLabel, onRemove })
       <span className="material-symbols-outlined" style={{ fontSize: 17, color: TXT3 }}>{icon}</span>
       <span style={{ fontSize: 13.5, color: TXT1, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{identity.value}</span>
       <select value={identity.label || 'other'} disabled={busy} onChange={(e) => onLabel(identity.id, e.target.value)}
-        style={{ fontSize: 11, padding: '2px 4px', border: `1px solid ${BORDER}`, borderRadius: 6, color: TXT2, background: '#fff', cursor: 'pointer' }}>
+        style={{ fontSize: 11, padding: '2px 4px', border: `1px solid ${BORDER}`, borderRadius: 6, color: TXT2, background: 'rgb(var(--surface-container-lowest))', cursor: 'pointer' }}>
         {LABEL_OPTIONS.map((l) => <option key={l} value={l}>{l}</option>)}
       </select>
       <button title={identity.isPrimary ? 'Primary' : 'Make primary'} disabled={busy || identity.isPrimary} onClick={() => onPrimary(identity.id)}
@@ -556,7 +556,7 @@ function AddIdentityForm({ busy, onCancel, onAdd }) {
   };
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 8, padding: 10, border: `1px solid ${BORDER}`, borderRadius: 8, background: '#fff' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 8, padding: 10, border: `1px solid ${BORDER}`, borderRadius: 8, background: 'rgb(var(--surface-container-lowest))' }}>
       <select value={type} onChange={(e) => setType(e.target.value)} style={{ ...inp, padding: '5px 6px' }}>
         <option value="email">Email</option>
         <option value="phone">Phone</option>
@@ -582,7 +582,7 @@ function FactsSection({ facts }) {
       <SectionLabel subtitle="Aria-extracted">Facts</SectionLabel>
       <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {facts.map((f) => (
-          <li key={f.id} style={{ fontSize: 13, color: '#374151', padding: '3px 0', display: 'flex', gap: 8 }}>
+          <li key={f.id} style={{ fontSize: 13, color: 'rgb(var(--text-primary))', padding: '3px 0', display: 'flex', gap: 8 }}>
             <span style={{ color: PRIMARY }}>•</span>
             <span style={{ flex: 1 }}>{f.factText}</span>
           </li>
@@ -628,7 +628,7 @@ function NotesSection({ notes, contactId, apiFetch, authToken, onAdded }) {
         <div style={{ fontSize: 13, color: TXT3, fontStyle: 'italic' }}>No notes yet</div>
       ) : (
         notes.map((n) => (
-          <div key={n.id} style={{ fontSize: 13, color: '#374151', padding: '6px 0', borderTop: `1px dashed ${BORDER}`, whiteSpace: 'pre-wrap' }}>{n.factText}</div>
+          <div key={n.id} style={{ fontSize: 13, color: 'rgb(var(--text-primary))', padding: '6px 0', borderTop: `1px dashed ${BORDER}`, whiteSpace: 'pre-wrap' }}>{n.factText}</div>
         ))
       )}
     </div>
@@ -654,11 +654,11 @@ function fmtWhen(iso) {
 // event{endTime,location,accountEmail}, meeting_outcome{status,note,followUpNeeded,followUpBy},
 // note{text}, task{status,priority,dueDate,completed}.
 const TIMELINE_TYPES = {
-  email:           { icon: 'mail',          accent: '#4f4dcf' },
-  event:           { icon: 'event',         accent: '#7777fa' },
-  meeting_outcome: { icon: 'task_alt',      accent: '#2f9e6e' },
-  note:            { icon: 'sticky_note_2', accent: '#b9892b' },
-  task:            { icon: 'check_circle',  accent: '#5a6b7b' },
+  email:           { icon: 'mail',          accent: 'rgb(var(--accent))' },
+  event:           { icon: 'event',         accent: 'rgb(var(--primary-container))' },
+  meeting_outcome: { icon: 'task_alt',      accent: 'rgb(var(--success))' },
+  note:            { icon: 'sticky_note_2', accent: 'rgb(var(--warning))' },
+  task:            { icon: 'check_circle',  accent: 'rgb(var(--text-secondary))' },
 };
 
 // deep_link.panel → App.jsx activeView name. Tasks live on the dashboard.
@@ -757,7 +757,7 @@ function TimelineSection({ contactId, apiFetch, authToken }) {
                 fontSize: 11.5, padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
                 border: `1px solid ${active ? PRIMARY : BORDER}`,
                 background: active ? PRIMARY : 'transparent',
-                color: active ? '#fff' : TXT2,
+                color: active ? 'rgb(var(--accent-contrast))' : TXT2,
               }}
             >{f.label}</button>
           );
@@ -777,11 +777,11 @@ function TimelineSection({ contactId, apiFetch, authToken }) {
 }
 
 function DetailSkeleton() {
-  const bar = (w) => <div style={{ height: 12, width: w, background: '#eceaf4', borderRadius: 6 }} />;
+  const bar = (w) => <div style={{ height: 12, width: w, background: 'rgb(var(--surface-container))', borderRadius: 6 }} />;
   return (
     <div style={{ padding: '28px 32px', maxWidth: 760 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#eceaf4' }} />
+        <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'rgb(var(--surface-container))' }} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{bar(160)}{bar(110)}</div>
       </div>
       <div style={{ height: 1, background: BORDER, margin: '20px 0' }} />
@@ -823,7 +823,7 @@ function NewContactForm({ apiFetch, authToken, onCancel, onCreated }) {
   };
 
   return (
-    <div style={{ background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, maxWidth: 520 }}>
+    <div style={{ background: 'rgb(var(--surface-container-lowest))', border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, maxWidth: 520 }}>
       <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 16, fontWeight: 700, color: TXT1, marginBottom: 12 }}>New contact</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         <input autoFocus value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" style={inp} />
@@ -834,7 +834,7 @@ function NewContactForm({ apiFetch, authToken, onCancel, onCreated }) {
         <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company" style={inp} />
         <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" style={inp} />
       </div>
-      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 8 }}>{error}</div>}
+      {error && <div style={{ fontSize: 12, color: 'rgb(var(--danger))', marginTop: 8 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 6, marginTop: 12, justifyContent: 'flex-end' }}>
         <button onClick={onCancel} style={btnGhost}>Cancel</button>
         <button onClick={save} disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }}>{saving ? 'Saving…' : 'Save'}</button>
@@ -880,7 +880,7 @@ function EditContactForm({ contact, apiFetch, authToken, onCancel, onSaved }) {
   };
 
   return (
-    <div style={{ background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, maxWidth: 520 }}>
+    <div style={{ background: 'rgb(var(--surface-container-lowest))', border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, maxWidth: 520 }}>
       <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 16, fontWeight: 700, color: TXT1, marginBottom: 12 }}>Edit contact</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         <input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" style={inp} />
@@ -892,7 +892,7 @@ function EditContactForm({ contact, apiFetch, authToken, onCancel, onSaved }) {
       <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes (freeform)"
         style={{ ...inp, width: '100%', boxSizing: 'border-box', marginTop: 8, resize: 'vertical', minHeight: 56, fontFamily: 'Manrope, sans-serif' }} />
       <div style={{ fontSize: 11, color: TXT3, marginTop: 8 }}>Email and phone are managed in the contact info section.</div>
-      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
+      {error && <div style={{ fontSize: 12, color: 'rgb(var(--danger))', marginTop: 6 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 6, marginTop: 12, justifyContent: 'flex-end' }}>
         <button onClick={onCancel} style={btnGhost}>Cancel</button>
         <button onClick={save} disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }}>{saving ? 'Saving…' : 'Save'}</button>
@@ -903,5 +903,5 @@ function EditContactForm({ contact, apiFetch, authToken, onCancel, onSaved }) {
 
 const inp = { fontSize: 13, padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, outline: 'none', fontFamily: 'Manrope, sans-serif' };
 const btnGhost = { fontSize: 12, fontWeight: 600, color: PRIMARY, background: 'transparent', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '4px 12px', cursor: 'pointer' };
-const btnPrimary = { fontSize: 12, fontWeight: 600, color: '#fff', background: PRIMARY, border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer' };
+const btnPrimary = { fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: PRIMARY, border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer' };
 const linkBtn = { fontSize: 11, fontWeight: 600, color: PRIMARY, background: 'transparent', border: 'none', cursor: 'pointer' };
