@@ -8,9 +8,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * the existing draft-composition surfaces — daily wrap, close loop, etc).
  * Defer / dismiss / expand are handled inline.
  *
- * Empty state is rendered by ActiveZoneVoice (AZ6) — this component
- * returns null when the queue is empty so the parent can show that
- * panel instead.
+ * Empty state: this component returns null when the queue is empty, so the
+ * parent renders nothing (the empty-state panel was removed in the
+ * command-center-chat work).
  *
  * Refresh triggers come from the parent via a `refreshKey` prop —
  * incrementing it triggers a debounced re-fetch. Internally we also
