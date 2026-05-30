@@ -819,6 +819,7 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
       '4h':  4 * 60 * 60 * 1000,
     };
     let scanInterval = null;
+    let cancelled = false;
     (async () => {
       let frequency = '1h';
       try {
@@ -826,13 +827,17 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
         const cfg = await r.json();
         if (cfg?.scanFrequency) frequency = cfg.scanFrequency;
       } catch {}
+      // The effect can be torn down (logout/re-login) while the config fetch is
+      // in flight. If so, bail — otherwise we'd start an orphaned interval that
+      // polls forever with a stale authToken. (audit: bugs/resilience, Critical)
+      if (cancelled) return;
       scanInbox();
       if (frequency !== 'manual') {
         const ms = SCAN_INTERVAL_MS[frequency] ?? SCAN_INTERVAL_MS['1h'];
         scanInterval = setInterval(scanInbox, ms);
       }
     })();
-    return () => { if (scanInterval) clearInterval(scanInterval); };
+    return () => { cancelled = true; if (scanInterval) clearInterval(scanInterval); };
   }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save tasks whenever they change (skip initial hydration)
