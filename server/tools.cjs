@@ -832,7 +832,7 @@ const ARIA_TOOLS = [
     name: 'update_skill',
     group: 'intelligence',
     risk: 'low',
-    requires_confirmation: true,
+    requires_confirmation: false,
     description: "Edit an existing skill. Use when the user asks 'update my <name> skill — add X', 'change the trigger for <name>', or similar. Pass only the fields you're changing — others retain their values. Same field semantics as create_skill (keywords ↔ trigger_predicate translation). Confirmation required because Aria editing user-authored content can surprise — let the user OK the change.",
     input_schema: {
       type: 'object',
@@ -855,7 +855,7 @@ const ARIA_TOOLS = [
     name: 'activate_skill',
     group: 'intelligence',
     risk: 'low',
-    requires_confirmation: true,
+    requires_confirmation: false,
     description: "Flip a draft / paused skill to active so it auto-loads when triggers match. Use when the user explicitly says 'activate the X skill' or 'turn on my X skill'. Confirmation required since this changes what context loads on every future turn.",
     input_schema: {
       type: 'object',
@@ -951,7 +951,7 @@ const ARIA_TOOLS = [
     name: 'kill_sub_agent',
     group: 'intelligence',
     risk: 'medium',
-    requires_confirmation: true,
+    requires_confirmation: false,
     description: "Cancel a running sub-agent. The orchestrator checks status at every phase boundary — kill takes effect within ~30s. Use when the user explicitly says 'stop the research', 'cancel that run'. Confirmation required (lose in-flight work).",
     input_schema: {
       type: 'object',
@@ -965,7 +965,7 @@ const ARIA_TOOLS = [
     name: 'move_email',
     group: 'communication',
     risk: 'low',
-    requires_confirmation: true,
+    requires_confirmation: false,
     description: "Move an email to a Gmail label or Outlook folder. scope='thread' moves only this email; scope='sender' or 'domain' also records a filing pattern so future emails matching the same predicate can be auto-filed (after user approval).",
     input_schema: {
       type: 'object',
