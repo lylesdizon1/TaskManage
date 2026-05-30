@@ -110,18 +110,39 @@ async function runAgenticLoop({ messages, system, tools, userId, executeTool, on
     const onTextDelta = onProgress
       ? (text) => onProgress({ type: 'text_delta', text })
       : undefined;
-    const response = await Promise.race([
-      trackedAnthropicStream(client, {
-        model: model || 'claude-sonnet-4-6',
-        max_tokens: 8192,
-        system: systemParam,
-        tools: cachedTools,
-        messages: currentMessages,
-      }, { userId, scope: 'agentic_loop', onTextDelta }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Aria is taking too long to respond. Please try again.')), 30_000)
-      ),
-    ]);
+    // Abort the in-flight stream if the timeout wins the race. Without this the
+    // Anthropic stream keeps running after the 30s timeout — burning tokens and
+    // later rejecting as an unhandled error. (audit: bugs/resilience, Critical)
+    const streamAbort = new AbortController();
+    let streamTimeoutId;
+    const streamPromise = trackedAnthropicStream(client, {
+      model: model || 'claude-sonnet-4-6',
+      max_tokens: 8192,
+      system: systemParam,
+      tools: cachedTools,
+      messages: currentMessages,
+    }, { userId, scope: 'agentic_loop', onTextDelta, signal: streamAbort.signal });
+    // The losing branch's rejection (an AbortError once we cancel) must not go
+    // unhandled after the race already settled on the timeout. This extra
+    // handler does not suppress the normal-error path — the race still receives
+    // and propagates a real stream error.
+    streamPromise.catch(() => {});
+    let response;
+    try {
+      response = await Promise.race([
+        streamPromise,
+        new Promise((_, reject) => {
+          streamTimeoutId = setTimeout(() => {
+            streamAbort.abort();
+            reject(new Error('Aria is taking too long to respond. Please try again.'));
+          }, 30_000);
+        }),
+      ]);
+    } finally {
+      // Clear the timer on the success path so it can't fire later (spurious
+      // abort + unhandled rejection); a no-op if the timeout already fired.
+      clearTimeout(streamTimeoutId);
+    }
 
     const textBlocks    = response.content.filter(b => b.type === 'text');
     const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
