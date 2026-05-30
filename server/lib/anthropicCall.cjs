@@ -163,7 +163,7 @@ async function getDailyCostSummary(userId) {
  * @returns {Promise<object>} The assembled final message.
  */
 async function trackedAnthropicStream(client, params, opts = {}) {
-  const { userId = 'anon', scope = 'unscoped', onTextDelta } = opts;
+  const { userId = 'anon', scope = 'unscoped', onTextDelta, signal } = opts;
 
   if (ENFORCEMENT_CAP && userId !== 'anon') {
     const current = await getDailyCount(userId, 'tokens');
@@ -177,7 +177,9 @@ async function trackedAnthropicStream(client, params, opts = {}) {
   }
 
   const t0 = Date.now();
-  const stream = client.messages.stream(params);
+  // Forward an optional AbortSignal so callers (e.g. the agentic loop's
+  // Promise.race timeout) can cancel the in-flight stream and stop token burn.
+  const stream = client.messages.stream(params, signal ? { signal } : undefined);
 
   // Iterate stream events. Text deltas are the user-facing payload;
   // everything else is for the final assembled message which we get

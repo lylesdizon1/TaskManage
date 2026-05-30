@@ -6,6 +6,13 @@ const jwt     = require('jsonwebtoken');
 const logger = require('../../guardrails/logger.cjs');
 const { DEFAULT_TIMEZONE } = require('../utils/timezone.cjs');
 
+// Fixed valid bcrypt hash (cost 10, matching the app's password hashing in
+// users.cjs/admin.cjs) used for a constant-time comparison when a username
+// isn't found — so login latency can't reveal whether a username exists
+// (enumeration). The plaintext is irrelevant; it only needs bcrypt.compare to
+// do its full work. Computed once at module load. (audit: security)
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('timing-attack-mitigation-dummy', 10);
+
 /**
  * Auth routes extracted from proxy-server.cjs
  *
@@ -31,12 +38,13 @@ module.exports = function createAuthRouter({ authenticateToken, JWT_SECRET, db }
     try {
       const users = await db.getUsers();
       const user = users.find((u) => u.username === username);
-      if (!user) {
-        return res.status(401).json({ error: 'Invalid username or password' });
-      }
-
-      const valid = await bcrypt.compare(password, user.passwordHash);
-      if (!valid) {
+      // Constant-time: always run a bcrypt comparison — against a fixed dummy
+      // hash when the username doesn't exist — so the not-found path costs the
+      // same as a real comparison and login latency can't reveal whether a
+      // username is valid. Outcomes are unchanged: missing user OR wrong
+      // password → the same generic 401. (audit: security)
+      const valid = await bcrypt.compare(password, user ? user.passwordHash : DUMMY_PASSWORD_HASH);
+      if (!user || !valid) {
         return res.status(401).json({ error: 'Invalid username or password' });
       }
 
