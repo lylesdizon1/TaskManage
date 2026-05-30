@@ -54,7 +54,7 @@ async function syncOutlookForUser(userId, tz, db) {
           },
         });
         if (!res.ok) {
-          const body = await res.text().catch(() => '');
+          const body = await res.text().catch((e) => `<failed to read response body: ${e.message}>`);
           logger.error('outlook-sync.fetch.failed', { userId, accountEmail: account.accountEmail, status: res.status, body: body.slice(0, 500) });
           continue;
         }

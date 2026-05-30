@@ -507,7 +507,7 @@ To page through results: use the oldest result's date as date_to in a follow-up 
   const projectsBlock = buildProjectsBlock(projectsCtx);
 
   // People + relationship memory + shared-access summary.
-  const peopleBlock = await buildPeopleBlock(contactsData, db, userId);
+  const peopleBlock = await buildPeopleBlock(contactsData, db, userId, tz);
   const sharedAccessBlock = buildSharedAccessBlock(sharedAccessData);
 
   // Gmail labels + Outlook folders mapped by labelMapper.cjs.
@@ -645,7 +645,7 @@ function buildProjectsBlock(projects) {
  */
 const PEOPLE_BLOCK_CHAR_CAP = 650;
 
-async function buildPeopleBlock(contacts, db, userId) {
+async function buildPeopleBlock(contacts, db, userId, tz) {
   if (!Array.isArray(contacts) || contacts.length === 0) return '';
   const getFacts = db.getTopContactFacts
     ? (cid) => db.getTopContactFacts(cid, userId, 3).catch(() => [])
@@ -671,7 +671,7 @@ async function buildPeopleBlock(contacts, db, userId) {
     let emailLine = '';
     if (lastEmail && lastEmail.occurredAt) {
       const dir = lastEmail.direction === 'outbound' ? 'you emailed them' : 'they emailed you';
-      const when = new Date(lastEmail.occurredAt).toISOString().slice(0, 10);
+      const when = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(lastEmail.occurredAt));
       const subj = (lastEmail.subject || '(no subject)').slice(0, 60);
       emailLine = `\n  Last email: ${dir} ${when} — "${subj}"`;
     }

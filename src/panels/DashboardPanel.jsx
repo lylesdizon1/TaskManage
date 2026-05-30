@@ -885,7 +885,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // hover action only after midnight (their "end" has passed).
   const isEventPast = (ev) => {
     try {
-      if (ev.allDay) return ev.end && ev.end <= new Date().toISOString().slice(0, 10);
+      if (ev.allDay) return ev.end && ev.end <= getTodayLocal(userTZ);
       return new Date(ev.start).getTime() < Date.now();
     } catch { return false; }
   };
