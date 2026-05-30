@@ -1440,7 +1440,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // finished assigning ccConvId, with the POST landing on whatever
     // stale ccConvId (from React state) happened to be set at that
     // moment. See docs/investigations/cc-persistence-state.md Bug 1.
-    if (!text || ccSending || !ccConvId || ccInitRunningRef.current) return;
+    if (!text || ccSending || ccInitRunningRef.current) return;
+    // Self-heal: if the one-shot session init never set a conversation id
+    // (e.g. a transient auth/5xx blip at load), re-init instead of silently
+    // blocking every send for the rest of the session. Input text is
+    // preserved (cleared only past this guard), so the resend lands once
+    // ccConvId is set. We never POST against a null conversation id.
+    if (!ccConvId) { initCommandCenterRef.current?.(); return; }
     setCcInput('');
     setCcSending(true);
     ccStoppedRef.current = false;
