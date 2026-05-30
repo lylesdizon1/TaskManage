@@ -891,6 +891,8 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   };
   const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
+  const ccInputRef = useRef(null);          // CC text input — for refocus after send
+  const ccShouldRefocusRef = useRef(false); // set on send; refocus once input re-enables
   const lastCheckedRef = useRef(new Date().toISOString());
   const ccAutoRefreshedRef = useRef(false);
 
@@ -951,6 +953,16 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     }
     scrollToBottom();
   }, [ccMessages.length, ccLastMsg?.content, scrollToBottom]);
+
+  // Keep focus in the input after a send. The input is disabled while Aria
+  // responds (which drops focus); refocus once it re-enables so the user can
+  // type the next message with no re-click. Works for Enter and the button.
+  useEffect(() => {
+    if (!ccSending && ccShouldRefocusRef.current) {
+      ccShouldRefocusRef.current = false;
+      requestAnimationFrame(() => ccInputRef.current?.focus());
+    }
+  }, [ccSending]);
 
   // Mirror ccMessages into a ref so callbacks (handleCcSend) can read the
   // latest committed state without depending on ccMessages in their deps.
@@ -1462,6 +1474,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // ccConvId is set. We never POST against a null conversation id.
     if (!ccConvId) { initCommandCenterRef.current?.(); return; }
     setCcInput('');
+    ccShouldRefocusRef.current = true; // refocus the input once Aria's reply completes
     setCcSending(true);
     ccStoppedRef.current = false;
     const controller = new AbortController();
@@ -3302,6 +3315,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           </button>
           <div className="flex-1 relative">
             <input
+              ref={ccInputRef}
               type="text"
               value={ccInput}
               onChange={(e) => setCcInput(e.target.value)}
