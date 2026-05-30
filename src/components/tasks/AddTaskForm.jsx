@@ -105,22 +105,22 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
       {!forceOpen && !isOpen ? (
         <button
           onClick={() => setIsOpen(true)}
-          className="w-full flex items-center gap-2 px-4 py-3 md:py-3 min-h-[48px] bg-white border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50/30 transition-all text-sm font-medium group"
+          className="w-full flex items-center gap-2 px-4 py-3 md:py-3 min-h-[48px] bg-surface-container-lowest border-2 border-dashed border-outline-variant rounded-xl text-text-faint hover:border-primary hover:text-primary hover:bg-accent-surface/30 transition-all text-sm font-medium group"
         >
-          <span className="w-6 h-6 md:w-5 md:h-5 rounded-full bg-gray-100 group-hover:bg-indigo-100 flex items-center justify-center text-base leading-none transition-colors">
+          <span className="w-6 h-6 md:w-5 md:h-5 rounded-full bg-surface-container group-hover:bg-accent-surface flex items-center justify-center text-base leading-none transition-colors">
             +
           </span>
           Add new task
         </button>
       ) : (
-        <div className={forceOpen ? '' : 'fixed inset-0 z-50 bg-white overflow-y-auto md:static md:inset-auto md:z-auto md:bg-transparent md:overflow-visible'}>
+        <div className={forceOpen ? '' : 'fixed inset-0 z-50 bg-surface-container-lowest overflow-y-auto md:static md:inset-auto md:z-auto md:bg-transparent md:overflow-visible'}>
         <form
           onSubmit={handleSubmit}
           className="p-5 md:rounded-xl"
           style={{ fontFamily: "'Plus Jakarta Sans', 'Manrope', sans-serif" }}
         >
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-base md:text-sm font-semibold text-gray-900">New Task</h3>
+            <h3 className="text-base md:text-sm font-semibold text-on-surface">New Task</h3>
             <button
               type="button"
               onClick={() => {
@@ -130,7 +130,7 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
                 setContact(null);
                 onClose?.();
               }}
-              className="text-gray-400 hover:text-gray-600 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+              className="text-text-faint hover:text-on-surface-variant transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
             >
               <XIcon className="w-5 h-5 md:w-4 md:h-4" />
             </button>
@@ -146,7 +146,7 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
               onBlur={handleBlur}
               autoFocus
               required
-              className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+              className="w-full px-3 py-2.5 md:py-2 bg-surface-container-low border border-outline-variant rounded-lg text-base md:text-sm text-on-surface placeholder:text-text-faint focus:outline-none focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition"
             />
 
             {/* Description */}
@@ -156,19 +156,19 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
               onChange={handleDescChange}
               onBlur={handleBlur}
               rows={2}
-              className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition resize-none"
+              className="w-full px-3 py-2.5 md:py-2 bg-surface-container-low border border-outline-variant rounded-lg text-base md:text-sm text-on-surface placeholder:text-text-faint focus:outline-none focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition resize-none"
             />
 
             {/* Priority + Due Date + Time */}
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="block text-xs font-medium text-gray-500 mb-1">
+                <label className="block text-xs font-medium text-on-surface-variant mb-1">
                   Priority
                 </label>
                 <select
                   value={form.priority}
                   onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
-                  className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px] md:min-h-0"
+                  className="w-full px-3 py-2.5 md:py-2 bg-surface-container-low border border-outline-variant rounded-lg text-base md:text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition min-h-[44px] md:min-h-0"
                 >
                   <option value="low">🟢 Low</option>
                   <option value="medium">🟡 Medium</option>
@@ -177,26 +177,26 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
               </div>
 
               <div className="flex-1">
-                <label className="block text-xs font-medium text-gray-500 mb-1">
+                <label className="block text-xs font-medium text-on-surface-variant mb-1">
                   Due Date
                 </label>
                 <input
                   type="date"
                   value={form.dueDate}
                   onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
-                  className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px] md:min-h-0"
+                  className="w-full px-3 py-2.5 md:py-2 bg-surface-container-low border border-outline-variant rounded-lg text-base md:text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition min-h-[44px] md:min-h-0"
                 />
               </div>
 
               <div style={{ flex: '0 0 100px' }}>
-                <label className="block text-xs font-medium text-gray-500 mb-1">
+                <label className="block text-xs font-medium text-on-surface-variant mb-1">
                   Time
                 </label>
                 <input
                   type="time"
                   value={form.dueTime}
                   onChange={(e) => setForm((f) => ({ ...f, dueTime: e.target.value }))}
-                  className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px] md:min-h-0"
+                  className="w-full px-3 py-2.5 md:py-2 bg-surface-container-low border border-outline-variant rounded-lg text-base md:text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition min-h-[44px] md:min-h-0"
                 />
               </div>
             </div>
@@ -204,16 +204,16 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
             {/* Tags */}
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-medium text-gray-500">Tags</span>
+                <span className="text-xs font-medium text-on-surface-variant">Tags</span>
                 {suggesting && (
-                  <span className="text-xs text-indigo-500 flex items-center gap-1">
+                  <span className="text-xs text-primary flex items-center gap-1">
                     <SpinnerIcon className="w-3 h-3 animate-spin" />
                     AI suggesting…
                   </span>
                 )}
                 {!suggesting && aiSuggested.length > 0 && (
-                  <span className="text-xs text-indigo-400 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />
+                  <span className="text-xs text-primary flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary inline-block" />
                     AI auto-selected tags
                   </span>
                 )}
@@ -241,12 +241,12 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
                       className={`inline-flex items-center gap-1 text-xs px-3 py-2 md:px-2.5 md:py-1 rounded-full font-medium border transition-all min-h-[36px] md:min-h-0 ${
                         isSelected
                           ? isHex ? 'font-bold' : `${style.bg} ${style.text} ${style.border} ring-2 ring-offset-1 ${style.ring}`
-                          : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                          : 'bg-surface-container-low text-on-surface-variant border-outline-variant hover:bg-surface-container'
                       }`}
                     >
                       {ent._indent ? '\u2514 ' : ''}{tag}{ent.shared ? ' \u{1F517}' : ''}
                       {isAiPick && isSelected && (
-                        <span className="text-[9px] leading-none bg-indigo-500 text-white px-1 py-0.5 rounded-full">
+                        <span className="text-[9px] leading-none bg-primary text-on-primary px-1 py-0.5 rounded-full">
                           AI
                         </span>
                       )}
@@ -258,7 +258,7 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
 
             {/* Visibility */}
             <div>
-              <span className="text-xs font-medium text-gray-500 mb-2 block">Visibility</span>
+              <span className="text-xs font-medium text-on-surface-variant mb-2 block">Visibility</span>
               <div className="flex gap-2">
                 {[
                   { key: 'shared', label: 'Shared', desc: 'Visible to all users' },
@@ -271,9 +271,9 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
                     className={`flex-1 px-3 py-3 md:py-2 rounded-lg text-xs font-medium border transition-all min-h-[44px] md:min-h-0 ${
                       form.visibility === key
                         ? key === 'private'
-                          ? 'bg-amber-50 text-amber-700 border-amber-300 ring-2 ring-offset-1 ring-amber-300'
-                          : 'bg-indigo-50 text-indigo-700 border-indigo-300 ring-2 ring-offset-1 ring-indigo-300'
-                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
+                          ? 'bg-warning-surface text-warning border-warning ring-2 ring-offset-1 ring-warning'
+                          : 'bg-accent-surface text-primary border-primary ring-2 ring-offset-1 ring-primary'
+                        : 'bg-surface-container-low text-text-faint border-outline-variant hover:bg-surface-container'
                     }`}
                   >
                     {key === 'private' ? '🔒 ' : '👥 '}{label}
@@ -285,7 +285,7 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
             {/* Related contact (optional) — links the task so it surfaces in
                 the contact's timeline and Aria can reason over it. */}
             <div>
-              <span className="text-xs font-medium text-gray-500 mb-1 block">Related contact (optional)</span>
+              <span className="text-xs font-medium text-on-surface-variant mb-1 block">Related contact (optional)</span>
               <ContactLinkPicker value={contact} onChange={setContact} apiFetch={apiFetch} authToken={authToken} />
             </div>
 
@@ -296,9 +296,9 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
                   type="checkbox"
                   checked={form.syncToCalendar}
                   onChange={(e) => setForm((f) => ({ ...f, syncToCalendar: e.target.checked }))}
-                  className="w-4 h-4 accent-indigo-600 rounded"
+                  className="w-4 h-4 accent-primary rounded"
                 />
-                <span className="text-xs font-medium text-gray-600">📅 Add to Google Calendar</span>
+                <span className="text-xs font-medium text-on-surface-variant">📅 Add to Google Calendar</span>
               </label>
             )}
 
@@ -312,13 +312,13 @@ export default function AddTaskForm({ onAdd, currentUser, entities, authToken, g
                   setAiSuggested([]);
                   onClose?.();
                 }}
-                className="flex-1 px-4 py-3 md:py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors min-h-[44px]"
+                className="flex-1 px-4 py-3 md:py-2 border border-outline-variant rounded-lg text-on-surface-variant hover:bg-surface-container-low text-sm font-medium transition-colors min-h-[44px]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="flex-1 px-4 py-3 md:py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm min-h-[44px]"
+                className="flex-1 px-4 py-3 md:py-2 bg-primary text-on-primary rounded-lg hover:bg-primary text-sm font-medium transition-colors shadow-sm min-h-[44px]"
               >
                 Add Task
               </button>
@@ -372,13 +372,13 @@ function ContactLinkPicker({ value, onChange, apiFetch, authToken }) {
 
   if (value) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg">
-        <span className="material-symbols-outlined text-indigo-600" style={{ fontSize: 16 }}>person</span>
-        <span className="text-sm text-indigo-800 flex-1 truncate">{value.name}</span>
+      <div className="flex items-center gap-2 px-3 py-2 bg-accent-surface border border-primary rounded-lg">
+        <span className="material-symbols-outlined text-primary" style={{ fontSize: 16 }}>person</span>
+        <span className="text-sm text-primary flex-1 truncate">{value.name}</span>
         <button
           type="button"
           onClick={() => { onChange(null); setQuery(''); }}
-          className="text-indigo-400 hover:text-indigo-700 text-xs font-medium"
+          className="text-primary hover:opacity-80 text-xs font-medium"
         >Clear</button>
       </div>
     );
@@ -392,22 +392,22 @@ function ContactLinkPicker({ value, onChange, apiFetch, authToken }) {
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         placeholder="Search contacts by name or email"
-        className="w-full px-3 py-2.5 md:py-2 bg-gray-50 border border-gray-200 rounded-lg text-base md:text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+        className="w-full px-3 py-2.5 md:py-2 bg-surface-container-low border border-outline-variant rounded-lg text-base md:text-sm text-on-surface placeholder:text-text-faint focus:outline-none focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition"
       />
       {open && (matches.length > 0 || loading) && (
-        <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-          {loading && <div className="px-3 py-2 text-xs text-gray-400">Searching…</div>}
+        <div className="absolute z-30 left-0 right-0 mt-1 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          {loading && <div className="px-3 py-2 text-xs text-text-faint">Searching…</div>}
           {!loading && matches.map((m, i) => (
             <button
               key={m.id || `${m.primaryEmail}-${i}`}
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => { onChange({ id: m.id, name: m.displayName || m.primaryEmail }); setOpen(false); }}
-              className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-0"
+              className="w-full text-left px-3 py-2 hover:bg-surface-container-low border-b border-outline-variant last:border-0"
             >
-              <div className="text-sm text-gray-900 truncate">{m.displayName || m.primaryEmail}</div>
+              <div className="text-sm text-on-surface truncate">{m.displayName || m.primaryEmail}</div>
               {m.primaryEmail && m.displayName !== m.primaryEmail && (
-                <div className="text-xs text-gray-500 truncate">{m.primaryEmail}</div>
+                <div className="text-xs text-on-surface-variant truncate">{m.primaryEmail}</div>
               )}
             </button>
           ))}

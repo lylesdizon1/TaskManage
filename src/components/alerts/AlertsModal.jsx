@@ -13,7 +13,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
   return (
     <div
       className={`rounded-xl border transition-all ${
-        rule.enabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50/50'
+        rule.enabled ? 'border-outline-variant bg-surface-container-lowest' : 'border-outline-variant bg-surface-container-low/50'
       }`}
     >
       <div className="flex items-center gap-3 px-4 py-3">
@@ -21,12 +21,12 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
         <button
           onClick={onToggle}
           className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors ${
-            rule.enabled ? 'bg-indigo-600' : 'bg-gray-200'
+            rule.enabled ? 'bg-primary' : 'bg-surface-container-high'
           }`}
           title={rule.enabled ? 'Disable' : 'Enable'}
         >
           <span
-            className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+            className={`absolute top-0.5 w-4 h-4 bg-surface-container-lowest rounded-full shadow transition-transform ${
               rule.enabled ? 'translate-x-4' : 'translate-x-0.5'
             }`}
           />
@@ -35,31 +35,31 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
         {/* Info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className={`text-sm font-medium ${rule.enabled ? 'text-gray-900' : 'text-gray-400'}`}>
+            <span className={`text-sm font-medium ${rule.enabled ? 'text-on-surface' : 'text-text-faint'}`}>
               {rule.name}
             </span>
-            <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-medium">
+            <span className="text-[10px] bg-surface-container text-on-surface-variant px-1.5 py-0.5 rounded font-medium">
               {scopeLabel}
             </span>
             {rule.isCustom && (
-              <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded font-medium">
+              <span className="text-[10px] bg-accent-surface text-primary px-1.5 py-0.5 rounded font-medium">
                 custom
               </span>
             )}
             {rule.condition?.type === 'critical-mail' && (
-              <span className="text-[10px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded font-medium">
+              <span className="text-[10px] bg-accent-surface text-primary px-1.5 py-0.5 rounded font-medium">
                 flagged inbox
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-400 mt-0.5 truncate">{rule.description}</p>
+          <p className="text-xs text-text-faint mt-0.5 truncate">{rule.description}</p>
         </div>
 
         {/* Expand / delete */}
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="text-gray-300 hover:text-gray-500 transition-colors p-1"
+            className="text-text-faint hover:text-on-surface-variant transition-colors p-1"
             title="Configure channels & options"
           >
             <svg
@@ -72,7 +72,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
           {onDelete && (
             <button
               onClick={onDelete}
-              className="text-gray-300 hover:text-red-400 transition-colors p-1"
+              className="text-text-faint hover:text-danger transition-colors p-1"
               title="Delete rule"
             >
               <XIcon className="w-3.5 h-3.5" />
@@ -83,16 +83,16 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
 
       {/* Expanded panel */}
       {expanded && (
-        <div className="px-4 pb-3 border-t border-gray-100 space-y-3">
+        <div className="px-4 pb-3 border-t border-outline-variant space-y-3">
           {/* Section A — Channel toggles */}
           <div className="mt-2.5">
-            <label className="block text-xs font-medium text-gray-500 mb-1.5">Channels</label>
+            <label className="block text-xs font-medium text-on-surface-variant mb-1.5">Channels</label>
             <div className="flex flex-wrap gap-1.5">
               {[
-                { key: 'whatsapp', label: 'WhatsApp', color: 'bg-green-500' },
-                { key: 'slack',    label: 'Slack',    color: 'bg-purple-500' },
-                { key: 'sms',      label: 'SMS',      color: 'bg-blue-500' },
-                { key: 'email',    label: 'Email',    color: 'bg-orange-500' },
+                { key: 'whatsapp', label: 'WhatsApp', color: 'bg-success' },
+                { key: 'slack',    label: 'Slack',    color: 'bg-primary' },
+                { key: 'sms',      label: 'SMS',      color: 'bg-primary' },
+                { key: 'email',    label: 'Email',    color: 'bg-warning' },
               ].map(({ key, label, color }) => {
                 const on = channels[key];
                 const disabled = key === 'sms';
@@ -104,10 +104,10 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
                     onClick={() => onChannelChange && onChannelChange(key, !on)}
                     className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
                       disabled
-                        ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
+                        ? 'bg-surface-container text-text-faint cursor-not-allowed'
                         : on
-                          ? `${color} text-white`
-                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                          ? `${color} text-on-primary`
+                          : 'bg-surface-container text-text-faint hover:bg-surface-container-high'
                     }`}
                   >
                     {label}
@@ -120,7 +120,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
           {/* Re-notify interval */}
           {['overdue','due-in-hours','high-priority','tag-overdue','tag-match'].includes(rule.condition.type) && (
             <div className="mt-3">
-              <label className="text-xs font-medium text-gray-500">Remind again after</label>
+              <label className="text-xs font-medium text-on-surface-variant">Remind again after</label>
               <div className="flex gap-2 mt-1.5 flex-wrap">
                 {[1, 4, 12, 24, 48].map((h) => (
                   <button
@@ -128,8 +128,8 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
                     onClick={() => onIntervalChange && onIntervalChange(h)}
                     className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                       rule.remindIntervalHours === h
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        ? 'bg-primary text-on-primary'
+                        : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
                     }`}
                   >
                     {h < 24 ? `${h}h` : `${h / 24}d`}
@@ -142,9 +142,9 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
           {/* Email recipient override */}
           {channels.email && (
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">
+              <label className="block text-xs font-medium text-on-surface-variant mb-1.5">
                 Recipient override{' '}
-                <span className="font-normal text-gray-400">
+                <span className="font-normal text-text-faint">
                   (blank = default: {defaultRecipient || 'not set'})
                 </span>
               </label>
@@ -153,7 +153,7 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
                 value={rule.recipientOverride}
                 onChange={(e) => onRecipientChange(e.target.value)}
                 placeholder={defaultRecipient || 'override@example.com'}
-                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
           )}
@@ -161,22 +161,22 @@ function RuleRow({ rule, defaultRecipient, onToggle, onDelete, onRecipientChange
           {/* Section B — Condition config */}
           {condType === 'morning-brief' && (
             <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-500 w-16 flex-shrink-0">Time:</label>
+              <label className="text-xs text-on-surface-variant w-16 flex-shrink-0">Time:</label>
               <input
                 type="time"
                 value={rule.condition.time || '08:00'}
                 onChange={(e) => onConditionChange && onConditionChange({ ...rule.condition, time: e.target.value })}
-                className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
           )}
           {condType === 'event-reminder' && (
             <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-500 w-16 flex-shrink-0">Before:</label>
+              <label className="text-xs text-on-surface-variant w-16 flex-shrink-0">Before:</label>
               <select
                 value={rule.condition.minutesBefore || 15}
                 onChange={(e) => onConditionChange && onConditionChange({ ...rule.condition, minutesBefore: Number(e.target.value) })}
-                className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 {[5, 10, 15, 30, 60].map((m) => (
                   <option key={m} value={m}>{m} min</option>
@@ -284,19 +284,19 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]">
+      <div className="bg-surface-container-lowest rounded-2xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 flex-shrink-0 border-b border-gray-100">
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 flex-shrink-0 border-b border-outline-variant">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
-              <BellIcon className="w-4 h-4 text-indigo-600" />
+            <div className="w-8 h-8 bg-accent-surface rounded-lg flex items-center justify-center">
+              <BellIcon className="w-4 h-4 text-primary" />
             </div>
-            <h2 className="text-lg font-bold text-gray-900">Alert Rules</h2>
+            <h2 className="text-lg font-bold text-on-surface">Alert Rules</h2>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-1 transition-colors"
+              className="text-text-faint hover:text-on-surface-variant hover:bg-surface-container rounded-lg p-1 transition-colors"
             >
               <XIcon className="w-5 h-5" />
             </button>
@@ -304,7 +304,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
         </div>
 
         {/* Channel status */}
-        <div className="px-6 py-2.5 text-xs flex items-center gap-2 flex-shrink-0 bg-gray-50 border-b border-gray-100 text-gray-600 flex-wrap">
+        <div className="px-6 py-2.5 text-xs flex items-center gap-2 flex-shrink-0 bg-surface-container-low border-b border-outline-variant text-on-surface-variant flex-wrap">
           {[
             { key: 'whatsapp', label: 'WhatsApp' },
             { key: 'slack',    label: 'Slack' },
@@ -312,11 +312,11 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
             { key: 'email',    label: 'Email' },
           ].map(({ key, label }) => (
             <span key={key} className="flex items-center gap-1">
-              <span className={`inline-block w-2 h-2 rounded-full ${env[key] ? 'bg-green-500' : 'bg-gray-300'}`} />
+              <span className={`inline-block w-2 h-2 rounded-full ${env[key] ? 'bg-success' : 'bg-surface-container-highest'}`} />
               {label}
             </span>
           ))}
-          <span className="text-gray-400 ml-auto">Rules fire every 60s</span>
+          <span className="text-text-faint ml-auto">Rules fire every 60s</span>
         </div>
 
         {/* Scrollable rules list */}
@@ -337,8 +337,8 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
 
           {/* Add custom rule inline form */}
           {showAdd ? (
-            <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/30 mt-2">
-              <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">
+            <div className="border border-primary rounded-xl p-4 bg-accent-surface/30 mt-2">
+              <h4 className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide mb-3">
                 New Custom Rule
               </h4>
               <div className="space-y-2.5">
@@ -347,7 +347,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
                   placeholder="Rule name *"
                   value={newRule.name}
                   onChange={(e) => setNewRule((r) => ({ ...r, name: e.target.value }))}
-                  className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
 
                 <select
@@ -358,7 +358,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
                       condition: { ...r.condition, type: e.target.value },
                     }))
                   }
-                  className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   {Object.entries(CONDITION_META).map(([type, meta]) => (
                     <option key={type} value={type}>{meta.label}</option>
@@ -367,7 +367,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
 
                 {selectedMeta.hasHours && (
                   <div className="flex items-center gap-2">
-                    <label className="text-xs text-gray-500 w-16 flex-shrink-0">Hours:</label>
+                    <label className="text-xs text-on-surface-variant w-16 flex-shrink-0">Hours:</label>
                     <select
                       value={newRule.condition.hours || 24}
                       onChange={(e) =>
@@ -376,7 +376,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
                           condition: { ...r.condition, hours: Number(e.target.value) },
                         }))
                       }
-                      className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="flex-1 px-3 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                       {[2, 4, 8, 24, 48, 72].map((h) => (
                         <option key={h} value={h}>{h} h</option>
@@ -387,7 +387,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
 
                 {selectedMeta.hasTag && (
                   <div className="flex items-center gap-2">
-                    <label className="text-xs text-gray-500 w-16 flex-shrink-0">Tag:</label>
+                    <label className="text-xs text-on-surface-variant w-16 flex-shrink-0">Tag:</label>
                     <select
                       value={newRule.condition.tag || (entities[0]?.name || '')}
                       onChange={(e) =>
@@ -396,7 +396,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
                           condition: { ...r.condition, tag: e.target.value },
                         }))
                       }
-                      className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="flex-1 px-3 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                       {EntitySelectOptions && <EntitySelectOptions entities={entities || []} />}
                     </select>
@@ -408,20 +408,20 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
                   placeholder="Recipient override (optional)"
                   value={newRule.recipientOverride}
                   onChange={(e) => setNewRule((r) => ({ ...r, recipientOverride: e.target.value }))}
-                  className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
 
                 <div className="flex gap-2">
                   <button
                     onClick={() => { setShowAdd(false); setNewRule(EMPTY_NEW_RULE); }}
-                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
+                    className="flex-1 px-3 py-2 border border-outline-variant rounded-lg text-on-surface-variant hover:bg-surface-container-low text-sm font-medium transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleAddRule}
                     disabled={!newRule.name.trim()}
-                    className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors disabled:opacity-40"
+                    className="flex-1 px-3 py-2 bg-primary text-on-primary rounded-lg hover:bg-primary text-sm font-medium transition-colors disabled:opacity-40"
                   >
                     Add Rule
                   </button>
@@ -431,7 +431,7 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
           ) : (
             <button
               onClick={() => setShowAdd(true)}
-              className="w-full flex items-center gap-2 px-4 py-3 border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50/20 transition-all text-sm font-medium mt-1"
+              className="w-full flex items-center gap-2 px-4 py-3 border-2 border-dashed border-outline-variant rounded-xl text-text-faint hover:border-primary hover:text-primary hover:bg-accent-surface/20 transition-all text-sm font-medium mt-1"
             >
               <span className="text-base leading-none">+</span> Add custom rule
             </button>
@@ -439,10 +439,10 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0 space-y-2">
+        <div className="px-6 py-4 border-t border-outline-variant flex-shrink-0 space-y-2">
           {testPicker ? (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">Send test via:</span>
+              <span className="text-xs text-on-surface-variant">Send test via:</span>
               {[
                 { key: 'whatsapp', label: 'WhatsApp', ok: env.whatsapp },
                 { key: 'slack',    label: 'Slack',    ok: env.slack },
@@ -454,8 +454,8 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
                   onClick={() => handleSendTest(key)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     ok
-                      ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                      ? 'bg-accent-surface text-primary hover:bg-accent-surface'
+                      : 'bg-surface-container-low text-text-faint cursor-not-allowed'
                   }`}
                 >
                   {label}
@@ -463,14 +463,14 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
               ))}
               <button
                 disabled={sending}
-                className="px-2 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-300 cursor-not-allowed"
+                className="px-2 py-1.5 rounded-lg text-xs font-medium bg-surface-container-low text-text-faint cursor-not-allowed"
                 title="Coming soon"
               >
                 SMS
               </button>
               <button
                 onClick={() => setTestPicker(null)}
-                className="ml-auto text-xs text-gray-400 hover:text-gray-600"
+                className="ml-auto text-xs text-text-faint hover:text-on-surface-variant"
               >
                 Cancel
               </button>
@@ -480,13 +480,13 @@ export function AlertsModal({ rules, onUpdateRules, emailSettings, tasks, addToa
               <button
                 onClick={() => setTestPicker(true)}
                 disabled={sending}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors disabled:opacity-50"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-outline-variant rounded-xl text-on-surface hover:bg-surface-container-low text-sm font-medium transition-colors disabled:opacity-50"
               >
                 {sending ? 'Sending…' : 'Send Test →'}
               </button>
               <button
                 onClick={onClose}
-                className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 text-sm font-medium transition-colors shadow-sm"
+                className="flex-1 px-4 py-2.5 bg-primary text-on-primary rounded-xl hover:bg-primary text-sm font-medium transition-colors shadow-sm"
               >
                 Done
               </button>

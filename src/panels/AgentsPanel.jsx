@@ -12,12 +12,12 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
  * via local state. Same component for blank and populated edit (D3).
  */
 
-const PANEL_BG = '#fbf8fe';
-const PRIMARY = '#4f4dcf';
-const PRIMARY_LIGHT = '#7777fa';
-const BORDER = '#e5e7eb';
-const TEXT_PRIMARY = '#31323a';
-const TEXT_SECONDARY = '#6b7280';
+const PANEL_BG = 'rgb(var(--surface))';
+const PRIMARY = 'rgb(var(--accent))';
+const PRIMARY_LIGHT = 'rgb(var(--primary-container))';
+const BORDER = 'rgb(var(--surface-container-high))';
+const TEXT_PRIMARY = 'rgb(var(--text-primary))';
+const TEXT_SECONDARY = 'rgb(var(--text-secondary))';
 
 const PERSONAS = ['CFO', 'COO', 'Best-Friend', 'Operator', 'Personal', 'Brand'];
 
@@ -258,7 +258,7 @@ function SectionHeader({ title, subtitle, ctaLabel, onCta }) {
         <button
           onClick={onCta}
           style={{
-            fontSize: 13, fontWeight: 600, color: 'white', background: PRIMARY,
+            fontSize: 13, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: PRIMARY,
             border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
           }}
         >
@@ -272,7 +272,7 @@ function SectionHeader({ title, subtitle, ctaLabel, onCta }) {
 function EmptyState({ onCreateNew }) {
   return (
     <div style={{
-      padding: 32, textAlign: 'center', background: 'white',
+      padding: 32, textAlign: 'center', background: 'rgb(var(--surface-elevated))',
       border: `1px dashed ${BORDER}`, borderRadius: 12,
     }}>
       <div style={{ fontSize: 14, color: TEXT_PRIMARY, fontWeight: 600, marginBottom: 8 }}>
@@ -284,7 +284,7 @@ function EmptyState({ onCreateNew }) {
       <button
         onClick={onCreateNew}
         style={{
-          fontSize: 13, fontWeight: 600, color: 'white', background: PRIMARY,
+          fontSize: 13, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: PRIMARY,
           border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
         }}
       >
@@ -318,7 +318,7 @@ function SkillTile({ skill, onEdit, apiFetch, addToast, onChanged }) {
 
   return (
     <div style={{
-      padding: '16px 18px', background: 'white', borderRadius: 12,
+      padding: '16px 18px', background: 'rgb(var(--surface-elevated))', borderRadius: 12,
       border: `1px solid ${BORDER}`,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
@@ -329,7 +329,7 @@ function SkillTile({ skill, onEdit, apiFetch, addToast, onChanged }) {
           {skill.source === 'aria_proposed' && (
             <span style={{
               fontSize: 10, fontWeight: 600, color: PRIMARY,
-              background: '#eeecff', padding: '2px 6px', borderRadius: 4,
+              background: 'rgb(var(--accent-surface))', padding: '2px 6px', borderRadius: 4,
             }}>Aria-proposed</span>
           )}
         </div>
@@ -338,7 +338,7 @@ function SkillTile({ skill, onEdit, apiFetch, addToast, onChanged }) {
             <button
               onClick={handleActivate}
               style={{
-                fontSize: 12, fontWeight: 600, color: 'white', background: PRIMARY,
+                fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: PRIMARY,
                 border: 'none', padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
               }}
             >
@@ -348,7 +348,7 @@ function SkillTile({ skill, onEdit, apiFetch, addToast, onChanged }) {
           <button
             onClick={onEdit}
             style={{
-              fontSize: 12, fontWeight: 600, color: TEXT_PRIMARY, background: 'white',
+              fontSize: 12, fontWeight: 600, color: TEXT_PRIMARY, background: 'rgb(var(--surface-elevated))',
               border: `1px solid ${BORDER}`, padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
             }}
           >
@@ -369,7 +369,7 @@ function SkillTile({ skill, onEdit, apiFetch, addToast, onChanged }) {
           {overflowCount > 0 && (
             <span style={{
               fontSize: 11, color: TEXT_SECONDARY, padding: '3px 8px',
-              background: '#f3f4f6', borderRadius: 4,
+              background: 'rgb(var(--surface-container))', borderRadius: 4,
             }}>+{overflowCount} more</span>
           )}
         </div>
@@ -399,9 +399,9 @@ function SkillTile({ skill, onEdit, apiFetch, addToast, onChanged }) {
 
 function StatusPill({ kind }) {
   const styles = {
-    active: { bg: '#dcfce7', color: '#166534' },
-    draft:  { bg: '#f3f4f6', color: '#374151' },
-    paused: { bg: '#fef3c7', color: '#92400e' },
+    active: { bg: 'rgb(var(--success-surface))', color: 'rgb(var(--success))' },
+    draft:  { bg: 'rgb(var(--surface-container))', color: 'rgb(var(--text-primary))' },
+    paused: { bg: 'rgb(var(--warning-surface))', color: 'rgb(var(--warning))' },
   };
   const s = styles[kind] || styles.draft;
   return (
@@ -415,7 +415,7 @@ function StatusPill({ kind }) {
 function PersonaPill({ persona }) {
   return (
     <span style={{
-      fontSize: 10, fontWeight: 600, color: PRIMARY, background: '#eeecff',
+      fontSize: 10, fontWeight: 600, color: PRIMARY, background: 'rgb(var(--accent-surface))',
       padding: '2px 8px', borderRadius: 999,
     }}>{persona}</span>
   );
@@ -425,7 +425,7 @@ function KeywordPill({ keyword }) {
   return (
     <span style={{
       fontSize: 11, color: TEXT_SECONDARY, padding: '3px 8px',
-      background: '#f3f4f6', borderRadius: 4, fontFamily: 'Manrope, sans-serif',
+      background: 'rgb(var(--surface-container))', borderRadius: 4, fontFamily: 'Manrope, sans-serif',
     }}>{keyword}</span>
   );
 }
@@ -476,7 +476,7 @@ function SubAgentsSection({ sessions, loaded, onOpenRun, onStartRun, apiFetch, a
 
       {loaded && sorted.length === 0 && (
         <div style={{
-          padding: 32, textAlign: 'center', background: 'white',
+          padding: 32, textAlign: 'center', background: 'rgb(var(--surface-elevated))',
           border: `1px dashed ${BORDER}`, borderRadius: 12,
         }}>
           <div style={{ fontSize: 14, color: TEXT_PRIMARY, fontWeight: 600, marginBottom: 8 }}>
@@ -488,7 +488,7 @@ function SubAgentsSection({ sessions, loaded, onOpenRun, onStartRun, apiFetch, a
           <button
             onClick={onStartRun}
             style={{
-              fontSize: 13, fontWeight: 600, color: 'white', background: PRIMARY,
+              fontSize: 13, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: PRIMARY,
               border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
             }}
           >
@@ -547,7 +547,7 @@ function RunTile({ session, onOpen, apiFetch, addToast, onChanged }) {
     <div
       onClick={onOpen}
       style={{
-        padding: '16px 18px', background: 'white', borderRadius: 12,
+        padding: '16px 18px', background: 'rgb(var(--surface-elevated))', borderRadius: 12,
         border: `1px solid ${BORDER}`, cursor: 'pointer',
       }}
     >
@@ -565,7 +565,7 @@ function RunTile({ session, onOpen, apiFetch, addToast, onChanged }) {
             <button
               onClick={handleCancel}
               style={{
-                fontSize: 12, fontWeight: 600, color: '#dc2626', background: 'white',
+                fontSize: 12, fontWeight: 600, color: 'rgb(var(--danger))', background: 'rgb(var(--surface-elevated))',
                 border: `1px solid ${BORDER}`, padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
               }}
             >Cancel</button>
@@ -573,7 +573,7 @@ function RunTile({ session, onOpen, apiFetch, addToast, onChanged }) {
           <button
             onClick={(e) => { e.stopPropagation(); onOpen(); }}
             style={{
-              fontSize: 12, fontWeight: 600, color: TEXT_PRIMARY, background: 'white',
+              fontSize: 12, fontWeight: 600, color: TEXT_PRIMARY, background: 'rgb(var(--surface-elevated))',
               border: `1px solid ${BORDER}`, padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
             }}
           >View</button>
@@ -613,12 +613,12 @@ function RunTile({ session, onOpen, apiFetch, addToast, onChanged }) {
 
 function RunStatusPill({ kind }) {
   const styles = {
-    running:   { bg: '#dbeafe', color: '#1e40af', label: 'RUNNING' },
-    completed: { bg: '#dcfce7', color: '#166534', label: 'COMPLETED' },
-    failed:    { bg: '#fee2e2', color: '#991b1b', label: 'FAILED' },
-    budget:    { bg: '#fef3c7', color: '#92400e', label: 'BUDGET' },
-    killed:    { bg: '#f3f4f6', color: '#374151', label: 'KILLED' },
-    stagnated: { bg: '#f3f4f6', color: '#374151', label: 'STAGNATED' },
+    running:   { bg: 'rgb(var(--accent-surface))', color: 'rgb(var(--accent))', label: 'RUNNING' },
+    completed: { bg: 'rgb(var(--success-surface))', color: 'rgb(var(--success))', label: 'COMPLETED' },
+    failed:    { bg: 'rgb(var(--danger-surface))', color: 'rgb(var(--danger))', label: 'FAILED' },
+    budget:    { bg: 'rgb(var(--warning-surface))', color: 'rgb(var(--warning))', label: 'BUDGET' },
+    killed:    { bg: 'rgb(var(--surface-container))', color: 'rgb(var(--text-primary))', label: 'KILLED' },
+    stagnated: { bg: 'rgb(var(--surface-container))', color: 'rgb(var(--text-primary))', label: 'STAGNATED' },
   };
   const s = styles[kind] || styles.completed;
   return (
@@ -641,7 +641,7 @@ function RunStatusPill({ kind }) {
 function ProgressBar({ used, total, color = PRIMARY }) {
   const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
   return (
-    <div style={{ width: '100%', height: 5, background: '#f3f4f6', borderRadius: 999, overflow: 'hidden' }}>
+    <div style={{ width: '100%', height: 5, background: 'rgb(var(--surface-container))', borderRadius: 999, overflow: 'hidden' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: color, transition: 'width 300ms ease' }} />
     </div>
   );
@@ -722,7 +722,7 @@ function DispatchModal({ apiFetch, addToast, existingActiveCount, onClose, onDis
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'white', borderRadius: 16, maxWidth: 560, width: '100%',
+          background: 'rgb(var(--surface-elevated))', borderRadius: 16, maxWidth: 560, width: '100%',
           padding: 24, fontFamily: 'Manrope, sans-serif',
           boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
         }}
@@ -733,7 +733,7 @@ function DispatchModal({ apiFetch, addToast, existingActiveCount, onClose, onDis
         }}>Start research run</h2>
         <p style={{ fontSize: 12, color: TEXT_SECONDARY, marginTop: 0, marginBottom: 16 }}>
           Aria runs in the background and pings via WhatsApp when done.
-          {atCap && <span style={{ color: '#dc2626', fontWeight: 600 }}> Max 2 active reached.</span>}
+          {atCap && <span style={{ color: 'rgb(var(--danger))', fontWeight: 600 }}> Max 2 active reached.</span>}
         </p>
 
         <FieldLabel>What should I investigate?</FieldLabel>
@@ -787,7 +787,7 @@ function DispatchModal({ apiFetch, addToast, existingActiveCount, onClose, onDis
             onClick={onClose}
             disabled={dispatching}
             style={{
-              fontSize: 13, fontWeight: 600, color: TEXT_PRIMARY, background: 'white',
+              fontSize: 13, fontWeight: 600, color: TEXT_PRIMARY, background: 'rgb(var(--surface-elevated))',
               border: `1px solid ${BORDER}`, padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
             }}
           >Cancel</button>
@@ -795,7 +795,7 @@ function DispatchModal({ apiFetch, addToast, existingActiveCount, onClose, onDis
             onClick={handleDispatch}
             disabled={dispatching || atCap || !prompt.trim()}
             style={{
-              fontSize: 13, fontWeight: 600, color: 'white', background: PRIMARY,
+              fontSize: 13, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: PRIMARY,
               border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
               opacity: (dispatching || atCap || !prompt.trim()) ? 0.6 : 1,
             }}
@@ -892,7 +892,7 @@ function RunDetailView({ sessionId, apiFetch, addToast, onClose }) {
             onClick={handleKill}
             disabled={killing}
             style={{
-              fontSize: 13, fontWeight: 600, color: '#dc2626', background: 'white',
+              fontSize: 13, fontWeight: 600, color: 'rgb(var(--danger))', background: 'rgb(var(--surface-elevated))',
               border: `1px solid ${BORDER}`, padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
             }}
           >{killing ? 'Cancelling…' : 'Cancel run'}</button>
@@ -937,7 +937,7 @@ function RunDetailView({ sessionId, apiFetch, addToast, onClose }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {result.key_findings.map((f, i) => (
                     <div key={i} style={{
-                      padding: 10, background: '#fafafa', borderRadius: 6,
+                      padding: 10, background: 'rgb(var(--surface-container-low))', borderRadius: 6,
                       borderLeft: `3px solid ${PRIMARY}`,
                     }}>
                       <div style={{ fontSize: 13, color: TEXT_PRIMARY, marginBottom: 4 }}>{f.point}</div>
@@ -982,7 +982,7 @@ function RunDetailView({ sessionId, apiFetch, addToast, onClose }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {findings.map((f) => (
                 <div key={f.id} style={{
-                  padding: 10, background: '#fafafa', borderRadius: 6,
+                  padding: 10, background: 'rgb(var(--surface-container-low))', borderRadius: 6,
                   borderLeft: `3px solid ${PRIMARY}`,
                 }}>
                   <div style={{ fontSize: 13, color: TEXT_PRIMARY, marginBottom: 4 }}>{f.finding?.point || ''}</div>
@@ -1012,12 +1012,12 @@ function StepRow({ step }) {
   const [open, setOpen] = useState(false);
   const hasPayload = step.payload && Object.keys(step.payload).length > 0;
   const kindColor = {
-    phase_enter: '#1e40af',
-    phase_exit:  '#166534',
+    phase_enter: 'rgb(var(--accent))',
+    phase_exit:  'rgb(var(--success))',
     tool_call:   TEXT_PRIMARY,
     synthesis:   PRIMARY,
-    error:       '#dc2626',
-    killed:      '#374151',
+    error:       'rgb(var(--danger))',
+    killed:      'rgb(var(--text-primary))',
   }[step.stepKind] || TEXT_PRIMARY;
 
   const summary = step.stepKind === 'tool_call' && step.payload?.tool
@@ -1053,7 +1053,7 @@ function StepRow({ step }) {
         <pre style={{
           margin: '6px 0 0 72px', fontSize: 11, color: TEXT_SECONDARY,
           fontFamily: 'Menlo, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          background: '#fafafa', padding: 8, borderRadius: 6, maxHeight: 300, overflow: 'auto',
+          background: 'rgb(var(--surface-container-low))', padding: 8, borderRadius: 6, maxHeight: 300, overflow: 'auto',
         }}>
           {JSON.stringify(step.payload, null, 2)}
         </pre>
@@ -1269,7 +1269,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
               onClick={handleDelete}
               disabled={deleting || saving}
               style={{
-                fontSize: 13, fontWeight: 600, color: '#dc2626', background: 'transparent',
+                fontSize: 13, fontWeight: 600, color: 'rgb(var(--danger))', background: 'transparent',
                 border: 'none', cursor: 'pointer', padding: '8px 12px',
               }}
             >
@@ -1280,7 +1280,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
             onClick={onClose}
             disabled={saving}
             style={{
-              fontSize: 13, fontWeight: 600, color: TEXT_PRIMARY, background: 'white',
+              fontSize: 13, fontWeight: 600, color: TEXT_PRIMARY, background: 'rgb(var(--surface-elevated))',
               border: `1px solid ${BORDER}`, padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
             }}
           >
@@ -1290,7 +1290,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
             onClick={handleSave}
             disabled={saving || deleting}
             style={{
-              fontSize: 13, fontWeight: 600, color: 'white', background: PRIMARY,
+              fontSize: 13, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: PRIMARY,
               border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
               opacity: (saving || deleting) ? 0.6 : 1,
             }}
@@ -1340,7 +1340,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
             style={{
               width: '100%', fontSize: 13, padding: '8px 12px',
               border: `1px solid ${BORDER}`, borderRadius: 8, outline: 'none',
-              background: 'white', fontFamily: 'Manrope, sans-serif',
+              background: 'rgb(var(--surface-elevated))', fontFamily: 'Manrope, sans-serif',
             }}
           >
             <option value="">none (loads regardless)</option>
@@ -1360,7 +1360,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
             {keywords.map((kw) => (
               <span key={kw} style={{
                 display: 'inline-flex', alignItems: 'center', gap: 4,
-                background: '#eeecff', color: PRIMARY, fontSize: 12, fontWeight: 600,
+                background: 'rgb(var(--accent-surface))', color: PRIMARY, fontSize: 12, fontWeight: 600,
                 padding: '4px 8px', borderRadius: 999,
               }}>
                 {kw}
@@ -1451,7 +1451,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
             />
           ) : (
             <div style={{
-              minHeight: 240, padding: 16, background: '#fafafa', borderRadius: 8,
+              minHeight: 240, padding: 16, background: 'rgb(var(--surface-container-low))', borderRadius: 8,
               fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap',
               border: `1px solid ${BORDER}`,
             }}>
@@ -1459,7 +1459,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
             </div>
           )}
           {tokensUsed > tokenCap && (
-            <p style={{ fontSize: 11, color: '#dc2626', marginTop: 6 }}>
+            <p style={{ fontSize: 11, color: 'rgb(var(--danger))', marginTop: 6 }}>
               Content exceeds token cap — Aria will truncate at load time.
             </p>
           )}
@@ -1532,7 +1532,7 @@ function SkillEditView({ skillId, apiFetch, addToast, onClose }) {
 function FormCard({ children }) {
   return (
     <div style={{
-      padding: 22, background: 'white', border: `0.5px solid ${BORDER}`,
+      padding: 22, background: 'rgb(var(--surface-elevated))', border: `0.5px solid ${BORDER}`,
       borderRadius: 12, marginBottom: 16,
     }}>{children}</div>
   );
@@ -1570,8 +1570,8 @@ function ToggleButton({ active, onClick, label }) {
       style={{
         fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 6,
         border: `1px solid ${active ? PRIMARY : BORDER}`,
-        background: active ? PRIMARY : 'white',
-        color: active ? 'white' : TEXT_PRIMARY,
+        background: active ? PRIMARY : 'rgb(var(--surface-elevated))',
+        color: active ? 'rgb(var(--accent-contrast))' : TEXT_PRIMARY,
         cursor: 'pointer',
       }}
     >{label}</button>

@@ -13,7 +13,7 @@ export function ChatMessageThread({ messages, loading }) {
     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-surface" style={{ fontFamily: 'Manrope, sans-serif' }}>
       {messages.length === 0 && (
         <div className="text-center py-10 text-on-surface-variant">
-          <span className="material-symbols-outlined text-4xl mb-3 block" style={{ color: '#4f4dcf', opacity: 0.3 }}>auto_awesome</span>
+          <span className="material-symbols-outlined text-4xl mb-3 block" style={{ color: 'rgb(var(--accent))', opacity: 0.3 }}>auto_awesome</span>
           <p className="text-sm font-medium text-on-surface-variant" style={{ fontFamily: 'Plus Jakarta Sans, sans-serif' }}>Ask your AI assistant</p>
           <p className="text-xs text-on-surface-variant mt-1">&ldquo;What should I focus on today?&rdquo;</p>
           <p className="text-xs text-on-surface-variant">&ldquo;Which Careific tasks are overdue?&rdquo;</p>
@@ -27,16 +27,16 @@ export function ChatMessageThread({ messages, loading }) {
             </span>
           )}
           {msg.role === 'assistant' && (
-            <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center mr-2 mt-0.5 flex-shrink-0"><span className="material-symbols-outlined" style={{fontSize:'14px',color:'#4f4dcf'}}>auto_awesome</span></div>
+            <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center mr-2 mt-0.5 flex-shrink-0"><span className="material-symbols-outlined" style={{fontSize:'14px',color:'rgb(var(--accent))'}}>auto_awesome</span></div>
           )}
           <div className={`max-w-[82%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${
-            msg.role === 'user' ? 'text-white rounded-br-sm' : 'bg-surface-container-lowest text-on-surface border border-surface-container-low shadow-sm rounded-bl-sm'
-          }`} style={msg.role === 'user' ? { backgroundColor: '#4f4dcf' } : undefined}>{msg.content}</div>
+            msg.role === 'user' ? 'text-on-primary rounded-br-sm' : 'bg-surface-container-lowest text-on-surface border border-surface-container-low shadow-sm rounded-bl-sm'
+          }`} style={msg.role === 'user' ? { backgroundColor: 'rgb(var(--accent))' } : undefined}>{msg.content}</div>
         </div>
       ))}
       {loading && (
         <div className="flex justify-start items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center"><span className="material-symbols-outlined" style={{fontSize:'14px',color:'#4f4dcf'}}>auto_awesome</span></div>
+          <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center"><span className="material-symbols-outlined" style={{fontSize:'14px',color:'rgb(var(--accent))'}}>auto_awesome</span></div>
           <div className="bg-surface-container-lowest border border-surface-container-low rounded-xl px-4 py-3 shadow-sm">
             <div className="flex gap-1 items-center">
               {[0, 1, 2].map((j) => (
@@ -61,9 +61,9 @@ export function SlidingChatPanel({ messages, loading, backend, contextBadge, onH
       {/* Header */}
       <div className="bg-surface-container-lowest border-b border-surface-container-low px-4 py-3 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-lg" style={{ color: '#4f4dcf' }}>chat</span>
+          <span className="material-symbols-outlined text-lg" style={{ color: 'rgb(var(--accent))' }}>chat</span>
           <span className="text-sm font-semibold text-on-surface" style={{ fontFamily: 'Plus Jakarta Sans, sans-serif' }}>Chat</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${backend === 'claude' ? 'bg-primary/10 text-primary' : 'bg-green-100 text-green-700'}`}>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${backend === 'claude' ? 'bg-primary/10 text-primary' : 'bg-success-surface text-success'}`}>
             {backend === 'claude' ? 'Claude' : 'ChatGPT'}
           </span>
           {activePersona && (
@@ -176,7 +176,7 @@ export function ChatTabPanel({ conversations, activeConvId, activeMessages, load
                     <div className="min-w-0 flex-1">
                       <p className="text-[11px] font-bold truncate">{conv.title || 'New conversation'}</p>
                       <div className="flex items-center gap-1 mt-0.5">
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${conv.model === 'chatgpt' ? 'bg-green-50 text-green-600' : 'bg-primary/10 text-primary'}`}>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${conv.model === 'chatgpt' ? 'bg-success-surface text-success' : 'bg-primary/10 text-primary'}`}>
                           {conv.model === 'chatgpt' ? 'GPT' : 'Claude'}
                         </span>
                       </div>
@@ -231,7 +231,7 @@ export function ChatTabPanel({ conversations, activeConvId, activeMessages, load
                     {conversations.find((c) => c.id === activeConvId)?.title || 'New conversation'}
                   </h3>
                 )}
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold flex-shrink-0 ${backend === 'claude' ? 'bg-primary/10 text-primary' : 'bg-green-50 text-green-600'}`}>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold flex-shrink-0 ${backend === 'claude' ? 'bg-primary/10 text-primary' : 'bg-success-surface text-success'}`}>
                   {backend === 'claude' ? 'Claude' : 'ChatGPT'}
                 </span>
               </div>
@@ -272,7 +272,7 @@ export function UniversalPromptBar({ input, onInputChange, backend, onBackendCha
   return (
     <div className="z-40 bg-surface border-b border-surface-container-low flex-shrink-0">
       <div className="flex items-center justify-center" style={{ height: 72, padding: '12px 24px' }}>
-        <div className="flex items-center gap-2 w-full" style={{ maxWidth: 860, height: 52, borderRadius: 26, border: '1px solid var(--color-surface-container-low, #f1f0f5)', backgroundColor: 'var(--color-surface-container-lowest, #ffffff)', padding: '0 20px' }}>
+        <div className="flex items-center gap-2 w-full" style={{ maxWidth: 860, height: 52, borderRadius: 26, border: '1px solid rgb(var(--surface-container-low))', backgroundColor: 'rgb(var(--surface-container-lowest))', padding: '0 20px' }}>
           {personaPill && (
             <span className="flex-shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary select-none">
               {personaPill.emoji} {personaPill.name}
@@ -299,11 +299,11 @@ export function UniversalPromptBar({ input, onInputChange, backend, onBackendCha
           <button
             onClick={onSend}
             disabled={loading || !input.trim()}
-            className="flex-shrink-0 flex items-center justify-center text-white rounded-full disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            style={{ backgroundColor: '#4f4dcf', width: 40, height: 40 }}
+            className="flex-shrink-0 flex items-center justify-center text-on-primary rounded-full disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            style={{ backgroundColor: 'rgb(var(--accent))', width: 40, height: 40 }}
           >
             {loading ? (
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <div className="w-4 h-4 border-2 border-on-primary border-t-transparent rounded-full animate-spin" />
             ) : (
               <SendIcon className="w-4 h-4" />
             )}

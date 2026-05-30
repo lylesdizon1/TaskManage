@@ -21,12 +21,12 @@ export default function ProjectDraftTile({ payload = {}, status = 'draft', error
 
   return (
     <div
-      className="bg-white border border-gray-200 rounded-xl"
+      className="bg-surface-container-lowest border border-outline-variant rounded-xl"
       style={{ fontFamily: 'Manrope, sans-serif' }}
     >
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
-        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '15px' }}>folder_open</span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+        <span className="material-symbols-outlined" style={{ color: 'rgb(var(--accent))', fontSize: '15px' }}>folder_open</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
           Project draft
         </span>
       </div>
@@ -40,10 +40,10 @@ export default function ProjectDraftTile({ payload = {}, status = 'draft', error
           disabled={disabled}
         />
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400 mb-0.5" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-faint mb-0.5" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
             Entity
           </div>
-          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: hasEntity ? '#1f2937' : '#dc2626', padding: '4px 6px' }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: hasEntity ? 'rgb(var(--text-primary))' : 'rgb(var(--danger))', padding: '4px 6px' }}>
             {payload.entity_name || 'No entity'}
           </div>
         </div>

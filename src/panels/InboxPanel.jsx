@@ -70,9 +70,9 @@ function sanitizeHtml(raw) {
 }
 
 // Deterministic color per account_email so each account gets a stable
-// badge tint across loads. Kept muted so it never competes with #4f4dcf.
+// badge tint across loads. Kept muted so it never competes with rgb(var(--accent)).
 const ACCOUNT_TINTS = [
-  { bg: 'rgba(79,77,207,0.08)',  fg: '#4f4dcf' },
+  { bg: 'rgba(79,77,207,0.08)',  fg: 'rgb(var(--accent))' },
   { bg: 'rgba(5,150,105,0.08)',  fg: '#059669' },
   { bg: 'rgba(217,119,6,0.08)',  fg: '#b45309' },
   { bg: 'rgba(219,39,119,0.08)', fg: '#be185d' },
@@ -109,10 +109,10 @@ const INBOX_MD_COMPONENTS = {
   li: ({ node, ordered, ...p }) => <li style={{ margin: '0.1em 0' }} {...p} />,
   strong: ({ node, ...p }) => <strong style={{ fontWeight: 700 }} {...p} />,
   em: ({ node, ...p }) => <em style={{ fontStyle: 'italic' }} {...p} />,
-  a: ({ node, ...p }) => <a style={{ color: '#4f4dcf', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
+  a: ({ node, ...p }) => <a style={{ color: 'rgb(var(--accent))', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
   code: ({ node, inline, ...p }) =>
     inline
-      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', background: 'rgba(79,77,207,0.06)', padding: '0 3px', borderRadius: '3px' }} {...p} />
+      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', background: 'rgb(var(--accent) / 0.06)', padding: '0 3px', borderRadius: '3px' }} {...p} />
       : <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', whiteSpace: 'pre-wrap' }} {...p} />,
 };
 
@@ -140,7 +140,7 @@ function initials(name) {
 // accents. Hashed deterministically per sender so the same sender always
 // renders the same color across refreshes.
 const AVATAR_PALETTE = [
-  { bg: '#ededff', fg: '#4f4dcf' }, // primary container
+  { bg: '#ededff', fg: 'rgb(var(--accent))' }, // primary container
   { bg: '#dcfce7', fg: '#166534' }, // emerald
   { bg: '#fef3c7', fg: '#b45309' }, // amber
   { bg: '#fce7f3', fg: '#be185d' }, // pink
@@ -165,7 +165,7 @@ const LABEL_CATEGORY_STYLES = {
   clients:       { bg: 'rgba(13,148,136,0.10)', fg: '#0f766e' },
   vendors:       { bg: 'rgba(180,83,9,0.10)',   fg: '#9a3412' },
   personal:      { bg: 'rgba(219,39,119,0.10)', fg: '#be185d' },
-  team:          { bg: 'rgba(79,77,207,0.10)',  fg: '#4f4dcf' },
+  team:          { bg: 'rgba(79,77,207,0.10)',  fg: 'rgb(var(--accent))' },
   receipts:      { bg: 'rgba(217,119,6,0.10)',  fg: '#b45309' },
   newsletters:   { bg: 'rgba(107,114,128,0.10)',fg: '#4b5563' },
   notifications: { bg: 'rgba(107,114,128,0.10)',fg: '#4b5563' },
@@ -173,7 +173,7 @@ const LABEL_CATEGORY_STYLES = {
   hr:            { bg: 'rgba(124,58,237,0.10)', fg: '#6d28d9' },
   projects:      { bg: 'rgba(147,51,234,0.10)', fg: '#7e22ce' },
   archive:       { bg: 'rgba(71,85,105,0.10)',  fg: '#475569' },
-  other:         { bg: 'rgba(156,163,175,0.10)',fg: '#6b7280' },
+  other:         { bg: 'rgba(156,163,175,0.10)',fg: 'rgb(var(--text-secondary))' },
 };
 function labelStyleFor(category) {
   return LABEL_CATEGORY_STYLES[category] || LABEL_CATEGORY_STYLES.other;
@@ -207,8 +207,8 @@ const CATEGORY_LABELS = {
 const IMPORTANCE_STYLES = {
   critical: { dot: '#dc2626', bg: 'rgba(220,38,38,0.08)', fg: '#b91c1c' },
   high:     { dot: '#d97706', bg: 'rgba(217,119,6,0.08)', fg: '#b45309' },
-  normal:   { dot: '#4f4dcf', bg: 'rgba(79,77,207,0.08)', fg: '#4f4dcf' },
-  low:      { dot: '#9ca3af', bg: 'rgba(156,163,175,0.10)', fg: '#6b7280' },
+  normal:   { dot: 'rgb(var(--accent))', bg: 'rgba(79,77,207,0.08)', fg: 'rgb(var(--accent))' },
+  low:      { dot: 'rgb(var(--text-faint))', bg: 'rgba(156,163,175,0.10)', fg: 'rgb(var(--text-secondary))' },
 };
 const SUPPRESS_PILL = new Set(['general', 'newsletter']);
 
@@ -1062,29 +1062,29 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
   }
 
   return (
-    <div className="flex-1 overflow-hidden flex" style={{ backgroundColor: '#fbf8fe', fontFamily: 'Manrope, sans-serif' }}>
+    <div className="flex-1 overflow-hidden flex" style={{ backgroundColor: 'rgb(var(--surface))', fontFamily: 'Manrope, sans-serif' }}>
       <style>{`
         .email-html-body img { max-width: 100%; height: auto; }
-        .email-html-body a { color: #4f4dcf; text-decoration: underline; }
+        .email-html-body a { color: rgb(var(--accent)); text-decoration: underline; }
         .email-html-body table { max-width: 100%; }
         .email-html-body pre { white-space: pre-wrap; }
       `}</style>
       {/* Left panel — w-96 (384px) per V2 design comp. */}
       <div
         className={`flex-col h-full ${mobileShowThread ? 'hidden md:flex' : 'flex'}`}
-        style={{ width: 384, minWidth: 384, flexShrink: 0, backgroundColor: '#f5f2fa', borderRight: '1px solid rgba(0,0,0,0.08)', position: 'relative' }}
+        style={{ width: 384, minWidth: 384, flexShrink: 0, backgroundColor: 'rgb(var(--surface-container-low))', borderRight: '1px solid rgba(0,0,0,0.08)', position: 'relative' }}
       >
         {/* Header: Inbox title + unread count badge */}
         <div className="px-5 pt-5 pb-3">
           <div className="flex items-baseline gap-2">
-            <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
+            <h1 className="text-2xl font-extrabold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox</h1>
             {(() => {
               const unread = threads.filter(t => !t.isRead).length;
               if (!unread) return null;
               return (
                 <span
-                  className="px-2 py-0.5 rounded-full text-[11px] font-bold"
-                  style={{ backgroundColor: '#ededff', color: '#4f4dcf' }}
+                  className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-accent-surface"
+                  style={{ color: 'rgb(var(--accent))' }}
                 >
                   {unread}
                 </span>
@@ -1096,14 +1096,14 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         {/* Search — full width, icon left */}
         <div className="px-5 pb-2">
           <div className="relative">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" style={{ fontSize: 18 }}>search</span>
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-text-faint" style={{ fontSize: 18 }}>search</span>
             <input
               type="search"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') setSearchQuery(searchInput.trim()); }}
               placeholder="Search emails..."
-              className="w-full pl-10 pr-9 py-2 bg-white text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full pl-10 pr-9 py-2 bg-surface-container-lowest text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
               style={{ borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)' }}
             />
             {(searchInput || searchQuery) && (
@@ -1111,17 +1111,17 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 type="button"
                 onClick={clearSearch}
                 aria-label="Clear search"
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-faint hover:text-on-surface-variant"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
               </button>
             )}
           </div>
           {searchQuery && !threadsLoading && (
-            <div className="mt-1.5 text-[11px] text-gray-500">
+            <div className="mt-1.5 text-[11px] text-on-surface-variant">
               {threads.length === 0
-                ? <>No results for <span className="font-semibold text-gray-700">&ldquo;{searchQuery}&rdquo;</span></>
-                : <>{threads.length} result{threads.length === 1 ? '' : 's'} for <span className="font-semibold text-gray-700">&ldquo;{searchQuery}&rdquo;</span></>}
+                ? <>No results for <span className="font-semibold text-on-surface">&ldquo;{searchQuery}&rdquo;</span></>
+                : <>{threads.length} result{threads.length === 1 ? '' : 's'} for <span className="font-semibold text-on-surface">&ldquo;{searchQuery}&rdquo;</span></>}
             </div>
           )}
         </div>
@@ -1140,8 +1140,8 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 onClick={() => setPillFilter(key)}
                 className="px-2.5 py-1 text-[11px] font-semibold rounded-full transition-colors"
                 style={pillFilter === key
-                  ? { backgroundColor: '#4f4dcf', color: '#fff' }
-                  : { backgroundColor: 'transparent', color: '#6b7280', border: '1px solid rgba(0,0,0,0.08)' }}
+                  ? { backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }
+                  : { backgroundColor: 'transparent', color: 'rgb(var(--text-secondary))', border: '1px solid rgba(0,0,0,0.08)' }}
               >
                 {label}{key === 'flagged' && flaggedCount > 0 ? ` (${flaggedCount})` : ''}
               </button>
@@ -1151,8 +1151,8 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 onClick={() => setShowAcked(!showAcked)}
                 className="px-2 py-1 text-[10px] font-semibold rounded-full transition-colors ml-1"
                 style={showAcked
-                  ? { backgroundColor: '#ededff', color: '#4f4dcf' }
-                  : { backgroundColor: 'transparent', color: '#9ca3af', border: '1px solid rgba(0,0,0,0.06)' }}
+                  ? { backgroundColor: 'rgb(var(--accent) / 0.12)', color: 'rgb(var(--accent))' }
+                  : { backgroundColor: 'transparent', color: 'rgb(var(--text-faint))', border: '1px solid rgba(0,0,0,0.06)' }}
               >
                 {showAcked ? 'Hide acknowledged' : 'Show acknowledged'}
               </button>
@@ -1162,7 +1162,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
             <select
               value={accountFilter}
               onChange={(e) => setAccountFilter(e.target.value)}
-              className="text-[11px] text-gray-700 bg-white px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="text-[11px] text-on-surface bg-surface-container-lowest px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
               style={{ borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', maxWidth: 140 }}
               title="Filter by account"
             >
@@ -1186,9 +1186,9 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
           {threadsLoading ? (
             <ZonedSkeleton />
           ) : threadsError ? (
-            <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 mx-1 text-center">
-              <p className="text-sm text-gray-600">Couldn&rsquo;t load inbox. Try again.</p>
-              <button onClick={loadThreads} className="mt-2 text-xs font-semibold" style={{ color: '#4f4dcf' }}>Retry</button>
+            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-4 mx-1 text-center">
+              <p className="text-sm text-on-surface-variant">Couldn&rsquo;t load inbox. Try again.</p>
+              <button onClick={loadThreads} className="mt-2 text-xs font-semibold" style={{ color: 'rgb(var(--accent))' }}>Retry</button>
             </div>
           ) : (
             <>
@@ -1197,18 +1197,18 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
               {/* Inbox Zero — zones 1+2+3 empty */}
               {zones.attn.length === 0 && zones.review.length === 0 && zones.low.length === 0 ? (
-                <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6 mx-1 my-3 text-center">
-                  <span className="material-symbols-outlined" style={{ color: '#22c55e', fontSize: '36px' }}>task_alt</span>
-                  <p className="text-sm font-semibold text-gray-800 mt-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox zero. Aria&rsquo;s got your back.</p>
-                  <p className="text-xs text-gray-500 mt-1">New emails will be prioritized automatically.</p>
+                <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-6 mx-1 my-3 text-center">
+                  <span className="material-symbols-outlined text-success" style={{ fontSize: '36px' }}>task_alt</span>
+                  <p className="text-sm font-semibold text-on-surface mt-1" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Inbox zero. Aria&rsquo;s got your back.</p>
+                  <p className="text-xs text-on-surface-variant mt-1">New emails will be prioritized automatically.</p>
                 </div>
               ) : null}
 
               {/* Zone 1 — Needs Your Attention */}
               <Zone
-                icon="priority_high" iconColor="#ef4444"
+                icon="priority_high" iconColor="rgb(var(--danger))"
                 label="Needs Your Attention"
-                badgeClass="bg-red-50 text-red-700 border-red-200"
+                badgeClass="bg-danger-surface text-danger border-danger"
                 count={zones.attn.length}
                 unreadCount={zones.attn.filter((t) => !t.isRead).length}
                 expanded={expandedZones.attn}
@@ -1221,9 +1221,9 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
               {/* Zone 2 — For Your Review */}
               <Zone
-                icon="mail" iconColor="#4f4dcf"
+                icon="mail" iconColor="rgb(var(--accent))"
                 label="For Your Review"
-                badgeClass="bg-indigo-50 text-indigo-700 border-indigo-200"
+                badgeClass="bg-accent-surface text-primary border-primary"
                 count={zones.review.length}
                 unreadCount={zones.review.filter((t) => !t.isRead).length}
                 expanded={expandedZones.review}
@@ -1236,9 +1236,9 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
 
               {/* Zone 3 — Low Priority */}
               <Zone
-                icon="low_priority" iconColor="#6b7280"
+                icon="low_priority" iconColor="rgb(var(--text-secondary))"
                 label="Low Priority"
-                badgeClass="bg-gray-50 text-gray-600 border-gray-200"
+                badgeClass="bg-surface-container-low text-on-surface-variant border-outline-variant"
                 count={zones.low.length}
                 unreadCount={zones.low.filter((t) => !t.isRead).length}
                 expanded={expandedZones.low}
@@ -1251,7 +1251,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                       <button
                         onClick={startBulkClean}
                         className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg"
-                        style={{ backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.25)' }}
+                        style={{ backgroundColor: 'transparent', color: 'rgb(var(--accent))', border: '1px solid rgb(var(--accent) / 0.25)' }}
                       >
                         <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>archive</span>
                         Archive All Low Priority
@@ -1272,18 +1272,18 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         {!threadsLoading && !threadsError && (cursorStack.length > 0 || nextCursor) && (
           <div
             className="px-4 py-2 flex items-center justify-between text-[12px]"
-            style={{ backgroundColor: '#f5f2fa', borderTop: '1px solid rgba(0,0,0,0.08)' }}
+            style={{ backgroundColor: 'rgb(var(--surface-container-low))', borderTop: '1px solid rgba(0,0,0,0.08)' }}
           >
             <button
               type="button"
               onClick={goNewer}
               disabled={cursorStack.length === 0}
               className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ color: '#4f4dcf' }}
+              style={{ color: 'rgb(var(--accent))' }}
             >
               ← Newer
             </button>
-            <span className="text-gray-500">
+            <span className="text-on-surface-variant">
               {cursorStack.length === 0 ? 'Showing latest 25' : `Page ${cursorStack.length + 1}`}
             </span>
             <button
@@ -1291,7 +1291,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               onClick={goOlder}
               disabled={!nextCursor}
               className="px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ color: '#4f4dcf' }}
+              style={{ color: 'rgb(var(--accent))' }}
             >
               Older →
             </button>
@@ -1307,38 +1307,38 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="bg-white border border-gray-200 rounded-xl shadow-lg p-4 w-[300px]"
+              className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-4 w-[300px]"
               style={{ fontFamily: 'Manrope, sans-serif' }}
             >
               <div className="flex items-center gap-2">
                 {cleanScan.would_archive >= (cleanScan.threshold || 20) ? (
                   <>
-                    <span className="material-symbols-outlined" style={{ color: '#d97706', fontSize: '18px' }}>warning</span>
-                    <p className="text-sm font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                    <span className="material-symbols-outlined text-warning" style={{ fontSize: '18px' }}>warning</span>
+                    <p className="text-sm font-semibold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                       About to archive {cleanScan.would_archive} emails — this is a lot.
                     </p>
                   </>
                 ) : (
                   <>
-                    <span className="material-symbols-outlined" style={{ color: '#22c55e', fontSize: '18px' }}>check_circle</span>
-                    <p className="text-sm font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                    <span className="material-symbols-outlined text-success" style={{ fontSize: '18px' }}>check_circle</span>
+                    <p className="text-sm font-semibold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                       Ready to archive {cleanScan.would_archive} emails:
                     </p>
                   </>
                 )}
               </div>
-              <ul className="mt-1.5 ml-6 space-y-0.5 text-[12px] text-gray-600">
+              <ul className="mt-1.5 ml-6 space-y-0.5 text-[12px] text-on-surface-variant">
                 <li>• {cleanScan.breakdown?.promos || 0} promotions</li>
                 <li>• {cleanScan.breakdown?.newsletters || 0} newsletters</li>
                 <li>• {cleanScan.breakdown?.social || 0} social notifications</li>
               </ul>
               <div className="flex items-center justify-end gap-2 mt-3">
-                <button onClick={() => !cleanArchiving && setCleanScan(null)} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+                <button onClick={() => !cleanArchiving && setCleanScan(null)} className="px-3 py-1.5 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-low rounded-lg">Cancel</button>
                 <button
                   onClick={confirmBulkClean}
                   disabled={cleanArchiving}
                   className="px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-50"
-                  style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+                  style={{ backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
                 >
                   {cleanArchiving ? 'Archiving…' : 'Archive Now'}
                 </button>
@@ -1349,16 +1349,16 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
       </div>
 
       {/* Right — Aria chat by default; thread view when a thread is open */}
-      <div className={`flex-1 flex-col h-full ${mobileShowThread ? 'flex' : 'hidden md:flex'}`} style={{ backgroundColor: '#fbf8fe', position: 'relative' }}>
+      <div className={`flex-1 flex-col h-full ${mobileShowThread ? 'flex' : 'hidden md:flex'}`} style={{ backgroundColor: 'rgb(var(--surface))', position: 'relative' }}>
         {!activeThreadId ? (
           <>
             <div ref={inboxChatScrollRef} className="flex-1 overflow-y-auto px-6 pt-4 pb-4">
               {inboxChatMessages.length === 0 && !inboxChatLoading ? (
                 <div className="h-full flex items-center justify-center">
                   <div className="text-center">
-                    <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '44px' }}>auto_awesome</span>
-                    <p className="text-base font-semibold text-gray-900 mt-2" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Ask me anything about your inbox</p>
-                    <p className="text-xs text-gray-500 mt-1 max-w-[300px] mx-auto">Find emails, summarize threads, check what needs attention</p>
+                    <span className="material-symbols-outlined text-primary" style={{ fontSize: '44px' }}>auto_awesome</span>
+                    <p className="text-base font-semibold text-on-surface mt-2" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Ask me anything about your inbox</p>
+                    <p className="text-xs text-on-surface-variant mt-1 max-w-[300px] mx-auto">Find emails, summarize threads, check what needs attention</p>
                   </div>
                 </div>
               ) : (
@@ -1368,15 +1368,15 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                     return (
                       <div key={m.ts || i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                         <div
-                          className={`max-w-[85%] ${isUser ? 'text-white' : ''}`}
+                          className={`max-w-[85%] ${isUser ? 'text-on-primary' : ''}`}
                           style={isUser
-                            ? { backgroundColor: '#4f4dcf', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '9px 12px', fontFamily: 'Manrope, sans-serif', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
-                            : { backgroundColor: '#fff', border: '1px solid #e5e7eb', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '9px 12px', color: '#1f2937', fontFamily: 'Manrope, sans-serif', wordBreak: 'break-word' }
+                            ? { backgroundColor: 'rgb(var(--accent))', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '9px 12px', fontFamily: 'Manrope, sans-serif', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                            : { backgroundColor: 'rgb(var(--surface-container-lowest))', border: '1px solid rgb(var(--surface-container-high))', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '9px 12px', color: 'rgb(var(--text-primary))', fontFamily: 'Manrope, sans-serif', wordBreak: 'break-word' }
                           }
                         >
                           {m.content
                             ? (isUser ? m.content : <ReactMarkdown components={INBOX_MD_COMPONENTS}>{m.content}</ReactMarkdown>)
-                            : <span className="text-gray-400">Aria is thinking…</span>}
+                            : <span className="text-text-faint">Aria is thinking…</span>}
                         </div>
                       </div>
                     );
@@ -1394,17 +1394,17 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
         ) : (
           <>
             {/* Thread header: back (mobile), subject, sender row */}
-            <div className="px-6 pt-5 pb-4 bg-white" style={{ borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
+            <div className="px-6 pt-5 pb-4 bg-surface-container-lowest" style={{ borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
               <button
                 onClick={() => setMobileShowThread(false)}
-                className="md:hidden flex items-center gap-1 text-gray-500 mb-2 text-xs font-semibold"
+                className="md:hidden flex items-center gap-1 text-on-surface-variant mb-2 text-xs font-semibold"
                 title="Back"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>arrow_back</span>
                 Back
               </button>
               <h2
-                className="text-[18px] font-semibold text-gray-900 leading-snug break-words"
+                className="text-[18px] font-semibold text-on-surface leading-snug break-words"
                 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
               >
                 {thread?.messages?.[0]?.subject || '(no subject)'}
@@ -1423,10 +1423,10 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                       {initials(senderRaw)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold text-gray-900 truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                      <div className="text-sm font-semibold text-on-surface truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                         {senderRaw}
                       </div>
-                      <div className="text-[11px] text-gray-500 truncate">
+                      <div className="text-[11px] text-on-surface-variant truncate">
                         to {latest.to || activeAccount || 'me'} · {absTime(latest.date)}
                       </div>
                     </div>
@@ -1490,15 +1490,15 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
               {threadLoading ? (
                 <MessageSkeleton />
               ) : threadError ? (
-                <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 text-center">
-                  <p className="text-sm text-gray-600">Couldn&rsquo;t load this thread. Try again.</p>
-                  <button onClick={() => loadThread(activeThreadId, activeAccount)} className="mt-2 text-xs font-semibold" style={{ color: '#4f4dcf' }}>Retry</button>
+                <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-4 text-center">
+                  <p className="text-sm text-on-surface-variant">Couldn&rsquo;t load this thread. Try again.</p>
+                  <button onClick={() => loadThread(activeThreadId, activeAccount)} className="mt-2 text-xs font-semibold" style={{ color: 'rgb(var(--accent))' }}>Retry</button>
                 </div>
               ) : thread?.messages?.length ? (
                 thread.messages.map((m) => {
                   const open = expanded.has(m.id);
                   return (
-                    <div key={m.id} className="bg-white border border-gray-100 rounded-xl shadow-sm">
+                    <div key={m.id} className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm">
                       <button
                         className="w-full flex items-start gap-3 px-4 py-3 text-left"
                         onClick={() => setExpanded((prev) => {
@@ -1508,18 +1508,18 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                         })}
                       >
                         <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                             style={{ backgroundColor: 'rgba(79,77,207,0.08)', color: '#4f4dcf', fontSize: '12px', fontWeight: 700, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                             style={{ backgroundColor: 'rgb(var(--accent) / 0.08)', color: 'rgb(var(--accent))', fontSize: '12px', fontWeight: 700, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                           {initials(senderName(m.from))}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold text-gray-900 truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                            <span className="text-sm font-semibold text-on-surface truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                               {senderName(m.from) || '(unknown)'}
                             </span>
-                            <span className="text-[11px] text-gray-400 flex-shrink-0">{absTime(m.date)}</span>
+                            <span className="text-[11px] text-text-faint flex-shrink-0">{absTime(m.date)}</span>
                           </div>
-                          {open && m.to && <div className="text-[11px] text-gray-400 mt-0.5 truncate">to {m.to}</div>}
-                          {!open && <div className="text-[12px] text-gray-500 truncate mt-0.5">{m.snippet}</div>}
+                          {open && m.to && <div className="text-[11px] text-text-faint mt-0.5 truncate">to {m.to}</div>}
+                          {!open && <div className="text-[12px] text-on-surface-variant truncate mt-0.5">{m.snippet}</div>}
                         </div>
                       </button>
                       {open && (
@@ -1528,20 +1528,20 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                               ? (
                                 <div
                                   className="px-4 pb-4 pt-1 email-html-body"
-                                  style={{ fontSize: '14px', lineHeight: '1.6', color: '#1f2937', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+                                  style={{ fontSize: '14px', lineHeight: '1.6', color: 'rgb(var(--text-primary))', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
                                   dangerouslySetInnerHTML={{ __html: sanitizeHtml(m.body) }}
                                 />
                               )
                               : (
                                 <div
                                   className="px-4 pb-4 pt-1"
-                                  style={{ fontSize: '14px', lineHeight: '1.6', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                                  style={{ fontSize: '14px', lineHeight: '1.6', color: 'rgb(var(--text-primary))', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                                 >
                                   {cleanPlainText(m.body)}
                                 </div>
                               ))
                           : (
-                            <div className="px-4 pb-4 pt-1" style={{ fontSize: '14px', color: '#9ca3af', fontStyle: 'italic' }}>(empty body)</div>
+                            <div className="px-4 pb-4 pt-1" style={{ fontSize: '14px', color: 'rgb(var(--text-faint))', fontStyle: 'italic' }}>(empty body)</div>
                           )
                       )}
                     </div>
@@ -1559,7 +1559,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                 : null;
               const currentRow = threads.find((x) => x.id === thread.id);
               return (
-                <div className="px-4 py-2.5 space-y-1.5" style={{ backgroundColor: '#f5f2fa', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+                <div className="px-4 py-2.5 space-y-1.5" style={{ backgroundColor: 'rgb(var(--surface-container-low))', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
                   {/* Row 1: Reply / Reply All / Forward + primary "Reply in Gmail" */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <ActionBtn icon="reply"     label="Reply"     onClick={() => openCompose('reply')} />
@@ -1571,7 +1571,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                         target="_blank"
                         rel="noopener noreferrer"
                         className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold rounded-lg shadow-sm"
-                        style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+                        style={{ backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
                         title="Open this thread in Gmail to reply"
                       >
                         <span className="material-symbols-outlined" style={{ fontSize: 15 }}>open_in_new</span>
@@ -1657,7 +1657,7 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
                               setFlaggedCount(prev => Math.max(0, prev - 1));
                             });
                           }}
-                          className="text-[11px] text-gray-500 hover:text-indigo-600 underline"
+                          className="text-[11px] text-on-surface-variant hover:text-primary underline"
                           style={{ fontFamily: 'Manrope, sans-serif' }}
                         >
                           Put back in triage queue
@@ -1673,57 +1673,57 @@ export default function InboxPanel({ authToken, apiFetch, onNavigate, onUnreadCo
             {movePickerOpen && (
               <div className="absolute inset-0 z-20 flex items-end md:items-center md:justify-center bg-black/30" onClick={() => setMovePickerOpen(false)}>
                 <div
-                  className="w-full md:w-[420px] bg-white rounded-t-2xl md:rounded-2xl shadow-xl p-4 max-h-[70vh] overflow-y-auto"
+                  className="w-full md:w-[420px] bg-surface-container-lowest rounded-t-2xl md:rounded-2xl shadow-xl p-4 max-h-[70vh] overflow-y-auto"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-bold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Move to label</h3>
-                    <button onClick={() => setMovePickerOpen(false)} className="text-gray-400 hover:text-gray-600">
+                    <h3 className="text-sm font-bold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Move to label</h3>
+                    <button onClick={() => setMovePickerOpen(false)} className="text-text-faint hover:text-on-surface-variant">
                       <span className="material-symbols-outlined" style={{ fontSize: 18 }}>close</span>
                     </button>
                   </div>
                   {moveLabelsLoading ? (
-                    <div className="py-6 text-center text-xs text-gray-500">Loading labels…</div>
+                    <div className="py-6 text-center text-xs text-on-surface-variant">Loading labels…</div>
                   ) : moveLabels.length === 0 ? (
-                    <div className="py-6 text-center text-xs text-gray-500">No labels found. Create one in Gmail first.</div>
+                    <div className="py-6 text-center text-xs text-on-surface-variant">No labels found. Create one in Gmail first.</div>
                   ) : !moveSelectedLabel ? (
                     <div className="space-y-1">
                       {moveLabels.map((l) => (
                         <button
                           key={`${l.accountEmail}::${l.labelId}`}
                           onClick={() => setMoveSelectedLabel(l)}
-                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 flex items-center justify-between"
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-surface-container-low flex items-center justify-between"
                         >
                           <div>
-                            <div className="text-sm font-semibold text-gray-800">{l.labelName}</div>
-                            <div className="text-[10px] text-gray-400">
+                            <div className="text-sm font-semibold text-on-surface">{l.labelName}</div>
+                            <div className="text-[10px] text-text-faint">
                               {l.semanticCategory || 'unmapped'}{l.messageCount ? ` · ${l.messageCount} msgs` : ''}
                             </div>
                           </div>
-                          <span className="material-symbols-outlined text-gray-400" style={{ fontSize: 16 }}>chevron_right</span>
+                          <span className="material-symbols-outlined text-text-faint" style={{ fontSize: 16 }}>chevron_right</span>
                         </button>
                       ))}
                     </div>
                   ) : (
                     <div>
-                      <div className="text-xs text-gray-500 mb-2">
-                        Move to <span className="font-semibold text-gray-800">{moveSelectedLabel.labelName}</span>:
+                      <div className="text-xs text-on-surface-variant mb-2">
+                        Move to <span className="font-semibold text-on-surface">{moveSelectedLabel.labelName}</span>:
                       </div>
                       <div className="space-y-1">
-                        <button onClick={() => moveCurrent('thread')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-gray-50 border border-gray-200">
-                          <div className="text-sm font-semibold text-gray-800">Just this email</div>
-                          <div className="text-[11px] text-gray-500">One-off move; no future filing.</div>
+                        <button onClick={() => moveCurrent('thread')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-surface-container-low border border-outline-variant">
+                          <div className="text-sm font-semibold text-on-surface">Just this email</div>
+                          <div className="text-[11px] text-on-surface-variant">One-off move; no future filing.</div>
                         </button>
-                        <button onClick={() => moveCurrent('sender')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-gray-50 border border-gray-200">
-                          <div className="text-sm font-semibold text-gray-800">All emails from this sender</div>
-                          <div className="text-[11px] text-gray-500">Records a filing pattern. Aria can later auto-file.</div>
+                        <button onClick={() => moveCurrent('sender')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-surface-container-low border border-outline-variant">
+                          <div className="text-sm font-semibold text-on-surface">All emails from this sender</div>
+                          <div className="text-[11px] text-on-surface-variant">Records a filing pattern. Aria can later auto-file.</div>
                         </button>
-                        <button onClick={() => moveCurrent('domain')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-gray-50 border border-gray-200">
-                          <div className="text-sm font-semibold text-gray-800">All emails from this domain</div>
-                          <div className="text-[11px] text-gray-500">Records a domain-wide filing pattern.</div>
+                        <button onClick={() => moveCurrent('domain')} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-surface-container-low border border-outline-variant">
+                          <div className="text-sm font-semibold text-on-surface">All emails from this domain</div>
+                          <div className="text-[11px] text-on-surface-variant">Records a domain-wide filing pattern.</div>
                         </button>
                       </div>
-                      <button onClick={() => setMoveSelectedLabel(null)} className="mt-3 text-xs font-semibold text-gray-500">← Back</button>
+                      <button onClick={() => setMoveSelectedLabel(null)} className="mt-3 text-xs font-semibold text-on-surface-variant">← Back</button>
                     </div>
                   )}
                 </div>
@@ -1855,56 +1855,56 @@ function CreateFromEmailModal({ data, authToken, apiFetch, toast, onClose, onNav
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-5"
+        className="bg-surface-container-lowest rounded-2xl shadow-xl w-full max-w-md mx-4 p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-bold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          <h3 className="text-base font-bold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
             {isTask ? 'Create Task from Email' : 'Create Note from Email'}
           </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} className="text-text-faint hover:text-on-surface-variant">
             <span className="material-symbols-outlined" style={{ fontSize: 18 }}>close</span>
           </button>
         </div>
 
         {/* Source email pill */}
-        <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg" style={{ backgroundColor: '#ededff' }}>
-          <span className="material-symbols-outlined" style={{ fontSize: 16, color: '#4f4dcf' }}>email</span>
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-accent-surface">
+          <span className="material-symbols-outlined" style={{ fontSize: 16, color: 'rgb(var(--accent))' }}>email</span>
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-semibold text-gray-700 truncate">{data.subject}</div>
-            <div className="text-[10px] text-gray-500 truncate">{data.sender}</div>
+            <div className="text-[11px] font-semibold text-on-surface truncate">{data.subject}</div>
+            <div className="text-[10px] text-on-surface-variant truncate">{data.sender}</div>
           </div>
         </div>
 
         <div className="space-y-3">
           <div>
-            <label className="text-[11px] font-semibold text-gray-600 mb-1 block">Title</label>
+            <label className="text-[11px] font-semibold text-on-surface-variant mb-1 block">Title</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full px-3 py-2 text-sm border border-outline-variant rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
               autoFocus
             />
           </div>
           {isTask && (
             <div>
-              <label className="text-[11px] font-semibold text-gray-600 mb-1 block">Due Date</label>
+              <label className="text-[11px] font-semibold text-on-surface-variant mb-1 block">Due Date</label>
               <input
                 type="date"
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="w-full px-3 py-2 text-sm border border-outline-variant rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
           )}
           <div>
-            <label className="text-[11px] font-semibold text-gray-600 mb-1 block">{isTask ? 'Notes' : 'Body'}</label>
+            <label className="text-[11px] font-semibold text-on-surface-variant mb-1 block">{isTask ? 'Notes' : 'Body'}</label>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
               rows={4}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none"
+              className="w-full px-3 py-2 text-sm border border-outline-variant rounded-lg focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
           </div>
         </div>
@@ -1912,15 +1912,15 @@ function CreateFromEmailModal({ data, authToken, apiFetch, toast, onClose, onNav
         <div className="mt-4 flex items-center justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-semibold text-gray-600 rounded-lg hover:bg-gray-100"
+            className="px-4 py-2 text-sm font-semibold text-on-surface-variant rounded-lg hover:bg-surface-container"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={saving || !title.trim()}
-            className="px-4 py-2 text-sm font-semibold text-white rounded-lg disabled:opacity-50"
-            style={{ backgroundColor: '#4f4dcf' }}
+            className="px-4 py-2 text-sm font-semibold text-on-primary rounded-lg disabled:opacity-50"
+            style={{ backgroundColor: 'rgb(var(--accent))' }}
           >
             {saving ? 'Creating...' : `Create ${isTask ? 'Task' : 'Note'}`}
           </button>
@@ -1935,16 +1935,16 @@ function CreateFromEmailModal({ data, authToken, apiFetch, toast, onClose, onNav
 function AriaInputBar({ value, onChange, onSubmit, disabled }) {
   const canSend = !!value?.trim() && !disabled;
   return (
-    <div className="border-t border-gray-100 px-3 py-2" style={{ backgroundColor: '#fbf8fe' }}>
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-full pl-3 pr-1 py-1">
-        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '18px' }}>auto_awesome</span>
+    <div className="border-t border-outline-variant px-3 py-2" style={{ backgroundColor: 'rgb(var(--surface))' }}>
+      <div className="flex items-center gap-2 bg-surface-container-lowest border border-outline-variant rounded-full pl-3 pr-1 py-1">
+        <span className="material-symbols-outlined text-primary" style={{ fontSize: '18px' }}>auto_awesome</span>
         <input
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (canSend) onSubmit(); } }}
           placeholder="Ask about your inbox..."
-          className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-gray-400 py-1.5"
+          className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-text-faint py-1.5"
           style={{ fontFamily: 'Manrope, sans-serif' }}
           disabled={disabled}
         />
@@ -1952,10 +1952,10 @@ function AriaInputBar({ value, onChange, onSubmit, disabled }) {
           onClick={() => canSend && onSubmit()}
           disabled={!canSend}
           className="w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-30 flex-shrink-0"
-          style={{ backgroundColor: canSend ? '#4f4dcf' : 'transparent' }}
+          style={{ backgroundColor: canSend ? 'rgb(var(--accent))' : 'transparent' }}
           aria-label="Send"
         >
-          <span className={`material-symbols-outlined ${canSend ? 'text-white' : 'text-slate-400'}`} style={{ fontSize: '16px' }}>
+          <span className={`material-symbols-outlined ${canSend ? 'text-on-primary' : 'text-text-faint'}`} style={{ fontSize: '16px' }}>
             {disabled ? 'hourglass_empty' : 'arrow_forward'}
           </span>
         </button>
@@ -1970,8 +1970,8 @@ function ActionBtn({ icon, label, onClick, primary }) {
       onClick={onClick}
       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
       style={primary
-        ? { backgroundColor: '#4f4dcf', color: '#fff' }
-        : { backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.2)' }
+        ? { backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }
+        : { backgroundColor: 'transparent', color: 'rgb(var(--accent))', border: '1px solid rgb(var(--accent) / 0.2)' }
       }
     >
       <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>{icon}</span>
@@ -1984,14 +1984,14 @@ function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend
   const canSend = !!(compose.from && compose.to && compose.subject);
   return (
     <div
-      className="absolute inset-x-0 bottom-0 bg-white border-t border-gray-200 shadow-lg"
+      className="absolute inset-x-0 bottom-0 bg-surface-container-lowest border-t border-outline-variant shadow-lg"
       style={{ maxHeight: '72%', display: 'flex', flexDirection: 'column', borderTopLeftRadius: 12, borderTopRightRadius: 12 }}
     >
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
-        <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-outline-variant">
+        <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
           {compose.mode === 'forward' ? 'Forward' : compose.mode === 'replyAll' ? 'Reply all' : compose.mode === 'new' ? 'New message' : 'Reply'}
         </span>
-        <button onClick={onCancel} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+        <button onClick={onCancel} className="text-text-faint hover:text-on-surface-variant" aria-label="Close">
           <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
         </button>
       </div>
@@ -2000,7 +2000,7 @@ function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend
           <select
             value={compose.from}
             onChange={(e) => onChange({ from: e.target.value })}
-            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-2 py-1.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
           >
             <option value="" disabled>Select account</option>
             {accounts.map(a => <option key={a.id} value={a.account_email}>{a.account_email}</option>)}
@@ -2011,14 +2011,14 @@ function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend
             type="text" value={compose.to}
             onChange={(e) => onChange({ to: e.target.value })}
             placeholder="name@example.com"
-            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-2 py-1.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </Row>
         <Row label="Subject">
           <input
             type="text" value={compose.subject}
             onChange={(e) => onChange({ subject: e.target.value })}
-            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-2 py-1.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </Row>
         <textarea
@@ -2026,7 +2026,7 @@ function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend
           onChange={(e) => onChange({ body: e.target.value })}
           rows={10}
           placeholder="Write your message…"
-          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
           style={{ fontFamily: 'Manrope, sans-serif', lineHeight: 1.55, resize: 'vertical', minHeight: 180 }}
         />
         <div>
@@ -2035,11 +2035,11 @@ function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend
             onClick={onDraftWithAria}
             disabled={drafting}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
-            style={{ backgroundColor: 'transparent', color: '#4f4dcf', border: '1px solid rgba(79,77,207,0.3)' }}
+            style={{ backgroundColor: 'transparent', color: 'rgb(var(--accent))', border: '1px solid rgb(var(--accent) / 0.3)' }}
           >
             {drafting ? (
               <>
-                <span className="w-3 h-3 border-2 border-[#4f4dcf]/30 border-t-[#4f4dcf] rounded-full animate-spin" />
+                <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                 Drafting…
               </>
             ) : (
@@ -2051,13 +2051,13 @@ function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend
           </button>
         </div>
       </div>
-      <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-end gap-2 flex-shrink-0">
-        <button onClick={onCancel} className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+      <div className="px-4 py-3 border-t border-outline-variant flex items-center justify-end gap-2 flex-shrink-0">
+        <button onClick={onCancel} className="px-3 py-1.5 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-low rounded-lg">Cancel</button>
         <button
           onClick={onSend}
           disabled={!canSend}
           className="px-3 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-40"
-          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+          style={{ backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
         >
           Send
         </button>
@@ -2069,7 +2069,7 @@ function ComposeDrawer({ compose, accounts, drafting, onChange, onCancel, onSend
 function Row({ label, children }) {
   return (
     <div className="flex items-center gap-2">
-      <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider w-16 flex-shrink-0" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{label}</div>
+      <div className="text-[11px] font-semibold text-text-faint uppercase tracking-wider w-16 flex-shrink-0" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{label}</div>
       <div className="flex-1 min-w-0">{children}</div>
     </div>
   );
@@ -2082,26 +2082,26 @@ function AriaSummaryCard({ items, total }) {
   return (
     <div
       className="rounded-xl p-3 mx-1 mb-2 border"
-      style={{ backgroundColor: 'rgba(79,77,207,0.05)', borderColor: 'rgba(79,77,207,0.2)' }}
+      style={{ backgroundColor: 'rgb(var(--accent) / 0.05)', borderColor: 'rgb(var(--accent) / 0.2)' }}
     >
       <div className="flex items-start gap-2">
-        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '18px' }}>auto_awesome</span>
+        <span className="material-symbols-outlined text-primary" style={{ fontSize: '18px' }}>auto_awesome</span>
         <div className="flex-1 min-w-0">
           {empty ? (
-            <p className="text-[13px] text-gray-700" style={{ fontFamily: 'Manrope, sans-serif' }}>
+            <p className="text-[13px] text-on-surface" style={{ fontFamily: 'Manrope, sans-serif' }}>
               You&rsquo;re all caught up. Nothing urgent right now.
             </p>
           ) : (
             <>
-              <p className="text-[13px] font-semibold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+              <p className="text-[13px] font-semibold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                 {total} email{total === 1 ? '' : 's'} need{total === 1 ? 's' : ''} your attention
               </p>
               <ul className="mt-1.5 space-y-0.5">
                 {items.map((t) => {
                   const line = `${senderName(t.from) || shortAccount(t.accountEmail)}: ${decodeHtmlEntities(t.subject) || '(no subject)'}`;
                   return (
-                    <li key={t.id} className="text-[12px] text-gray-500 truncate">
-                      <span style={{ color: '#ef4444' }}>● </span>
+                    <li key={t.id} className="text-[12px] text-on-surface-variant truncate">
+                      <span style={{ color: 'rgb(var(--danger))' }}>● </span>
                       {line.length > 50 ? line.slice(0, 50) + '…' : line}
                     </li>
                   );
@@ -2125,25 +2125,25 @@ function Zone({ icon, iconColor, label, count, unreadCount, badgeClass, expanded
     <div className="mb-2 px-1">
       <button
         onClick={onToggle}
-        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white transition-colors"
+        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-container-lowest transition-colors"
       >
         <span className="material-symbols-outlined" style={{ color: iconColor, fontSize: '16px' }}>{icon}</span>
         <span
-          className="text-[10px] font-bold uppercase tracking-[0.14em] text-gray-500 flex-1 text-left"
+          className="text-[10px] font-bold uppercase tracking-[0.14em] text-on-surface-variant flex-1 text-left"
           style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
         >
           {label}{hideBadge && showCountSuffix ? ` (${count})` : ''}
         </span>
         {showUnreadSubcount && (
-          <span className="text-[10px] text-gray-400 font-medium">{unreadCount} unread</span>
+          <span className="text-[10px] text-text-faint font-medium">{unreadCount} unread</span>
         )}
         {!hideBadge && (
-          <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${badgeClass || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+          <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${badgeClass || 'bg-surface-container-low text-on-surface-variant border-outline-variant'}`}>
             {count}
           </span>
         )}
         <span
-          className="material-symbols-outlined text-gray-400"
+          className="material-symbols-outlined text-text-faint"
           style={{ fontSize: '16px', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 150ms ease' }}
         >
           expand_more
@@ -2153,7 +2153,7 @@ function Zone({ icon, iconColor, label, count, unreadCount, badgeClass, expanded
         hasChildren ? (
           <div className="mt-0.5">{children}</div>
         ) : (
-          <p className="text-[12px] text-gray-400 italic px-3 py-2">{emptyText}</p>
+          <p className="text-[12px] text-text-faint italic px-3 py-2">{emptyText}</p>
         )
       )}
       {expanded && footer}
@@ -2165,10 +2165,10 @@ function ZonedSkeleton() {
   const row = (k) => (
     <div key={k} className="px-3 py-2.5 mb-1">
       <div className="flex items-start gap-2">
-        <div className="w-2 h-2 rounded-full bg-gray-100 animate-pulse mt-1.5" />
+        <div className="w-2 h-2 rounded-full bg-surface-container animate-pulse mt-1.5" />
         <div className="flex-1 space-y-1.5">
-          <div className="h-3 w-32 bg-gray-100 rounded animate-pulse" />
-          <div className="h-3 w-48 bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 w-32 bg-surface-container rounded animate-pulse" />
+          <div className="h-3 w-48 bg-surface-container rounded animate-pulse" />
         </div>
       </div>
     </div>
@@ -2176,11 +2176,11 @@ function ZonedSkeleton() {
   return (
     <div>
       <div className="mb-2 px-1">
-        <div className="h-6 w-44 bg-gray-100 rounded animate-pulse mx-2 mb-1" />
+        <div className="h-6 w-44 bg-surface-container rounded animate-pulse mx-2 mb-1" />
         {[0,1,2].map(row)}
       </div>
       <div className="mb-2 px-1">
-        <div className="h-6 w-44 bg-gray-100 rounded animate-pulse mx-2 mb-1" />
+        <div className="h-6 w-44 bg-surface-container rounded animate-pulse mx-2 mb-1" />
         {[0,1].map(row)}
       </div>
     </div>
@@ -2210,30 +2210,30 @@ function ClassificationReasoningTooltip({ cls, onOpenCorrections }) {
     >
       <span
         className="material-symbols-outlined cursor-pointer"
-        style={{ fontSize: '12px', color: '#9ca3af', verticalAlign: 'middle' }}
+        style={{ fontSize: '12px', color: 'rgb(var(--text-faint))', verticalAlign: 'middle' }}
       >
         info
       </span>
       {open && (
         <div
-          className="absolute left-0 bottom-full mb-1 z-50 w-56 rounded-lg shadow-lg border border-gray-200 bg-white p-2.5"
+          className="absolute left-0 bottom-full mb-1 z-50 w-56 rounded-lg shadow-lg border border-outline-variant bg-surface-container-lowest p-2.5"
           style={{ fontFamily: 'Manrope, sans-serif', fontSize: '11px', lineHeight: '1.4' }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '11px', color: '#4f4dcf', marginBottom: '4px' }}>
+          <div style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '11px', color: 'rgb(var(--accent))', marginBottom: '4px' }}>
             {importanceLabel} {categoryLabel}
           </div>
           {patterns.length > 0 && (
-            <ul className="list-disc pl-3 text-gray-600 mb-1.5">
+            <ul className="list-disc pl-3 text-on-surface-variant mb-1.5">
               {patterns.map((p, i) => <li key={i}>{p}</li>)}
             </ul>
           )}
           {Array.isArray(r.signals_fired) && r.signals_fired.length > 0 && (
             <div className="mb-1.5">
-              <div className="text-gray-400 text-[10px] uppercase tracking-wide" style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700 }}>Signals</div>
+              <div className="text-text-faint text-[10px] uppercase tracking-wide" style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700 }}>Signals</div>
               <div className="flex flex-wrap gap-1 mt-0.5">
                 {r.signals_fired.map((s, i) => (
-                  <span key={i} className="inline-block px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200 text-gray-700 text-[10px]" style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                  <span key={i} className="inline-block px-1.5 py-0.5 rounded bg-surface-container-low border border-outline-variant text-on-surface text-[10px]" style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
                     {s}
                   </span>
                 ))}
@@ -2241,21 +2241,21 @@ function ClassificationReasoningTooltip({ cls, onOpenCorrections }) {
             </div>
           )}
           {r.has_confirmation_code && (
-            <div className="text-gray-600 mb-1">Contains confirmation/OTP code</div>
+            <div className="text-on-surface-variant mb-1">Contains confirmation/OTP code</div>
           )}
           {r.amount != null && (
-            <div className="text-gray-600 mb-1">Amount: {r.currency || '$'}{r.amount}</div>
+            <div className="text-on-surface-variant mb-1">Amount: {r.currency || '$'}{r.amount}</div>
           )}
           {r.vendor && (
-            <div className="text-gray-600 mb-1">Vendor: {r.vendor}</div>
+            <div className="text-on-surface-variant mb-1">Vendor: {r.vendor}</div>
           )}
-          <div className="text-gray-400 text-[10px] mt-1.5">
+          <div className="text-text-faint text-[10px] mt-1.5">
             Source: {r.source || cls.source} {r.classifier_version ? `(${r.classifier_version})` : ''}
           </div>
           {onOpenCorrections && (
             <button
               onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenCorrections(); }}
-              className="mt-1.5 text-[10px] text-red-500 hover:text-red-700 underline"
+              className="mt-1.5 text-[10px] text-danger hover:opacity-80 underline"
             >
               Thumbs down with corrections
             </button>
@@ -2289,15 +2289,15 @@ function InlineCorrectionPanel({ cls, t, submitFeedback, onClose }) {
 
   return (
     <div
-      className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50/50 p-3"
+      className="mx-3 mb-2 rounded-lg border border-danger bg-danger-surface/50 p-3"
       style={{ fontFamily: 'Manrope, sans-serif', fontSize: '12px' }}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="flex items-center justify-between mb-2">
-        <span style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '12px', color: '#dc2626' }}>
+        <span style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontWeight: 700, fontSize: '12px', color: 'rgb(var(--danger))' }}>
           What's wrong?
         </span>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+        <button onClick={onClose} className="text-text-faint hover:text-on-surface-variant">
           <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
         </button>
       </div>
@@ -2321,11 +2321,11 @@ function InlineCorrectionPanel({ cls, t, submitFeedback, onClose }) {
           </label>
         )}
         <div className="flex items-center gap-1.5">
-          <span className="text-gray-600">Priority:</span>
+          <span className="text-on-surface-variant">Priority:</span>
           <select
             value={selectedPriority}
             onChange={(e) => setSelectedPriority(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-1 py-0.5"
+            className="text-xs border border-outline-variant rounded px-1 py-0.5"
           >
             <option value="">Keep current</option>
             <option value="high">High</option>
@@ -2335,11 +2335,11 @@ function InlineCorrectionPanel({ cls, t, submitFeedback, onClose }) {
         </div>
         {hasEntity && (
           <div className="flex items-center gap-1.5">
-            <span className="text-gray-600">Entity:</span>
+            <span className="text-on-surface-variant">Entity:</span>
             <select
               value={selectedEntity}
               onChange={(e) => setSelectedEntity(e.target.value)}
-              className="text-xs border border-gray-300 rounded px-1 py-0.5"
+              className="text-xs border border-outline-variant rounded px-1 py-0.5"
             >
               <option value="">Keep current</option>
               <option value="">None</option>
@@ -2354,14 +2354,14 @@ function InlineCorrectionPanel({ cls, t, submitFeedback, onClose }) {
       <div className="flex items-center gap-2 mt-2.5">
         <button
           onClick={handleSubmit}
-          className="text-xs font-semibold px-3 py-1 rounded-lg text-white"
-          style={{ backgroundColor: '#dc2626', fontFamily: 'Plus Jakarta Sans, sans-serif' }}
+          className="text-xs font-semibold px-3 py-1 rounded-lg text-on-primary"
+          style={{ backgroundColor: 'rgb(var(--danger))', fontFamily: 'Plus Jakarta Sans, sans-serif' }}
         >
           Apply corrections
         </button>
         <button
           onClick={() => submitFeedback(t, 'thumbs_down')}
-          className="text-xs text-gray-500 hover:text-gray-700 underline"
+          className="text-xs text-on-surface-variant hover:text-on-surface underline"
         >
           Just wrong
         </button>
@@ -2391,9 +2391,9 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
   // critical=red, high=amber, otherwise primary.
   let unreadDotBg = null;
   if (!t.isRead) {
-    if (impStyle && cls.importance === 'critical') unreadDotBg = '#ef4444';
-    else if (impStyle && cls.importance === 'high') unreadDotBg = '#f59e0b';
-    else unreadDotBg = '#4f4dcf';
+    if (impStyle && cls.importance === 'critical') unreadDotBg = 'rgb(var(--danger))';
+    else if (impStyle && cls.importance === 'high') unreadDotBg = 'rgb(var(--warning))';
+    else unreadDotBg = 'rgb(var(--accent))';
   }
 
   // Find the first user-mapped Gmail label on this thread to render as
@@ -2462,8 +2462,8 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
       className="group relative mb-1 transition-colors overflow-hidden"
       style={{
         borderRadius: 10,
-        backgroundColor: active ? '#ededff' : 'transparent',
-        borderLeft: active ? '3px solid #4f4dcf' : (isFlagged && !isAcked) ? '3px solid #4f4dcf' : '3px solid transparent',
+        backgroundColor: active ? 'rgb(var(--accent) / 0.12)' : 'transparent',
+        borderLeft: active ? '3px solid rgb(var(--accent))' : (isFlagged && !isAcked) ? '3px solid rgb(var(--accent))' : '3px solid transparent',
         opacity: isAcked ? 0.65 : 1,
       }}
     >
@@ -2480,8 +2480,8 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
           type="button"
           tabIndex={drawerOpen ? 0 : -1}
           onClick={(e) => { e.stopPropagation(); markThreadRead(t); setDrawerOpen(false); setDragOffset(0); }}
-          className="flex-1 flex flex-col items-center justify-center text-white text-[10px] font-semibold"
-          style={{ backgroundColor: '#3b82f6' }}
+          className="flex-1 flex flex-col items-center justify-center text-on-primary text-[10px] font-semibold"
+          style={{ backgroundColor: 'rgb(var(--accent))' }}
         >
           <span className="material-symbols-outlined" style={{ fontSize: 18 }}>mark_email_read</span>
           Read
@@ -2490,8 +2490,8 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
           type="button"
           tabIndex={drawerOpen ? 0 : -1}
           onClick={(e) => { e.stopPropagation(); archiveSingle(t); setDrawerOpen(false); setDragOffset(0); }}
-          className="flex-1 flex flex-col items-center justify-center text-white text-[10px] font-semibold"
-          style={{ backgroundColor: '#6b7280' }}
+          className="flex-1 flex flex-col items-center justify-center text-on-primary text-[10px] font-semibold"
+          style={{ backgroundColor: 'rgb(var(--outline))' }}
         >
           <span className="material-symbols-outlined" style={{ fontSize: 18 }}>archive</span>
           Archive
@@ -2507,7 +2507,7 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
           // through the row at rest. Match panel surface (#f5f2fa) when
           // inactive, primary container (#ededff) when selected. The
           // drawer only shows when this wrapper translates left.
-          backgroundColor: active ? '#ededff' : '#f5f2fa',
+          backgroundColor: active ? 'rgb(var(--accent) / 0.12)' : 'rgb(var(--surface-container-low))',
         }}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
@@ -2515,7 +2515,7 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
       >
       <button
         onClick={() => { if (drawerOpen) { setDrawerOpen(false); setDragOffset(0); return; } openThread(t); }}
-        className="w-full text-left px-3 py-2.5 transition-colors hover:bg-[#f5f2fa]"
+        className="w-full text-left px-3 py-2.5 transition-colors hover:bg-surface-container-low"
         style={{ backgroundColor: 'transparent' }}
       >
         <div className="flex items-start gap-3">
@@ -2536,14 +2536,14 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
             {unreadDotBg && (
               <span
                 className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full"
-                style={{ backgroundColor: unreadDotBg, border: '2px solid #f5f2fa' }}
+                style={{ backgroundColor: unreadDotBg, border: '2px solid rgb(var(--surface-container-low))' }}
                 aria-label="unread"
               />
             )}
             {t.starred && (
               <span
                 className="absolute -top-0.5 -right-0.5 material-symbols-outlined"
-                style={{ fontSize: 12, color: '#f59e0b' }}
+                style={{ fontSize: 12, color: 'rgb(var(--warning))' }}
                 aria-label="starred"
               >
                 star
@@ -2555,22 +2555,22 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
             {/* Sender + timestamp */}
             <div className="flex items-center justify-between gap-2">
               <span
-                className={`text-sm truncate ${t.isRead ? 'text-gray-600' : 'text-gray-900 font-bold'}`}
+                className={`text-sm truncate ${t.isRead ? 'text-on-surface-variant' : 'text-on-surface font-bold'}`}
                 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
               >
                 {senderDisplay}
               </span>
-              <span className="text-[10px] text-gray-400 flex-shrink-0">{relTime(t.date)}</span>
+              <span className="text-[10px] text-text-faint flex-shrink-0">{relTime(t.date)}</span>
             </div>
             {/* Subject */}
-            <div className={`text-[13px] truncate mt-0.5 ${t.isRead ? 'text-gray-500' : 'text-gray-800 font-semibold'}`}>
+            <div className={`text-[13px] truncate mt-0.5 ${t.isRead ? 'text-on-surface-variant' : 'text-on-surface font-semibold'}`}>
               {decodeHtmlEntities(t.subject) || '(no subject)'}
             </div>
             {/* Snippet */}
-            <div className="text-xs text-gray-400 truncate mt-0.5">{decodeHtmlEntities(t.snippet)}</div>
+            <div className="text-xs text-text-faint truncate mt-0.5">{decodeHtmlEntities(t.snippet)}</div>
             {/* Tags row: account chip + label chip + classification chip */}
             <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-              <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: '#ededff', color: '#4f4dcf' }}>
+              <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-accent-surface" style={{ color: 'rgb(var(--accent))' }}>
                 {shortAccount(t.accountEmail)}{t.messageCount > 1 ? ` · ${t.messageCount}` : ''}
               </span>
               {labelChip && (
@@ -2596,7 +2596,7 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
                 </span>
               )}
               {isFlagged && isAcked && (
-                <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: '#f3f4f6', color: '#9ca3af' }}>
+                <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: 'rgb(var(--surface-container))', color: 'rgb(var(--text-faint))' }}>
                   Seen
                 </span>
               )}
@@ -2611,26 +2611,26 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
         <button
           onClick={(e) => { e.stopPropagation(); archiveSingle(t); }}
           title="Archive"
-          className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+          className="w-7 h-7 rounded-lg flex items-center justify-center bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low"
         >
-          <span className="material-symbols-outlined text-gray-500" style={{ fontSize: '15px' }}>archive</span>
+          <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: '15px' }}>archive</span>
         </button>
         {!t.isRead && (
           <button
             onClick={(e) => { e.stopPropagation(); markThreadRead(t); }}
             title="Mark read"
-            className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+            className="w-7 h-7 rounded-lg flex items-center justify-center bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low"
           >
-            <span className="material-symbols-outlined text-gray-500" style={{ fontSize: '15px' }}>mark_email_read</span>
+            <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: '15px' }}>mark_email_read</span>
           </button>
         )}
         {starSingle && (
           <button
             onClick={(e) => { e.stopPropagation(); starSingle(t); }}
             title={t.starred ? 'Unstar' : 'Star'}
-            className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+            className="w-7 h-7 rounded-lg flex items-center justify-center bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: t.starred ? '#f59e0b' : '#9ca3af' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: t.starred ? 'rgb(var(--warning))' : 'rgb(var(--text-faint))' }}>
               {t.starred ? 'star' : 'star_outline'}
             </span>
           </button>
@@ -2639,9 +2639,9 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
           <button
             onClick={(e) => { e.stopPropagation(); toggleFlag(t); }}
             title={isFlagged ? 'Unflag' : 'Flag as important'}
-            className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-gray-50"
+            className="w-7 h-7 rounded-lg flex items-center justify-center bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: isFlagged ? '#4f4dcf' : '#9ca3af' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: isFlagged ? 'rgb(var(--accent))' : 'rgb(var(--text-faint))' }}>
               {isFlagged ? 'flag' : 'outlined_flag'}
             </span>
           </button>
@@ -2651,22 +2651,22 @@ function ThreadRow({ t, activeThreadId, classifications, openThread, archiveSing
             <button
               onClick={(e) => { e.stopPropagation(); submitFeedback(t, 'thumbs_up'); }}
               title="Good classification"
-              className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-green-50"
+              className="w-7 h-7 rounded-lg flex items-center justify-center bg-surface-container-lowest border border-outline-variant hover:bg-success-surface"
             >
-              <span className="material-symbols-outlined" style={{ fontSize: '15px', color: '#9ca3af' }}>thumb_up</span>
+              <span className="material-symbols-outlined" style={{ fontSize: '15px', color: 'rgb(var(--text-faint))' }}>thumb_up</span>
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); setCorrectionOpenId?.(correctionOpenId === mid ? null : mid); }}
               title="Wrong classification"
-              className="w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-gray-200 hover:bg-red-50"
+              className="w-7 h-7 rounded-lg flex items-center justify-center bg-surface-container-lowest border border-outline-variant hover:bg-danger-surface"
             >
-              <span className="material-symbols-outlined" style={{ fontSize: '15px', color: '#9ca3af' }}>thumb_down</span>
+              <span className="material-symbols-outlined" style={{ fontSize: '15px', color: 'rgb(var(--text-faint))' }}>thumb_down</span>
             </button>
           </>
         )}
         {hasFeedback && (
           <span className="w-7 h-7 rounded-lg flex items-center justify-center" title="Feedback sent">
-            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: '#059669' }}>check_circle</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '15px', color: 'rgb(var(--success))' }}>check_circle</span>
           </span>
         )}
       </div>
@@ -2684,11 +2684,11 @@ function ListSkeleton() {
       {Array.from({ length: 8 }).map((_, i) => (
         <div key={i} className="rounded-xl px-3 py-2.5 mb-1">
           <div className="flex items-start gap-2">
-            <div className="w-2 h-2 rounded-full bg-gray-100 animate-pulse mt-1.5" />
+            <div className="w-2 h-2 rounded-full bg-surface-container animate-pulse mt-1.5" />
             <div className="flex-1 space-y-1.5">
-              <div className="h-3 w-32 bg-gray-100 rounded animate-pulse" />
-              <div className="h-3 w-48 bg-gray-100 rounded animate-pulse" />
-              <div className="h-3 w-56 bg-gray-100 rounded animate-pulse" />
+              <div className="h-3 w-32 bg-surface-container rounded animate-pulse" />
+              <div className="h-3 w-48 bg-surface-container rounded animate-pulse" />
+              <div className="h-3 w-56 bg-surface-container rounded animate-pulse" />
             </div>
           </div>
         </div>
@@ -2835,7 +2835,7 @@ When you have enough info, write the final draft and end your message with:
         aria-label="Draft email reply with Aria"
         style={{
           position: 'absolute', top: 0, right: 0, bottom: 0, width: 380,
-          maxWidth: '100%', backgroundColor: '#fbf8fe', borderLeft: '1px solid #e5e7eb',
+          maxWidth: '100%', backgroundColor: 'rgb(var(--surface))', borderLeft: '1px solid rgb(var(--surface-container-high))',
           boxShadow: '-8px 0 24px rgba(15,15,40,0.08)', zIndex: 50,
           display: 'flex', flexDirection: 'column',
           fontFamily: 'Manrope, sans-serif',
@@ -2843,15 +2843,15 @@ When you have enough info, write the final draft and end your message with:
         }}
       >
         {/* Header */}
-        <div className="flex items-start justify-between px-4 pt-4 pb-3 border-b border-gray-100">
+        <div className="flex items-start justify-between px-4 pt-4 pb-3 border-b border-outline-variant">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '18px' }}>auto_awesome</span>
-              <h3 className="text-sm font-extrabold text-gray-900" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Draft with Aria</h3>
+              <span className="material-symbols-outlined text-primary" style={{ fontSize: '18px' }}>auto_awesome</span>
+              <h3 className="text-sm font-extrabold text-on-surface" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Draft with Aria</h3>
             </div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Chat with Aria to craft your reply</p>
+            <p className="text-[11px] text-on-surface-variant mt-0.5">Chat with Aria to craft your reply</p>
           </div>
-          <button onClick={handleClose} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+          <button onClick={handleClose} className="text-text-faint hover:text-on-surface-variant" aria-label="Close">
             <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
           </button>
         </div>
@@ -2863,36 +2863,36 @@ When you have enough info, write the final draft and end your message with:
             return (
               <div key={m.ts || i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                 <div
-                  className={`max-w-[88%] ${isUser ? 'text-white' : ''}`}
+                  className={`max-w-[88%] ${isUser ? 'text-on-primary' : ''}`}
                   style={isUser
-                    ? { backgroundColor: '#4f4dcf', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '10px 12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
-                    : { backgroundColor: '#f5f2fa', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '10px 12px', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                    ? { backgroundColor: 'rgb(var(--accent))', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '10px 12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                    : { backgroundColor: 'rgb(var(--surface-container-low))', fontSize: '14px', lineHeight: '1.55', borderRadius: '12px', padding: '10px 12px', color: 'rgb(var(--text-primary))', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
                   }
                 >
-                  {m.content || <span className="animate-pulse text-gray-500">Thinking…</span>}
+                  {m.content || <span className="animate-pulse text-on-surface-variant">Thinking…</span>}
                 </div>
               </div>
             );
           })}
 
           {draft && (
-            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-3">
+            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-3">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '16px' }}>edit_note</span>
-                <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: '16px' }}>edit_note</span>
+                <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                   Draft ready
                 </span>
               </div>
-              <div style={{ borderTop: '1px solid #e5e7eb', margin: '4px 0 8px 0' }} />
+              <div style={{ borderTop: '1px solid rgb(var(--surface-container-high))', margin: '4px 0 8px 0' }} />
               <div
-                style={{ fontSize: '13px', lineHeight: '1.55', color: '#1f2937', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '220px', overflowY: 'auto', marginBottom: '10px' }}
+                style={{ fontSize: '13px', lineHeight: '1.55', color: 'rgb(var(--text-primary))', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '220px', overflowY: 'auto', marginBottom: '10px' }}
               >
                 {draft}
               </div>
               <button
                 onClick={() => onInsert?.(draft)}
                 className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold"
-                style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+                style={{ backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
               >
                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>check</span>
                 Insert into reply
@@ -2902,14 +2902,14 @@ When you have enough info, write the final draft and end your message with:
         </div>
 
         {/* Input */}
-        <div className="px-3 py-2 border-t border-gray-100 flex items-center gap-2">
+        <div className="px-3 py-2 border-t border-outline-variant flex items-center gap-2">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
             placeholder="Tell Aria what you want to say…"
-            className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="flex-1 px-3 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             disabled={sending}
             style={{ fontFamily: 'Manrope, sans-serif' }}
           />
@@ -2917,10 +2917,10 @@ When you have enough info, write the final draft and end your message with:
             onClick={send}
             disabled={!input.trim() || sending}
             className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-40"
-            style={{ backgroundColor: input.trim() ? '#4f4dcf' : 'transparent' }}
+            style={{ backgroundColor: input.trim() ? 'rgb(var(--accent))' : 'transparent' }}
             aria-label="Send"
           >
-            <span className={`material-symbols-outlined text-base ${input.trim() ? 'text-white' : 'text-slate-400'}`}>
+            <span className={`material-symbols-outlined text-base ${input.trim() ? 'text-on-primary' : 'text-text-faint'}`}>
               {sending ? 'hourglass_empty' : 'send'}
             </span>
           </button>
@@ -2948,12 +2948,12 @@ function MessageSkeleton() {
   return (
     <>
       {Array.from({ length: 2 }).map((_, i) => (
-        <div key={i} className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 flex gap-3">
-          <div className="w-8 h-8 rounded-full bg-gray-100 animate-pulse flex-shrink-0" />
+        <div key={i} className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-4 flex gap-3">
+          <div className="w-8 h-8 rounded-full bg-surface-container animate-pulse flex-shrink-0" />
           <div className="flex-1 space-y-2">
-            <div className="h-3 w-40 bg-gray-100 rounded animate-pulse" />
-            <div className="h-3 w-64 bg-gray-100 rounded animate-pulse" />
-            <div className="h-3 w-56 bg-gray-100 rounded animate-pulse" />
+            <div className="h-3 w-40 bg-surface-container rounded animate-pulse" />
+            <div className="h-3 w-64 bg-surface-container rounded animate-pulse" />
+            <div className="h-3 w-56 bg-surface-container rounded animate-pulse" />
           </div>
         </div>
       ))}

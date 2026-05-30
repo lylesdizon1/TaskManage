@@ -41,10 +41,10 @@ export function useToast() {
 }
 
 const STYLES = {
-  success: { bg: '#16a34a', icon: '✓' },
-  error:   { bg: '#dc2626', icon: '✕' },
-  warn:    { bg: '#d97706', icon: '⚠' },
-  info:    { bg: '#2563eb', icon: 'ℹ' },
+  success: { bg: 'rgb(var(--success))', icon: '✓' },
+  error:   { bg: 'rgb(var(--danger))', icon: '✕' },
+  warn:    { bg: 'rgb(var(--warning))', icon: '⚠' },
+  info:    { bg: 'rgb(var(--accent))', icon: 'ℹ' },
 };
 
 function ToastContainer({ toasts, onRemove }) {
@@ -66,13 +66,13 @@ function ToastItem({ toast, onRemove }) {
   const { bg, icon } = STYLES[toast.type] || STYLES.info;
   const labelStyle = { flex: 1, fontSize: '0.875rem', lineHeight: '1.4' };
   const btnStyle = {
-    background: 'none', border: 'none', color: 'rgba(255,255,255,0.8)',
+    background: 'none', border: 'none', color: 'rgb(var(--accent-contrast) / 0.8)',
     cursor: 'pointer', fontSize: '1rem', padding: 0, flexShrink: 0,
   };
   return (
     <div style={{
       display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
-      background: bg, color: '#fff', borderRadius: '0.5rem',
+      background: bg, color: 'rgb(var(--accent-contrast))', borderRadius: '0.5rem',
       padding: '0.75rem 1rem', boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
       animation: 'slideIn 0.2s ease',
     }}>

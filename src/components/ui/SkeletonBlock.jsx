@@ -1,3 +1,3 @@
 export default function SkeletonBlock({ className = '' }) {
-  return <div className={`bg-gray-200 rounded-lg animate-pulse ${className}`} />;
+  return <div className={`bg-surface-container-high rounded-lg animate-pulse ${className}`} />;
 }

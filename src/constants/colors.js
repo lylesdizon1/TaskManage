@@ -1,15 +1,15 @@
 // Color presets for entities — maps color name to Tailwind classes
 export const COLOR_PRESETS = {
-  indigo: { bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-200', ring: 'ring-indigo-400', dot: 'bg-indigo-500' },
+  indigo: { bg: 'bg-accent-surface', text: 'text-primary', border: 'border-primary', ring: 'ring-primary', dot: 'bg-primary' },
   pink:   { bg: 'bg-pink-100',   text: 'text-pink-700',   border: 'border-pink-200',   ring: 'ring-pink-400',   dot: 'bg-pink-500' },
-  amber:  { bg: 'bg-amber-100',  text: 'text-amber-700',  border: 'border-amber-200',  ring: 'ring-amber-400',  dot: 'bg-amber-500' },
+  amber:  { bg: 'bg-warning-surface',  text: 'text-warning',  border: 'border-warning',  ring: 'ring-warning',  dot: 'bg-warning' },
   teal:   { bg: 'bg-teal-100',   text: 'text-teal-700',   border: 'border-teal-200',   ring: 'ring-teal-400',   dot: 'bg-teal-500' },
-  slate:  { bg: 'bg-slate-100',  text: 'text-slate-600',  border: 'border-slate-200',  ring: 'ring-slate-400',  dot: 'bg-slate-500' },
-  red:    { bg: 'bg-red-100',    text: 'text-red-700',    border: 'border-red-200',    ring: 'ring-red-400',    dot: 'bg-red-500' },
-  green:  { bg: 'bg-green-100',  text: 'text-green-700',  border: 'border-green-200',  ring: 'ring-green-400',  dot: 'bg-green-500' },
-  blue:   { bg: 'bg-blue-100',   text: 'text-blue-700',   border: 'border-blue-200',   ring: 'ring-blue-400',   dot: 'bg-blue-500' },
-  purple: { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-200', ring: 'ring-purple-400', dot: 'bg-purple-500' },
-  orange: { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-200', ring: 'ring-orange-400', dot: 'bg-orange-500' },
+  slate:  { bg: 'bg-surface-container',  text: 'text-on-surface-variant',  border: 'border-outline-variant',  ring: 'ring-outline-variant',  dot: 'bg-outline' },
+  red:    { bg: 'bg-danger-surface',    text: 'text-danger',    border: 'border-danger',    ring: 'ring-danger',    dot: 'bg-danger' },
+  green:  { bg: 'bg-success-surface',  text: 'text-success',  border: 'border-success',  ring: 'ring-success',  dot: 'bg-success' },
+  blue:   { bg: 'bg-accent-surface',   text: 'text-primary',   border: 'border-primary',   ring: 'ring-primary',   dot: 'bg-primary' },
+  purple: { bg: 'bg-accent-surface', text: 'text-primary', border: 'border-primary', ring: 'ring-primary', dot: 'bg-primary' },
+  orange: { bg: 'bg-warning-surface', text: 'text-warning', border: 'border-warning', ring: 'ring-warning', dot: 'bg-warning' },
 };
 
 export const AVAILABLE_COLORS = Object.keys(COLOR_PRESETS);
@@ -24,13 +24,13 @@ export function getTagStyle(tagName, entities) {
 }
 
 export const PRIORITY_BORDER = {
-  high:   'border-l-4 border-l-red-500',
-  medium: 'border-l-4 border-l-amber-400',
-  low:    'border-l-4 border-l-green-500',
+  high:   'border-l-4 border-l-danger',
+  medium: 'border-l-4 border-l-warning',
+  low:    'border-l-4 border-l-success',
 };
 
 export const PRIORITY_BADGE = {
-  high:   'bg-red-50   text-red-500',
-  medium: 'bg-amber-50 text-amber-500',
-  low:    'bg-green-50 text-green-600',
+  high:   'bg-danger-surface   text-danger',
+  medium: 'bg-warning-surface text-warning',
+  low:    'bg-success-surface text-success',
 };

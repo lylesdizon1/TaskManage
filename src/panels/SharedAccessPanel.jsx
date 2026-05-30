@@ -36,16 +36,16 @@ export default function SharedAccessPanel({ apiFetch, authToken }) {
 
   return (
     <div className="flex-1 overflow-y-auto px-8 py-6 w-full" style={{ minHeight: 0, fontFamily: 'Manrope, sans-serif' }}>
-      <h1 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 24, fontWeight: 700, color: '#31323a', marginBottom: 20 }}>Sharing</h1>
+      <h1 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 24, fontWeight: 700, color: 'rgb(var(--text-primary))', marginBottom: 20 }}>Sharing</h1>
 
       {/* Section 1 — Access I've Given */}
       <section style={{ marginBottom: 32 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <h2 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 14, fontWeight: 700, color: '#1f2937', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          <h2 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 14, fontWeight: 700, color: 'rgb(var(--text-primary))', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             Access you've given
           </h2>
           {!adding && (
-            <button onClick={() => setAdding(true)} style={{ fontSize: 12, fontWeight: 600, color: '#4f4dcf', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+            <button onClick={() => setAdding(true)} style={{ fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent))', background: 'transparent', border: 'none', cursor: 'pointer' }}>
               + Grant Access
             </button>
           )}
@@ -61,9 +61,9 @@ export default function SharedAccessPanel({ apiFetch, authToken }) {
         )}
 
         {!loaded ? (
-          <div style={{ fontSize: 13, color: '#9ca3af' }}>Loading…</div>
+          <div style={{ fontSize: 13, color: 'rgb(var(--text-faint))' }}>Loading…</div>
         ) : given.filter((g) => !g.revokedAt).length === 0 ? (
-          <div style={{ fontSize: 13, color: '#9ca3af', fontStyle: 'italic' }}>You haven't granted anyone access yet.</div>
+          <div style={{ fontSize: 13, color: 'rgb(var(--text-faint))', fontStyle: 'italic' }}>You haven't granted anyone access yet.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {given.filter((g) => !g.revokedAt).map((g) => (
@@ -75,13 +75,13 @@ export default function SharedAccessPanel({ apiFetch, authToken }) {
 
       {/* Section 2 — Access Given To Me */}
       <section>
-        <h2 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 14, fontWeight: 700, color: '#1f2937', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+        <h2 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 14, fontWeight: 700, color: 'rgb(var(--text-primary))', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
           Access granted to you
         </h2>
         {!loaded ? (
-          <div style={{ fontSize: 13, color: '#9ca3af' }}>Loading…</div>
+          <div style={{ fontSize: 13, color: 'rgb(var(--text-faint))' }}>Loading…</div>
         ) : received.length === 0 ? (
-          <div style={{ fontSize: 13, color: '#9ca3af', fontStyle: 'italic' }}>Nobody has granted you access yet.</div>
+          <div style={{ fontSize: 13, color: 'rgb(var(--text-faint))', fontStyle: 'italic' }}>Nobody has granted you access yet.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {received.map((g) => (
@@ -120,21 +120,21 @@ function NewGrantForm({ apiFetch, authToken, onCancel, onCreated }) {
   };
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, marginBottom: 10 }}>
+    <div style={{ background: 'rgb(var(--surface-container-lowest))', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 10, padding: 12, marginBottom: 10 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
         <input autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Grantee email"
-          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, outline: 'none' }} />
         <select value={scope} onChange={(e) => setScope(e.target.value)}
-          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none', background: '#fff' }}>
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, outline: 'none', background: 'rgb(var(--surface-container-lowest))' }}>
           {SCOPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)}
-          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
+          style={{ fontSize: 13, padding: '6px 10px', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, outline: 'none' }} />
       </div>
-      {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>{error}</div>}
+      {error && <div style={{ fontSize: 12, color: 'rgb(var(--danger))', marginTop: 6 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 6, marginTop: 8, justifyContent: 'flex-end' }}>
-        <button onClick={onCancel} style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
-        <button onClick={save} disabled={saving} style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
+        <button onClick={onCancel} style={{ fontSize: 12, color: 'rgb(var(--text-secondary))', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+        <button onClick={save} disabled={saving} style={{ fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: 'rgb(var(--accent))', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
           {saving ? 'Saving…' : 'Grant'}
         </button>
       </div>
@@ -167,18 +167,18 @@ function GrantRow({ grant, mine, apiFetch, authToken, onChange }) {
   const expires = fmtDate(grant.expiresAt);
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span className="material-symbols-outlined" style={{ fontSize: 16, color: '#4f4dcf' }}>{mine ? 'share' : 'visibility'}</span>
+    <div style={{ background: 'rgb(var(--surface-container-lowest))', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 8, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span className="material-symbols-outlined" style={{ fontSize: 16, color: 'rgb(var(--accent))' }}>{mine ? 'share' : 'visibility'}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontSize: 13, color: 'rgb(var(--text-primary))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {mine ? 'To: ' : 'From: '}{whoLabel}
         </div>
-        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 1 }}>
+        <div style={{ fontSize: 11, color: 'rgb(var(--text-secondary))', marginTop: 1 }}>
           {scopeLabel}{expires ? ` · expires ${expires}` : ' · no expiry'}
         </div>
       </div>
       {mine && (
-        <button onClick={revoke} disabled={revoking} style={{ fontSize: 11, color: '#dc2626', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', opacity: revoking ? 0.6 : 1 }}>
+        <button onClick={revoke} disabled={revoking} style={{ fontSize: 11, color: 'rgb(var(--danger))', background: 'transparent', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', opacity: revoking ? 0.6 : 1 }}>
           {revoking ? 'Revoking…' : 'Revoke'}
         </button>
       )}

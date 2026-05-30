@@ -29,12 +29,12 @@ export default function TaskDraftTile({ payload = {}, status = 'draft', error, o
 
   return (
     <div
-      className="bg-white border border-gray-200 rounded-xl"
+      className="bg-surface-container-lowest border border-outline-variant rounded-xl"
       style={{ fontFamily: 'Manrope, sans-serif' }}
     >
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
-        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '15px' }}>check_circle</span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+        <span className="material-symbols-outlined" style={{ color: 'rgb(var(--accent))', fontSize: '15px' }}>check_circle</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
           Task draft
         </span>
       </div>
@@ -101,7 +101,7 @@ export default function TaskDraftTile({ payload = {}, status = 'draft', error, o
 export function TileFooter({ status, error, disabled, onConfirm, onCancel, onRetry, successLabel }) {
   if (status === 'success') {
     return (
-      <div className="flex items-center gap-1.5 px-3 py-2 border-t border-gray-100" style={{ color: '#059669' }}>
+      <div className="flex items-center gap-1.5 px-3 py-2 border-t border-outline-variant" style={{ color: 'rgb(var(--success))' }}>
         <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>check_circle</span>
         <span className="text-[12px] font-semibold">{successLabel}</span>
       </div>
@@ -109,12 +109,12 @@ export function TileFooter({ status, error, disabled, onConfirm, onCancel, onRet
   }
   if (status === 'error') {
     return (
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
-        <span className="text-[12px] text-red-600 truncate">{error || 'Something went wrong'}</span>
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-outline-variant">
+        <span className="text-[12px] text-danger truncate">{error || 'Something went wrong'}</span>
         <button
           onClick={onRetry}
           className="px-2.5 py-1 text-[11px] font-semibold rounded-lg"
-          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+          style={{ backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
         >
           Retry
         </button>
@@ -123,8 +123,8 @@ export function TileFooter({ status, error, disabled, onConfirm, onCancel, onRet
   }
   if (status === 'executing') {
     return (
-      <div className="flex items-center gap-1.5 px-3 py-2 border-t border-gray-100 text-[12px] text-gray-500">
-        <span className="w-3 h-3 border-2 border-gray-200 border-t-[#4f4dcf] rounded-full animate-spin" />
+      <div className="flex items-center gap-1.5 px-3 py-2 border-t border-outline-variant text-[12px] text-on-surface-variant">
+        <span className="w-3 h-3 border-2 border-outline-variant border-t-primary rounded-full animate-spin" />
         Creating…
       </div>
     );
@@ -133,12 +133,12 @@ export function TileFooter({ status, error, disabled, onConfirm, onCancel, onRet
   // tile reads as an action-required draft, not a completed result. Users had
   // been walking away from drafts thinking the event/task was already created.
   return (
-    <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
-      <span className="text-[11px] text-gray-500 italic">Not yet created</span>
+    <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-outline-variant">
+      <span className="text-[11px] text-on-surface-variant italic">Not yet created</span>
       <div className="flex items-center gap-2">
         <button
           onClick={onCancel}
-          className="px-2.5 py-1 text-[11px] font-semibold text-gray-600 hover:bg-gray-50 rounded-lg"
+          className="px-2.5 py-1 text-[11px] font-semibold text-on-surface-variant hover:bg-surface-container-low rounded-lg"
         >
           Cancel
         </button>
@@ -146,7 +146,7 @@ export function TileFooter({ status, error, disabled, onConfirm, onCancel, onRet
           onClick={onConfirm}
           disabled={disabled}
           className="px-3 py-1.5 text-[12px] font-bold rounded-lg disabled:opacity-40 shadow-sm"
-          style={{ backgroundColor: '#4f4dcf', color: '#fff' }}
+          style={{ backgroundColor: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
         >
           Confirm & Create
         </button>

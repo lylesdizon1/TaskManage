@@ -52,35 +52,35 @@ export default function ChecklistDraftTile({ payload = {}, status = 'draft', err
 
   return (
     <div
-      className="bg-white border border-gray-200 rounded-xl"
+      className="bg-surface-container-lowest border border-outline-variant rounded-xl"
       style={{ fontFamily: 'Manrope, sans-serif' }}
     >
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
-        <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '15px' }}>checklist</span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+        <span className="material-symbols-outlined" style={{ color: 'rgb(var(--accent))', fontSize: '15px' }}>checklist</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
           Checklist draft
         </span>
       </div>
 
       <div className="px-3 pb-2 space-y-1.5">
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400 mb-0.5" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-faint mb-0.5" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
             Task
           </div>
-          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: hasTask ? '#1f2937' : '#dc2626', padding: '4px 6px' }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: hasTask ? 'rgb(var(--text-primary))' : 'rgb(var(--danger))', padding: '4px 6px' }}>
             {payload.task_title || 'No task'}
-            {payload.project_name ? <span style={{ color: '#6b7280' }}> · {payload.project_name}</span> : null}
+            {payload.project_name ? <span style={{ color: 'rgb(var(--text-secondary))' }}> · {payload.project_name}</span> : null}
           </div>
         </div>
 
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400 mb-0.5" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-faint mb-0.5" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
             Items
           </div>
           <div className="space-y-1">
             {(items.length ? items : ['']).map((v, i) => (
               <div key={i} className="flex items-center gap-1.5">
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#c7c7f4', flexShrink: 0 }} />
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgb(var(--primary-container))', flexShrink: 0 }} />
                 <input
                   ref={(el) => { rowRefs.current[i] = el; }}
                   type="text"
@@ -94,9 +94,9 @@ export default function ChecklistDraftTile({ payload = {}, status = 'draft', err
                   placeholder="Checklist item"
                   disabled={disabled}
                   style={{
-                    fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: '#1f2937',
-                    background: '#fff', padding: '4px 6px', borderRadius: '6px',
-                    border: '1px solid #e5e7eb', width: '100%', outline: 'none',
+                    fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--text-primary))',
+                    background: 'rgb(var(--surface-container-lowest))', padding: '4px 6px', borderRadius: '6px',
+                    border: '1px solid rgb(var(--surface-container-high))', width: '100%', outline: 'none',
                   }}
                 />
               </div>
@@ -106,7 +106,7 @@ export default function ChecklistDraftTile({ payload = {}, status = 'draft', err
             onClick={() => appendAfter((items.length || 1) - 1)}
             disabled={disabled}
             className="mt-1 text-[11px] font-semibold"
-            style={{ color: '#4f4dcf', background: 'none', border: 'none', padding: '2px 0', cursor: disabled ? 'default' : 'pointer' }}
+            style={{ color: 'rgb(var(--accent))', background: 'none', border: 'none', padding: '2px 0', cursor: disabled ? 'default' : 'pointer' }}
           >
             + Add another item
           </button>

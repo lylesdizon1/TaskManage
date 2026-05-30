@@ -55,13 +55,13 @@ export default function ContactDraftTile({
 
   return (
     <div
-      className="bg-white border border-gray-200 rounded-xl"
+      className="bg-surface-container-lowest border border-outline-variant rounded-xl"
       style={{ fontFamily: 'Manrope, sans-serif' }}
     >
       <div className="flex items-center justify-between gap-1.5 px-3 pt-2.5 pb-1">
         <div className="flex items-center gap-1.5">
-          <span className="material-symbols-outlined" style={{ color: '#4f4dcf', fontSize: '15px' }}>person_add</span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          <span className="material-symbols-outlined" style={{ color: 'rgb(var(--accent))', fontSize: '15px' }}>person_add</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-on-surface-variant" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
             Contact draft{payload.source === 'business_card_ocr' ? ' · from photo' : ''}
           </span>
         </div>
@@ -70,7 +70,7 @@ export default function ContactDraftTile({
             href={blobImageUrl}
             target="_blank"
             rel="noreferrer"
-            className="block w-10 h-10 rounded border border-gray-200 overflow-hidden hover:border-[#4f4dcf]"
+            className="block w-10 h-10 rounded border border-outline-variant overflow-hidden hover:border-primary"
             title="View source photo"
           >
             <img src={blobImageUrl} alt="Source card" className="w-full h-full object-cover" />

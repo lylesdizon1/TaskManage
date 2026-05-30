@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 
 const STATUS_CHIP = {
-  active:    { background: '#eaf3de', color: '#3b6d11' },
-  completed: { background: '#f1efe8', color: '#5f5e5a' },
-  archived:  { background: '#f1efe8', color: '#888' },
+  active:    { background: 'rgb(var(--success-surface))', color: 'rgb(var(--success))' },
+  completed: { background: 'rgb(var(--surface-container))', color: 'rgb(var(--text-secondary))' },
+  archived:  { background: 'rgb(var(--surface-container))', color: 'rgb(var(--text-faint))' },
 };
 
 function Chip({ status }) {
@@ -23,11 +23,11 @@ export default function ProjectsPanel({ entities = [], apiFetch, authToken }) {
   const ownedOrShared = (entities || []).filter((e) => e); // all entities visible
   return (
     <div className="flex-1 overflow-y-auto px-8 py-6 w-full" style={{ minHeight: 0, fontFamily: 'Manrope, sans-serif' }}>
-      <h1 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 24, fontWeight: 700, color: '#31323a', marginBottom: 24 }}>
+      <h1 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 24, fontWeight: 700, color: 'rgb(var(--text-primary))', marginBottom: 24 }}>
         Projects
       </h1>
       {ownedOrShared.length === 0 ? (
-        <div style={{ color: '#9ca3af', fontSize: 14 }}>No entities yet — create one in Settings to start a project workspace.</div>
+        <div style={{ color: 'rgb(var(--text-faint))', fontSize: 14 }}>No entities yet — create one in Settings to start a project workspace.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
           {ownedOrShared.map((entity) => (
@@ -73,11 +73,11 @@ function EntitySection({ entity, apiFetch, authToken }) {
   return (
     <section>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <h2 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 14, fontWeight: 700, color: '#1f2937', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        <h2 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 14, fontWeight: 700, color: 'rgb(var(--text-primary))', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
           {entity.name}
         </h2>
         {!adding ? (
-          <button onClick={() => setAdding(true)} style={{ fontSize: 12, fontWeight: 600, color: '#4f4dcf', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+          <button onClick={() => setAdding(true)} style={{ fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent))', background: 'transparent', border: 'none', cursor: 'pointer' }}>
             + New Project
           </button>
         ) : (
@@ -88,17 +88,17 @@ function EntitySection({ entity, apiFetch, authToken }) {
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') create(); if (e.key === 'Escape') { setAdding(false); setNewTitle(''); } }}
               placeholder="Project title"
-              style={{ fontSize: 12, padding: '4px 8px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none', minWidth: 200 }}
+              style={{ fontSize: 12, padding: '4px 8px', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, outline: 'none', minWidth: 200 }}
             />
-            <button onClick={create} style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Add</button>
-            <button onClick={() => { setAdding(false); setNewTitle(''); }} style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+            <button onClick={create} style={{ fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: 'rgb(var(--accent))', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Add</button>
+            <button onClick={() => { setAdding(false); setNewTitle(''); }} style={{ fontSize: 12, color: 'rgb(var(--text-secondary))', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
           </div>
         )}
       </div>
       {!loaded ? (
-        <div style={{ fontSize: 12, color: '#9ca3af' }}>Loading…</div>
+        <div style={{ fontSize: 12, color: 'rgb(var(--text-faint))' }}>Loading…</div>
       ) : projects.length === 0 ? (
-        <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>No projects yet</div>
+        <div style={{ fontSize: 12, color: 'rgb(var(--text-faint))', fontStyle: 'italic' }}>No projects yet</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {projects.map((p) => (
@@ -184,31 +184,31 @@ function ProjectRow({ project, entity, apiFetch, authToken, onChange }) {
   };
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
+    <div style={{ background: 'rgb(var(--surface-elevated))', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer' }} onClick={() => setExpanded((v) => !v)}>
-        <span className="material-symbols-outlined" style={{ fontSize: 16, color: '#6b7280' }}>{expanded ? 'expand_more' : 'chevron_right'}</span>
-        <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: '#1f2937' }}>{project.title}</span>
+        <span className="material-symbols-outlined" style={{ fontSize: 16, color: 'rgb(var(--text-secondary))' }}>{expanded ? 'expand_more' : 'chevron_right'}</span>
+        <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: 'rgb(var(--text-primary))' }}>{project.title}</span>
         {totalTasks > 0 && (
-          <span style={{ fontSize: 11, color: '#6b7280' }}>{doneTasks}/{totalTasks} tasks done</span>
+          <span style={{ fontSize: 11, color: 'rgb(var(--text-secondary))' }}>{doneTasks}/{totalTasks} tasks done</span>
         )}
         <Chip status={project.status} />
       </div>
       {expanded && (
-        <div style={{ borderTop: '1px solid #f3f4f6', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12, background: '#fcfbff' }}>
+        <div style={{ borderTop: '1px solid rgb(var(--surface-container))', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12, background: 'rgb(var(--surface-container-low))' }}>
           {/* Tasks */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Tasks</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'rgb(var(--text-secondary))', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Tasks</div>
               {!addingTask && (
-                <button onClick={() => setAddingTask(true)} style={{ fontSize: 11, color: '#4f4dcf', background: 'transparent', border: 'none', cursor: 'pointer' }}>+ Add Task</button>
+                <button onClick={() => setAddingTask(true)} style={{ fontSize: 11, color: 'rgb(var(--accent))', background: 'transparent', border: 'none', cursor: 'pointer' }}>+ Add Task</button>
               )}
             </div>
             {addingTask && (
               <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                 <input autoFocus value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') addTask(); if (e.key === 'Escape') { setAddingTask(false); setNewTaskTitle(''); } }}
-                  placeholder="Task title" style={{ flex: 1, fontSize: 12, padding: '4px 8px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none' }} />
-                <button onClick={addTask} style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Add</button>
+                  placeholder="Task title" style={{ flex: 1, fontSize: 12, padding: '4px 8px', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, outline: 'none' }} />
+                <button onClick={addTask} style={{ fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: 'rgb(var(--accent))', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Add</button>
               </div>
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -216,39 +216,39 @@ function ProjectRow({ project, entity, apiFetch, authToken, onChange }) {
                 <TaskRow key={t.id} task={t} entity={entity} apiFetch={apiFetch} authToken={authToken} onChange={reload} />
               ))}
               {tasks.length === 0 && !addingTask && (
-                <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>No tasks yet</div>
+                <div style={{ fontSize: 12, color: 'rgb(var(--text-faint))', fontStyle: 'italic' }}>No tasks yet</div>
               )}
             </div>
           </div>
           {/* Notes */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Notes</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'rgb(var(--text-secondary))', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Notes</div>
               {!addingNote && (
-                <button onClick={() => setAddingNote(true)} style={{ fontSize: 11, color: '#4f4dcf', background: 'transparent', border: 'none', cursor: 'pointer' }}>+ Add note</button>
+                <button onClick={() => setAddingNote(true)} style={{ fontSize: 11, color: 'rgb(var(--accent))', background: 'transparent', border: 'none', cursor: 'pointer' }}>+ Add note</button>
               )}
             </div>
             {addingNote && (
               <div style={{ marginBottom: 6 }}>
                 <textarea autoFocus value={newNote} onChange={(e) => setNewNote(e.target.value)}
                   placeholder="Note…"
-                  style={{ width: '100%', fontSize: 12, padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: 6, outline: 'none', resize: 'vertical', minHeight: 50, fontFamily: 'Manrope, sans-serif' }} />
+                  style={{ width: '100%', fontSize: 12, padding: '6px 8px', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 6, outline: 'none', resize: 'vertical', minHeight: 50, fontFamily: 'Manrope, sans-serif' }} />
                 <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                  <button onClick={addNote} style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Add</button>
-                  <button onClick={() => { setAddingNote(false); setNewNote(''); }} style={{ fontSize: 12, color: '#6b7280', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                  <button onClick={addNote} style={{ fontSize: 12, fontWeight: 600, color: 'rgb(var(--accent-contrast))', background: 'rgb(var(--accent))', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Add</button>
+                  <button onClick={() => { setAddingNote(false); setNewNote(''); }} style={{ fontSize: 12, color: 'rgb(var(--text-secondary))', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
                 </div>
               </div>
             )}
             {notes.map((n) => (
-              <div key={n.id} style={{ fontSize: 12, color: '#374151', padding: '4px 0', borderTop: '1px dashed #e5e7eb', whiteSpace: 'pre-wrap' }}>{n.body}</div>
+              <div key={n.id} style={{ fontSize: 12, color: 'rgb(var(--text-primary))', padding: '4px 0', borderTop: '1px dashed rgb(var(--surface-container-high))', whiteSpace: 'pre-wrap' }}>{n.body}</div>
             ))}
           </div>
           {/* Project actions */}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid #f3f4f6', paddingTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid rgb(var(--surface-container))', paddingTop: 8 }}>
             {project.status !== 'completed' && (
-              <button onClick={completeProject} style={{ fontSize: 11, color: '#3b6d11', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Mark complete</button>
+              <button onClick={completeProject} style={{ fontSize: 11, color: 'rgb(var(--success))', background: 'transparent', border: '1px solid rgb(var(--text-faint))', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Mark complete</button>
             )}
-            <button onClick={deleteProject} style={{ fontSize: 11, color: '#dc2626', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Delete</button>
+            <button onClick={deleteProject} style={{ fontSize: 11, color: 'rgb(var(--danger))', background: 'transparent', border: '1px solid rgb(var(--text-faint))', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>Delete</button>
           </div>
         </div>
       )}
@@ -340,32 +340,32 @@ function TaskRow({ task, entity, apiFetch, authToken, onChange }) {
   const allDone = items.length > 0 && items.every((it) => it.isDone);
 
   return (
-    <div style={{ background: allDone ? 'rgba(16,185,129,0.06)' : '#fff', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+    <div style={{ background: allDone ? 'rgb(var(--success) / 0.06)' : 'rgb(var(--surface-elevated))', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer' }} onClick={() => setExpanded((v) => !v)}>
-        <span className="material-symbols-outlined" style={{ fontSize: 14, color: '#6b7280' }}>{expanded ? 'expand_more' : 'chevron_right'}</span>
-        <span style={{ flex: 1, fontSize: 13, color: task.status === 'completed' ? '#6b7280' : '#1f2937', textDecoration: task.status === 'completed' ? 'line-through' : 'none' }}>{task.title}</span>
+        <span className="material-symbols-outlined" style={{ fontSize: 14, color: 'rgb(var(--text-secondary))' }}>{expanded ? 'expand_more' : 'chevron_right'}</span>
+        <span style={{ flex: 1, fontSize: 13, color: task.status === 'completed' ? 'rgb(var(--text-secondary))' : 'rgb(var(--text-primary))', textDecoration: task.status === 'completed' ? 'line-through' : 'none' }}>{task.title}</span>
         {task.status !== 'completed' && (
-          <button onClick={(e) => { e.stopPropagation(); completeTask(); }} style={{ fontSize: 10, color: '#3b6d11', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 5, padding: '1px 6px', cursor: 'pointer' }}>Complete</button>
+          <button onClick={(e) => { e.stopPropagation(); completeTask(); }} style={{ fontSize: 10, color: 'rgb(var(--success))', background: 'transparent', border: '1px solid rgb(var(--text-faint))', borderRadius: 5, padding: '1px 6px', cursor: 'pointer' }}>Complete</button>
         )}
         <button
           onClick={(e) => { e.stopPropagation(); deleteTask(); }}
           title="Delete task"
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, color: '#dc2626', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 5, cursor: 'pointer' }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, color: 'rgb(var(--danger))', background: 'transparent', border: '1px solid rgb(var(--text-faint))', borderRadius: 5, cursor: 'pointer' }}
         >
           <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
         </button>
       </div>
       {expanded && (
-        <div style={{ padding: '6px 10px 10px 28px', borderTop: '1px dashed #e5e7eb' }}>
+        <div style={{ padding: '6px 10px 10px 28px', borderTop: '1px dashed rgb(var(--surface-container-high))' }}>
           {items.map((it) => (
-            <div key={it.id} className="group" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: it.isDone ? '#6b7280' : '#1f2937', padding: '2px 0' }}>
+            <div key={it.id} className="group" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: it.isDone ? 'rgb(var(--text-secondary))' : 'rgb(var(--text-primary))', padding: '2px 0' }}>
               <input type="checkbox" checked={!!it.isDone} onChange={() => toggleItem(it.id)} />
               <span style={{ flex: 1, textDecoration: it.isDone ? 'line-through' : 'none' }}>{it.text}</span>
               <button
                 onClick={() => deleteItem(it.id)}
                 title="Delete item"
                 className="opacity-0 group-hover:opacity-100"
-                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, color: '#dc2626', background: 'transparent', border: 'none', cursor: 'pointer', transition: 'opacity 120ms' }}
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, color: 'rgb(var(--danger))', background: 'transparent', border: 'none', cursor: 'pointer', transition: 'opacity 120ms' }}
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 13 }}>delete</span>
               </button>
@@ -375,17 +375,17 @@ function TaskRow({ task, entity, apiFetch, authToken, onChange }) {
             <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
               <input autoFocus value={text} onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') addItem(); if (e.key === 'Escape') { setAdding(false); setText(''); } }}
-                placeholder="Checklist item" style={{ flex: 1, fontSize: 12, padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: 5, outline: 'none' }} />
-              <button onClick={addItem} style={{ fontSize: 11, color: '#fff', background: '#4f4dcf', border: 'none', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Add</button>
+                placeholder="Checklist item" style={{ flex: 1, fontSize: 12, padding: '3px 6px', border: '1px solid rgb(var(--surface-container-high))', borderRadius: 5, outline: 'none' }} />
+              <button onClick={addItem} style={{ fontSize: 11, color: 'rgb(var(--accent-contrast))', background: 'rgb(var(--accent))', border: 'none', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Add</button>
             </div>
           ) : (
-            <button onClick={() => setAdding(true)} style={{ fontSize: 11, color: '#4f4dcf', background: 'transparent', border: 'none', cursor: 'pointer', marginTop: 4 }}>+ Add item</button>
+            <button onClick={() => setAdding(true)} style={{ fontSize: 11, color: 'rgb(var(--accent))', background: 'transparent', border: 'none', cursor: 'pointer', marginTop: 4 }}>+ Add item</button>
           )}
           {taskNotes.length > 0 && (
-            <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px dashed #e5e7eb' }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: 3 }}>Notes</div>
+            <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px dashed rgb(var(--surface-container-high))' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'rgb(var(--text-secondary))', textTransform: 'uppercase', marginBottom: 3 }}>Notes</div>
               {taskNotes.map((n) => (
-                <div key={n.id} style={{ fontSize: 11, color: '#374151', padding: '2px 0', whiteSpace: 'pre-wrap' }}>{n.body}</div>
+                <div key={n.id} style={{ fontSize: 11, color: 'rgb(var(--text-primary))', padding: '2px 0', whiteSpace: 'pre-wrap' }}>{n.body}</div>
               ))}
             </div>
           )}

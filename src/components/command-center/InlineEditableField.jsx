@@ -45,7 +45,7 @@ export default function InlineEditableField({
   const displayStyle = {
     fontFamily: 'Manrope, sans-serif',
     fontSize: '13px',
-    color: value ? '#1f2937' : '#9ca3af',
+    color: value ? 'rgb(var(--text-primary))' : 'rgb(var(--text-faint))',
     cursor: disabled ? 'default' : 'text',
     padding: '4px 6px',
     borderRadius: '6px',
@@ -55,18 +55,18 @@ export default function InlineEditableField({
   const inputStyle = {
     fontFamily: 'Manrope, sans-serif',
     fontSize: '13px',
-    color: '#1f2937',
-    background: '#fff',
+    color: 'rgb(var(--text-primary))',
+    background: 'rgb(var(--surface-container-lowest))',
     padding: '4px 6px',
     borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    border: '1px solid rgb(var(--surface-container-high))',
     width: '100%',
     outline: 'none',
   };
 
   const labelEl = (
     <div
-      className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400 mb-0.5"
+      className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-faint mb-0.5"
       style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
     >
       {label}
@@ -85,7 +85,7 @@ export default function InlineEditableField({
           tabIndex={disabled ? -1 : 0}
           onClick={() => { if (!disabled) setEditing(true); }}
           onKeyDown={(e) => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setEditing(true); } }}
-          className={disabled ? '' : 'hover:bg-gray-50'}
+          className={disabled ? '' : 'hover:bg-surface-container-low'}
           style={displayStyle}
         >
           {shown || '—'}

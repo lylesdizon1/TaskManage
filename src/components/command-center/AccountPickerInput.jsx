@@ -11,7 +11,7 @@ export default function AccountPickerInput({ value, onChange, accounts = [], dis
       value={value || ''}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      className="w-full px-2 py-1.5 text-[13px] border border-gray-200 rounded-md bg-white focus:outline-none focus:border-[#4f4dcf] disabled:bg-gray-50"
+      className="w-full px-2 py-1.5 text-[13px] border border-outline-variant rounded-md bg-surface-container-lowest focus:outline-none focus:border-[rgb(var(--accent))] disabled:bg-surface-container-low"
       style={{ fontFamily: 'Manrope, sans-serif' }}
     >
       {accounts.map((a) => (

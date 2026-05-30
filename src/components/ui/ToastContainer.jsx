@@ -9,15 +9,15 @@ export default function ToastContainer({ toasts, onDismiss }) {
           key={t.id}
           className={`flex items-start gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium ${
             t.type === 'success'
-              ? 'bg-white border-green-200 text-green-800'
-              : 'bg-white border-red-200 text-red-700'
+              ? 'bg-surface-container-lowest border-success text-success'
+              : 'bg-surface-container-lowest border-danger text-danger'
           }`}
         >
           <span className="flex-shrink-0 mt-0.5">{t.type === 'success' ? '✉️' : '❌'}</span>
           <span className="flex-1 leading-snug">{t.message}</span>
           <button
             onClick={() => onDismiss(t.id)}
-            className="flex-shrink-0 text-gray-300 hover:text-gray-500 transition-colors"
+            className="flex-shrink-0 text-text-faint hover:text-on-surface-variant transition-colors"
           >
             <XIcon className="w-3.5 h-3.5" />
           </button>

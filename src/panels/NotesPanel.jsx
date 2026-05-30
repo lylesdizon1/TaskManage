@@ -12,27 +12,27 @@ export { PILLAR_CONFIG, PILLAR_KEYS };
 function TiptapToolbar({ editor, onImageClick }) {
   if (!editor) return null;
   const btnBase = 'w-7 h-7 flex items-center justify-center rounded text-xs transition-colors';
-  const active = 'bg-purple-600 text-white';
-  const inactive = 'text-gray-600 hover:bg-gray-100';
+  const active = 'bg-primary text-on-primary';
+  const inactive = 'text-on-surface-variant hover:bg-surface-container';
   const btn = (isActive) => `${btnBase} ${isActive ? active : inactive}`;
   return (
-    <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-100 flex-wrap overflow-x-auto" style={{ minHeight: 40 }}>
+    <div className="flex items-center gap-1 px-3 py-2 border-b border-outline-variant flex-wrap overflow-x-auto" style={{ minHeight: 40 }}>
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title="Bold (Cmd+B)"><strong>B</strong></button>
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleItalic().run()} className={btn(editor.isActive('italic'))} title="Italic (Cmd+I)"><em>I</em></button>
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleUnderline().run()} className={btn(editor.isActive('underline'))} title="Underline (Cmd+U)"><span style={{ textDecoration: 'underline' }}>U</span></button>
-      <div className="w-px h-5 bg-gray-200 mx-0.5" />
+      <div className="w-px h-5 bg-surface-container-high mx-0.5" />
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={btn(editor.isActive('heading', { level: 1 }))} title="Heading 1">H1</button>
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={btn(editor.isActive('heading', { level: 2 }))} title="Heading 2">H2</button>
-      <div className="w-px h-5 bg-gray-200 mx-0.5" />
+      <div className="w-px h-5 bg-surface-container-high mx-0.5" />
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title="Bullet list">•</button>
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title="Ordered list">1.</button>
-      <div className="w-px h-5 bg-gray-200 mx-0.5" />
+      <div className="w-px h-5 bg-surface-container-high mx-0.5" />
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleBlockquote().run()} className={btn(editor.isActive('blockquote'))} title="Quote">"</button>
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().toggleCodeBlock().run()} className={btn(editor.isActive('codeBlock'))} title="Code block">&lt;/&gt;</button>
       <button type="button" tabIndex={-1} onClick={() => editor.chain().focus().setHorizontalRule().run()} className={`${btnBase} ${inactive}`} title="Divider">—</button>
       {onImageClick && (
         <>
-          <div className="w-px h-5 bg-gray-200 mx-0.5" />
+          <div className="w-px h-5 bg-surface-container-high mx-0.5" />
           <button type="button" tabIndex={-1} onClick={onImageClick} className={`${btnBase} ${inactive}`} title="Add image">📷</button>
         </>
       )}
@@ -77,7 +77,7 @@ function highlightMatch(text, query) {
   const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
   const parts = text.split(regex);
   return parts.map((part, i) =>
-    regex.test(part) ? <strong key={i} className="text-purple-700 bg-purple-50">{part}</strong> : part
+    regex.test(part) ? <strong key={i} className="text-primary bg-accent-surface">{part}</strong> : part
   );
 }
 
@@ -98,15 +98,15 @@ function ImageLightbox({ images, startIndex, onClose, onDelete }) {
     <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center" onClick={onClose}>
       <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
         <img src={img.url} alt={img.originalName || 'image'} className="max-w-full max-h-[85vh] object-contain rounded-lg" />
-        <button type="button" tabIndex={-1} onClick={onClose} className="absolute top-2 right-2 w-8 h-8 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80">✕</button>
+        <button type="button" tabIndex={-1} onClick={onClose} className="absolute top-2 right-2 w-8 h-8 bg-black/60 text-on-primary rounded-full flex items-center justify-center hover:bg-black/80">✕</button>
         {images.length > 1 && (
           <>
-            <button type="button" tabIndex={-1} onClick={() => setIdx((idx - 1 + images.length) % images.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">←</button>
-            <button type="button" tabIndex={-1} onClick={() => setIdx((idx + 1) % images.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 text-lg">→</button>
+            <button type="button" tabIndex={-1} onClick={() => setIdx((idx - 1 + images.length) % images.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-on-primary rounded-full flex items-center justify-center hover:bg-black/80 text-lg">←</button>
+            <button type="button" tabIndex={-1} onClick={() => setIdx((idx + 1) % images.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-black/60 text-on-primary rounded-full flex items-center justify-center hover:bg-black/80 text-lg">→</button>
           </>
         )}
         {onDelete && (
-          <button type="button" tabIndex={-1} onClick={() => onDelete(img.id)} className="absolute bottom-3 right-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 flex items-center gap-1">🗑️ Delete</button>
+          <button type="button" tabIndex={-1} onClick={() => onDelete(img.id)} className="absolute bottom-3 right-3 px-3 py-1.5 bg-danger text-on-primary text-xs rounded-lg hover:bg-danger flex items-center gap-1">🗑️ Delete</button>
         )}
       </div>
     </div>
@@ -133,21 +133,21 @@ function NoteImageGallery({ noteId, authToken, images, setImages, onAddClick, ap
   if (!images.length) return null;
 
   return (
-    <div className="border-t border-gray-100 pt-3 mt-3">
-      <div className="text-xs text-gray-400 font-medium mb-2 flex items-center gap-1.5">
+    <div className="border-t border-outline-variant pt-3 mt-3">
+      <div className="text-xs text-text-faint font-medium mb-2 flex items-center gap-1.5">
         📷 Attachments ({images.length})
       </div>
       <div className="flex gap-2 flex-wrap">
         {images.map((img, i) => (
           <div key={img.id} className="relative group cursor-pointer" onClick={() => setLightboxIdx(i)}>
-            <img src={img.url} alt={img.originalName || 'attachment'} className="w-20 h-20 object-cover rounded-lg border border-gray-200" style={{ minWidth: 80 }} />
+            <img src={img.url} alt={img.originalName || 'attachment'} className="w-20 h-20 object-cover rounded-lg border border-outline-variant" style={{ minWidth: 80 }} />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 rounded-lg flex items-center justify-center transition-opacity">
-              <button type="button" tabIndex={-1} onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="text-white text-sm">🗑️</button>
+              <button type="button" tabIndex={-1} onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="text-on-primary text-sm">🗑️</button>
             </div>
           </div>
         ))}
         {onAddClick && (
-          <button type="button" tabIndex={-1} onClick={onAddClick} className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 hover:border-purple-400 hover:text-purple-500 transition-colors text-2xl" title="Add image">+</button>
+          <button type="button" tabIndex={-1} onClick={onAddClick} className="w-20 h-20 rounded-lg border-2 border-dashed border-outline-variant flex items-center justify-center text-text-faint hover:border-primary hover:text-primary transition-colors text-2xl" title="Add image">+</button>
         )}
       </div>
       {lightboxIdx !== null && (
@@ -577,22 +577,22 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <SpinnerIcon className="w-6 h-6 text-indigo-400 animate-spin" />
+        <SpinnerIcon className="w-6 h-6 text-primary animate-spin" />
       </div>
     );
   }
 
   // ── Editor view (mobile replaces list, desktop is right panel) ──
   const editorPanel = selectedNote && (
-    <div className="flex-1 flex flex-col overflow-hidden bg-white">
+    <div className="flex-1 flex flex-col overflow-hidden bg-surface-container-lowest">
       {/* Editor header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-        <button onClick={closeEditor} className="text-sm text-gray-500 hover:text-gray-700 md:hidden">← Back</button>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant">
+        <button onClick={closeEditor} className="text-sm text-on-surface-variant hover:text-on-surface md:hidden">← Back</button>
         <div className="flex items-center gap-2">
-          <span className={`text-xs px-2 py-0.5 rounded ${saveStatus === 'saved' ? 'bg-green-50 text-green-600' : saveStatus.startsWith('Save failed') ? 'bg-red-50 text-red-600' : saveStatus === 'new' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'}`}>
+          <span className={`text-xs px-2 py-0.5 rounded ${saveStatus === 'saved' ? 'bg-success-surface text-success' : saveStatus.startsWith('Save failed') ? 'bg-danger-surface text-danger' : saveStatus === 'new' ? 'bg-accent-surface text-primary' : 'bg-warning-surface text-warning'}`}>
             {saveStatus === 'saved' ? '✓ Saved' : saveStatus.startsWith('Save failed') ? saveStatus : saveStatus === 'new' ? 'New note' : '⏳ Saving...'}
           </span>
-          <button onClick={handlePin} className={`p-1.5 rounded hover:bg-gray-100 ${selectedNote.pinned ? 'text-amber-500' : 'text-gray-400'}`} title={selectedNote.pinned ? 'Unpin' : 'Pin'}>📌</button>
+          <button onClick={handlePin} className={`p-1.5 rounded hover:bg-surface-container ${selectedNote.pinned ? 'text-warning' : 'text-text-faint'}`} title={selectedNote.pinned ? 'Unpin' : 'Pin'}>📌</button>
         </div>
       </div>
 
@@ -603,12 +603,12 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
 
       {/* Editor body */}
       <div
-        className={`flex-1 overflow-y-auto px-4 py-3 space-y-3 relative ${dragOver ? 'ring-2 ring-purple-400 ring-inset' : ''}`}
+        className={`flex-1 overflow-y-auto px-4 py-3 space-y-3 relative ${dragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
         onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onPaste={handlePaste}
       >
         {dragOver && (
-          <div className="absolute inset-0 bg-purple-50/80 z-10 flex items-center justify-center rounded-lg pointer-events-none">
-            <span className="text-purple-600 font-medium text-sm">Drop image here</span>
+          <div className="absolute inset-0 bg-accent-surface/80 z-10 flex items-center justify-center rounded-lg pointer-events-none">
+            <span className="text-primary font-medium text-sm">Drop image here</span>
           </div>
         )}
         <input
@@ -621,7 +621,7 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             }
           }}
           placeholder="Title (optional)"
-          className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder-gray-300"
+          className="w-full text-lg font-semibold bg-transparent border-0 outline-none placeholder:text-text-faint"
         />
         {/* Entity picker */}
         <div className="flex gap-2 flex-wrap pb-1">
@@ -631,13 +631,13 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             None
           </button>
           {(entities || []).map((ent, idx) => {
-            const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+            const ENTITY_COLORS = ['rgb(var(--accent))','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
             const entColor = (ent.color && ent.color.startsWith('#')) ? ent.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
             const isActive = editorData.entityId === ent.id;
             return (
               <button type="button" key={ent.id}
                 onClick={() => handleEditorChange('entityId', isActive ? '' : ent.id)}
-                className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors ${isActive ? 'text-white' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70'}`}
+                className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors ${isActive ? 'text-on-primary' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70'}`}
                 style={isActive ? { backgroundColor: entColor } : { borderLeft: `3px solid ${entColor}` }}>
                 {ent.name}
               </button>
@@ -704,7 +704,7 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             All
           </button>
           {(entities || []).map((ent, idx) => {
-            const ENTITY_COLORS = ['#4f4dcf','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+            const ENTITY_COLORS = ['rgb(var(--accent))','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
             const dotColor = (ent.color && ent.color.startsWith('#')) ? ent.color : ENTITY_COLORS[idx % ENTITY_COLORS.length];
             const isActive = pillarFilter === ent.id;
             return (
@@ -729,15 +729,15 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             pb-20 clears the bottom nav bar so the last note isn't clipped. */}
         <div className="flex-1 overflow-y-auto min-h-0 pb-20 md:pb-0">
           {searchResults !== null && displayNotes.length === 0 ? (
-            <div className="flex flex-col items-center text-gray-400 py-10 px-3">
-              <p className="text-sm text-gray-500 mb-2">No notes found for '{searchQuery}'</p>
-              <button type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="text-xs text-purple-600 hover:underline">Clear search</button>
+            <div className="flex flex-col items-center text-text-faint py-10 px-3">
+              <p className="text-sm text-on-surface-variant mb-2">No notes found for '{searchQuery}'</p>
+              <button type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="text-xs text-primary hover:underline">Clear search</button>
             </div>
           ) : displayNotes.length === 0 ? (
-            <div className="flex flex-col items-center text-gray-400 py-10 px-3">
-              <p className="text-sm text-gray-500 mb-1">No notes yet</p>
+            <div className="flex flex-col items-center text-text-faint py-10 px-3">
+              <p className="text-sm text-on-surface-variant mb-1">No notes yet</p>
               <button type="button" onClick={handleNewNote}
-                className="mt-2 px-4 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 transition-colors">
+                className="mt-2 px-4 py-1.5 bg-primary text-on-primary text-xs font-medium rounded-lg hover:bg-primary transition-colors">
                 + Create your first note
               </button>
             </div>
@@ -745,7 +745,7 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
             groupedNotes.map(({ label, notes: groupNotes }) => (
               <div key={label}>
                 <div className="px-3 pt-3 pb-1">
-                  <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
+                  <span className="text-[10px] font-semibold text-text-faint uppercase tracking-wider">{label}</span>
                 </div>
                 {groupNotes.map((note) => {
                   const plainContent = stripHtml(note.content || '');
@@ -810,8 +810,8 @@ export default function NotesPanel({ authToken, onEditorStateChange, onCategorie
           {editorPanel}
         </div>
       ) : (
-        <div className="hidden md:flex md:flex-1 md:border-l md:border-gray-100">
-          <div className="flex-1 flex items-center justify-center text-gray-300 text-sm">
+        <div className="hidden md:flex md:flex-1 md:border-l md:border-outline-variant">
+          <div className="flex-1 flex items-center justify-center text-text-faint text-sm">
             Select a note or create a new one
           </div>
         </div>

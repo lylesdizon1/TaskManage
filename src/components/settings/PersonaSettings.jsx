@@ -20,7 +20,7 @@ export default function PersonaSettings() {
 
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-2">Persona</label>
+      <label className="block text-sm font-medium text-on-surface mb-2">Persona</label>
       <div className="flex flex-wrap gap-2 mb-3">
         {personas.map((p) => {
           const isActive = p.id === activePersonaId;
@@ -31,8 +31,8 @@ export default function PersonaSettings() {
               onClick={() => selectPersona(p.id)}
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 ${
                 isActive
-                  ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
-                  : 'bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-300'
+                  ? 'bg-accent-surface text-primary border border-primary'
+                  : 'bg-surface-container-low text-on-surface-variant border border-outline-variant hover:border-outline'
               }`}
             >
               <span>{p.emoji}</span>
@@ -54,7 +54,7 @@ export default function PersonaSettings() {
               )}
               {isActive && (
                 <span
-                  className="ml-0.5 opacity-50 hover:opacity-100 text-indigo-400"
+                  className="ml-0.5 opacity-50 hover:opacity-100 text-primary"
                   onClick={(e) => { e.stopPropagation(); startEdit(p.id); }}
                   title="Rename"
                 >
@@ -65,7 +65,7 @@ export default function PersonaSettings() {
           );
         })}
       </div>
-      <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5 text-xs text-gray-500 italic">
+      <div className="bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-xs text-on-surface-variant italic">
         {personas.find((p) => p.id === activePersonaId)?.description}
       </div>
     </div>
