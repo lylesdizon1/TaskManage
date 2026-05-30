@@ -459,21 +459,22 @@ const ARIA_TOOLS = [
 
   // ── MEMORY (M1a — explicit recall) ───────────────────────────────────
   // remember_this lets the user explicitly stamp a fact into long-term
-  // memory. Persists at high strength (0.9) so the entry survives the
-  // weekly decay floor. Channel-agnostic — works from web chat,
-  // WhatsApp, future SMS identically. Non-gated: the user is the one
-  // invoking, so no double-confirmation.
+  // memory. Strength is set by the fact's CONSEQUENCE (priority arg), NOT
+  // by the fact that the user asked — asking to remember doesn't make it
+  // important. Channel-agnostic — works from web chat, WhatsApp, future
+  // SMS identically. Non-gated: the user is the one invoking.
   {
     name: 'remember_this',
     group: 'memory',
     risk: 'low',
     requires_confirmation: false,
-    description: "Save a fact to long-term memory. Use when the user explicitly asks to remember something (\"remember that I...\", \"don't forget...\", \"keep in mind...\"). If content is omitted, save the previous user message verbatim.",
+    description: "Save a fact to long-term memory. Use when the user explicitly asks to remember something (\"remember that I...\", \"don't forget...\", \"keep in mind...\"). If content is omitted, save the previous user message verbatim. Set `priority` by the fact's CONSEQUENCE, not because it was requested: high = time-sensitive or consequential (deadlines, commitments, critical facts); medium = useful context; low = trivia, preferences, nicknames. A joke nickname is low. Asking to remember something does not make it high.",
     input_schema: {
       type: 'object',
       properties: {
         content:      { type: 'string', description: 'The fact text to save. If omitted, use the previous user message verbatim.' },
         contact_name: { type: 'string', description: 'Optional: if the fact is about a specific person, the name to resolve to a contact.' },
+        priority:     { type: 'string', enum: ['low', 'medium', 'high'], description: 'Importance by CONSEQUENCE (not by the fact it was requested). high = deadline/commitment/critical fact; medium = useful context; low = trivia/preference/nickname. Defaults to medium.' },
       },
       required: [],
     },
@@ -3124,6 +3125,11 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
           // back with a clear error rather than persist nothing.
           return { success: false, error: 'remember_this requires content. If the user said "remember that", pass their statement as content.' };
         }
+        // Strength reflects the fact's CONSEQUENCE (the priority arg), not the
+        // fact that it was explicitly requested. Default medium — an explicit
+        // "remember this" no longer auto-stamps high. (audit: memory calibration)
+        const memPriority = ['low', 'medium', 'high'].includes(toolInput?.priority) ? toolInput.priority : 'medium';
+        const memStrength = { low: 0.3, medium: 0.6, high: 0.9 }[memPriority];
         // Optional contact resolution. Best-effort: ambiguous matches
         // become a global memory_fact rather than blocking — the user's
         // intent was to remember, not to disambiguate.
@@ -3178,9 +3184,9 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
         }
         try {
           if (contactId) {
-            await db.addContactFact(userId, contactId, text, 'explicit_remember', 0.9, 'explicit_remember');
+            await db.addContactFact(userId, contactId, text, 'explicit_remember', memStrength, 'explicit_remember');
           } else {
-            await db.upsertMemoryFact(userId, null, text, 'explicit_remember', 'explicit_remember');
+            await db.upsertMemoryFact(userId, null, text, 'explicit_remember', 'explicit_remember', memStrength);
           }
           try {
             await db.logMemory({

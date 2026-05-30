@@ -11237,7 +11237,7 @@ async function updateOutcomeFollowUp(outcomeId, userId, followUpNeeded, suggesti
  * `source` is accepted for caller symmetry but not persisted — add a
  * source column later if provenance becomes important.
  */
-async function upsertMemoryFact(userId, entityId, factText, factType, sourceChannel /* M1a */) {
+async function upsertMemoryFact(userId, entityId, factText, factType, sourceChannel /* M1a */, strength = 0.5) {
   // NOTE: the global unique index on (user_id, fact_text) is partial
   // `WHERE contact_id IS NULL` so the ON CONFLICT inference needs the
   // matching predicate. Rows inserted here have contact_id NULL and so
@@ -11251,17 +11251,20 @@ async function upsertMemoryFact(userId, entityId, factText, factType, sourceChan
   // so a fact reinforced from a different channel reflects its most
   // recent provenance.
   const channel = assertSourceChannel(sourceChannel);
+  // Initial strength reflects the caller's assigned priority (default 0.5).
+  // Existing callers that pass no strength are unchanged. (audit: memory calibration)
+  const initialStrength = Number.isFinite(strength) ? Math.max(0, Math.min(1, strength)) : 0.5;
   await pool.query(
     `INSERT INTO memory_facts
        (user_id, entity_id, fact_text, fact_type, supporting_count, strength_score, first_seen_at, last_seen_at, source_channel)
-     VALUES ($1, $2, $3, $4, 1, 0.5, NOW(), NOW(), $5)
+     VALUES ($1, $2, $3, $4, 1, $6, NOW(), NOW(), $5)
      ON CONFLICT (user_id, fact_text) WHERE contact_id IS NULL
      DO UPDATE SET
        supporting_count = memory_facts.supporting_count + 1,
        strength_score   = LEAST(1.0, memory_facts.strength_score + 0.1),
        last_seen_at     = NOW(),
        source_channel   = COALESCE(EXCLUDED.source_channel, memory_facts.source_channel)`,
-    [userId, entityId, factText, factType, channel],
+    [userId, entityId, factText, factType, channel, initialStrength],
   );
 }
 
