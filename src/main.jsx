@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ToastProvider } from './contexts/ToastContext';
 import { PersonaProvider } from './contexts/PersonaContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import './index.css';
@@ -42,11 +43,13 @@ setTimeout(() => {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <PersonaProvider>
-        <ToastProvider>
-          <App />
-        </ToastProvider>
-      </PersonaProvider>
+      <ThemeProvider>
+        <PersonaProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </PersonaProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   </React.StrictMode>
 );

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useToast } from '../../contexts/ToastContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import { GearIcon, XIcon } from '../icons/Icons.jsx';
 import { getRuleScope, conditionDescription, uid } from '../../utils/helpers.js';
 import { CONDITION_META, EMPTY_NEW_RULE, runAlertRules, buildPlainTextAlert } from '../alerts/alertUtils.js';
@@ -1219,6 +1220,24 @@ function AlertCadenceTab({ apiFetch, authToken }) {
 
 export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEmail, onClose, envConfigured = {}, authToken, currentUser, entities, onEntitiesChanged, onUserUpdated, apiFetch, alertRules, onUpdateAlertRules, tasks, firedAlertsRef, envStatus, addToast: addToastProp, EntitySelectOptions, initialTab }) {
   const [tab, setTab]               = useState(initialTab || 'keys');
+  const { themePref, setThemePref } = useTheme();
+
+  // Persist the theme per-user. GET-merge-POST because saveUserPreferences is a
+  // full upsert (sending only { theme } would reset the other prefs).
+  async function persistTheme(pref) {
+    setThemePref(pref); // instant, optimistic
+    try {
+      const cur = await apiFetch('/api/preferences', { headers: { Authorization: `Bearer ${authToken}` } })
+        .then((r) => r.json()).catch(() => ({}));
+      await apiFetch('/api/preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ ...cur, theme: pref }),
+      });
+    } catch {
+      addToast?.('Couldn’t save theme preference', 'error');
+    }
+  }
   const [draftKeys, setDraftKeys]   = useState({ ...apiKeys });
   const [draftEmail, setDraftEmail] = useState({ ...emailSettings });
   const [testing, setTesting]       = useState(false);
@@ -1681,6 +1700,7 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
             { key: 'assistant', label: 'Profile' },
             { key: 'entities', label: 'Entities' },
             { key: 'password', label: 'Password' },
+            { key: 'appearance', label: 'Appearance' },
             { key: 'cadence', label: 'Alert Cadence' },
             { key: 'gmail', label: 'Email Intelligence' },
           ].map(({ key, label }) => (
@@ -2268,6 +2288,38 @@ export default function SettingsModal({ apiKeys, onSave, emailSettings, onSaveEm
               >
                 {pwSaving ? 'Changing\u2026' : 'Change Password'}
               </button>
+            </div>
+          )}
+
+          {/* Appearance tab */}
+          {tab === 'appearance' && (
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-semibold text-on-surface mb-1">Theme</h3>
+                <p className="text-xs text-on-surface-variant mb-3">
+                  Choose how Dizon.ai looks. System follows your device setting.
+                </p>
+                <div className="inline-flex rounded-xl border border-border p-1 bg-surface-container-low">
+                  {[
+                    { key: 'system', label: 'System', icon: 'brightness_auto' },
+                    { key: 'light',  label: 'Light',  icon: 'light_mode' },
+                    { key: 'dark',   label: 'Dark',   icon: 'dark_mode' },
+                  ].map(({ key, label, icon }) => (
+                    <button
+                      key={key}
+                      onClick={() => persistTheme(key)}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        themePref === key
+                          ? 'bg-primary text-on-primary'
+                          : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-base">{icon}</span>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 

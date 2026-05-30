@@ -5,6 +5,7 @@ import { buildContext } from './lib/context-engine/buildContext';
 import { detectIntent } from './lib/context-engine/intentDetector';
 import { routePersona } from './lib/context-engine/personaRouter';
 import { usePersona } from './contexts/PersonaContext';
+import { useTheme } from './contexts/ThemeContext';
 import SkeletonBlock from './components/ui/SkeletonBlock.jsx';
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'));
 
@@ -310,6 +311,7 @@ export default function App() {
 }
 
 function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
+  const { setThemePref } = useTheme();
   const [currentUser, setCurrentUser]           = useState(initialUser);
   const [tasks, setTasks]                       = useState([]);
   const tasksLoadedRef                           = useRef(false);
@@ -501,6 +503,13 @@ function AuthenticatedApp({ currentUser: initialUser, authToken, onLogout }) {
           localStorage.setItem('tm_user', JSON.stringify(data.user));
         }
       })
+      .catch(() => {});
+    // Reconcile theme with the per-user server preference (source of truth).
+    // The pre-mount script in index.html already painted from the cached
+    // value; this only flips if the server differs, then re-caches it.
+    apiFetch('/api/preferences', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((data) => { if (data && data.theme) setThemePref(data.theme); })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

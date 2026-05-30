@@ -2,6 +2,115 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   SEMANTIC THEME TOKENS — single source of truth.
+   :root = light (brand). [data-theme="dark"] on <html> = dark.
+   tailwind.config.js color names all resolve to these vars, so
+   class-based AND inline usages theme from one place.
+   Light reproduces production exactly EXCEPT text neutrals, which
+   are corrected to the brand values (decision 2026-05-29).
+   ============================================================ */
+:root {
+  color-scheme: light;
+  /* surfaces */
+  --surface: #fbf8fe;
+  --surface-elevated: #ffffff;
+  --surface-card: #ffffff;
+  --sidebar: #f5f2fa;
+  --surface-container-low: #f5f2fa;
+  --surface-container: #efedf5;
+  --surface-container-high: #e9e7f0;
+  --surface-container-highest: #e3e1ec;
+  --surface-dim: #dbd9e3;
+  --surface-variant: #e3e1ec;
+  /* text */
+  --text-primary: #1c1830;
+  --text-secondary: #5f5b7a;
+  --text-faint: #8a86a6;
+  /* borders */
+  --border: rgba(79,77,207,.14);
+  --border-strong: rgba(79,77,207,.28);
+  --outline: #7a7a83;
+  --outline-variant: #b2b1bb;
+  /* accent */
+  --accent: #4f4dcf;
+  --accent-deep: #3c3aa8;
+  --accent-contrast: #ffffff;
+  --primary-container: #7777fa;
+  --primary-dim: #423fc2;
+  --inverse-primary: #8282ff;
+  /* secondary / tertiary */
+  --secondary: #5c5c7c;
+  --secondary-container: #e1dfff;
+  --on-secondary-container: #4f4f6e;
+  --tertiary: #755478;
+  --tertiary-container: #fcd2fe;
+  --on-tertiary-container: #654569;
+  /* status */
+  --success: #1d9e75;
+  --danger: #d85a30;
+  --warning: #ba7517;
+  --error: #a8364b;
+  --error-container: #f97386;
+  --on-error-container: #6e0523;
+  /* effects */
+  --glow: rgba(79,77,207,.30);
+  --focus-ring: rgba(79,77,207,.5);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  /* surfaces — flat dark neutrals; accent is NOT a background flood */
+  --surface: #0b0a16;
+  --surface-elevated: #16142b;
+  --surface-card: #1c1936;
+  --sidebar: #0e0c1c;
+  --surface-container-low: #211e3e;
+  --surface-container: #211e3e;
+  --surface-container-high: #272350;
+  --surface-container-highest: #2d2858;
+  --surface-dim: #13111f;
+  --surface-variant: #2d2858;
+  /* text */
+  --text-primary: #eceaff;
+  --text-secondary: #9d99c4;
+  --text-faint: #6d6a93;
+  /* borders */
+  --border: rgba(140,130,255,.14);
+  --border-strong: rgba(140,130,255,.3);
+  --outline: #6d6a93;
+  --outline-variant: #3a3658;
+  /* accent — deliberately brighter than light for contrast on dark */
+  --accent: #7c78ff;
+  --accent-deep: #4f4dcf;
+  --accent-contrast: #ffffff;
+  --primary-container: #9a97ff;
+  --primary-dim: #4f4dcf;
+  --inverse-primary: #4f4dcf;
+  /* secondary / tertiary */
+  --secondary: #9d99c4;
+  --secondary-container: #2a2752;
+  --on-secondary-container: #cfcbe9;
+  --tertiary: #c9a0cc;
+  --tertiary-container: #3a2440;
+  --on-tertiary-container: #f3c4f5;
+  /* status */
+  --success: #3ddc97;
+  --danger: #f0997b;
+  --warning: #ef9f27;
+  --error: #f0997b;
+  --error-container: #5a1f12;
+  --on-error-container: #ffd9cc;
+  /* effects */
+  --glow: rgba(124,120,255,.45);
+  --focus-ring: rgba(124,120,255,.6);
+}
+
+html, body {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
 /* Smooth scrollbar for chat panel */
 ::-webkit-scrollbar {
   width: 4px;
@@ -10,11 +119,11 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #e5e7eb;
+  background: var(--border-strong);
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #d1d5db;
+  background: var(--text-faint);
 }
 
 /* Prevent textarea resize in chat */
@@ -52,7 +161,7 @@ textarea {
 }
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  color: #9CA3AF;
+  color: var(--text-faint);
   pointer-events: none;
   float: left;
   height: 0;
@@ -95,14 +204,14 @@ textarea {
   list-style-type: decimal;
 }
 .tiptap-editor blockquote {
-  border-left: 3px solid #7C3AED;
+  border-left: 3px solid var(--accent);
   padding-left: 1em;
   margin: 0.5em 0;
   font-style: italic;
-  color: #6B7280;
+  color: var(--text-secondary);
 }
 .tiptap-editor pre {
-  background: #F3F4F6;
+  background: var(--surface-container);
   border-radius: 6px;
   padding: 12px 16px;
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, monospace;
@@ -113,7 +222,7 @@ textarea {
 }
 .tiptap-editor code {
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, monospace;
-  background: #F3F4F6;
+  background: var(--surface-container);
   border-radius: 3px;
   padding: 0.15em 0.3em;
   font-size: 0.9em;
@@ -124,7 +233,7 @@ textarea {
 }
 .tiptap-editor hr {
   border: none;
-  border-top: 1px solid #E5E7EB;
+  border-top: 1px solid var(--border);
   margin: 1em 0;
 }
 .tiptap-editor img {
@@ -136,7 +245,7 @@ textarea {
 .tiptap-editor p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
-  color: #D1D5DB;
+  color: var(--text-faint);
   pointer-events: none;
   height: 0;
 }
