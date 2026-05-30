@@ -3427,11 +3427,24 @@ async function deleteGcalTokensForUser(userId, googleEmail) {
  * @param {string} googleEmail
  */
 async function setGcalPrimaryAccount(userId, googleEmail) {
-  await pool.query('UPDATE gcal_tokens SET is_primary = false WHERE user_id = $1', [userId]);
-  await pool.query(
-    'UPDATE gcal_tokens SET is_primary = true WHERE user_id = $1 AND google_email = $2',
-    [userId, googleEmail.toLowerCase()],
-  );
+  // Atomic: clearing the old primary and setting the new one must commit
+  // together. Without a transaction, a failure between the two UPDATEs would
+  // leave the user with NO primary calendar account. (audit: data-layer)
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE gcal_tokens SET is_primary = false WHERE user_id = $1', [userId]);
+    await client.query(
+      'UPDATE gcal_tokens SET is_primary = true WHERE user_id = $1 AND google_email = $2',
+      [userId, googleEmail.toLowerCase()],
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Gmail config (tokens moved to user_integrations) ────────────────────────
