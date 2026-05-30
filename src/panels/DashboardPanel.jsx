@@ -5,7 +5,6 @@ import buildSystemPrompt from '../utils/systemPrompt';
 import { getTodayLocal } from '../utils/helpers.js';
 import { parseActionDraft } from '../utils/parseActionDraft.js';
 import ActiveZoneOrchestrator from '../components/dashboard/ActiveZoneOrchestrator.jsx';
-import ActiveZoneVoice from '../components/dashboard/ActiveZoneVoice.jsx';
 import TaskDraftTile from '../components/command-center/TaskDraftTile.jsx';
 import EventDraftTile from '../components/command-center/EventDraftTile.jsx';
 import ProjectDraftTile from '../components/command-center/ProjectDraftTile.jsx';
@@ -26,10 +25,10 @@ const MD_COMPONENTS = {
   li: ({ node, ordered, ...p }) => <li style={{ margin: '0.15em 0' }} {...p} />,
   strong: ({ node, ...p }) => <strong style={{ fontWeight: 700 }} {...p} />,
   em: ({ node, ...p }) => <em style={{ fontStyle: 'italic' }} {...p} />,
-  a: ({ node, ...p }) => <a style={{ color: 'rgb(var(--accent))', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
+  a: ({ node, ...p }) => <a style={{ color: 'rgb(var(--accent-contrast))', textDecoration: 'underline' }} target="_blank" rel="noreferrer" {...p} />,
   code: ({ node, inline, ...p }) =>
     inline
-      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', background: 'rgb(var(--accent) / 0.06)', padding: '0 4px', borderRadius: '4px' }} {...p} />
+      ? <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', background: 'rgba(255,255,255,0.15)', padding: '0 4px', borderRadius: '4px' }} {...p} />
       : <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px', whiteSpace: 'pre-wrap' }} {...p} />,
   h1: ({ node, ...p }) => <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '16px', margin: '0.25em 0 0.4em 0' }} {...p} />,
   h2: ({ node, ...p }) => <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, fontSize: '15px', margin: '0.25em 0 0.35em 0' }} {...p} />,
@@ -2729,18 +2728,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       </div>
 
       {/* ROW 1.5: Active Zone — Aria's orchestration surface (AZ5/6).
-          Renders up to 3 tiles ranked by priority, or the empty-state
-          Aria voice panel when there's nothing to surface. Refresh-
-          debounced via azRefreshKey wired by AZ7. */}
-      <section className="px-1 md:px-0 mb-3 hidden md:block" aria-label="Active Zone">
-        <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="material-symbols-outlined text-primary" style={{ fontSize: '14px' }}>auto_awesome</span>
-          <h2 className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-primary">Active Zone</h2>
-        </div>
+          Renders up to 3 tiles ranked by priority. When there are no
+          tiles the orchestrator returns null and this section collapses
+          to nothing (no label, no empty-state). Refresh-debounced via
+          azRefreshKey wired by AZ7. */}
+      {/* Active Zone + Command Center capped to ~66vh as the dashboard's
+          focal block; the chat scrolls inside the CC card and the page
+          scrolls below for Timeline/Tasks. `contents` keeps mobile (where
+          AZ is hidden + CC is fixed) completely unaffected. */}
+      <div className="contents md:flex md:flex-col md:max-h-[66vh]">
+      <section className={`px-1 md:px-0 hidden md:block md:shrink-0 ${azIsEmpty ? '' : 'mb-3'}`} aria-label="Active Zone">
         <div className="space-y-2">
-          {azIsEmpty && (
-            <ActiveZoneVoice apiFetch={apiFetch} authToken={authToken} refreshKey={azRefreshKey} />
-          )}
           <ActiveZoneOrchestrator
           apiFetch={apiFetch}
           authToken={authToken}
@@ -2801,7 +2799,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           bar (56px / top-14) and the bottom nav (64px / bottom-16) so
           the input stays above the nav regardless of browser-chrome
           animations. Desktop: static flex-col card with max-height cap. */}
-      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:max-h-[calc(100vh-300px)] z-30 md:z-auto" style={{ width: '100%' }}>
+      <div className="bg-gradient-to-br from-surface-container-lowest to-surface-container-low rounded-none md:rounded-xl shadow-none md:shadow-[0px_10px_30px_rgba(79,77,207,0.05)] overflow-hidden border-0 md:border md:border-primary/5 flex flex-col fixed md:static top-14 md:top-auto bottom-16 md:bottom-auto left-0 right-0 md:flex-1 md:min-h-0 z-30 md:z-auto" style={{ width: '100%' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-primary/5" style={{ flexShrink: 0 }}>
           <div className="flex items-center gap-2">
@@ -3202,17 +3200,17 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 return (
                   <div key={msg.ts || i} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                     <div
-                      className={`max-w-[85%] ${isUser ? 'text-on-primary' : ''}`}
+                      className="max-w-[85%]"
                       style={isUser
-                        ? { backgroundColor: 'rgb(var(--accent))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
-                        : { backgroundColor: 'rgb(var(--surface-container-low))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }
+                        ? { backgroundColor: 'rgb(var(--surface-card))', color: 'rgb(var(--text-primary))', border: '1px solid var(--border)', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '16px', borderTopRightRadius: '5px', padding: '12px 16px', boxShadow: '0 2px 8px rgba(16,24,40,0.06)' }
+                        : { background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-deep)))', color: 'rgb(var(--accent-contrast))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '16px', borderTopLeftRadius: '5px', padding: '12px 16px', boxShadow: '0 6px 22px rgb(var(--accent) / 0.35)' }
                       }
                     >
                       {msg.content
                         ? (isUser
                             ? msg.content
                             : <ReactMarkdown components={MD_COMPONENTS}>{msg.content}</ReactMarkdown>)
-                        : <span className="animate-pulse" style={{ color: 'rgb(var(--text-secondary))' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>}
+                        : <span className="animate-pulse" style={{ color: 'rgb(var(--accent-contrast) / 0.85)' }}>{thinkingMessagesForIntent[thinkingIdx % thinkingMessagesForIntent.length]}</span>}
                     </div>
                     {!isUser && Array.isArray(msg.loadedSkills) && msg.loadedSkills.length > 0 && (
                       <div style={{ marginTop: 4, marginLeft: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -3244,7 +3242,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               })}
               {ccRefreshing && (
                 <div className="flex justify-start">
-                  <div style={{ backgroundColor: 'rgb(var(--surface-container-low))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '12px', padding: '12px 16px' }}>
+                  <div style={{ background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-deep)))', color: 'rgb(var(--accent-contrast))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '16px', borderTopLeftRadius: '5px', padding: '12px 16px', boxShadow: '0 6px 22px rgb(var(--accent) / 0.35)' }}>
                     <span className="animate-pulse">Updating...</span>
                   </div>
                 </div>
@@ -3346,6 +3344,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             </button>
           )}
         </div>}
+      </div>
       </div>
 
       {/* ROW 4: Timeline + Tasks + Upcoming — desktop-only; mobile
