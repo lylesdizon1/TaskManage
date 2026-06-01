@@ -7460,6 +7460,24 @@ async function runMigrations() {
     ON calendar_events(user_id, start_time)
   `).catch(() => {});
 
+  // Command Center daily-thread identity (2026-06-01). cc_date is the STABLE
+  // local-date key for a user's per-day CC thread — identity is (user_id,
+  // cc_date), never the (mutable) title. Additive + idempotent.
+  await pool.query(`
+    ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS cc_date DATE
+  `).catch((err) => logger.warn('migration.warn', { label: 'chat_conversations.cc_date', error: err.message }));
+  // Backfill existing command_center rows from created_at → the OWNER'S LOCAL
+  // date (AT TIME ZONE the user's tz; never UTC). Only fills NULLs, so it's a
+  // no-op on re-run. Users without a tz fall back to the app default.
+  await pool.query(`
+    UPDATE chat_conversations c
+       SET cc_date = (c.created_at AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::date
+      FROM users u
+     WHERE c.user_id = u.id
+       AND c.type = 'command_center'
+       AND c.cc_date IS NULL
+  `).catch((err) => logger.warn('migration.warn', { label: 'cc_date backfill', error: err.message }));
+
   // Contact timeline (2026-05-29) — attendee emails per event, stored as a
   // JSONB array of lowercased addresses (e.g. ["a@x.com","b@y.com"]). Lets
   // the contact timeline match meetings via `attendees ?| ARRAY[...]`. The
