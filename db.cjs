@@ -6242,7 +6242,45 @@ async function getConversations(userId) {
        LIMIT 1
      ) lm ON true
      WHERE c.user_id = $1
+       AND c.type IS DISTINCT FROM 'command_center'
      ORDER BY c.updated_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * Load a user's Command Center thread for a specific LOCAL date — WITHOUT
+ * creating one (used when the date selector jumps to a past day). Returns null
+ * if that day has no thread.
+ */
+async function getCommandCenterConversationByDate(userId, dateStr) {
+  const { rows } = await pool.query(
+    `SELECT * FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND cc_date = $2
+     ORDER BY created_at ASC LIMIT 1`,
+    [userId, dateStr],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * List a user's Command Center days, newest first, for the date selector:
+ * { ccDate, messageCount, gist } where gist = the first USER message of that
+ * day truncated to ~50 chars (fallback '—' for brief-only days).
+ */
+async function getCommandCenterDays(userId) {
+  const { rows } = await pool.query(
+    `SELECT c.cc_date AS "ccDate",
+            (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id)::int AS "messageCount",
+            COALESCE((
+              SELECT LEFT(m2.content, 50) FROM chat_messages m2
+              WHERE m2.conversation_id = c.id AND m2.role = 'user'
+              ORDER BY m2.created_at ASC LIMIT 1
+            ), '—') AS gist
+     FROM chat_conversations c
+     WHERE c.user_id = $1 AND c.type = 'command_center' AND c.cc_date IS NOT NULL
+     ORDER BY c.cc_date DESC`,
     [userId],
   );
   return rows;
@@ -12293,6 +12331,8 @@ module.exports = {
   getConversationMessagesWindowed,
   addConversationMessage,
   getOrCreateCommandCenterConversation,
+  getCommandCenterConversationByDate,
+  getCommandCenterDays,
   filterAndMarkSurfaced,
   hasSurfacedKind,
   searchContactsByName,

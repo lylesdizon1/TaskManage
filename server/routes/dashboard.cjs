@@ -127,11 +127,37 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
 
-      const conversation = await db.getOrCreateCommandCenterConversation(req.user.id, todayStr);
+      // ?date=YYYY-MM-DD loads that day's thread (no create — past days only
+      // exist if they have history). No/invalid date = today's thread (created
+      // on demand). Identity is (user_id, cc_date), never the title.
+      const dateParam = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date : null;
+
+      let conversation;
+      if (dateParam && dateParam !== todayStr) {
+        conversation = await db.getCommandCenterConversationByDate(req.user.id, dateParam);
+        if (!conversation) return res.json({ conversation: null, messages: [] });
+      } else {
+        conversation = await db.getOrCreateCommandCenterConversation(req.user.id, todayStr);
+      }
       const messages = await db.getConversationMessages(conversation.id, req.user.id);
       return res.json({ conversation, messages });
     } catch (err) {
       logger.error('commandCenter.session.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/dashboard/command-center/days — list the user's CC days, newest
+   * first, for the date selector: [{ ccDate, messageCount, gist }].
+   */
+  router.get('/api/dashboard/command-center/days', authenticateToken, async (req, res) => {
+    try {
+      const days = await db.getCommandCenterDays(req.user.id);
+      return res.json({ days });
+    } catch (err) {
+      logger.error('commandCenter.days.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
