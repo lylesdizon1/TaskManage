@@ -6428,35 +6428,40 @@ async function addConversationMessage(conversationId, userId, role, content, mod
  * @throws {Error} If the database queries fail.
  */
 async function getOrCreateCommandCenterConversation(userId, dateStr) {
+  // Identity is (user_id, cc_date, type) — NOT the title. `dateStr` is the
+  // caller's LOCAL date (computed from the user's tz in dashboard.cjs). Today's
+  // thread persists all day (no wipe on reload); each local day is its own
+  // thread. The title is a stable, non-identity label and is never renamed.
   const title = `Command Center — ${dateStr}`;
 
-  // Always delete existing command center conversations for today and start fresh
   const existing = await pool.query(
-    `SELECT id FROM chat_conversations
-     WHERE user_id = $1 AND type = 'command_center' AND title = $2`,
-    [userId, title]
+    `SELECT * FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND cc_date = $2
+     ORDER BY created_at ASC LIMIT 1`,
+    [userId, dateStr],
   );
+  if (existing.rows.length > 0) return existing.rows[0];
 
-  if (existing.rows.length > 0) {
-    const ids = existing.rows.map(r => r.id);
-    await pool.query(
-      `DELETE FROM chat_messages WHERE conversation_id = ANY($1)`,
-      [ids]
-    );
-    await pool.query(
-      `DELETE FROM chat_conversations WHERE id = ANY($1)`,
-      [ids]
-    );
-  }
-
-  // Always create fresh
-  const result = await pool.query(
-    `INSERT INTO chat_conversations (user_id, title, model, type, created_at, updated_at)
-     VALUES ($1, $2, 'claude', 'command_center', NOW(), NOW())
+  // First creation for this (user, day). ON CONFLICT makes it exactly-once
+  // under concurrent mounts — relies on the partial unique index
+  // idx_cc_daily_conv (user_id, cc_date) WHERE type='command_center'.
+  const inserted = await pool.query(
+    `INSERT INTO chat_conversations (user_id, title, model, type, cc_date, created_at, updated_at)
+     VALUES ($1, $2, 'claude', 'command_center', $3, NOW(), NOW())
+     ON CONFLICT (user_id, cc_date) WHERE type = 'command_center' DO NOTHING
      RETURNING *`,
-    [userId, title]
+    [userId, title, dateStr],
   );
-  return result.rows[0];
+  if (inserted.rows.length > 0) return inserted.rows[0];
+
+  // Lost the create race — the row exists now; return it.
+  const race = await pool.query(
+    `SELECT * FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND cc_date = $2
+     ORDER BY created_at ASC LIMIT 1`,
+    [userId, dateStr],
+  );
+  return race.rows[0];
 }
 
 // ── Single-task update ───────────────────────────────────────────────────────
@@ -7477,6 +7482,15 @@ async function runMigrations() {
        AND c.type = 'command_center'
        AND c.cc_date IS NULL
   `).catch((err) => logger.warn('migration.warn', { label: 'cc_date backfill', error: err.message }));
+  // Partial unique index backing getOrCreate's ON CONFLICT (one CC thread per
+  // user per local day). On a CLEAN db this creates immediately; on existing
+  // prod (which has pre-cleanup duplicates) it fails-and-logs here and is
+  // created for real by scripts/migrate-cc-daily.cjs --execute AFTER the
+  // dupes are merged (run before this code is merged to prod).
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cc_daily_conv
+    ON chat_conversations(user_id, cc_date) WHERE type = 'command_center'
+  `).catch((err) => logger.warn('migration.warn', { label: 'idx_cc_daily_conv (expected pre-cleanup on prod)', error: err.message }));
 
   // Contact timeline (2026-05-29) — attendee emails per event, stored as a
   // JSONB array of lowercased addresses (e.g. ["a@x.com","b@y.com"]). Lets

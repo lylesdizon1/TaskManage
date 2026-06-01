@@ -1523,18 +1523,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       });
     } catch {}
 
-    // Auto-name CC conversation from first user message
-    const userMsgCount = ccMessages.filter((m) => m.role === 'user').length;
-    if (userMsgCount === 0) {
-      const autoTitle = text.length > 50 ? text.slice(0, 50).trim() + '...' : text.trim();
-      try {
-        await apiFetch(`/api/conversations/${convIdAtSend}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ title: autoTitle }),
-        });
-      } catch {}
-    }
+    // (Removed) Auto-renaming the CC conversation to the first user message.
+    // The CC thread's identity is now (user_id, cc_date) with a stable title;
+    // renaming it broke the old title-keyed resolution and fragmented history.
+    // The day's "gist" for the date selector is derived server-side from the
+    // first user message instead — see GET /command-center/days.
 
     // ── Dynamic tile intercept: parse task/event intent first ──
     // If the message is a task/event ask, render an inline editable
