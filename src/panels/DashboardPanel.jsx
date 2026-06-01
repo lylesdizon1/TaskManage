@@ -37,6 +37,17 @@ const MD_COMPONENTS = {
 
 const API_BASE = '';
 
+/**
+ * Normalize a Command Center day value to a 'YYYY-MM-DD' calendar key.
+ * GET /command-center/days returns cc_date (a Postgres DATE) which serializes
+ * over JSON as a full ISO string ("2026-05-28T00:00:00.000Z"); slicing the
+ * first 10 chars takes the literal date portion WITHOUT a Date() parse, so
+ * there's no UTC-midnight backward shift. Null/garbage → '' (caller falls back).
+ */
+function ccDateKey(v) {
+  return v == null ? '' : String(v).slice(0, 10);
+}
+
 /** Convert "HH:MM" (24h) to "h:MM AM/PM" for display in draft tiles. */
 function to24hTo12h(t) {
   if (!t) return '';
@@ -982,29 +993,44 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // ── Date selector ──────────────────────────────────────────────────────────
   // Human label for a CC day: "Today · Jun 1" / "Yesterday · May 31" /
   // "Wed · May 28" / "May 8". All local-date math (no UTC).
-  const ccDayLabel = useCallback((dateStr) => {
+  // Human label for a CC day. `pill` = the header pill form (today → "Today ·
+  // Jun 1", else absolute "Mon, May 28"); otherwise the dropdown-row form
+  // (today → "Today", yesterday → "Yesterday", else "Mon, May 28"). Accepts
+  // either a 'YYYY-MM-DD' string or the ISO date /days returns — normalized via
+  // ccDateKey, then parsed by explicit Y/M/D (no new Date('YYYY-MM-DD') UTC
+  // shift). Malformed/missing → graceful fallback, never "Invalid Date".
+  const ccDayLabel = useCallback((dateStr, opts = {}) => {
+    const { pill = false } = opts;
     const todayStr = getTodayLocal(userTZ);
-    const target = dateStr || todayStr;
+    const target = ccDateKey(dateStr) || todayStr;
+    const parts = target.split('-').map(Number);
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+      return pill ? 'Pick a day' : 'Recent';
+    }
+    const [y, m, d] = parts;
     const [ty, tm, td] = todayStr.split('-').map(Number);
-    const [y, m, d] = target.split('-').map(Number);
     const todayD = new Date(ty, tm - 1, td);
     const targetD = new Date(y, m - 1, d);
-    const md = targetD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const diff = Math.round((todayD - targetD) / 86_400_000);
-    if (diff === 0) return `Today · ${md}`;
-    if (diff === 1) return `Yesterday · ${md}`;
-    if (diff > 1 && diff < 7) return `${targetD.toLocaleDateString('en-US', { weekday: 'short' })} · ${md}`;
-    return md;
+    const md = targetD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });          // "Jun 1"
+    const abs = targetD.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); // "Mon, May 28"
+    if (pill) return diff === 0 ? `Today · ${md}` : abs;
+    if (diff === 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    return abs;
   }, [userTZ]);
 
   // Load a specific CC day's thread (null = today). Browsing past days is a
   // read view; today's thread is the one that auto-inits + accepts the brief.
   const loadCcDay = useCallback(async (dateStr) => {
+    // Normalize to 'YYYY-MM-DD' — day.ccDate from /days is an ISO string, which
+    // /session's ^\d{4}-\d{2}-\d{2}$ guard would reject (loading today instead).
+    const key = dateStr ? ccDateKey(dateStr) : null;
     setCcDayMenuOpen(false);
-    setCcViewDate(dateStr || null);
+    setCcViewDate(key);
     try {
-      const url = dateStr
-        ? `/api/dashboard/command-center/session?date=${dateStr}`
+      const url = key
+        ? `/api/dashboard/command-center/session?date=${key}`
         : '/api/dashboard/command-center/session';
       const r = await apiFetch(url, { headers: { Authorization: `Bearer ${authToken}` } });
       const data = await r.json();
@@ -2900,7 +2926,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
               title="Switch Command Center day"
             >
               <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>calendar_today</span>
-              {ccDayLabel(ccViewDate)}
+              {ccDayLabel(ccViewDate, { pill: true })}
               <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>expand_more</span>
             </button>
 
@@ -2932,7 +2958,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                     {ccDays.length === 0 ? (
                       <div className="px-3 py-3" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--text-faint))' }}>No days yet.</div>
                     ) : ccDays.map((day) => {
-                      const active = (ccViewDate || getTodayLocal(userTZ)) === day.ccDate;
+                      const active = (ccViewDate || getTodayLocal(userTZ)) === ccDateKey(day.ccDate);
                       return (
                         <button
                           key={day.ccDate}
