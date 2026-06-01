@@ -2935,7 +2935,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                 <div className="fixed inset-0 z-40" onClick={() => setCcDayMenuOpen(false)} />
                 <div
                   className="absolute right-0 top-full mt-1 z-50 rounded-xl border shadow-lg overflow-hidden"
-                  style={{ width: '300px', background: 'rgb(var(--surface-container-lowest))', borderColor: 'rgb(var(--border-strong))' }}
+                  style={{ width: '300px', background: 'rgb(var(--surface-elevated))', borderColor: 'rgb(var(--border-strong))' }}
                 >
                   <label
                     className="flex items-center justify-between gap-2 px-3 py-2.5 border-b cursor-pointer"
