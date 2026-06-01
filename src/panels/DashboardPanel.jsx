@@ -2847,7 +2847,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           focal block; the chat scrolls inside the CC card and the page
           scrolls below for Timeline/Tasks. `contents` keeps mobile (where
           AZ is hidden + CC is fixed) completely unaffected. */}
-      <div className="contents md:flex md:flex-col md:h-[66vh]">
+      <div className="contents md:flex md:flex-col md:min-h-[66vh]">
       <section className={`px-1 md:px-0 hidden md:block md:shrink-0 ${azIsEmpty ? '' : 'mb-3'}`} aria-label="Active Zone">
         <div className="space-y-2">
           <ActiveZoneOrchestrator
