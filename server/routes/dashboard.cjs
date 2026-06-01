@@ -127,11 +127,37 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
 
-      const conversation = await db.getOrCreateCommandCenterConversation(req.user.id, todayStr);
+      // ?date=YYYY-MM-DD loads that day's thread (no create — past days only
+      // exist if they have history). No/invalid date = today's thread (created
+      // on demand). Identity is (user_id, cc_date), never the title.
+      const dateParam = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date : null;
+
+      let conversation;
+      if (dateParam && dateParam !== todayStr) {
+        conversation = await db.getCommandCenterConversationByDate(req.user.id, dateParam);
+        if (!conversation) return res.json({ conversation: null, messages: [] });
+      } else {
+        conversation = await db.getOrCreateCommandCenterConversation(req.user.id, todayStr);
+      }
       const messages = await db.getConversationMessages(conversation.id, req.user.id);
       return res.json({ conversation, messages });
     } catch (err) {
       logger.error('commandCenter.session.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/dashboard/command-center/days — list the user's CC days, newest
+   * first, for the date selector: [{ ccDate, messageCount, gist }].
+   */
+  router.get('/api/dashboard/command-center/days', authenticateToken, async (req, res) => {
+    try {
+      const days = await db.getCommandCenterDays(req.user.id);
+      return res.json({ days });
+    } catch (err) {
+      logger.error('commandCenter.days.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -188,6 +214,36 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
           type: 'overdue',
           content: `⚠️ Task now overdue: "${task.title}"${task.priority === 'high' ? ' — high priority' : ''}`
         });
+      }
+
+      // New meaningful calendar events. calendar_events has only synced_at
+      // (bumps every sync), so a time cursor can't dedup — instead we dedup by
+      // event id against the surfaced ledger. Noise events (all-day, busy/focus/
+      // lunch/hold/OOO holds, untitled) are filtered out — substantive only.
+      const calResult = await db.pool.query(
+        `SELECT id, title, start_time FROM calendar_events
+         WHERE user_id = $1
+           AND COALESCE(all_day, false) = false
+           AND start_time >= NOW() AND start_time < NOW() + INTERVAL '14 days'
+           AND title IS NOT NULL AND btrim(title) <> ''
+           AND title !~* '^(busy|focus|lunch|hold|tentative|ooo|out of office|private)'
+         ORDER BY start_time ASC LIMIT 25`,
+        [userId]
+      );
+      const calIds = calResult.rows.map((e) => e.id);
+      // First-ever check seeds the ledger silently (don't back-announce the
+      // whole existing calendar); only events added AFTER that announce.
+      const calSeeded = await db.hasSurfacedKind(userId, 'calendar');
+      const freshCalIds = new Set(await db.filterAndMarkSurfaced(userId, 'calendar', calIds));
+      if (calSeeded) {
+        for (const ev of calResult.rows) {
+          if (!freshCalIds.has(ev.id)) continue;
+          const when = new Intl.DateTimeFormat('en-US', {
+            timeZone: req.user.timezone, weekday: 'short', month: 'short',
+            day: 'numeric', hour: 'numeric', minute: '2-digit',
+          }).format(new Date(ev.start_time));
+          updates.push({ type: 'calendar', content: `📅 New event: "${ev.title}" — ${when}` });
+        }
       }
 
       return res.json({ updates });

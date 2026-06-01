@@ -445,6 +445,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   });
   const [ccMessages, setCcMessages] = useState(ccCacheInit || []);
   const [ccConvId, setCcConvId] = useState(null);
+  // Date selector — which CC day is being viewed (null = today), the list of
+  // days for the dropdown, and its open state.
+  const [ccViewDate, setCcViewDate] = useState(null);   // 'YYYY-MM-DD' or null=today
+  const [ccDays, setCcDays] = useState([]);
+  const [ccDayMenuOpen, setCcDayMenuOpen] = useState(false);
   // Skip the loading spinner when localStorage already has today's messages —
   // show cached messages immediately and let initCommandCenter sync silently.
   const [ccLoading, setCcLoading] = useState(!ccCacheInit);
@@ -973,6 +978,58 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   // where init created conversation 1580 while a concurrent send POST'd
   // to the stale (closure-captured) 1579 — orphaning the message.
   useEffect(() => { ccConvIdRef.current = ccConvId; }, [ccConvId]);
+
+  // ── Date selector ──────────────────────────────────────────────────────────
+  // Human label for a CC day: "Today · Jun 1" / "Yesterday · May 31" /
+  // "Wed · May 28" / "May 8". All local-date math (no UTC).
+  const ccDayLabel = useCallback((dateStr) => {
+    const todayStr = getTodayLocal(userTZ);
+    const target = dateStr || todayStr;
+    const [ty, tm, td] = todayStr.split('-').map(Number);
+    const [y, m, d] = target.split('-').map(Number);
+    const todayD = new Date(ty, tm - 1, td);
+    const targetD = new Date(y, m - 1, d);
+    const md = targetD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const diff = Math.round((todayD - targetD) / 86_400_000);
+    if (diff === 0) return `Today · ${md}`;
+    if (diff === 1) return `Yesterday · ${md}`;
+    if (diff > 1 && diff < 7) return `${targetD.toLocaleDateString('en-US', { weekday: 'short' })} · ${md}`;
+    return md;
+  }, [userTZ]);
+
+  // Load a specific CC day's thread (null = today). Browsing past days is a
+  // read view; today's thread is the one that auto-inits + accepts the brief.
+  const loadCcDay = useCallback(async (dateStr) => {
+    setCcDayMenuOpen(false);
+    setCcViewDate(dateStr || null);
+    try {
+      const url = dateStr
+        ? `/api/dashboard/command-center/session?date=${dateStr}`
+        : '/api/dashboard/command-center/session';
+      const r = await apiFetch(url, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await r.json();
+      const msgs = (data.messages || []).map((m) => ({
+        role: m.role, content: m.content, createdAt: m.createdAt,
+        ts: m.createdAt ? new Date(m.createdAt).getTime() : Date.now(),
+      }));
+      setCcMessages(msgs);
+      if (data.conversation?.id) setCcConvId(data.conversation.id);
+      userScrolledAwayRef.current = false;
+    } catch { /* leave current view on error */ }
+  }, [apiFetch, authToken]);
+
+  // Open/close the day menu; lazy-load the day list when opening.
+  const toggleCcDayMenu = useCallback(async () => {
+    const next = !ccDayMenuOpen;
+    setCcDayMenuOpen(next);
+    if (next) {
+      try {
+        const r = await apiFetch('/api/dashboard/command-center/days', { headers: { Authorization: `Bearer ${authToken}` } });
+        const data = await r.json();
+        if (Array.isArray(data.days)) setCcDays(data.days);
+      } catch { /* keep stale list */ }
+    }
+  }, [ccDayMenuOpen, apiFetch, authToken]);
   // 60s safety-net: if ccSending stays true for a full minute, force-
   // reset it. This covers edge cases where the SSE stream silently dies
   // (network change, server restart) and the finally block never fires.
@@ -1523,18 +1580,11 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       });
     } catch {}
 
-    // Auto-name CC conversation from first user message
-    const userMsgCount = ccMessages.filter((m) => m.role === 'user').length;
-    if (userMsgCount === 0) {
-      const autoTitle = text.length > 50 ? text.slice(0, 50).trim() + '...' : text.trim();
-      try {
-        await apiFetch(`/api/conversations/${convIdAtSend}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ title: autoTitle }),
-        });
-      } catch {}
-    }
+    // (Removed) Auto-renaming the CC conversation to the first user message.
+    // The CC thread's identity is now (user_id, cc_date) with a stable title;
+    // renaming it broke the old title-keyed resolution and fragmented history.
+    // The day's "gist" for the date selector is derived server-side from the
+    // first user message instead — see GET /command-center/days.
 
     // ── Dynamic tile intercept: parse task/event intent first ──
     // If the message is a task/event ask, render an inline editable
@@ -2841,15 +2891,78 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
             <span className="material-symbols-outlined text-lg" style={{ color: 'rgb(var(--accent))' }}>auto_awesome</span>
             <h3 style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '15px', fontWeight: 600, color: 'rgb(var(--accent))' }}>Command Center</h3>
           </div>
-          <select
-            value={backend}
-            onChange={(e) => onBackendChange(e.target.value)}
-            className="bg-transparent border-none focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
-            style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, color: 'rgb(var(--accent))' }}
-          >
-            <option value="claude">Claude</option>
-            <option value="chatgpt">ChatGPT</option>
-          </select>
+          <div className="flex items-center gap-2 relative">
+            {/* Date selector — left of the model picker, both grouped right */}
+            <button
+              onClick={toggleCcDayMenu}
+              className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors hover:bg-primary/5"
+              style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, color: 'rgb(var(--accent))', borderColor: 'rgb(var(--accent) / 0.25)' }}
+              title="Switch Command Center day"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>calendar_today</span>
+              {ccDayLabel(ccViewDate)}
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>expand_more</span>
+            </button>
+
+            {ccDayMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setCcDayMenuOpen(false)} />
+                <div
+                  className="absolute right-0 top-full mt-1 z-50 rounded-xl border shadow-lg overflow-hidden"
+                  style={{ width: '300px', background: 'rgb(var(--surface-container-lowest))', borderColor: 'rgb(var(--border-strong))' }}
+                >
+                  <label
+                    className="flex items-center justify-between gap-2 px-3 py-2.5 border-b cursor-pointer"
+                    style={{ borderColor: 'rgb(var(--border))', fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--text-secondary))' }}
+                  >
+                    Jump to a date…
+                    <input
+                      type="date"
+                      max={getTodayLocal(userTZ)}
+                      onChange={(e) => e.target.value && loadCcDay(e.target.value)}
+                      className="bg-transparent outline-none cursor-pointer"
+                      style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--accent))' }}
+                    />
+                  </label>
+                  <div
+                    className="px-3 pt-2 pb-1"
+                    style={{ fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgb(var(--text-faint))' }}
+                  >Recent</div>
+                  <div className="overflow-y-auto" style={{ maxHeight: '300px' }}>
+                    {ccDays.length === 0 ? (
+                      <div className="px-3 py-3" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', color: 'rgb(var(--text-faint))' }}>No days yet.</div>
+                    ) : ccDays.map((day) => {
+                      const active = (ccViewDate || getTodayLocal(userTZ)) === day.ccDate;
+                      return (
+                        <button
+                          key={day.ccDate}
+                          onClick={() => loadCcDay(day.ccDate)}
+                          className="w-full text-left px-3 py-2 transition-colors hover:bg-primary/5 flex items-start justify-between gap-2"
+                          style={active ? { background: 'rgb(var(--accent) / 0.08)' } : undefined}
+                        >
+                          <div className="min-w-0">
+                            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, color: 'rgb(var(--text-primary))' }}>{ccDayLabel(day.ccDate)}</div>
+                            <div className="truncate" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '12px', color: 'rgb(var(--text-secondary))' }}>{day.gist}</div>
+                          </div>
+                          <span className="flex-shrink-0 mt-0.5" style={{ fontFamily: 'Manrope, sans-serif', fontSize: '11px', color: 'rgb(var(--text-faint))' }}>{day.messageCount}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            )}
+
+            <select
+              value={backend}
+              onChange={(e) => onBackendChange(e.target.value)}
+              className="bg-transparent border-none focus:ring-0 cursor-pointer outline-none px-1 py-0.5 rounded-full"
+              style={{ fontFamily: 'Manrope, sans-serif', fontSize: '13px', fontWeight: 600, color: 'rgb(var(--accent))' }}
+            >
+              <option value="claude">Claude</option>
+              <option value="chatgpt">ChatGPT</option>
+            </select>
+          </div>
         </div>
         {/* Active zone — structured context, tiles, email drafts, success */}
         <ActiveZone

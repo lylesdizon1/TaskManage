@@ -6242,7 +6242,45 @@ async function getConversations(userId) {
        LIMIT 1
      ) lm ON true
      WHERE c.user_id = $1
+       AND c.type IS DISTINCT FROM 'command_center'
      ORDER BY c.updated_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * Load a user's Command Center thread for a specific LOCAL date — WITHOUT
+ * creating one (used when the date selector jumps to a past day). Returns null
+ * if that day has no thread.
+ */
+async function getCommandCenterConversationByDate(userId, dateStr) {
+  const { rows } = await pool.query(
+    `SELECT * FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND cc_date = $2
+     ORDER BY created_at ASC LIMIT 1`,
+    [userId, dateStr],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * List a user's Command Center days, newest first, for the date selector:
+ * { ccDate, messageCount, gist } where gist = the first USER message of that
+ * day truncated to ~50 chars (fallback '—' for brief-only days).
+ */
+async function getCommandCenterDays(userId) {
+  const { rows } = await pool.query(
+    `SELECT c.cc_date AS "ccDate",
+            (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id)::int AS "messageCount",
+            COALESCE((
+              SELECT LEFT(m2.content, 50) FROM chat_messages m2
+              WHERE m2.conversation_id = c.id AND m2.role = 'user'
+              ORDER BY m2.created_at ASC LIMIT 1
+            ), '—') AS gist
+     FROM chat_conversations c
+     WHERE c.user_id = $1 AND c.type = 'command_center' AND c.cc_date IS NOT NULL
+     ORDER BY c.cc_date DESC`,
     [userId],
   );
   return rows;
@@ -6428,35 +6466,74 @@ async function addConversationMessage(conversationId, userId, role, content, mod
  * @throws {Error} If the database queries fail.
  */
 async function getOrCreateCommandCenterConversation(userId, dateStr) {
+  // Identity is (user_id, cc_date, type) — NOT the title. `dateStr` is the
+  // caller's LOCAL date (computed from the user's tz in dashboard.cjs). Today's
+  // thread persists all day (no wipe on reload); each local day is its own
+  // thread. The title is a stable, non-identity label and is never renamed.
   const title = `Command Center — ${dateStr}`;
 
-  // Always delete existing command center conversations for today and start fresh
   const existing = await pool.query(
-    `SELECT id FROM chat_conversations
-     WHERE user_id = $1 AND type = 'command_center' AND title = $2`,
-    [userId, title]
+    `SELECT * FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND cc_date = $2
+     ORDER BY created_at ASC LIMIT 1`,
+    [userId, dateStr],
   );
+  if (existing.rows.length > 0) return existing.rows[0];
 
-  if (existing.rows.length > 0) {
-    const ids = existing.rows.map(r => r.id);
-    await pool.query(
-      `DELETE FROM chat_messages WHERE conversation_id = ANY($1)`,
-      [ids]
-    );
-    await pool.query(
-      `DELETE FROM chat_conversations WHERE id = ANY($1)`,
-      [ids]
-    );
-  }
-
-  // Always create fresh
-  const result = await pool.query(
-    `INSERT INTO chat_conversations (user_id, title, model, type, created_at, updated_at)
-     VALUES ($1, $2, 'claude', 'command_center', NOW(), NOW())
+  // First creation for this (user, day). ON CONFLICT makes it exactly-once
+  // under concurrent mounts — relies on the partial unique index
+  // idx_cc_daily_conv (user_id, cc_date) WHERE type='command_center'.
+  const inserted = await pool.query(
+    `INSERT INTO chat_conversations (user_id, title, model, type, cc_date, created_at, updated_at)
+     VALUES ($1, $2, 'claude', 'command_center', $3, NOW(), NOW())
+     ON CONFLICT (user_id, cc_date) WHERE type = 'command_center' DO NOTHING
      RETURNING *`,
-    [userId, title]
+    [userId, title, dateStr],
   );
-  return result.rows[0];
+  if (inserted.rows.length > 0) return inserted.rows[0];
+
+  // Lost the create race — the row exists now; return it.
+  const race = await pool.query(
+    `SELECT * FROM chat_conversations
+     WHERE user_id = $1 AND type = 'command_center' AND cc_date = $2
+     ORDER BY created_at ASC LIMIT 1`,
+    [userId, dateStr],
+  );
+  return race.rows[0];
+}
+
+/**
+ * Atomically record surfaced Command Center items and return ONLY the keys
+ * that were newly recorded (deduped against everything surfaced before).
+ * Used by the proactive-update triggers so a standing overdue task, an
+ * already-flagged email, or an already-announced calendar event never
+ * re-appends. Deterministic + auditable: the ledger IS the surfaced record.
+ * (salvaged from cc-persistent-chat)
+ */
+async function filterAndMarkSurfaced(userId, kind, keys) {
+  if (!Array.isArray(keys) || keys.length === 0) return [];
+  const placeholders = keys.map((_, i) => `($1, $2, $${i + 3})`).join(', ');
+  const { rows } = await pool.query(
+    `INSERT INTO cc_surfaced_items (user_id, kind, item_key)
+     VALUES ${placeholders}
+     ON CONFLICT (user_id, kind, item_key) DO NOTHING
+     RETURNING item_key`,
+    [userId, kind, ...keys],
+  );
+  return rows.map((r) => r.item_key);
+}
+
+/**
+ * True if the surfaced ledger already has at least one row of this kind for
+ * the user — i.e. it has been seeded. Lets the first calendar check seed the
+ * existing calendar silently instead of back-announcing every upcoming event.
+ */
+async function hasSurfacedKind(userId, kind) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM cc_surfaced_items WHERE user_id = $1 AND kind = $2 LIMIT 1`,
+    [userId, kind],
+  );
+  return rows.length > 0;
 }
 
 // ── Single-task update ───────────────────────────────────────────────────────
@@ -7459,6 +7536,45 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS calendar_events_user_start
     ON calendar_events(user_id, start_time)
   `).catch(() => {});
+
+  // Command Center daily-thread identity (2026-06-01). cc_date is the STABLE
+  // local-date key for a user's per-day CC thread — identity is (user_id,
+  // cc_date), never the (mutable) title. Additive + idempotent.
+  await pool.query(`
+    ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS cc_date DATE
+  `).catch((err) => logger.warn('migration.warn', { label: 'chat_conversations.cc_date', error: err.message }));
+  // Backfill existing command_center rows from created_at → the OWNER'S LOCAL
+  // date (AT TIME ZONE the user's tz; never UTC). Only fills NULLs, so it's a
+  // no-op on re-run. Users without a tz fall back to the app default.
+  await pool.query(`
+    UPDATE chat_conversations c
+       SET cc_date = (c.created_at AT TIME ZONE COALESCE(u.timezone, 'America/Los_Angeles'))::date
+      FROM users u
+     WHERE c.user_id = u.id
+       AND c.type = 'command_center'
+       AND c.cc_date IS NULL
+  `).catch((err) => logger.warn('migration.warn', { label: 'cc_date backfill', error: err.message }));
+  // Partial unique index backing getOrCreate's ON CONFLICT (one CC thread per
+  // user per local day). On a CLEAN db this creates immediately; on existing
+  // prod (which has pre-cleanup duplicates) it fails-and-logs here and is
+  // created for real by scripts/migrate-cc-daily.cjs --execute AFTER the
+  // dupes are merged (run before this code is merged to prod).
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cc_daily_conv
+    ON chat_conversations(user_id, cc_date) WHERE type = 'command_center'
+  `).catch((err) => logger.warn('migration.warn', { label: 'idx_cc_daily_conv (expected pre-cleanup on prod)', error: err.message }));
+  // Surfaced-items ledger → deterministic, auditable dedup so proactive updates
+  // (overdue task / new calendar event / critical email) append at most once and
+  // never re-announce already-surfaced items. (salvaged from cc-persistent-chat)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cc_surfaced_items (
+      user_id    TEXT NOT NULL,
+      kind       TEXT NOT NULL,
+      item_key   TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, kind, item_key)
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'cc_surfaced_items table', error: err.message }));
 
   // Contact timeline (2026-05-29) — attendee emails per event, stored as a
   // JSONB array of lowercased addresses (e.g. ["a@x.com","b@y.com"]). Lets
@@ -12215,6 +12331,10 @@ module.exports = {
   getConversationMessagesWindowed,
   addConversationMessage,
   getOrCreateCommandCenterConversation,
+  getCommandCenterConversationByDate,
+  getCommandCenterDays,
+  filterAndMarkSurfaced,
+  hasSurfacedKind,
   searchContactsByName,
   getHealthyGmailAccounts,
   createActionCardMessage,
