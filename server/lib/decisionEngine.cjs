@@ -48,6 +48,25 @@ const { getEmailContent, assessEmailContentRisk } = require('./emailContent.cjs'
 // here triggers a getEmailContent fetch (cached) before tier evaluation.
 const CONTENT_AWARE_EMAIL_TOOLS = new Set(['archive_email', 'delete_email']);
 
+// Internal-reversible tools: reversible writes that stay within the user's
+// control (no external send, no permission change, no hard delete). These
+// bypass the AUTOMATIC friction tiers — the trust-floor (Tier 5) and the
+// engine-error fail-closed — so they just execute. Everything still applies:
+// user-defined rules (ask_first / constraints, Tiers 1–4), the rate-limit
+// brake (Tier 6), content-aware email checks (Tier 0), and the static
+// requires_confirmation flags. The exemption removes only the *automatic*
+// friction, never a rule the user deliberately set.
+const INTERNAL_REVERSIBLE_TOOLS = new Set([
+  'create_task', 'update_task', 'complete_task',
+  'create_note', 'update_note',
+  'create_contact', 'update_contact', 'note_about_contact',
+  'remember_this',
+  'set_preference', 'remove_preference',
+  'create_journal_entry', 'log_food',
+  'create_skill', 'update_skill', 'pause_skill', 'activate_skill',
+  'archive_email', 'move_email', 'flag_email_as_crucial',
+]);
+
 // Phase 3 → Phase 0 disposition mapping for storage.
 const PERSISTED_DISPOSITION = {
   hard_stop: 'suggest_only',
@@ -560,7 +579,11 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     // defaults to 0.3 when unset (Extension 3 of engine-extensions
     // workstream — paranoid users can raise to 0.7+, autonomous users
     // can lower further or keep default).
-    if (disposition === 'auto_proceed' && trust && Number(trust.trustScore) < trustFloor) {
+    // Internal-reversible tools skip the trust-floor — a low trust score
+    // should never gate a reversible internal write (the remember_this
+    // nagging). User rules above (Tiers 1–4) still apply to them.
+    if (disposition === 'auto_proceed' && trust && Number(trust.trustScore) < trustFloor
+        && !INTERNAL_REVERSIBLE_TOOLS.has(toolName)) {
       disposition = 'confirm_required';
       conflictLevel = 'low_trust';
       reason = `I want to confirm before ${toolName.replace(/_/g, ' ')} — your trust score for this action (${Number(trust.trustScore).toFixed(2)}) is below your floor of ${trustFloor.toFixed(2)}.`;
@@ -599,11 +622,23 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
       }
     }
   } catch (err) {
-    // Fail-closed: bias to confirm_required on engine error.
     logger.error('decisionEngine.failed', { userId, toolName, error: err.message, stack: err.stack });
-    disposition = 'confirm_required';
-    conflictLevel = 'engine_error';
-    reason = 'Decision engine error; falling back to confirmation.';
+    if (INTERNAL_REVERSIBLE_TOOLS.has(toolName)) {
+      // Internal-reversible write — a plain DB write that doesn't need the
+      // engine's reasoning. Don't fail-closed to confirmation on an engine
+      // error (the WhatsApp "engine error → confirm create_task" prompts);
+      // proceed to auto-execute. auto_proceed routes to action:'allow' in the
+      // channel gate (flag is false for these tools), i.e. actual execution.
+      disposition = 'auto_proceed';
+      conflictLevel = 'engine_error_exempt';
+      reason = '';
+    } else {
+      // Fail-closed: bias to confirm_required on engine error for everything
+      // consequential (external sends, sharing, hard deletes, etc.).
+      disposition = 'confirm_required';
+      conflictLevel = 'engine_error';
+      reason = 'Decision engine error; falling back to confirmation.';
+    }
   }
 
   const latencyMs = Date.now() - t0;
