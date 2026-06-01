@@ -34,11 +34,17 @@ function shiftKey(key, days) {
   return todayKey(new Date(y, m - 1, d + days));
 }
 function prettyDate(key) {
-  const [y, m, d] = key.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
+  // Tolerate both a clean "YYYY-MM-DD" (today/activeKey) and an ISO timestamp
+  // ("YYYY-MM-DDT…Z") — the /history endpoint serializes the DATE column to
+  // full ISO, so slice to the date portion before parsing.
+  const s = String(key || '').slice(0, 10);
+  const [y, m, d] = s.split('-').map(Number);
+  if (!y || !m || !d) return 'Unknown date';        // malformed/missing — never "Invalid Date"
+  const dt = new Date(y, m - 1, d);                  // LOCAL midnight, no UTC shift
+  if (Number.isNaN(dt.getTime())) return 'Unknown date';
   const t = todayKey();
-  if (key === t) return 'Today';
-  if (key === shiftKey(t, -1)) return 'Yesterday';
+  if (s === t) return 'Today';
+  if (s === shiftKey(t, -1)) return 'Yesterday';
   return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 function formatTime(iso) {
