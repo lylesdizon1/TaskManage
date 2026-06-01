@@ -6464,6 +6464,40 @@ async function getOrCreateCommandCenterConversation(userId, dateStr) {
   return race.rows[0];
 }
 
+/**
+ * Atomically record surfaced Command Center items and return ONLY the keys
+ * that were newly recorded (deduped against everything surfaced before).
+ * Used by the proactive-update triggers so a standing overdue task, an
+ * already-flagged email, or an already-announced calendar event never
+ * re-appends. Deterministic + auditable: the ledger IS the surfaced record.
+ * (salvaged from cc-persistent-chat)
+ */
+async function filterAndMarkSurfaced(userId, kind, keys) {
+  if (!Array.isArray(keys) || keys.length === 0) return [];
+  const placeholders = keys.map((_, i) => `($1, $2, $${i + 3})`).join(', ');
+  const { rows } = await pool.query(
+    `INSERT INTO cc_surfaced_items (user_id, kind, item_key)
+     VALUES ${placeholders}
+     ON CONFLICT (user_id, kind, item_key) DO NOTHING
+     RETURNING item_key`,
+    [userId, kind, ...keys],
+  );
+  return rows.map((r) => r.item_key);
+}
+
+/**
+ * True if the surfaced ledger already has at least one row of this kind for
+ * the user — i.e. it has been seeded. Lets the first calendar check seed the
+ * existing calendar silently instead of back-announcing every upcoming event.
+ */
+async function hasSurfacedKind(userId, kind) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM cc_surfaced_items WHERE user_id = $1 AND kind = $2 LIMIT 1`,
+    [userId, kind],
+  );
+  return rows.length > 0;
+}
+
 // ── Single-task update ───────────────────────────────────────────────────────
 
 /**
@@ -7491,6 +7525,18 @@ async function runMigrations() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_cc_daily_conv
     ON chat_conversations(user_id, cc_date) WHERE type = 'command_center'
   `).catch((err) => logger.warn('migration.warn', { label: 'idx_cc_daily_conv (expected pre-cleanup on prod)', error: err.message }));
+  // Surfaced-items ledger → deterministic, auditable dedup so proactive updates
+  // (overdue task / new calendar event / critical email) append at most once and
+  // never re-announce already-surfaced items. (salvaged from cc-persistent-chat)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cc_surfaced_items (
+      user_id    TEXT NOT NULL,
+      kind       TEXT NOT NULL,
+      item_key   TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, kind, item_key)
+    )
+  `).catch((err) => logger.warn('migration.warn', { label: 'cc_surfaced_items table', error: err.message }));
 
   // Contact timeline (2026-05-29) — attendee emails per event, stored as a
   // JSONB array of lowercased addresses (e.g. ["a@x.com","b@y.com"]). Lets
@@ -12247,6 +12293,8 @@ module.exports = {
   getConversationMessagesWindowed,
   addConversationMessage,
   getOrCreateCommandCenterConversation,
+  filterAndMarkSurfaced,
+  hasSurfacedKind,
   searchContactsByName,
   getHealthyGmailAccounts,
   createActionCardMessage,

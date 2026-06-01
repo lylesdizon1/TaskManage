@@ -190,6 +190,36 @@ module.exports = function createDashboardRouter({ authenticateToken, db, loadGca
         });
       }
 
+      // New meaningful calendar events. calendar_events has only synced_at
+      // (bumps every sync), so a time cursor can't dedup — instead we dedup by
+      // event id against the surfaced ledger. Noise events (all-day, busy/focus/
+      // lunch/hold/OOO holds, untitled) are filtered out — substantive only.
+      const calResult = await db.pool.query(
+        `SELECT id, title, start_time FROM calendar_events
+         WHERE user_id = $1
+           AND COALESCE(all_day, false) = false
+           AND start_time >= NOW() AND start_time < NOW() + INTERVAL '14 days'
+           AND title IS NOT NULL AND btrim(title) <> ''
+           AND title !~* '^(busy|focus|lunch|hold|tentative|ooo|out of office|private)'
+         ORDER BY start_time ASC LIMIT 25`,
+        [userId]
+      );
+      const calIds = calResult.rows.map((e) => e.id);
+      // First-ever check seeds the ledger silently (don't back-announce the
+      // whole existing calendar); only events added AFTER that announce.
+      const calSeeded = await db.hasSurfacedKind(userId, 'calendar');
+      const freshCalIds = new Set(await db.filterAndMarkSurfaced(userId, 'calendar', calIds));
+      if (calSeeded) {
+        for (const ev of calResult.rows) {
+          if (!freshCalIds.has(ev.id)) continue;
+          const when = new Intl.DateTimeFormat('en-US', {
+            timeZone: req.user.timezone, weekday: 'short', month: 'short',
+            day: 'numeric', hour: 'numeric', minute: '2-digit',
+          }).format(new Date(ev.start_time));
+          updates.push({ type: 'calendar', content: `📅 New event: "${ev.title}" — ${when}` });
+        }
+      }
+
       return res.json({ updates });
     } catch (err) {
       logger.error('commandCenter.updates.failed', { requestId: req.requestId, userId: req.user?.id, error: err.message });
