@@ -67,6 +67,24 @@ const INTERNAL_REVERSIBLE_TOOLS = new Set([
   'archive_email', 'move_email', 'flag_email_as_crucial',
 ]);
 
+// Read-only tools: pure queries that return the user's own data or system
+// metrics and mutate NOTHING (no DB write, no external send, no permission
+// change). They have nothing to confirm and nothing to roll back, so they
+// are exempt from the engine entirely and FAIL-OPEN — on any decision-engine
+// error they auto-proceed, never asking YES/NO. This is the analogue of the
+// INTERNAL_REVERSIBLE_TOOLS exemption, one tier more obvious: reversible
+// writes skip the *automatic* friction; reads skip the engine outright.
+// Consequential writes (sends, shares, hard deletes) are NOT here.
+const READ_ONLY_TOOLS = new Set([
+  'search_tasks', 'search_notes', 'search_inbox',
+  'get_email_content', 'search_email_content', 'search_gmail',
+  'list_contacts', 'get_contact', 'get_contact_emails',
+  'list_shared_access', 'list_journal_entries', 'get_today_close_loop_context',
+  'list_email_labels', 'get_cost_usage', 'list_preferences',
+  'list_rule_proposals', 'list_skills', 'list_sub_agent_runs',
+  'get_sub_agent_result', 'web_search',
+]);
+
 // Phase 3 → Phase 0 disposition mapping for storage.
 const PERSISTED_DISPOSITION = {
   hard_stop: 'suggest_only',
@@ -406,6 +424,23 @@ const IMPACT_RISK = { low: 0.2, medium: 0.5, high: 0.9 };
  */
 async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE) {
   const t0 = Date.now();
+
+  // Read-only exemption (fail-OPEN). A pure read has nothing to confirm and
+  // nothing to roll back, so it bypasses the engine entirely and ALWAYS
+  // auto-proceeds. Returning before any rule/trust/Redis lookup means a
+  // decision-engine error (or a transient DB/Redis hiccup in the tiers
+  // below) can NEVER put a read behind a YES/NO prompt — even mid-error.
+  if (READ_ONLY_TOOLS.has(toolName)) {
+    return {
+      disposition: 'auto_proceed',
+      reason: '',
+      decision_id: null,
+      latency_ms: Date.now() - t0,
+      conflict_level: 'read_only_exempt',
+      conflicted_rules: [],
+    };
+  }
+
   // Defensive defaults — every code path must populate these before logging.
   let disposition = 'auto_proceed';
   let reason = '';
@@ -623,12 +658,14 @@ async function evaluateAction(userId, toolName, toolInput, tz = DEFAULT_TIMEZONE
     }
   } catch (err) {
     logger.error('decisionEngine.failed', { userId, toolName, error: err.message, stack: err.stack });
-    if (INTERNAL_REVERSIBLE_TOOLS.has(toolName)) {
-      // Internal-reversible write — a plain DB write that doesn't need the
-      // engine's reasoning. Don't fail-closed to confirmation on an engine
-      // error (the WhatsApp "engine error → confirm create_task" prompts);
-      // proceed to auto-execute. auto_proceed routes to action:'allow' in the
-      // channel gate (flag is false for these tools), i.e. actual execution.
+    if (INTERNAL_REVERSIBLE_TOOLS.has(toolName) || READ_ONLY_TOOLS.has(toolName)) {
+      // Internal-reversible write or pure read — neither needs the engine's
+      // reasoning. Don't fail-closed to confirmation on an engine error (the
+      // WhatsApp "engine error → confirm create_task / get_cost_usage"
+      // prompts); proceed to auto-execute. (Reads already short-circuit at
+      // the top of evaluateAction; this is the belt-and-suspenders path.)
+      // auto_proceed routes to action:'allow' in the channel gate, i.e.
+      // actual execution.
       disposition = 'auto_proceed';
       conflictLevel = 'engine_error_exempt';
       reason = '';
@@ -686,4 +723,6 @@ module.exports = {
   evaluatePredicate,
   getRuleEvaluationErrors,
   PERSISTED_DISPOSITION,
+  READ_ONLY_TOOLS,
+  INTERNAL_REVERSIBLE_TOOLS,
 };

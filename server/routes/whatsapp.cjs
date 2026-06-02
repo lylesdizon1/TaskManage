@@ -559,6 +559,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // send YES/NO prompt, and deny execution so the loop ends cleanly.
       // A later inbound message resolves the pending row.
       let waSentConfirmation = false;
+      let waConfirmationPrompt = ''; // prompt text we sent, persisted as the assistant turn
       const gateToolExecution = async ({ tool, input, decision }) => {
         // Phase 3 — same compose pattern as ai.cjs. Engine runs first.
         // hard_stop short-circuits with explanation; auto_proceed
@@ -626,6 +627,7 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             return { action: 'deny', reason: 'whatsapp_unreachable', message: "Couldn't reach you on WhatsApp to confirm — try again from the app." };
           }
           waSentConfirmation = true;
+          waConfirmationPrompt = prompt;
           await db.logAgentAction({ userId, eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id });
           return { action: 'deny', reason: 'awaiting_whatsapp_confirmation', message: 'Awaiting user confirmation via WhatsApp.' };
         } catch (err) {
@@ -772,7 +774,21 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // ── Persist conversation (best-effort) ─────────────────────────────
       try {
         await db.saveWhatsAppMessage(userId, normalizedPhone, 'user', msgBody || '[image]');
-        if (reply) await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply);
+        if (reply) {
+          await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply);
+        } else if (waSentConfirmation && waConfirmationPrompt) {
+          // We staged a YES/NO confirmation and intentionally suppressed the
+          // model's post-tool text (reply=''), since the gate already sent the
+          // prompt directly. Persist that prompt AS the assistant turn anyway —
+          // otherwise the user's request sits in history with no assistant
+          // response, and the NEXT inbound message (even a plain greeting)
+          // reads as two consecutive user turns, so the model treats the
+          // original request as unanswered and re-fires the same tool. This
+          // was the "Hello -> re-proposes get_cost_usage" replay. Recording
+          // the prompt closes the turn so a later non-action message resolves
+          // to a normal conversational reply with no stale tool proposed.
+          await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', waConfirmationPrompt);
+        }
       } catch (e) { logger.error('whatsapp.history.saveFailed', { requestId: req.requestId, userId, error: e.message }); }
 
       // ── Reply via user's UltraMsg integration ──────────────────────────
