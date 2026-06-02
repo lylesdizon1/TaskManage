@@ -105,7 +105,7 @@ B2. CHECKLIST (evaluated before project_task/task):
 - If the message is "yes", "sure", "yep", "go ahead", "ok", "do it" AND there is a Last-created project task (not "(none)") → return {"type": "checklist", "project_task_title": "<exact title from last task>", "items": []}. The client will pre-fill items as empty and let the user type them. Stop.
 - If the message says "add subtasks", "add checklist", "add checklist items", "add items", "add subtasks:", "subtasks:", "checklist:", etc. with a colon/comma/newline list of items (e.g. "Add subtasks: login, keyboard, retry", "subtasks: X, Y, Z") → return {"type": "checklist", "project_task_title": <match against last task OR task name in message OR null>, "items": [<string>, ...]}. Parse the items from everything after the colon (or the list on subsequent lines); split on commas, semicolons, or newlines; trim each. Stop.
 
-D. AMBIGUOUS TASK WITH NO PROJECT: If the message says "add a task", "create a task", "new task" with NO project named AND NO concrete subject that makes it obviously standalone (e.g. no "to buy groceries", "for the camping trip", "to call mom") → return {"type": "clarify", "question": "Should I add this to a project or as a standalone task?"}. Stop.
+D. TASK WITH NO PROJECT → STANDALONE: If the message says "add a task", "create a task", "new task", or describes a todo with NO project named → return {"type":"task"} as a STANDALONE task. NEVER ask whether it should go under a project vs standalone — always default to standalone; the user can file it under a project afterward. Stop.
 
 E. REMINDER / STANDALONE TASK: If the message contains "remind me", "reminder", "don't forget", "don't let me forget" OR asks to do something concrete with no project context (e.g. "buy groceries", "call Mom at 3pm with no time → task", "Wire to Schwab") → return {"type": "task"}. Stop.
 
@@ -132,8 +132,9 @@ Bucket output shapes:
    Output: {"type":"project_task","title":string,"project_name":string,"description":string,"confidence":"high"|"medium"|"low"}
    project_name MUST be the exact title from the active projects list (not the user's paraphrase). Description optional.
 
-5) "clarify" — ambiguous task request with no project context.
-   Output: {"type":"clarify","question":"Should I add this to a project or as a standalone task?"}
+5) "clarify" — RESERVED for server-side disambiguation only. Do NOT emit a
+   clarify yourself, and NEVER ask "project vs standalone" — ambiguous task
+   requests must default to a standalone {"type":"task"} (see rule D).
 
 6) "checklist" — batch checklist items under an existing project task.
    Output: {"type":"checklist","project_task_title":string|null,"items":string[]}
@@ -189,10 +190,13 @@ User message: ${message}`;
       if (parsed.type === 'default_chat') return res.json({ type: 'default_chat' });
 
       if (parsed.type === 'clarify') {
-        const question = typeof parsed.question === 'string' && parsed.question.trim()
-          ? parsed.question.trim().slice(0, 300)
-          : 'Should I add this to a project or as a standalone task?';
-        return res.json({ type: 'clarify', question });
+        // Rule D defaults ambiguous tasks to standalone, so the model should
+        // never emit a project-vs-standalone clarify. If it does anyway, do
+        // NOT re-ask (that was the clarification loop) — fall through to the
+        // history-aware agentic chat, which can resolve using the Q+A already
+        // in the conversation. (Server-side checklist/project_task clarifies
+        // below are emitted directly, not via this LLM path.)
+        return res.json({ type: 'default_chat' });
       }
 
       const confidence = VALID_CONFIDENCE.has(parsed.confidence) ? parsed.confidence : 'medium';
