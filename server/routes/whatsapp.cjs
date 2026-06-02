@@ -248,6 +248,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
                   actionType: pending.toolName, contextSummary: 'whatsapp_user_rejected',
                 }).catch(() => {});
               }
+              // Persist the user's NO + the cancel reply to conversation
+              // history. The logAgentAction calls above write the agent_actions
+              // AUDIT table, NOT the model-visible whatsapp_conversations store
+              // (that's only saveWhatsAppMessage). Without this the confirm→
+              // cancel exchange is missing from history and the last recorded
+              // assistant turn stays the pending confirmation prompt.
+              await db.saveWhatsAppMessage(userId, normalizedPhone, 'user', trimmedBody || 'NO').catch(() => {});
+              await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', 'Cancelled.').catch(() => {});
               await sendWhatsApp(db, userId, `Cancelled.`, fromRaw).catch(() => {});
               return res.json({ ok: true, confirmed: false });
             }
@@ -297,6 +305,14 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
             const reply = result?.success === false
               ? `Couldn't complete ${pending.toolName}: ${result.error || 'unknown error'}`
               : `Done — ${pending.toolName} executed.`;
+            // Persist the user's YES + the execution result to conversation
+            // history. The logAgentAction calls above write the agent_actions
+            // AUDIT table, NOT the model-visible whatsapp_conversations store
+            // (that's only saveWhatsAppMessage). This completes the confirm→
+            // execute exchange so a later message can't read the original
+            // request as unanswered and re-fire the action.
+            await db.saveWhatsAppMessage(userId, normalizedPhone, 'user', trimmedBody || 'YES').catch(() => {});
+            await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply).catch(() => {});
             await sendWhatsApp(db, userId, reply, fromRaw).catch(() => {});
             return res.json({ ok: true, confirmed: true });
           }
