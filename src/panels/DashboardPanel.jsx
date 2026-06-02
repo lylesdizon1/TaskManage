@@ -1335,14 +1335,26 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       }
       // Clarify: ambiguous task/project — ask and bail, no tile.
       if (draft && draft.type === 'clarify') {
-        const now = new Date().toISOString();
-        setCcMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: draft.question || 'Should I add this to a project or as a standalone task?', createdAt: now, ts: Date.now() },
-        ]);
-        ccAbortRef.current = null;
-        setCcSending(false);
-        return;
+        const q = draft.question || 'Should I add this to a project or as a standalone task?';
+        // General anti-loop guard: never re-emit a clarifying question identical
+        // to the one we just asked. If the user's reply re-triggered the same
+        // question, the stateless parse-draft tile path can't resolve it — fall
+        // through to the history-aware agentic chat (which has the Q + the
+        // user's answer in context and can just act) rather than asking again.
+        const lastAssistant = [...(ccMessagesRef.current || [])].reverse().find((m) => m.role === 'assistant');
+        const repeatsLastQuestion = lastAssistant && typeof lastAssistant.content === 'string'
+          && lastAssistant.content.trim() === q.trim();
+        if (!repeatsLastQuestion) {
+          const now = new Date().toISOString();
+          setCcMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: q, createdAt: now, ts: Date.now() },
+          ]);
+          ccAbortRef.current = null;
+          setCcSending(false);
+          return;
+        }
+        // repeatsLastQuestion → do NOT re-ask; fall through to agentic chat.
       }
       if (draft && (draft.type === 'task' || draft.type === 'event' || draft.type === 'project' || draft.type === 'project_task' || draft.type === 'checklist')) {
         // Project with no resolved entity → ask for clarification, no tile.
