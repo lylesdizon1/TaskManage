@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useToast } from '../contexts/ToastContext';
 import buildSystemPrompt from '../utils/systemPrompt';
@@ -964,11 +964,29 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const ccLastMsg = ccMessages[ccMessages.length - 1];
   useEffect(() => {
     if (!ccDidInitialPopulateRef.current) {
-      if (ccMessages.length > 0) ccDidInitialPopulateRef.current = true; // brief loaded — leave at top
+      if (ccMessages.length > 0) ccDidInitialPopulateRef.current = true; // first populate — load effect below handles the scroll
       return;
     }
     scrollToBottom();
   }, [ccMessages.length, ccLastMsg?.content, scrollToBottom]);
+
+  // Open a freshly LOADED thread at the most recent message. A full-thread
+  // load (mount/localStorage restore, the initial /session fetch, or a
+  // date-nav day switch) sets ccPendingLoadScrollRef; this useLayoutEffect
+  // runs after DOM layout but BEFORE paint, so scrollTop=scrollHeight lands
+  // on the bottom with no visible top→bottom jump. Forced (bypasses the
+  // userScrolledAway guard) because a brand-new thread should always start at
+  // the bottom — the guard above still governs incremental new-message follow.
+  // Initialized true so the mount/cache render scrolls without a load-path set.
+  const ccPendingLoadScrollRef = useRef(true);
+  useLayoutEffect(() => {
+    if (!ccPendingLoadScrollRef.current) return;
+    ccPendingLoadScrollRef.current = false;
+    const el = ccScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;          // empty thread: scrollHeight==clientHeight → no-op
+    userScrolledAwayRef.current = false;     // fresh thread starts following again
+  }, [ccMessages]);
 
   // Keep focus in the input after a send. The input is disabled while Aria
   // responds (which drops focus); refocus once it re-enables so the user can
@@ -1038,6 +1056,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         role: m.role, content: m.content, createdAt: m.createdAt,
         ts: m.createdAt ? new Date(m.createdAt).getTime() : Date.now(),
       }));
+      ccPendingLoadScrollRef.current = true; // fresh day → open at latest message
       setCcMessages(msgs);
       if (data.conversation?.id) setCcConvId(data.conversation.id);
       userScrolledAwayRef.current = false;
@@ -1313,6 +1332,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
 
       // Step 2: if messages exist, load and done
       if (messages && messages.length > 0) {
+        ccPendingLoadScrollRef.current = true; // initial load → open at latest message
         setCcMessages(messages.map((m) => {
           const base = { role: m.role, content: m.content, createdAt: m.createdAt, ts: m.createdAt ? new Date(m.createdAt).getTime() : Date.now() };
           // action_card rows are persisted with content as JSON. Parse on
@@ -1362,6 +1382,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           body: JSON.stringify({ role: 'assistant', content: brief, model: 'claude' }),
         });
 
+        ccPendingLoadScrollRef.current = true; // fresh brief → open at latest message
         setCcMessages([{ role: 'assistant', content: brief, createdAt: new Date().toISOString(), ts: Date.now() }]);
       }
 
