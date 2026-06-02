@@ -6536,6 +6536,54 @@ async function hasSurfacedKind(userId, kind) {
   return rows.length > 0;
 }
 
+/**
+ * Delta-gate READ: the last-surfaced state_signature for a set of
+ * (kind, item_key) pairs. Returns Map keyed by `${kind} ${itemKey}` →
+ * state_signature (string). Absent key ⇒ never surfaced ⇒ caller treats as
+ * NEW. Read-only.
+ */
+async function getSurfacedSignatures(userId, items) {
+  if (!Array.isArray(items) || items.length === 0) return new Map();
+  const params = [userId];
+  const rowVals = items.map((it) => {
+    params.push(it.kind, it.itemKey);
+    return `($${params.length - 1}, $${params.length})`;
+  });
+  const { rows } = await pool.query(
+    `SELECT kind, item_key, state_signature
+       FROM cc_surfaced_items
+      WHERE user_id = $1 AND (kind, item_key) IN (${rowVals.join(', ')})`,
+    params,
+  );
+  const m = new Map();
+  for (const r of rows) m.set(`${r.kind} ${r.item_key}`, r.state_signature);
+  return m;
+}
+
+/**
+ * Delta-gate WRITE: record/refresh the state_signature for items that were
+ * ACTUALLY surfaced this run (NEW or escalated). ON CONFLICT updates the
+ * signature + updated_at so the next run compares against the latest
+ * surfaced state. Called ONLY for surfaced items — steady-state suppressions
+ * never write.
+ */
+async function markSurfaced(userId, items) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const params = [userId];
+  const rowVals = items.map((it) => {
+    params.push(it.kind, it.itemKey, it.signature);
+    const n = params.length;
+    return `($1, $${n - 2}, $${n - 1}, $${n})`;
+  });
+  await pool.query(
+    `INSERT INTO cc_surfaced_items (user_id, kind, item_key, state_signature)
+     VALUES ${rowVals.join(', ')}
+     ON CONFLICT (user_id, kind, item_key)
+     DO UPDATE SET state_signature = EXCLUDED.state_signature, updated_at = NOW()`,
+    params,
+  );
+}
+
 // ── Single-task update ───────────────────────────────────────────────────────
 
 /**
@@ -7575,6 +7623,14 @@ async function runMigrations() {
       PRIMARY KEY (user_id, kind, item_key)
     )
   `).catch((err) => logger.warn('migration.warn', { label: 'cc_surfaced_items table', error: err.message }));
+
+  // 2026-06-02 — delta-gate: per-item material/urgency state so Active Zone
+  // surfaces DELTAS (new + escalations), not snapshots. NULL on legacy rows
+  // and the flag-only 'calendar' kind (which doesn't use it). Additive.
+  await pool.query(`ALTER TABLE cc_surfaced_items ADD COLUMN IF NOT EXISTS state_signature TEXT`)
+    .catch((err) => logger.warn('migration.warn', { label: 'cc_surfaced_items.state_signature', error: err.message }));
+  await pool.query(`ALTER TABLE cc_surfaced_items ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`)
+    .catch((err) => logger.warn('migration.warn', { label: 'cc_surfaced_items.updated_at', error: err.message }));
 
   // Contact timeline (2026-05-29) — attendee emails per event, stored as a
   // JSONB array of lowercased addresses (e.g. ["a@x.com","b@y.com"]). Lets
@@ -12335,6 +12391,8 @@ module.exports = {
   getCommandCenterDays,
   filterAndMarkSurfaced,
   hasSurfacedKind,
+  getSurfacedSignatures,
+  markSurfaced,
   searchContactsByName,
   getHealthyGmailAccounts,
   createActionCardMessage,
