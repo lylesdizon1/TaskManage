@@ -11942,6 +11942,11 @@ async function upsertActiveZoneTile(tile) {
        secondary_action = EXCLUDED.secondary_action,
        items_preview    = EXCLUDED.items_preview,
        composer_source  = EXCLUDED.composer_source,
+       -- Delta-gate: only NEW/escalated candidates reach this upsert, so on a
+       -- re-surface revive a tile that suppression had RESOLVED back to
+       -- pending. Preserve deferred/dismissed (those are explicit user hides).
+       status = CASE WHEN active_zone_tiles.status = 'resolved' THEN 'pending'
+                     ELSE active_zone_tiles.status END,
        updated_at       = NOW()
      RETURNING id, user_id AS "userId", candidate_type AS "candidateType",
                candidate_key AS "candidateKey", priority_score AS "priorityScore",
