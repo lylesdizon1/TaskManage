@@ -3103,7 +3103,7 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
         {/* Messages — content stacks from the top and scrolls naturally
             as it grows. The CC container is fixed on mobile with a
             static input bar below, so no bottom padding is needed. */}
-        <div ref={ccScrollRef} onScroll={handleCcScroll} className="flex-1 min-h-0 overflow-y-auto" style={{ fontFamily: 'Manrope, sans-serif', scrollBehavior: 'smooth' }}>
+        <div ref={ccScrollRef} onScroll={handleCcScroll} className="flex-1 min-h-0 overflow-y-auto md:max-h-[calc(66vh_-_7rem)]" style={{ fontFamily: 'Manrope, sans-serif', scrollBehavior: 'smooth' }}>
          <div className="px-5 py-3 space-y-3">
           {ccLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '32px', color: 'rgb(var(--accent))' }}>
