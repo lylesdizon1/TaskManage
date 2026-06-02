@@ -111,7 +111,7 @@ Frame as: unblock this so Aria can finish.`,
 `It's ${localTime} — past 9pm — and no daily wrap yet. Frame as: one light invite to wrap up.`,
 
     critical_email_unacked:
-`${context.count} flagged-critical emails are still unacked in the inbox. Frame as: worth a pass.`,
+`${context.unviewed_count || 0} unviewed and ${context.viewed_count || 0} already-read-but-unresolved flagged-critical emails (${context.count} total).${context.max_days_open ? ` Oldest open loop: ${context.max_days_open}d since flagged.` : ''} Frame as: if unviewed ones exist, "new critical email — take a look"; if the read-but-unresolved ones are the focus, frame as a close-the-loop nag to handle what they've already seen.`,
 
     single_urgent_task:
 `One high-priority task due today: "${context.task?.title}". Frame as: focused nudge.`,
@@ -169,12 +169,18 @@ function _fallbackFor(candidate) {
         body: 'Three lines — wins, frustrations, tomorrow.',
         primary_label: 'Wrap up',
       };
-    case 'critical_email_unacked':
-      return {
-        headline: `${context.count} flagged emails still need a look`,
-        body: '',
-        primary_label: 'Open inbox',
-      };
+    case 'critical_email_unacked': {
+      const unv = context.unviewed_count || 0;
+      const seen = context.viewed_count || 0;
+      // Lead with whichever bucket is the actionable story.
+      const headline = unv > 0
+        ? `${unv} new critical email${unv === 1 ? '' : 's'} to look at`
+        : `${seen} critical email${seen === 1 ? '' : 's'} read but still open${context.max_days_open ? ` (${context.max_days_open}d)` : ''}`;
+      const body = (unv > 0 && seen > 0)
+        ? `${seen} already read but unresolved — close the loop.`
+        : '';
+      return { headline, body, primary_label: unv > 0 ? 'Take a look' : 'Close the loop' };
+    }
     case 'single_urgent_task':
       return {
         headline: context.task?.title || 'High-priority task today',

@@ -96,4 +96,43 @@ t('daily_wrap_due: per-day item_key, steady within the day', () => {
   assert.equal(isEscalation(c.state_signature, c.state_signature), false);
 });
 
+// ── critical_email_unacked: viewed/unviewed + close-the-loop nag ────────────
+const emailCand = (items) => annotateDelta({ candidate_type: 'critical_email_unacked', items, context: {} }, stateNow);
+const email = (id, is_read, daysAgo = 0) => ({
+  id, is_read,
+  flagged_at: new Date(stateNow.now.getTime() - daysAgo * 86400000).toISOString(),
+});
+
+t('email: unviewed sits at baseline rank 3', () => {
+  const c = emailCand([email('e1', false)]);
+  assert.equal(c.state_signature, 'e1@3');
+  assert.equal(c.escalation_tier, 3);
+});
+t('email: steady unviewed → suppress', () => {
+  const a = emailCand([email('e1', false)]);
+  const b = emailCand([email('e1', false)]);
+  assert.equal(isEscalation(a.state_signature, b.state_signature), false);
+});
+t('email: unviewed → viewed transition → escalation (close-the-loop nag)', () => {
+  const unv = emailCand([email('e1', false)]);
+  const viewedFresh = emailCand([email('e1', true, 0)]); // rank 4
+  assert.equal(isEscalation(unv.state_signature, viewedFresh.state_signature), true);
+});
+t('email: viewed age deepening (0–2d → 7d+) → escalation', () => {
+  const fresh = emailCand([email('e1', true, 1)]);  // rank 4
+  const old = emailCand([email('e1', true, 9)]);    // rank 6
+  assert.equal(isEscalation(fresh.state_signature, old.state_signature), true);
+});
+t('email: steady viewed same age bucket → suppress', () => {
+  const a = emailCand([email('e1', true, 4)]); // rank 5
+  const b = emailCand([email('e1', true, 5)]); // rank 5 (same bucket 3–6d)
+  assert.equal(a.state_signature, b.state_signature);
+  assert.equal(isEscalation(a.state_signature, b.state_signature), false);
+});
+t('email: a NEW unviewed critical email arriving → escalation (new member)', () => {
+  const before = emailCand([email('e1', true, 2)]);
+  const after = emailCand([email('e1', true, 2), email('e2', false)]);
+  assert.equal(isEscalation(before.state_signature, after.state_signature), true);
+});
+
 console.log(`\n${pass} passed, 0 failed`);

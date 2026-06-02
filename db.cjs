@@ -3710,7 +3710,10 @@ async function getCriticalFlaggedInboxItems(userId, { limit = 10 } = {}) {
                   ON ec.user_id = ii.user_id AND ec.thread_id = ii.source_id`;
   const [items, countRes] = await Promise.all([
     pool.query(
-      `SELECT ii.* FROM inbox_items ii ${join}
+      // ec.is_read = viewed signal (false = Gmail UNREAD/unviewed, true =
+      // opened). LEFT JOIN ⇒ COALESCE so a flagged item with no classification
+      // row reads as unviewed (conservative: surfaces as a take-a-look FYI).
+      `SELECT ii.*, COALESCE(ec.is_read, false) AS is_read FROM inbox_items ii ${join}
        WHERE ${predicate}
        ORDER BY ii.flagged_at DESC LIMIT $2`,
       [userId, limit],
