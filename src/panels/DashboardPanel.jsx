@@ -178,7 +178,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
   const activeEmailDraftTsRef = useRef(null);
   // Tracking for summon logic.
   const lastTimeStateRef = useRef(null);
-  const lastActivityRef = useRef(Date.now());
   const firstBriefFetchRef = useRef(true);
   // Once-per-session guard so the Daily Wrap proactive CC message fires
   // exactly once. The server-side claim in checkAndLockDailyWrapWeb
@@ -269,15 +268,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const interval = setInterval(fetchBriefContext, 5 * 60 * 1000);
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
-      const idleMs = Date.now() - lastActivityRef.current;
+      // Refresh the brief/tile DATA on refocus only. The 30-min idle auto-
+      // summon (which fired "Catch me up on my day" into the CC thread as a
+      // fake user turn) was removed — refocus must never auto-post to chat.
+      // The manual "Get update" button (handleFreshUpdate) is the sole way
+      // to pull a fresh update.
       fetchBriefContext();
-      // 30+ min idle: ask Aria for a fresh catch-up. The active zone
-      // stays action-only now — context surfaces in Aria's chat reply,
-      // not a static card block.
-      if (idleMs > 30 * 60 * 1000) {
-        lastActivityRef.current = Date.now();
-        setTimeout(() => ccSendRef.current?.('Catch me up on my day'), 400);
-      }
     };
     document.addEventListener('visibilitychange', onVis);
     return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVis); };
@@ -1583,9 +1579,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     ccStoppedRef.current = false;
     const controller = new AbortController();
     ccAbortRef.current = controller;
-
-    // Mark activity so the 30-min idle summon doesn't fire immediately.
-    lastActivityRef.current = Date.now();
 
     // Lightweight intent detection — drives the rotating placeholder copy
     // and decides whether to inject the user's connected Gmail accounts.
