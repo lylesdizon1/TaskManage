@@ -58,15 +58,6 @@ function to24hTo12h(t) {
   return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-// Proactive narration discipline (paths 1+2+3 unified):
-// Path 1 (init) — excluded by design: no prior chat to dedup against.
-// Path 2 (freshUpdate) — has 9896fd7's inputHash dedup AND now this
-//   recency suppression layer.
-// Path 3 (pollUpdatesRef) — has 72ad9ce's in-flight gate AND now this
-//   recency suppression PLUS chat-history context in the LLM prompt.
-// Future trigger paths must route through this same machinery.
-const SUPPRESSION_RECENCY_WINDOW_MS = 10 * 60 * 1000;
-
 /**
  * Strip every CC-internal synthetic role from chat history before
  * sending to the backend. Anthropic only accepts `user` and `assistant`
@@ -111,32 +102,6 @@ function chatHistoryForLLM(msgs) {
     }
   }
   return base;
-}
-
-/**
- * Returns { overlap, matchedTokens, recentMsgTs } indicating whether a
- * planned narration repeats topics the user just discussed with Aria.
- * Heuristic: 6+ char alphabetic tokens, ≥2 distinct hits within the
- * recency window. The ≥2 floor avoids stop-word brushes ("today",
- * "tomorrow", "important") triggering false positives.
- */
-function topicOverlapsRecentChat(narrationText, ccMessages, windowMs) {
-  const cutoff = Date.now() - windowMs;
-  const recentMsgs = (ccMessages || []).filter((m) => {
-    const ts = m?.ts || (m?.createdAt ? new Date(m.createdAt).getTime() : 0);
-    return ts >= cutoff;
-  });
-  if (!recentMsgs.length) return { overlap: false, matchedTokens: [], recentMsgTs: null };
-  const recentText = recentMsgs.map((m) => String(m?.content || '').toLowerCase()).join(' ');
-  const tokens = Array.from(new Set(String(narrationText || '').toLowerCase().match(/[a-z]{6,}/g) || []));
-  const matched = [];
-  for (const tok of tokens) {
-    if (recentText.includes(tok)) matched.push(tok);
-    if (matched.length >= 5) break; // cap log noise
-  }
-  const lastTs = recentMsgs[recentMsgs.length - 1]?.ts
-    || (recentMsgs[recentMsgs.length - 1]?.createdAt ? new Date(recentMsgs[recentMsgs.length - 1].createdAt).getTime() : null);
-  return { overlap: matched.length >= 2, matchedTokens: matched, recentMsgTs: lastTs };
 }
 
 export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys, notes, onNavigate, onAIPrompt, entities, onAddTask, onQuickNote, onAddEvent, onToggleTask, onOpenNote, backend, onBackendChange, apiFetch, callClaudeChat, chatCalendarEvents, initialBriefData, onReloadTasks, onReloadNotes, onReloadCalendar }) {
@@ -268,11 +233,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     const interval = setInterval(fetchBriefContext, 5 * 60 * 1000);
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
-      // Refresh the brief/tile DATA on refocus only. The 30-min idle auto-
-      // summon (which fired "Catch me up on my day" into the CC thread as a
-      // fake user turn) was removed — refocus must never auto-post to chat.
-      // The manual "Get update" button (handleFreshUpdate) is the sole way
-      // to pull a fresh update.
+      // Refresh the brief/tile DATA on refocus only — never auto-post to
+      // chat. Periodic updates surface as Active Zone tiles (delta-gated);
+      // the morning init brief is the only conversational entry.
       fetchBriefContext();
     };
     document.addEventListener('visibilitychange', onVis);
@@ -901,12 +864,9 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       return new Date(ev.start).getTime() < Date.now();
     } catch { return false; }
   };
-  const [ccRefreshing, setCcRefreshing] = useState(false);
   const ccScrollRef = useRef(null);
   const ccInputRef = useRef(null);          // CC text input — for refocus after send
   const ccShouldRefocusRef = useRef(false); // set on send; refocus once input re-enables
-  const lastCheckedRef = useRef(new Date().toISOString());
-  const ccAutoRefreshedRef = useRef(false);
 
   // Rotating thinking messages — intent-aware. Each set is a small
   // sequence rotated every 1.8s while loading. Intent is set in
@@ -1093,181 +1053,12 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     }
   }, [ccMessages, ccStorageKey]);
 
-  // Poll for command center updates — Aria narrates updates via /api/chat/stream
-  const pollUpdatesRef = useRef(null);
-  pollUpdatesRef.current = async (convId) => {
-    // Bug 2 guard — never narrate background updates while a user turn
-    // is in flight. The narration call hits /api/chat/execute (the
-    // SAME endpoint as the user turn) and pushes an assistant bubble
-    // alongside the user's still-streaming placeholder, racing the
-    // primary response. Skip this cycle; the next 60s poll picks it up
-    // (cursor doesn't advance, so updates aren't lost).
-    if (ccSendingRef.current) {
-      return;
-    }
-    try {
-      const res = await apiFetch(`/api/dashboard/command-center/updates?since=${encodeURIComponent(lastCheckedRef.current)}`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      // Advance the cursor ONLY after we know we got a usable response.
-      // Prior code moved it immediately after the fetch — if the request
-      // errored or the JSON parse failed, the cursor still moved and the
-      // next poll skipped the missed window forever.
-      if (!res.ok) return;
-      const { updates } = await res.json();
-      if (!updates || updates.length === 0) {
-        // Empty page — safe to advance cursor.
-        lastCheckedRef.current = new Date().toISOString();
-        return;
-      }
-
-      // Second-chance gate — user may have started typing during the
-      // updates fetch above. Re-check before launching the narration
-      // turn (which holds the SSE channel for up to 30s).
-      // Cursor is intentionally NOT advanced here — the next poll will
-      // pick up these same updates and try again, so we don't drop them.
-      if (ccSendingRef.current) return;
-      // Cursor advance moved to AFTER successful narration save below
-      // so an interrupted narration doesn't lose its updates either.
-
-      // Build a natural prompt for Aria from the raw updates
-      const updateSummary = updates.map((u) => u.content).join('\n');
-
-      // Recency suppression — if the update content overlaps with topics
-      // the user just discussed with Aria, stay silent. Path 3's failure
-      // mode (pre-fix): server-emitted "task overdue" updates fired on
-      // tasks the user literally just created with Aria one turn earlier.
-      // Cursor advances on suppress: the update was seen and consciously
-      // dropped. Refusing to advance creates a guaranteed-suppress hot
-      // loop until the chat goes quiet.
-      const overlap = topicOverlapsRecentChat(updateSummary, ccMessagesRef.current, SUPPRESSION_RECENCY_WINDOW_MS);
-      if (overlap.overlap) {
-        if (typeof window !== 'undefined') {
-          console.log('[CC.poll] suppressed', {
-            reason: 'topic_overlap',
-            matched_tokens: overlap.matchedTokens,
-            recent_msg_ts: overlap.recentMsgTs,
-            update_id: updates[0]?.id || null,
-            cursor: lastCheckedRef.current,
-          });
-        }
-        lastCheckedRef.current = new Date().toISOString();
-        return;
-      }
-
-      // Build full context system prompt
-      const aName = currentUser?.assistantName || 'Aria';
-      const fullContext = buildSystemPrompt(tasks, entities, notes, chatCalendarEvents || calendarEvents, currentUser?.timezone);
-      const sysPrompt = `You are ${aName}, ${firstName}'s personal AI assistant. You are a full general assistant — answer any question, discuss any topic, help with anything asked: advice, research, cooking, ideas, business, personal, anything. You also have action tools available to create tasks, notes, and calendar events. Use your tools when the user is asking you to take an action. For everything else, just respond naturally and conversationally. Be warm, direct, and concise. No sign-off.\n\nThe user is in active conversation with you in this command center. Recent messages between you and the user are included below as context. Do NOT restate things you and the user just discussed — only narrate genuinely new context. If the new events are things the user already addressed with you, stay silent rather than echo.\n\n${fullContext}`;
-
-      // Last 10 turns as conversation history so the LLM sees what was
-      // just discussed even when the token-overlap heuristic missed it
-      // (paraphrasing, pronouns). Belt-and-suspenders with the gate above.
-      // chatHistoryForLLM strips UI-only synthetic roles before send.
-      const recentMsgs = chatHistoryForLLM((ccMessagesRef.current || []).slice(-10));
-
-      const ariaPrompt = `The following new events just occurred in the background. Narrate them to the user naturally and concisely in your voice as Aria — do not just repeat the raw text. Be brief, warm, and actionable:\n\n${updateSummary}`;
-
-      // Stream Aria's narration
-      const streamRes = await apiFetch('/api/chat/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          systemPrompt: sysPrompt,
-          messages: [...recentMsgs, { role: 'user', content: ariaPrompt }],
-          timeZone: userTZ,
-        }),
-      });
-      if (!streamRes.ok) {
-        console.warn('[CC.poll] narration request failed', { status: streamRes.status });
-        return;
-      }
-
-      const reader = streamRes.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let ariaResponse = '';
-      let currentEvent = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const rawLine of lines) {
-          const eventMatch = rawLine.match(/^event: (.+)/);
-          const dataMatch  = rawLine.match(/^data: (.+)/);
-
-          if (eventMatch) {
-            currentEvent = eventMatch[1].trim();
-          }
-
-          if (dataMatch && currentEvent) {
-            try {
-              const parsed = JSON.parse(dataMatch[1]);
-
-              if (currentEvent === 'text_delta') {
-                // Narration path streams too (2026-05-29). Accumulate
-                // deltas so the final ariaResponse matches the
-                // server-assembled message.
-                ariaResponse += parsed.text || '';
-              } else if (currentEvent === 'text') {
-                // Final reconciliation event — replace with the
-                // server's authoritative assembled text.
-                ariaResponse = parsed.content || '';
-              } else if (currentEvent === 'tools_executed') {
-                const tools = parsed.tools || [];
-                if (tools.some(t => ['create_task', 'complete_task', 'update_task', 'delete_task'].includes(t))) {
-                  onReloadTasks?.();
-                }
-                if (tools.some(t => ['create_note', 'update_note', 'delete_note'].includes(t))) {
-                  onReloadNotes?.();
-                }
-              } else if (currentEvent === 'error') {
-                console.error('[SSE] error:', parsed.message);
-              }
-            } catch (e) {
-              // malformed data line, skip
-            }
-            currentEvent = null;
-          }
-        }
-      }
-
-      if (!ariaResponse) return;
-
-      // Final gate before commit — if the user typed while we were
-      // streaming, suppress the narration to keep the chat focused on
-      // the user's question. Cursor stays unadvanced so next poll
-      // re-narrates these updates when the channel is free.
-      if (ccSendingRef.current) return;
-
-      // Save and append as Aria message
-      await apiFetch(`/api/conversations/${convId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ role: 'assistant', content: ariaResponse, model: 'claude' }),
-      });
-
-      setCcMessages((prev) => [...prev, { role: 'assistant', content: ariaResponse, createdAt: new Date().toISOString(), ts: Date.now() }]);
-      // Advance cursor only after we successfully committed the narration.
-      lastCheckedRef.current = new Date().toISOString();
-    } catch (err) {
-      console.error('[CommandCenter] poll failed:', err);
-    }
-  };
-
   // Init: load or create command center session — extracted to ref for trigger flexibility
   const ccInitRunningRef = useRef(false);
-  const ccPollIntervalRef = useRef(null);
 
-  // Cross-trigger brief-composition guard. Multiple callsites
-  // (initCommandCenter + handleFreshUpdate) both hit /api/dashboard/aria-brief;
-  // without coordination, a hard refresh could fire two LLM composes back-to-
-  // back when the visibility-change fresh-update path races init's fallback.
-  // `composeBriefOnce` serializes the two sites:
+  // Brief-composition guard. initCommandCenter hits /api/dashboard/aria-brief;
+  // `composeBriefOnce` coalesces concurrent/rapid calls (e.g. the init trigger
+  // and the 5s fallback racing) so a hard refresh can't fire two LLM composes:
   //   - in-flight: any concurrent caller awaits the same promise
   //   - fresh: if the last compose resolved <10s ago, reuse its result
   const briefInFlightRef = useRef(null);        // Promise|null
@@ -1310,14 +1101,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     // cached messages are already visible and we sync silently.
     const hasCachedMessages = ccMessagesRef.current.length > 0;
     if (!hasCachedMessages) setCcLoading(true);
-    // Guard against duplicate intervals on re-init (e.g. user-id change).
-    // Prior code only set ccInitRunningRef = false on the error path, so
-    // a successful init would lock the ref true forever AND each accepted
-    // re-entry could leak a fresh setInterval.
-    if (ccPollIntervalRef.current) {
-      clearInterval(ccPollIntervalRef.current);
-      ccPollIntervalRef.current = null;
-    }
     try {
       // Step 1: get or create today's session
       const sessionRes = await apiFetch('/api/dashboard/command-center/session', {
@@ -1343,14 +1126,13 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
           return base;
         }));
         setCcLoading(false);
-        ccPollIntervalRef.current = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
         return;
       }
 
       // Step 3: no messages — generate brief first. Server derives time
       // state from req.user.timezone so no timeOfDay needed here.
-      // Routes through composeBriefOnce so handleFreshUpdate firing
-      // moments later doesn't double-compose.
+      // Routes through composeBriefOnce so the init trigger and the 5s
+      // fallback don't double-compose.
       const aName = currentUser?.assistantName || 'Aria';
       const { brief, source: briefSource } = await composeBriefOnce(() => ({
         apiKey: apiKeys?.claude || '',
@@ -1383,7 +1165,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
       }
 
       setCcLoading(false);
-      ccPollIntervalRef.current = setInterval(() => pollUpdatesRef.current(conversation.id), 60000);
     } catch (err) {
       console.error('[CommandCenter] init failed:', err);
       setCcLoading(false);
@@ -1411,152 +1192,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
     }, 5000);
     return () => clearTimeout(fallback);
   }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (ccPollIntervalRef.current) clearInterval(ccPollIntervalRef.current);
-    };
-  }, []);
-
-  // ── Fresh update logic ──────────────────────────────────────────────────────
-  const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-
-  function getLastMessageTimestamp(msgs) {
-    if (!msgs || msgs.length === 0) return 0;
-    const last = msgs[msgs.length - 1];
-    if (last.ts) return last.ts;
-    if (last.createdAt) return new Date(last.createdAt).getTime();
-    return Date.now() - REFRESH_INTERVAL_MS - 60_000; // default: stale
-  }
-
-  const needsRefresh = useMemo(() => {
-    if (ccLoading || ccRefreshing || ccSending || ccMessages.length === 0) return false;
-    const lastTs = getLastMessageTimestamp(ccMessages);
-    return (Date.now() - lastTs) > REFRESH_INTERVAL_MS;
-  }, [ccMessages, ccLoading, ccRefreshing, ccSending]);
-
-  const handleFreshUpdate = useCallback(async () => {
-    if (!ccConvId || ccRefreshing) return;
-    setCcRefreshing(true);
-    try {
-      // Server derives time state from req.user.timezone.
-      // Routes through composeBriefOnce so a race with initCommandCenter's
-      // fallback brief call doesn't double-compose.
-      const aName = currentUser?.assistantName || 'Aria';
-      const briefData = {
-        overdue: overdueTasks.map((t) => t.title).join(', ') || 'None',
-        highPriority: highPriorityTasks.map((t) => t.title).join(', ') || 'None',
-        todayTasks: todayTasks.map((t) => t.title).join(', ') || 'None',
-        events: calendarEvents.map((e) => e.title).join(', ') || 'None',
-        notesCount: notes?.length || 0,
-        entities: (entities || []).map((e) => e.name).join(', ') || 'None',
-      };
-      // Semantic dedup: hash the composer INPUTS (not the LLM output).
-      // Identical inputs → identical meaning regardless of wording. djb2
-      // is plenty for short deterministic strings on a single session;
-      // collision risk is negligible for this vocabulary.
-      const inputHash = (() => {
-        const s = JSON.stringify(briefData);
-        let h = 5381;
-        for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i);
-        return (h >>> 0).toString(16);
-      })();
-      // Recency suppression — orthogonal to inputHash. inputHash catches
-      // identical-payload duplicates; this catches "different payload, but
-      // every meaningful topic is something the user just discussed with
-      // me". Cheaper to skip pre-compose than to LLM-render-and-discard.
-      const briefTopicSummary = [briefData.overdue, briefData.highPriority, briefData.todayTasks, briefData.events].join(' ');
-      const overlap = topicOverlapsRecentChat(briefTopicSummary, ccMessagesRef.current, SUPPRESSION_RECENCY_WINDOW_MS);
-      if (overlap.overlap) {
-        if (typeof window !== 'undefined') {
-          console.log('[CC.freshUpdate] suppressed', {
-            reason: 'topic_overlap',
-            matched_tokens: overlap.matchedTokens,
-            recent_msg_ts: overlap.recentMsgTs,
-            input_hash: inputHash,
-          });
-        }
-        return;
-      }
-      const { brief, source: briefSource } = await composeBriefOnce(() => ({
-        apiKey: apiKeys?.claude || '',
-        assistantName: aName,
-        persona: 'executive_assistant',
-        userName: firstName,
-        data: briefData,
-      }));
-      if (typeof window !== 'undefined') {
-        console.log('[CC.freshUpdate] brief composed', { source: briefSource, inputHash });
-      }
-      // If init just composed and we're inside the fresh window, we'd be
-      // echoing its brief into the conversation as a new message. Skip
-      // the append entirely when the source is cache/in_flight — init
-      // already rendered it.
-      if (briefSource === 'fresh_cache' || briefSource === 'in_flight_join') {
-        return;
-      }
-      const content = brief || 'Nothing new to report — you\'re all caught up!';
-      const now = new Date().toISOString();
-
-      // Result handling — three paths driven by semantic dedup on inputHash.
-      // NOTE: proactive narrations are CLIENT-ONLY ephemeral. They used to
-      // POST to /api/conversations/:id/messages, which persisted a growing
-      // stack across reloads. Now they only update ccMessages; init's
-      // brief remains the sole server-persisted entry for the day.
-      setCcMessages((prev) => {
-        // Find the most recent prior proactive narration.
-        let prevProactiveIdx = -1;
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i]?.update_type === 'proactive_brief') { prevProactiveIdx = i; break; }
-        }
-        // Path 1 — same inputs as the prior proactive. Skip entirely.
-        if (prevProactiveIdx >= 0 && prev[prevProactiveIdx]?.input_hash === inputHash) {
-          if (typeof window !== 'undefined') console.log('[CC.freshUpdate] skipped', { reason: 'semantic_dedup', inputHash });
-          return prev;
-        }
-        const newMsg = {
-          role: 'assistant',
-          update_type: 'proactive_brief',
-          input_hash: inputHash,
-          content,
-          createdAt: now,
-          ts: Date.now(),
-        };
-        // Path 2 — different inputs and a prior proactive exists. Replace in place.
-        if (prevProactiveIdx >= 0) {
-          if (typeof window !== 'undefined') console.log('[CC.freshUpdate] replaced', { inputHash });
-          const updated = [...prev];
-          updated[prevProactiveIdx] = newMsg;
-          return updated;
-        }
-        // Path 3 — no prior proactive (first one this session). Append.
-        if (typeof window !== 'undefined') console.log('[CC.freshUpdate] appended', { inputHash });
-        return [...prev, newMsg];
-      });
-    } catch (err) {
-      console.error('[CommandCenter] fresh update failed:', err);
-      setCcMessages((prev) => [...prev, { role: 'assistant', content: 'Couldn\'t fetch an update right now — try again in a moment.', createdAt: new Date().toISOString(), ts: Date.now() }]);
-    } finally {
-      setCcRefreshing(false);
-    }
-  }, [ccConvId, ccRefreshing, currentUser, firstName, apiKeys, authToken, apiFetch, overdueTasks, highPriorityTasks, todayTasks, calendarEvents, notes, entities, composeBriefOnce]);
-
-  // Auto-refresh on visibility change (returning to tab after 5min)
-  useEffect(() => {
-    function onVisibilityChange() {
-      if (document.visibilityState !== 'visible') return;
-      if (!ccConvId || ccLoading || ccRefreshing || ccSending) return;
-      if (ccMessages.length === 0) return;
-      const elapsed = Date.now() - getLastMessageTimestamp(ccMessages);
-      if (elapsed > REFRESH_INTERVAL_MS && !ccAutoRefreshedRef.current) {
-        ccAutoRefreshedRef.current = true;
-        handleFreshUpdate().finally(() => { ccAutoRefreshedRef.current = false; });
-      }
-    }
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [ccConvId, ccLoading, ccRefreshing, ccSending, ccMessages, handleFreshUpdate]);
 
   // Send user message + stream Aria response
   const handleCcSend = useCallback(async (textOverride) => {
@@ -3428,24 +3063,6 @@ export default function DashboardPanel({ tasks, currentUser, authToken, apiKeys,
                   </div>
                 );
               })}
-              {ccRefreshing && (
-                <div className="flex justify-start">
-                  <div style={{ background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-deep)))', color: 'rgb(var(--accent-contrast))', fontFamily: 'Manrope, sans-serif', fontSize: '15px', lineHeight: '1.6', borderRadius: '16px', borderTopLeftRadius: '5px', padding: '12px 16px', boxShadow: '0 6px 22px rgb(var(--accent) / 0.35)' }}>
-                    <span className="animate-pulse">Updating...</span>
-                  </div>
-                </div>
-              )}
-              {needsRefresh && !ccRefreshing && (
-                <div className="flex justify-start pt-1">
-                  <button
-                    onClick={handleFreshUpdate}
-                    style={{ fontFamily: 'Manrope, sans-serif', fontSize: '12px', fontWeight: 600, color: 'rgb(var(--accent))', background: 'none', border: '1px solid rgb(var(--accent) / 0.2)', borderRadius: '16px', padding: '4px 12px', cursor: 'pointer' }}
-                    className="hover:bg-primary/5 transition-colors"
-                  >
-                    ✦ Get update
-                  </button>
-                </div>
-              )}
             </>
           )}
          </div>

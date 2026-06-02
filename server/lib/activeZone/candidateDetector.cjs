@@ -262,8 +262,12 @@ function detectDailyWrapDue(state) {
 
 /** 8. 3+ unacked flagged-critical emails. Priority 60. */
 function detectCriticalEmailUnacked(state) {
-  const { flaggedUnackedCount = 0, flaggedItems = [] } = state;
+  const { flaggedUnackedCount = 0, flaggedItems = [], now = new Date() } = state;
   if (flaggedUnackedCount < 3) return null;
+  const viewed = flaggedItems.filter((i) => (i.is_read ?? i.isRead));
+  const unviewed = flaggedItems.filter((i) => !(i.is_read ?? i.isRead));
+  // Deepest open loop = oldest VIEWED-but-unresolved email (days since flagged).
+  const maxDaysOpen = viewed.reduce((m, i) => Math.max(m, daysSinceTs(i.flagged_at || i.flaggedAt, now)), 0);
   return {
     candidate_type: 'critical_email_unacked',
     candidate_key: hashItems('critical_email_unacked', flaggedItems.length
@@ -272,7 +276,12 @@ function detectCriticalEmailUnacked(state) {
     priority_score: 60,
     urgency: 'today',
     items: flaggedItems,
-    context: { count: flaggedUnackedCount },
+    context: {
+      count: flaggedUnackedCount,
+      unviewed_count: unviewed.length,
+      viewed_count: viewed.length,
+      max_days_open: maxDaysOpen,
+    },
   };
 }
 
@@ -322,6 +331,133 @@ function detectStaleRelationshipBatch(state) {
   };
 }
 
+// ── Delta-gate annotation ────────────────────────────────────────────────
+//
+// Each surfaced candidate carries a STABLE item_key (identity that persists
+// across escalations) and a compact state_signature encoding its material/
+// urgency state, plus an escalation_tier (numeric, higher = more urgent).
+// The signature format is `id@rank` members joined by ',' (sorted) for
+// batches, or a bare `rank` for singletons. The delta-gate (deltaGate.cjs)
+// compares a candidate's new signature to its last-surfaced one to decide
+// NEW / SUPPRESS / RE-SURFACE.
+//
+// RANK LADDER (tunable — this is the starter set):
+//   1 whenever · 2 soon · 3 today/due_today · 4 immediate/overdue(0–2d) ·
+//   5 overdue(3–6d) / stale(45–59d) · 6 overdue(7d+) / stale(60d+)
+const OVERDUE_RANK = (d) => (d >= 7 ? 6 : d >= 3 ? 5 : 4);
+const STALE_RANK   = (d) => (d >= 60 ? 6 : d >= 45 ? 5 : 4);
+// Critical email: an UNVIEWED flagged email sits at a fixed baseline (a
+// take-a-look FYI). Once VIEWED-but-unresolved it becomes an open loop and
+// escalates by how long it has sat (same task ladder), so it re-pops as it
+// ages. unviewed(3) → viewed-fresh(4) is itself an escalation, so the
+// view-without-handling transition always re-surfaces as a close-the-loop nag.
+const EMAIL_UNVIEWED_RANK = 3;
+const EMAIL_VIEWED_RANK = (d) => OVERDUE_RANK(d); // 4 (0–2d) · 5 (3–6d) · 6 (7d+)
+
+/** Whole local days between a timestamp and now (0 if unparseable). */
+function daysSinceTs(ts, now) {
+  const t = Date.parse(ts || '');
+  if (!Number.isFinite(t)) return 0;
+  return Math.max(0, Math.floor((now.getTime() - t) / 86400000));
+}
+
+function closeLoopIsStale(loop, now) {
+  const t = Date.parse(loop?.triggered_at || loop?.triggeredAt || '');
+  return Number.isFinite(t) && (now.getTime() - t) > 48 * 3600 * 1000;
+}
+
+const sortMembers = (arr) => [...arr].sort().join(',');
+
+/**
+ * Attach item_key / state_signature / escalation_tier to a candidate.
+ * Pure; depends only on the candidate + the loaded state (for todayLocalIso
+ * and now). See the rank ladder above. Easy to tune per type.
+ */
+function annotateDelta(c, state) {
+  const type = c.candidate_type || c.type;
+  const items = Array.isArray(c.items) ? c.items : [];
+  let item_key;
+  let state_signature;
+  let escalation_tier;
+  switch (type) {
+    case 'overdue_tasks_batch': {
+      const ranks = items.map((t) => OVERDUE_RANK(daysOverdue(t, state.todayLocalIso)));
+      item_key = 'overdue_tasks_batch';
+      state_signature = sortMembers(items.map((t, i) => `${t.id}@${ranks[i]}`));
+      escalation_tier = ranks.reduce((m, r) => Math.max(m, r), 4);
+      break;
+    }
+    case 'single_urgent_task':
+      item_key = `single_urgent_task:${items[0]?.id}`;
+      state_signature = '3';
+      escalation_tier = 3;
+      break;
+    case 'close_the_loops_batch':
+      item_key = 'close_the_loops_batch';
+      state_signature = sortMembers(items.map((l) => `${l.id}@${closeLoopIsStale(l, state.now) ? 3 : 2}`));
+      escalation_tier = c.context?.has_stale ? 3 : 2;
+      break;
+    case 'upcoming_meeting_with_prep':
+      item_key = `upcoming_meeting_with_prep:${c.context?.event?.id ?? items[0]?.id}`;
+      state_signature = '4';
+      escalation_tier = 4;
+      break;
+    case 'meeting_just_ended':
+      item_key = `meeting_just_ended:${c.context?.event?.id ?? items[0]?.id}`;
+      state_signature = '4';
+      escalation_tier = 4;
+      break;
+    case 'pending_confirmation':
+      item_key = `pending_confirmation:${items[0]?.id}`;
+      state_signature = '4';
+      escalation_tier = 4;
+      break;
+    case 'draft_resume':
+      item_key = 'draft_resume';
+      state_signature = sortMembers(items.map((d) => `${d.id}@2`));
+      escalation_tier = 2;
+      break;
+    case 'daily_wrap_due':
+      item_key = `daily_wrap_due:${state.todayLocalIso}`;
+      state_signature = '1';
+      escalation_tier = 1;
+      break;
+    case 'critical_email_unacked': {
+      item_key = 'critical_email_unacked';
+      // Per-email token encodes (viewed, age_bucket): unviewed → fixed
+      // baseline 3 (FYI, persists until viewed); viewed-but-unresolved →
+      // 4/5/6 by days-since-flagged (open-loop nag that deepens with age).
+      // So a NEW email (new member), the unviewed→viewed transition (3→4),
+      // and subsequent age deepening (4→5→6) all register as escalations.
+      const rankFor = (m) => (
+        (m.is_read ?? m.isRead)
+          ? EMAIL_VIEWED_RANK(daysSinceTs(m.flagged_at || m.flaggedAt, state.now))
+          : EMAIL_UNVIEWED_RANK
+      );
+      const members = items.length
+        ? items.map((m) => `${m.id}@${rankFor(m)}`)
+        : [`count_${c.context?.count ?? 0}@${EMAIL_UNVIEWED_RANK}`];
+      state_signature = sortMembers(members);
+      escalation_tier = items.reduce((mx, m) => Math.max(mx, rankFor(m)), EMAIL_UNVIEWED_RANK);
+      break;
+    }
+    case 'stale_relationship': {
+      const ranks = items.map((ct) => STALE_RANK(ct.daysSilent || 0));
+      item_key = 'stale_relationship';
+      state_signature = sortMembers(items.map((ct, i) => `${ct.id}@${ranks[i]}`));
+      escalation_tier = ranks.reduce((m, r) => Math.max(m, r), 4);
+      break;
+    }
+    default:
+      // Unknown type — fall back to the candidate_key as a stable identity so
+      // the gate degrades to "surface once per distinct key".
+      item_key = c.candidate_key;
+      state_signature = c.candidate_key;
+      escalation_tier = 0;
+  }
+  return { ...c, item_key, state_signature, escalation_tier };
+}
+
 // ── Orchestrator ─────────────────────────────────────────────────────────
 
 /**
@@ -365,7 +501,7 @@ function detectAllCandidates(state, { topN = 3 } = {}) {
     deduped.push({ ...c, items: kept });
   }
 
-  return deduped.slice(0, topN);
+  return deduped.slice(0, topN).map((c) => annotateDelta(c, state));
 }
 
 // ── State loader (does the I/O) ──────────────────────────────────────────
@@ -447,4 +583,5 @@ module.exports = {
   hashItems,
   urgencyFromPriority,
   localDateIso,
+  annotateDelta,
 };

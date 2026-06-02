@@ -24,6 +24,7 @@ const {
   detectAllCandidates,
 } = require('../lib/activeZone/candidateDetector.cjs');
 const { composeTiles } = require('../lib/activeZone/tileComposer.cjs');
+const { gateCandidates } = require('../lib/activeZone/deltaGate.cjs');
 const { composeVoice } = require('../lib/activeZone/voice.cjs');
 
 // Compute end of user's local day for the dismiss timeout. Returns an
@@ -101,6 +102,32 @@ module.exports = function createActiveZoneRouter({ authenticateToken, db }) {
       catch (err) { logger.warn('activeZone.hiddenKeys.failed', { userId, error: err.message }); }
       const candidates = allCandidates.filter((c) => !hiddenKeys.has(c.candidate_key));
 
+      // Delta-gate: surface DELTAS, not snapshots. Show each item once on
+      // first appearance and again only when its state_signature ESCALATES
+      // (deltaGate.cjs). Steady-state / de-escalations are suppressed so we
+      // don't re-compose and re-surface unchanged tiles. Fail-OPEN: on any
+      // gate/ledger error, surface everything (prior behaviour) rather than
+      // hide real work. Ledger is written ONLY for what we actually surface.
+      let surfacedCandidates = candidates;
+      try {
+        const gateItems = candidates.map((c) => ({ kind: c.candidate_type || c.type, itemKey: c.item_key }));
+        const storedSigs = await db.getSurfacedSignatures(userId, gateItems);
+        const { surfaced, decisions } = gateCandidates(candidates, storedSigs);
+        surfacedCandidates = surfaced;
+        if (surfaced.length) {
+          await db.markSurfaced(userId, surfaced.map((c) => ({
+            kind: c.candidate_type || c.type, itemKey: c.item_key, signature: c.state_signature,
+          })));
+        }
+        logger.info('activeZone.deltaGate', {
+          userId, detected: candidates.length, surfaced: surfaced.length,
+          decisions: decisions.map((d) => `${d.kind}:${d.decision}`),
+        });
+      } catch (err) {
+        logger.warn('activeZone.deltaGate.failed', { userId, error: err.message });
+        surfacedCandidates = candidates; // fail-open
+      }
+
       const user = state.userId ? await db.getUserById(userId).catch(() => null) : null;
       const firstName = (user?.displayName || user?.username || 'there').split(/[\s@]/)[0];
       const localTime = new Intl.DateTimeFormat('en-US', {
@@ -108,7 +135,7 @@ module.exports = function createActiveZoneRouter({ authenticateToken, db }) {
         hour: 'numeric', minute: '2-digit', hour12: true,
       }).format(state.now);
 
-      const tiles = await composeTiles(candidates, { userId, firstName, localTime });
+      const tiles = await composeTiles(surfacedCandidates, { userId, firstName, localTime });
 
       // Persist (upsert by candidate_key preserves deferred/dismissed).
       for (const t of tiles) {
