@@ -322,6 +322,110 @@ function detectStaleRelationshipBatch(state) {
   };
 }
 
+// ── Delta-gate annotation ────────────────────────────────────────────────
+//
+// Each surfaced candidate carries a STABLE item_key (identity that persists
+// across escalations) and a compact state_signature encoding its material/
+// urgency state, plus an escalation_tier (numeric, higher = more urgent).
+// The signature format is `id@rank` members joined by ',' (sorted) for
+// batches, or a bare `rank` for singletons. The delta-gate (deltaGate.cjs)
+// compares a candidate's new signature to its last-surfaced one to decide
+// NEW / SUPPRESS / RE-SURFACE.
+//
+// RANK LADDER (tunable — this is the starter set):
+//   1 whenever · 2 soon · 3 today/due_today · 4 immediate/overdue(0–2d) ·
+//   5 overdue(3–6d) / stale(45–59d) · 6 overdue(7d+) / stale(60d+)
+const OVERDUE_RANK = (d) => (d >= 7 ? 6 : d >= 3 ? 5 : 4);
+const STALE_RANK   = (d) => (d >= 60 ? 6 : d >= 45 ? 5 : 4);
+
+function closeLoopIsStale(loop, now) {
+  const t = Date.parse(loop?.triggered_at || loop?.triggeredAt || '');
+  return Number.isFinite(t) && (now.getTime() - t) > 48 * 3600 * 1000;
+}
+
+const sortMembers = (arr) => [...arr].sort().join(',');
+
+/**
+ * Attach item_key / state_signature / escalation_tier to a candidate.
+ * Pure; depends only on the candidate + the loaded state (for todayLocalIso
+ * and now). See the rank ladder above. Easy to tune per type.
+ */
+function annotateDelta(c, state) {
+  const type = c.candidate_type || c.type;
+  const items = Array.isArray(c.items) ? c.items : [];
+  let item_key;
+  let state_signature;
+  let escalation_tier;
+  switch (type) {
+    case 'overdue_tasks_batch': {
+      const ranks = items.map((t) => OVERDUE_RANK(daysOverdue(t, state.todayLocalIso)));
+      item_key = 'overdue_tasks_batch';
+      state_signature = sortMembers(items.map((t, i) => `${t.id}@${ranks[i]}`));
+      escalation_tier = ranks.reduce((m, r) => Math.max(m, r), 4);
+      break;
+    }
+    case 'single_urgent_task':
+      item_key = `single_urgent_task:${items[0]?.id}`;
+      state_signature = '3';
+      escalation_tier = 3;
+      break;
+    case 'close_the_loops_batch':
+      item_key = 'close_the_loops_batch';
+      state_signature = sortMembers(items.map((l) => `${l.id}@${closeLoopIsStale(l, state.now) ? 3 : 2}`));
+      escalation_tier = c.context?.has_stale ? 3 : 2;
+      break;
+    case 'upcoming_meeting_with_prep':
+      item_key = `upcoming_meeting_with_prep:${c.context?.event?.id ?? items[0]?.id}`;
+      state_signature = '4';
+      escalation_tier = 4;
+      break;
+    case 'meeting_just_ended':
+      item_key = `meeting_just_ended:${c.context?.event?.id ?? items[0]?.id}`;
+      state_signature = '4';
+      escalation_tier = 4;
+      break;
+    case 'pending_confirmation':
+      item_key = `pending_confirmation:${items[0]?.id}`;
+      state_signature = '4';
+      escalation_tier = 4;
+      break;
+    case 'draft_resume':
+      item_key = 'draft_resume';
+      state_signature = sortMembers(items.map((d) => `${d.id}@2`));
+      escalation_tier = 2;
+      break;
+    case 'daily_wrap_due':
+      item_key = `daily_wrap_due:${state.todayLocalIso}`;
+      state_signature = '1';
+      escalation_tier = 1;
+      break;
+    case 'critical_email_unacked':
+      item_key = 'critical_email_unacked';
+      // Prefer real ids (so a NEW email = a new member = escalation); fall
+      // back to a count bucket when ids aren't available (count grows = new
+      // member token = escalation).
+      state_signature = sortMembers(items.length
+        ? items.map((i) => `${i.id}@3`)
+        : [`count_${c.context?.count ?? 0}@3`]);
+      escalation_tier = 3;
+      break;
+    case 'stale_relationship': {
+      const ranks = items.map((ct) => STALE_RANK(ct.daysSilent || 0));
+      item_key = 'stale_relationship';
+      state_signature = sortMembers(items.map((ct, i) => `${ct.id}@${ranks[i]}`));
+      escalation_tier = ranks.reduce((m, r) => Math.max(m, r), 4);
+      break;
+    }
+    default:
+      // Unknown type — fall back to the candidate_key as a stable identity so
+      // the gate degrades to "surface once per distinct key".
+      item_key = c.candidate_key;
+      state_signature = c.candidate_key;
+      escalation_tier = 0;
+  }
+  return { ...c, item_key, state_signature, escalation_tier };
+}
+
 // ── Orchestrator ─────────────────────────────────────────────────────────
 
 /**
@@ -365,7 +469,7 @@ function detectAllCandidates(state, { topN = 3 } = {}) {
     deduped.push({ ...c, items: kept });
   }
 
-  return deduped.slice(0, topN);
+  return deduped.slice(0, topN).map((c) => annotateDelta(c, state));
 }
 
 // ── State loader (does the I/O) ──────────────────────────────────────────
@@ -447,4 +551,5 @@ module.exports = {
   hashItems,
   urgencyFromPriority,
   localDateIso,
+  annotateDelta,
 };
