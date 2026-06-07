@@ -1201,35 +1201,37 @@ const BULK_ARCHIVE_HARD_CAP = 250;
  * Sources, highest precedence first:
  *  1. CONSEQUENTIAL_TOOLS set (irreversible / external / access-changing)
  *  2. Tool-static `requires_confirmation: true` in ARIA_TOOLS (defense-in-depth)
- *  3. LLM-emitted `<decision>{requires_confirmation: true}</decision>`
- *  4. Tool-specific dynamic safety gates (bulk_archive count, image save)
+ *  3. bulk_archive_emails volume brake (runaway safety, not consequential gating)
+ *
+ * Gating is STATIC and deterministic — it depends only on tool identity (and
+ * bulk-archive volume), never on model output. The LLM-emitted
+ * `<decision>{requires_confirmation:true}</decision>` is intentionally NOT
+ * honored: the decision block is parsed once per turn and applied to every
+ * tool in that turn (agenticLoop), so letting it gate made non-consequential
+ * reads like capture_from_image fire a spurious "Confirm action" message
+ * while the action proceeded — a message/behavior desync. Confirm message
+ * and wait-behavior are now one decision, keyed on this function alone. The
+ * middle param (the LLM decision) is accepted for call-site stability but
+ * ignored on purpose.
  */
-function requiresConfirmation(toolName, llmDecision, toolInput) {
+function requiresConfirmation(toolName, _llmDecision, toolInput) {
   if (CONSEQUENTIAL_TOOLS.has(toolName)) return true;
   const tool = getToolByName(toolName);
   if (tool?.requires_confirmation) return true;
-  if (llmDecision?.requires_confirmation === true) return true;
-  // bulk_archive_emails count gate. dry_run:true is read-only — never gated.
+  // bulk_archive_emails volume brake. dry_run:true is read-only — never gated.
   // dry_run:false with expected_count > threshold OR expected_count missing
   // → require confirmation so a forgotten/lying expected_count fails closed.
+  // This is runaway-volume safety, not consequential gating.
   if (toolName === 'bulk_archive_emails' && toolInput?.dry_run === false) {
     const expected = Number.parseInt(toolInput?.expected_count, 10);
     if (!Number.isFinite(expected) || expected > BULK_ARCHIVE_AUTONOMY_THRESHOLD) return true;
   }
-  // Capture pipeline (Commit A) — gate SAVE tools called with a source
-  // image_blob_id. Photos are easy to send by accident and OCR extraction
-  // can mis-classify; always ask before saving. capture_from_image is
-  // the classification step, NOT a save — it gets image_blob_id in its
-  // schema by design (Aria needs to echo the id back) and must NOT be
-  // gated. Bug fix 2026-05-15: the prior "any tool with image_blob_id"
-  // rule was over-broad and caught capture_from_image itself, breaking
-  // every image-bearing turn after the first.
-  if (toolInput?.image_blob_id && IMAGE_SAVE_TOOLS.has(toolName)) return true;
+  // NOTE: image-bearing SAVE tools (create_note / create_contact / log_food
+  // with image_blob_id) do NOT confirm — they are reversible writes and
+  // auto-proceed. The image-save confirm gate was dropped 2026-06-06; only
+  // CONSEQUENTIAL_TOOLS and the bulk-archive volume brake confirm.
   return false;
 }
-
-// Save tools that should always gate when called with image_blob_id.
-const IMAGE_SAVE_TOOLS = new Set(['create_note', 'create_contact', 'log_food']);
 
 // ── Tool error sanitisation ────────────────────────────────────────────────
 // Shaped reasons we expose to the LLM (and via SSE to the user). Anything
