@@ -1073,7 +1073,26 @@ const ARIA_TOOLS = [
   },
 ];
 
-const ALWAYS_CONFIRM = new Set(['send_email', 'reply_email', 'delete_task', 'delete_event']);
+// CONSEQUENTIAL_TOOLS — the authoritative static set of irreversible /
+// external-effect / access-changing tools. These are the ONLY tools that
+// require user confirmation by default (plus the dynamic safety gates in
+// requiresConfirmation below). The decision engine is intentionally NOT in
+// the gating path (removed 2026-06-06): gating must be static and unable to
+// throw, so a "Decision engine error; falling back to confirmation" can no
+// longer gate routine actions. Bias is to confirm the dangerous — when in
+// doubt whether a tool sends externally / permanently deletes / changes
+// sharing, ADD it here; never drop a genuinely irreversible tool.
+const CONSEQUENTIAL_TOOLS = new Set([
+  'send_email',          // sends externally
+  'reply_email',         // sends externally
+  'delete_task',         // permanent delete
+  'delete_event',        // permanent delete
+  'delete_skill',        // permanent delete
+  'grant_shared_access', // changes sharing/access
+  'revoke_shared_access',// changes sharing/access
+]);
+// Backward-compat alias — ALWAYS_CONFIRM was the original (narrower) name.
+const ALWAYS_CONFIRM = CONSEQUENTIAL_TOOLS;
 
 function getToolByName(name) {
   return ARIA_TOOLS.find(t => t.name === name) || null;
@@ -1175,14 +1194,18 @@ const BULK_ARCHIVE_HARD_CAP = 250;
 /**
  * Resolve whether a tool requires user confirmation (server-authoritative).
  *
+ * This is the SOLE gating policy — static and exception-free. The decision
+ * engine is no longer consulted here (removed from the gating path
+ * 2026-06-06), so this function cannot throw the engine's fail-closed error.
+ *
  * Sources, highest precedence first:
- *  1. ALWAYS_CONFIRM list (send_email, reply_email, delete_task, delete_event)
- *  2. Tool-static `requires_confirmation: true` in ARIA_TOOLS
+ *  1. CONSEQUENTIAL_TOOLS set (irreversible / external / access-changing)
+ *  2. Tool-static `requires_confirmation: true` in ARIA_TOOLS (defense-in-depth)
  *  3. LLM-emitted `<decision>{requires_confirmation: true}</decision>`
- *  4. Tool-specific dynamic gates (bulk_archive_emails count threshold)
+ *  4. Tool-specific dynamic safety gates (bulk_archive count, image save)
  */
 function requiresConfirmation(toolName, llmDecision, toolInput) {
-  if (ALWAYS_CONFIRM.has(toolName)) return true;
+  if (CONSEQUENTIAL_TOOLS.has(toolName)) return true;
   const tool = getToolByName(toolName);
   if (tool?.requires_confirmation) return true;
   if (llmDecision?.requires_confirmation === true) return true;
@@ -3427,7 +3450,7 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
 }
 
 module.exports = {
-  ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation, ALWAYS_CONFIRM,
+  ARIA_TOOLS, executeTool, getToolByName, getToolSchemasForApi, requiresConfirmation, CONSEQUENTIAL_TOOLS, ALWAYS_CONFIRM,
   // Exported for tests (skills foundation v1, M1.6):
   _composeSkillPredicate, _clampTokenCap, _clampPriority,
   // Exported for tests (sub-agents, M3.7):

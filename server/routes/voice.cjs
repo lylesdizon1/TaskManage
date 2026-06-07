@@ -37,7 +37,6 @@
 
 const express = require('express');
 const { executeTool, getToolSchemasForApi, requiresConfirmation } = require('../tools.cjs');
-const { evaluateAction } = require('../lib/decisionEngine.cjs');
 const { closeDecisionWithFeedback } = require('../lib/trustFeedback.cjs');
 const { handleConversationTurn, applyCorrectionAndEnrichment } = require('../lib/conversationTurn.cjs');
 const logger = require('../../guardrails/logger.cjs');
@@ -201,45 +200,16 @@ function createVoiceRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalA
       };
 
       // ── Confirmation gate — deferred, spoken-prompt variant ───────────
-      // Same engine-first composition as web/WhatsApp: the engine can only
-      // ADD friction. hard_stop denies (the model relays engineReason as the
-      // spoken reply). confirm_required stages a pending voice row and the
-      // spoken reply BECOMES the YES/NO prompt — captured here and used to
-      // override the model's post-deny text below.
+      // Static gating policy (2026-06-06) — decision engine removed from the
+      // gating path. Confirm IFF requiresConfirmation() says so (tool ∈
+      // CONSEQUENTIAL_TOOLS or a dynamic safety gate fires); otherwise
+      // auto-proceed. Cannot throw, so routine voice actions never fall into a
+      // "Decision engine error" confirmation. When a confirm IS required we
+      // stage a pending voice row and the spoken reply BECOMES the YES/NO
+      // prompt — captured here and used to override the model's post-deny text.
       let voiceConfirmPrompt = null;
       const gateToolExecution = async ({ tool, input, decision }) => {
-        let engineDisposition = 'auto_proceed';
-        let engineReason = '';
-        let engineDecisionId = null;
-        try {
-          const result = await evaluateAction(userId, tool, input, tz);
-          engineDisposition = result.disposition;
-          engineReason = result.reason;
-          engineDecisionId = result.decision_id;
-        } catch (err) {
-          logger.warn('voice.decisionEngine.failed', { requestId: req.requestId, userId, tool, error: err.message });
-          engineDisposition = 'confirm_required'; // fail-closed
-        }
-
-        if (engineDisposition === 'hard_stop') {
-          logger.info('voice.decisionEngine.hardStop', { requestId: req.requestId, userId, tool, reason: engineReason });
-          if (engineDecisionId) {
-            closeDecisionWithFeedback({
-              userId, decisionId: engineDecisionId, outcome: 'rejected',
-              actionType: tool, contextSummary: engineReason || null,
-            }).catch(() => {});
-          }
-          return { action: 'deny', reason: 'hard_stop', message: engineReason || `I can't do ${tool} — it conflicts with one of your rules.` };
-        }
-
-        const engineWantsConfirm = engineDisposition === 'confirm_required' || engineDisposition === 'soft_confirm';
-        const toolWantsConfirm = requiresConfirmation(tool, decision, input);
-        if (!engineWantsConfirm && !toolWantsConfirm) {
-          if (engineDecisionId) {
-            closeDecisionWithFeedback({
-              userId, decisionId: engineDecisionId, outcome: 'executed', actionType: tool,
-            }).catch(() => {});
-          }
+        if (!requiresConfirmation(tool, decision, input)) {
           return { action: 'allow' };
         }
 
@@ -250,11 +220,10 @@ function createVoiceRouter({ authenticateToken, db, loadGcalTokens, loadAllGcalA
         try {
           const pending = await db.createPendingConfirmation({
             userId, toolName: tool, params: input, channel: 'voice',
-            decisionLogId: engineDecisionId,
+            decisionLogId: null, // engine no longer in the gating path
             expiresAtMinutes: 10,
           });
-          const prefix = engineWantsConfirm && engineReason ? `${engineReason} ` : '';
-          voiceConfirmPrompt = `${prefix}I need your okay to ${tool.replace(/_/g, ' ')}. Say "yes" to confirm or "no" to cancel.`;
+          voiceConfirmPrompt = `I need your okay to ${tool.replace(/_/g, ' ')}. Say "yes" to confirm or "no" to cancel.`;
           await db.logAgentAction({ userId, eventType: 'confirmation_requested', toolName: tool, input, confirmId: pending.id });
           return { action: 'deny', reason: 'awaiting_voice_confirmation', message: 'Awaiting user confirmation via voice.' };
         } catch (err) {
