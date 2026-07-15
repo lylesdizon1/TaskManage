@@ -757,8 +757,21 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       });
 
       // ── Persist conversation (best-effort) ─────────────────────────────
+      // For image turns, persist the vision analysis so later turns can
+      // reference what was in the photo. Without this, history shows
+      // "[image]" and the model can't distinguish between two photos.
+      let persistedUserContent = msgBody || '[image]';
+      if (imageData) {
+        const captureSummary = (toolSummaries || []).find(
+          (s) => s.tool === 'capture_from_image' && s.success && s.result?.summary
+        );
+        if (captureSummary) {
+          const label = captureSummary.result.summary.slice(0, 200);
+          persistedUserContent = `[image: ${label}]${msgBody ? ` ${msgBody}` : ''}`;
+        }
+      }
       try {
-        await db.saveWhatsAppMessage(userId, normalizedPhone, 'user', msgBody || '[image]');
+        await db.saveWhatsAppMessage(userId, normalizedPhone, 'user', persistedUserContent);
         if (reply) {
           await db.saveWhatsAppMessage(userId, normalizedPhone, 'assistant', reply);
         } else if (waSentConfirmation && waConfirmationPrompt) {
