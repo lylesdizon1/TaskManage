@@ -22,7 +22,15 @@ const { trackedAnthropicCall } = require('./anthropicCall.cjs');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
-const ESTIMATE_SYSTEM = `You are Aria's nutrition estimation engine. Given a free-text description of food and drink consumed, return ONLY a JSON object — no markdown, no code fences, no commentary. Schema: {"items":[{"name":string,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"sodium":number}],"note":string}. Break the description into individual foods/drinks. name includes the portion you assumed (e.g. "2 large eggs"). calories in kcal; protein, carbs, fat, fiber, sugar in grams; sodium in mg. Realistic USDA-style estimates, whole numbers. If quantity unspecified, assume one typical serving and reflect it in name. note: one short sentence only if you made a notable assumption, else empty string.`;
+const ESTIMATE_SYSTEM = `You are Aria's nutrition estimation engine. Given a free-text description, return ONLY a JSON object — no markdown, no code fences, no commentary.
+
+If the input describes food or drink, use this schema:
+{"items":[{"name":string,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"sodium":number}],"note":string}
+Break the description into individual foods/drinks. name includes the portion you assumed (e.g. "2 large eggs"). calories in kcal; protein, carbs, fat, fiber, sugar in grams; sodium in mg. Realistic USDA-style estimates, whole numbers. If quantity unspecified, assume one typical serving and reflect it in name. note: one short sentence only if you made a notable assumption, else empty string.
+
+If the input does NOT describe food or drink (e.g. supplements, vitamins, medications, cosmetics, cleaning products, documents, receipts, non-consumable items), respond with ONLY:
+{"not_food":true,"reason":"brief explanation of what it actually is"}
+Do NOT estimate nutrition for non-food items. Do NOT fabricate calorie or macro values for supplements, vitamins, or medications.`;
 
 const INSIGHTS_SYSTEM = `You are Aria, a practical and supportive nutrition coach. You'll receive JSON of the user's recent daily nutrition totals and the meals they ate. Identify 2–4 concrete, specific trends and give 2–3 realistic meal or swap recommendations grounded in what they actually eat. Be encouraging and non-judgmental. Do not make medical claims, diagnoses, or push extreme restriction. Reply in short plain-text bullet lines using "-" bullets and **bold** leads, grouped under "Trends" and "Suggestions".`;
 
@@ -89,6 +97,11 @@ async function estimateNutrition(description, { userId } = {}) {
   const body = response?.content?.[0]?.text || '';
   const parsed = safeParseJson(body);
   if (!parsed) throw new Error('estimate.parse_failed');
+
+  if (parsed.not_food) {
+    const reason = typeof parsed.reason === 'string' ? parsed.reason.slice(0, 200) : 'not a food or drink item';
+    return { not_food: true, reason };
+  }
 
   const items = normalizeItems(parsed.items);
   if (items.length === 0) throw new Error('estimate.empty_items');

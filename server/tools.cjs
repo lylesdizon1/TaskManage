@@ -3036,6 +3036,13 @@ async function executeTool(toolName, toolInput, userId, entityIds, db, tz, chann
           return { success: false, error: `Nutrition estimate failed: ${e.message}` };
         }
 
+        if (estimate.not_food) {
+          return {
+            success: false,
+            error: `This doesn't appear to be food or drink: ${estimate.reason}. Only food and beverages can be logged. If this is actually food, try rephrasing the description.`,
+          };
+        }
+
         const entry = await db.createFoodLogEntry(userId, {
           localDate,
           source,
