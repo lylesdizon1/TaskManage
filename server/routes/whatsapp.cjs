@@ -638,19 +638,26 @@ module.exports = function createWhatsAppRouter({ db, loadGcalTokens, makeOAuth2C
       // If the most recent message is older than SESSION_TIMEOUT_MS, start
       // a fresh session so stale context (e.g. yesterday's topic) doesn't
       // bleed into today's turn.
-      const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+      const SESSION_GAP_MS = 30 * 60 * 1000; // 30-minute silence = new session
       let priorMessages = [];
       try {
         const history = await db.getWhatsAppHistory(userId, normalizedPhone, 20);
-        // history is oldest-first, so most-recent is the last element.
-        const mostRecent = history.length ? history[history.length - 1] : null;
-        const age = mostRecent?.createdAt ? Date.now() - new Date(mostRecent.createdAt).getTime() : null;
-        if (age !== null && age > SESSION_TIMEOUT_MS) {
-          logger.info('whatsapp.history.sessionExpired', { requestId: req.requestId, userId, ageMinutes: Math.round(age / 60000) });
-          priorMessages = [];
-        } else {
-          priorMessages = history.map(m => ({ role: m.role, content: m.content }));
+        // Walk backwards and cut at the first inter-message gap > threshold.
+        // Only messages on the newer side of the gap enter the context window.
+        let cutIdx = 0;
+        for (let i = history.length - 1; i > 0; i--) {
+          const newer = new Date(history[i].createdAt).getTime();
+          const older = new Date(history[i - 1].createdAt).getTime();
+          if (newer - older > SESSION_GAP_MS) {
+            cutIdx = i;
+            break;
+          }
         }
+        const sessionHistory = history.slice(cutIdx);
+        if (cutIdx > 0) {
+          logger.info('whatsapp.history.sessionGap', { requestId: req.requestId, userId, droppedMessages: cutIdx, kept: sessionHistory.length });
+        }
+        priorMessages = sessionHistory.map(m => ({ role: m.role, content: m.content }));
       } catch (e) { logger.error('whatsapp.history.loadFailed', { requestId: req.requestId, userId, error: e.message }); }
 
       // Build user message — text-only or multipart (image + text) for vision
